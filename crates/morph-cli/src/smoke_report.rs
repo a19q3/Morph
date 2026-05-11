@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ pub struct DevnetSmokeSummary {
     pub json_files: usize,
     pub transactions: Vec<TransactionSummary>,
     pub script_failures: Vec<ScriptFailureSummary>,
+    pub deployed_scripts: Vec<DeployedScriptSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
@@ -27,6 +28,7 @@ pub struct DevnetSmokeAssertionReport {
     pub transaction_count: usize,
     pub committed_count: usize,
     pub expected_script_failures: usize,
+    pub deployed_scripts: usize,
     pub factory_local_exits: usize,
 }
 
@@ -48,6 +50,18 @@ pub struct ScriptFailureSummary {
     pub source: Option<String>,
     pub error_code: Option<i64>,
     pub morph_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeployedScriptSummary {
+    pub check: String,
+    pub path: String,
+    pub name: String,
+    pub out_point: String,
+    pub data_hash: String,
+    pub hash_type: String,
+    pub data_len: usize,
+    pub capacity: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,6 +123,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
 
     let mut transactions = Vec::new();
     let mut script_failures = Vec::new();
+    let mut deployed_scripts = Vec::new();
     let mut factory_local_exits = Vec::new();
     for path in &json_paths {
         let relative = path
@@ -127,6 +142,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             &value,
             &mut transactions,
             &mut script_failures,
+            &mut deployed_scripts,
             &mut factory_local_exits,
         )
         .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
@@ -139,6 +155,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         json_files: json_paths.len(),
         transactions,
         script_failures,
+        deployed_scripts,
         factory_local_exits,
         totals,
     })
@@ -163,6 +180,7 @@ pub fn assert_default_devnet_smoke(dir: &Path) -> Result<DevnetSmokeAssertionRep
         transaction_count: summary.totals.transaction_count,
         committed_count: summary.totals.committed_count,
         expected_script_failures: EXPECTED_SCRIPT_FAILURES.len(),
+        deployed_scripts: summary.deployed_scripts.len(),
         factory_local_exits: summary.factory_local_exits.len(),
     })
 }
@@ -195,6 +213,39 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
                 expected.error_code
             ));
         }
+    }
+
+    if summary.deployed_scripts.len() != EXPECTED_DEPLOYED_SCRIPT_NAMES.len() {
+        return Err(anyhow!(
+            "unexpected deployed script count: got {}, expected {}",
+            summary.deployed_scripts.len(),
+            EXPECTED_DEPLOYED_SCRIPT_NAMES.len()
+        ));
+    }
+    let deployed_names = summary
+        .deployed_scripts
+        .iter()
+        .map(|script| script.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let expected_names = EXPECTED_DEPLOYED_SCRIPT_NAMES
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if deployed_names != expected_names {
+        return Err(anyhow!(
+            "unexpected deployed script set: got {:?}, expected {:?}",
+            deployed_names,
+            expected_names
+        ));
+    }
+    if summary
+        .deployed_scripts
+        .iter()
+        .any(|script| script.hash_type != "data1" || script.data_len == 0 || script.capacity == 0)
+    {
+        return Err(anyhow!(
+            "deployed scripts must use data1 hashes and non-empty occupied cells"
+        ));
     }
 
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
@@ -371,6 +422,26 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Deployed Scripts\n\n");
+    if summary.deployed_scripts.is_empty() {
+        out.push_str("No deployed script records were found.\n");
+    } else {
+        out.push_str("| Name | Out point | Hash type | Data bytes | Capacity | Data hash |\n");
+        out.push_str("| --- | --- | --- | ---: | ---: | --- |\n");
+        for script in &summary.deployed_scripts {
+            out.push_str(&format!(
+                "| {} | `{}` | {} | {} | {} | `{}` |\n",
+                table_cell(&script.name),
+                script.out_point,
+                table_cell(&script.hash_type),
+                script.data_len,
+                script.capacity,
+                script.data_hash
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Local Exits\n\n");
     if summary.factory_local_exits.is_empty() {
         out.push_str("No factory local-exit evidence packages were recorded.\n");
@@ -493,6 +564,15 @@ const EXPECTED_SCRIPT_FAILURES: &[ExpectedScriptFailure] = &[
         error_code: 28,
     },
 ];
+const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
+    "morph-state-lock",
+    "morph-state-type",
+    "morph-factory-type",
+    "morph-factory-vault-lock",
+    "morph-vault-lock",
+    "morph-sponsor-lock",
+    "morph-devnet-xudt",
+];
 const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
 const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
 const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
@@ -553,6 +633,7 @@ fn collect_from_value(
     value: &Value,
     transactions: &mut Vec<TransactionSummary>,
     script_failures: &mut Vec<ScriptFailureSummary>,
+    deployed_scripts: &mut Vec<DeployedScriptSummary>,
     factory_local_exits: &mut Vec<FactoryLocalExitEvidenceSummary>,
 ) -> Result<()> {
     let Value::Object(object) = value else {
@@ -571,6 +652,21 @@ fn collect_from_value(
             error_code: failure.get("error_code").and_then(Value::as_i64),
             morph_error: string_field(failure, "morph_error"),
         });
+    }
+
+    if let Some(Value::Array(scripts)) = object.get("scripts") {
+        for (index, script) in scripts.iter().enumerate() {
+            let Value::Object(script) = script else {
+                continue;
+            };
+            if let Some(deployed_script) = deployed_script_from_object(
+                check,
+                &append_index_path(path, "scripts", index),
+                script,
+            ) {
+                deployed_scripts.push(deployed_script);
+            }
+        }
     }
 
     if object.get("schema").and_then(Value::as_str) == Some("morph.factory_local_exit_package.v1") {
@@ -603,6 +699,7 @@ fn collect_from_value(
             child,
             transactions,
             script_failures,
+            deployed_scripts,
             factory_local_exits,
         )?;
     }
@@ -626,6 +723,31 @@ fn transaction_from_object(
         block_number: object.get("block_number").and_then(Value::as_u64),
         estimated_cycles,
         tx_size_bytes,
+    })
+}
+
+fn deployed_script_from_object(
+    check: &str,
+    path: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Option<DeployedScriptSummary> {
+    let name = string_field(object, "name")?;
+    let data_hash = string_field(object, "data_hash")?;
+    let hash_type = string_field(object, "hash_type")?;
+    let data_len = object.get("data_len")?.as_u64()? as usize;
+    let capacity = object.get("capacity")?.as_u64()?;
+    let out_point = object.get("out_point")?.as_object()?;
+    let tx_hash = string_field(out_point, "tx_hash")?;
+    let index = out_point.get("index")?.as_u64()?;
+    Some(DeployedScriptSummary {
+        check: check.to_string(),
+        path: path.to_string(),
+        name,
+        out_point: format!("{tx_hash}:{index}"),
+        data_hash,
+        hash_type,
+        data_len,
+        capacity,
     })
 }
 
@@ -666,6 +788,14 @@ fn append_path(parent: &str, child: &str) -> String {
     }
 }
 
+fn append_index_path(parent: &str, child: &str, index: usize) -> String {
+    if parent == "$" {
+        format!("$.{child}[{index}]")
+    } else {
+        format!("{parent}.{child}[{index}]")
+    }
+}
+
 fn table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
@@ -688,7 +818,10 @@ fn signed_delta_usize(baseline: usize, candidate: usize) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn summarises_smoke_metrics_and_script_failures() {
@@ -740,12 +873,31 @@ mod tests {
             format!(r#"{{"exit": {{"local_exit_package": {local_exit_package}}}}}"#),
         )
         .unwrap();
+        fs::write(
+            dir.join("deploy.json"),
+            r#"{
+              "scripts": [{
+                "name": "morph-state-lock",
+                "out_point": {
+                  "tx_hash": "0xabc",
+                  "index": 0
+                },
+                "data_hash": "0x123",
+                "hash_type": "data1",
+                "data_len": 11,
+                "capacity": 22
+              }]
+            }"#,
+        )
+        .unwrap();
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 3);
+        assert_eq!(summary.json_files, 4);
         assert_eq!(summary.transactions.len(), 2);
         assert_eq!(summary.script_failures.len(), 1);
+        assert_eq!(summary.deployed_scripts.len(), 1);
+        assert_eq!(summary.deployed_scripts[0].name, "morph-state-lock");
         assert_eq!(summary.factory_local_exits.len(), 1);
         assert_eq!(
             summary.factory_local_exits[0].path,
@@ -757,6 +909,7 @@ mod tests {
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("StateSinceNotMature"));
         assert!(markdown.contains("0xabc"));
+        assert!(markdown.contains("Deployed Scripts"));
         assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
@@ -785,6 +938,14 @@ mod tests {
             err.to_string()
                 .contains("unexpected factory descriptor coverage")
         );
+    }
+
+    #[test]
+    fn rejects_incomplete_deployment_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary.deployed_scripts.pop();
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(err.to_string().contains("unexpected deployed script count"));
     }
 
     #[test]
@@ -842,6 +1003,7 @@ mod tests {
                 factory_exit("factory-xudt-negative/local-exit-package", 2),
                 factory_exit("factory-xudt-negative/smoke", 2),
             ],
+            deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
                 transaction_count: 46,
                 committed_count: 45,
@@ -880,6 +1042,23 @@ mod tests {
         }
     }
 
+    fn deployed_scripts() -> Vec<DeployedScriptSummary> {
+        EXPECTED_DEPLOYED_SCRIPT_NAMES
+            .iter()
+            .enumerate()
+            .map(|(index, name)| DeployedScriptSummary {
+                check: "deploy-contracts".to_string(),
+                path: format!("$.scripts[{index}]"),
+                name: (*name).to_string(),
+                out_point: format!("0x{index}:0"),
+                data_hash: format!("0x{index}"),
+                hash_type: "data1".to_string(),
+                data_len: 1,
+                capacity: 1,
+            })
+            .collect()
+    }
+
     fn write_metric_json(dir: &Path, file_name: &str, tx_hash: &str, cycles: u64, bytes: usize) {
         fs::write(
             dir.join(file_name),
@@ -903,8 +1082,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
-            "morph-smoke-report-test-{}-{nanos}",
+            "morph-smoke-report-test-{}-{nanos}-{counter}",
             std::process::id()
         ))
     }

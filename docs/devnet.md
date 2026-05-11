@@ -102,11 +102,12 @@ summary.json
 ```
 
 These summaries are generated from the smoke JSON files and include every
-transaction's node-estimated cycles, transaction size, status, block number, and
-expected script failure. During a full smoke run, the script also asserts that
-the expected negative-path failures and factory local-exit evidence packages
-are present and writes `summary-check.json`. They can be regenerated or
-rechecked for an existing run:
+transaction's node-estimated cycles, transaction size, status, block number,
+expected script failure, deployed script outpoint, and deployed script data
+hash. During a full smoke run, the script also asserts that the expected
+negative-path failures, deployed scripts, and factory local-exit evidence
+packages are present and writes `summary-check.json`. They can be regenerated
+or rechecked for an existing run:
 
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-report \

@@ -1305,6 +1305,7 @@ fn main() -> Result<()> {
                     "expected_script_failures={}",
                     report.expected_script_failures
                 );
+                println!("deployed_scripts={}", report.deployed_scripts);
                 println!("factory_local_exits={}", report.factory_local_exits);
             }
             Ok(())
