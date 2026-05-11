@@ -27,7 +27,10 @@ use morph_script_common::{
 };
 use serde::Serialize;
 
-use crate::packages::{PackageOutPoint, StoredStatePackage, read_package, write_package};
+use crate::packages::{
+    PackageOutPoint, StatePackageRecord, StoredStatePackage, latest_package, read_package,
+    write_package,
+};
 use crate::rpc::CkbRpcClient;
 
 const DEFAULT_SECP_TYPE_HASH: &str =
@@ -89,6 +92,18 @@ pub struct SaveStatePackageOptions {
     pub state_out_point: String,
     pub state_number: Option<u64>,
     pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishLatestStatePackageOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub state_out_point: String,
+    pub sponsor_out_point: String,
+    pub store_dir: PathBuf,
+    pub channel_id: String,
+    pub fee: u64,
+    pub mine_blocks: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -239,6 +254,12 @@ pub struct PublishStateReport {
 pub struct SaveStatePackageReport {
     pub path: String,
     pub package: StoredStatePackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PublishLatestStatePackageReport {
+    pub selected_package: StatePackageRecord,
+    pub publication: PublishStateReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -826,6 +847,32 @@ pub fn save_state_package(
     Ok(SaveStatePackageReport {
         path: path.display().to_string(),
         package,
+    })
+}
+
+pub fn publish_latest_state_package(
+    rpc: &CkbRpcClient,
+    options: PublishLatestStatePackageOptions,
+) -> Result<PublishLatestStatePackageReport> {
+    let selected_package = latest_package(&options.store_dir, &options.channel_id)?;
+    let publication = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: DEFAULT_ALICE_PRIVATE_KEY.to_string(),
+            bob_private_key: DEFAULT_BOB_PRIVATE_KEY.to_string(),
+            state_out_point: options.state_out_point,
+            sponsor_out_point: options.sponsor_out_point,
+            state_number: None,
+            state_package: Some(selected_package.path.clone()),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    Ok(PublishLatestStatePackageReport {
+        selected_package,
+        publication,
     })
 }
 

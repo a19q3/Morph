@@ -268,6 +268,16 @@ cargo run -q -p morph-cli -- devnet publish-state \
   --json
 ```
 
+Or let the CLI select the highest-numbered package for the channel:
+
+```sh
+cargo run -q -p morph-cli -- devnet publish-latest-package \
+  --channel-id "$CHANNEL_ID" \
+  --state-out-point "$STATE_OUT_POINT" \
+  --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --json
+```
+
 When `--state-package` is used, the publication transaction is rebuilt against
 the currently live StateCell and SponsorCell. Alice and Bob do not need to sign
 again, and their private keys are not needed by the publisher. The publisher

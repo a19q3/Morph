@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 use devnet::{
     DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY, DEFAULT_DEVNET_PRIVATE_KEY,
     DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions, OpenChannelOptions,
-    PublishStateOptions, SaveStatePackageOptions, SupersedeSmokeOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
+    SupersedeSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -224,6 +225,40 @@ enum DevnetCommand {
         /// Channel id to select.
         #[arg(long)]
         channel_id: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Publish the highest-numbered saved state package for a channel.
+    PublishLatestPackage {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the sponsor change lock.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Current StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// SponsorCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        sponsor_out_point: String,
+        /// Directory where signed state packages are stored.
+        #[arg(long, default_value = "target/morph-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Channel id to select.
+        #[arg(long)]
+        channel_id: String,
+        /// Absolute fee paid by the SponsorCell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -698,6 +733,49 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("funding_anchor={}", record.package.funding_anchor);
                 println!("state_number={}", record.package.state_number);
                 println!("signing_digest={}", record.package.signing_digest);
+            }
+        }
+        DevnetCommand::PublishLatestPackage {
+            contracts_dir,
+            private_key,
+            state_out_point,
+            sponsor_out_point,
+            store_dir,
+            channel_id,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::publish_latest_state_package(
+                &rpc,
+                PublishLatestStatePackageOptions {
+                    contracts_dir,
+                    private_key,
+                    state_out_point,
+                    sponsor_out_point,
+                    store_dir,
+                    channel_id,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("package={}", report.selected_package.path.display());
+                println!(
+                    "package_state_number={}",
+                    report.selected_package.package.state_number
+                );
+                println!("tx_hash={}", report.publication.tx_hash);
+                println!("status={}", report.publication.status);
+                println!(
+                    "state_out_point={}:{}",
+                    report.publication.state_out_point.tx_hash,
+                    report.publication.state_out_point.index
+                );
+                println!("fee={}", report.publication.fee);
+                print_metrics(&report.publication.metrics);
             }
         }
         DevnetCommand::FundSponsor {
