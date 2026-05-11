@@ -667,6 +667,9 @@ enum DevnetCommand {
         /// Optional JSONL alert sink for watchtower events.
         #[arg(long)]
         alert_file: Option<std::path::PathBuf>,
+        /// Optional HTTP webhook URL for watchtower alerts.
+        #[arg(long)]
+        alert_webhook_url: Option<String>,
         /// Start from --from-block even when a saved cursor exists.
         #[arg(long)]
         ignore_cursor: bool,
@@ -2061,6 +2064,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             cursor_file,
             watch_policy,
             alert_file,
+            alert_webhook_url,
             ignore_cursor,
             detection_depth,
             timeout_secs,
@@ -2083,6 +2087,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     cursor_file,
                     watch_policy,
                     alert_file,
+                    alert_webhook_url,
                     ignore_cursor,
                     detection_depth,
                     timeout_secs,
@@ -2107,6 +2112,9 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
                 if let Some(path) = &report.alert_file {
                     println!("alert_file={}", path.display());
+                }
+                if let Some(url) = &report.alert_webhook_url {
+                    println!("alert_webhook_url={url}");
                 }
                 if let Some(cursor) = &report.loaded_cursor {
                     println!("loaded_cursor_next_block={}", cursor.next_block);

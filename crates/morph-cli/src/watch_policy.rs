@@ -20,6 +20,8 @@ pub struct WatchtowerPolicyV1 {
     pub require_auto_fund_sponsor: bool,
     pub max_auto_sponsor_capacity: u64,
     pub require_mine_blocks: bool,
+    #[serde(default)]
+    pub allow_webhook_alerts: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +35,7 @@ pub struct WatchPolicyRun<'a> {
     pub sponsor_out_point_present: bool,
     pub auto_fund_sponsor: bool,
     pub auto_sponsor_capacity: u64,
+    pub alert_webhook_present: bool,
 }
 
 impl WatchtowerPolicyV1 {
@@ -48,6 +51,7 @@ impl WatchtowerPolicyV1 {
             require_auto_fund_sponsor: false,
             max_auto_sponsor_capacity: 50_000_000_000,
             require_mine_blocks: true,
+            allow_webhook_alerts: true,
         }
     }
 
@@ -148,6 +152,12 @@ impl WatchtowerPolicyV1 {
                 "watchtower policy requires mine_blocks greater than zero"
             );
         }
+        if run.alert_webhook_present {
+            ensure!(
+                self.allow_webhook_alerts,
+                "watchtower policy does not allow webhook alerts"
+            );
+        }
         Ok(())
     }
 }
@@ -184,6 +194,7 @@ mod tests {
             sponsor_out_point_present: true,
             auto_fund_sponsor: false,
             auto_sponsor_capacity: 50_000_000_000,
+            alert_webhook_present: false,
         }
     }
 
@@ -235,5 +246,17 @@ mod tests {
 
         let err = policy.validate_run(&valid_run()).unwrap_err();
         assert!(err.to_string().contains("not"));
+    }
+
+    #[test]
+    fn rejects_webhook_when_policy_forbids_it() {
+        let mut policy = WatchtowerPolicyV1::fixture();
+        policy.allow_webhook_alerts = false;
+
+        let mut run = valid_run();
+        run.alert_webhook_present = true;
+
+        let err = policy.validate_run(&run).unwrap_err();
+        assert!(err.to_string().contains("webhook alerts"));
     }
 }

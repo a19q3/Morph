@@ -44,6 +44,7 @@ use crate::packages::{
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{
     WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert, append_watchtower_alert,
+    post_watchtower_alert_webhook,
 };
 use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
@@ -235,6 +236,7 @@ pub struct WatchLatestStatePackageOptions {
     pub cursor_file: Option<PathBuf>,
     pub watch_policy: Option<PathBuf>,
     pub alert_file: Option<PathBuf>,
+    pub alert_webhook_url: Option<String>,
     pub ignore_cursor: bool,
     pub detection_depth: u64,
     pub timeout_secs: u64,
@@ -642,6 +644,8 @@ pub struct WatchLatestStatePackageReport {
     pub cursor_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alert_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_webhook_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loaded_cursor: Option<WatchCursor>,
     pub selected_package: StatePackageRecord,
@@ -2881,6 +2885,7 @@ pub fn watch_latest_state_package(
             sponsor_out_point_present: options.sponsor_out_point.is_some(),
             auto_fund_sponsor: options.auto_fund_sponsor,
             auto_sponsor_capacity: options.auto_sponsor_capacity,
+            alert_webhook_present: options.alert_webhook_url.is_some(),
         })?;
     }
     let channel_id = canonical_hex32(&options.channel_id)?;
@@ -2931,6 +2936,7 @@ pub fn watch_latest_state_package(
                         if observed.state_number < selected_state_number {
                             append_watch_alert_if_requested(
                                 &options.alert_file,
+                                &options.alert_webhook_url,
                                 WatchtowerAlert::new(
                                     channel_id.clone(),
                                     WatchAlertSeverity::Warning,
@@ -2969,6 +2975,7 @@ pub fn watch_latest_state_package(
                             )?;
                             append_watch_alert_if_requested(
                                 &options.alert_file,
+                                &options.alert_webhook_url,
                                 WatchtowerAlert::new(
                                     channel_id.clone(),
                                     WatchAlertSeverity::Warning,
@@ -2998,6 +3005,7 @@ pub fn watch_latest_state_package(
                                 detection_depth: options.detection_depth,
                                 cursor_file: Some(cursor_file),
                                 alert_file: options.alert_file.clone(),
+                                alert_webhook_url: options.alert_webhook_url.clone(),
                                 loaded_cursor,
                                 selected_package,
                                 sponsor_top_up,
@@ -3023,6 +3031,7 @@ pub fn watch_latest_state_package(
             )?;
             append_watch_alert_if_requested(
                 &options.alert_file,
+                &options.alert_webhook_url,
                 WatchtowerAlert::new(
                     channel_id.clone(),
                     WatchAlertSeverity::Info,
@@ -3042,6 +3051,7 @@ pub fn watch_latest_state_package(
                 detection_depth: options.detection_depth,
                 cursor_file: Some(cursor_file),
                 alert_file: options.alert_file.clone(),
+                alert_webhook_url: options.alert_webhook_url.clone(),
                 loaded_cursor,
                 selected_package,
                 sponsor_top_up: None,
@@ -3055,10 +3065,14 @@ pub fn watch_latest_state_package(
 
 fn append_watch_alert_if_requested(
     alert_file: &Option<PathBuf>,
+    alert_webhook_url: &Option<String>,
     alert: WatchtowerAlert,
 ) -> Result<()> {
     if let Some(path) = alert_file {
         append_watchtower_alert(path, &alert)?;
+    }
+    if let Some(url) = alert_webhook_url {
+        post_watchtower_alert_webhook(url, &alert)?;
     }
     Ok(())
 }

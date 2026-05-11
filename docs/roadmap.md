@@ -92,11 +92,10 @@ Acceptance criteria:
 
 ## M2: Watchtower
 
-Status: partially implemented for durable state package persistence, latest
-package selection, publish-from-latest-package rebuilding, confirmation-depth
-block polling, persisted scan cursors, conservative auto-funded sponsor
-rotation, JSON operator policy, and local JSONL alerts. External notification
-integrations remain open.
+Status: implemented for durable state package persistence, latest package
+selection, publish-from-latest-package rebuilding, confirmation-depth block
+polling, persisted scan cursors, conservative auto-funded sponsor rotation,
+JSON operator policy, local JSONL alerts, and policy-gated HTTP webhook alerts.
 
 - State package persistence.
 - Detection-depth polling.
@@ -106,8 +105,8 @@ integrations remain open.
 - Conservative auto-funded SponsorCell rotation.
 - Operator policy for confirmation depth, fee, sponsor mode, and auto-sponsor
   capacity.
-- JSONL alert sink for older-state detection, publication submission, and idle
-  scans.
+- JSONL and HTTP webhook alert sinks for older-state detection, publication
+  submission, and idle scans.
 
 ## M3: Conservative Factory Mode
 

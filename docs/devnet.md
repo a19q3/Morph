@@ -470,6 +470,7 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --sponsor-out-point "$SPONSOR_OUT_POINT" \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
+  --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
   --json
 ```
 
@@ -491,16 +492,16 @@ The watch policy is deliberately small. It bounds the operational assumptions
 that matter to safety on a confirmation-based chain: minimum confirmation
 depth, minimum runtime window, maximum polling interval, maximum fee, whether a
 pre-existing SponsorCell may be used, whether auto-funded sponsor rotation is
-required, and the largest auto-sponsor capacity the watcher may lock. It may
-also bind itself to one canonical channel id. The policy is checked before the
-scanner reads blocks or publishes a transaction.
+required, the largest auto-sponsor capacity the watcher may lock, and whether
+HTTP webhook alerts are allowed. It may also bind itself to one canonical
+channel id. The policy is checked before the scanner reads blocks or publishes
+a transaction.
 
 When `--alert-file` is provided, the watcher appends JSON Lines events for
-operator review. It records older-state detection before sponsor work begins,
-successful publication after the transaction is submitted, and idle scans that
-reach the timeout without publishing. The alert file is intentionally local and
-deterministic; external notification systems can consume the JSONL stream
-without changing the channel logic.
+operator review. When `--alert-webhook-url` is provided, the same structured
+event is also POSTed as JSON to that URL. Alerts record older-state detection
+before sponsor work begins, successful publication after the transaction is
+submitted, and idle scans that reach the timeout without publishing.
 
 The automatically funded SponsorCell is deliberately narrow: it is bound to the
 selected latest package's state number and carries a fee budget of twice the

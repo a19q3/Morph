@@ -21,8 +21,8 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
-| Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy` |
-| Watchtower alerts are structured and append-only | `appends_jsonl_alerts` |
+| Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
+| Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
@@ -54,8 +54,8 @@ Implemented devnet-level checks:
   `devnet sponsor-policy-negative-smoke`;
 - watchtower policy checking for confirmation depth, fee, sponsor mode, and
   automatic sponsor capacity before confirmed-block scanning starts;
-- watchtower JSONL alerts for older-state detection, submitted publication,
-  and idle scans;
+- watchtower JSONL and HTTP webhook alerts for older-state detection,
+  submitted publication, and idle scans;
 - node-reported cycle measurement and transaction size reporting, summarised by
   `devnet-smoke-report`;
 - durable signed state-package storage with signature validation and latest
