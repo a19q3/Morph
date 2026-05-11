@@ -22,10 +22,13 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING,
-    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
-    ScriptError, StateHeaderV1, blake2b256 as script_blake2b256, participants_commitment_v1,
-    settlement_descriptor_commitment_v1,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryStateHeaderV1,
+    PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, ScriptError, StateHeaderV1,
+    blake2b256 as script_blake2b256, factory_participants_commitment_v1,
+    participants_commitment_v1, settlement_descriptor_commitment_v1,
 };
 use serde::Serialize;
 
@@ -81,6 +84,35 @@ pub struct OpenChannelOptions {
     pub sponsor_max_total_fee: Option<u64>,
     pub fee: u64,
     pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenFactoryOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub state_root: Option<String>,
+    pub access_manifest_root: Option<String>,
+    pub non_interference_digest: Option<String>,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct UpdateFactoryOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_out_point: String,
+    pub update_number: Option<u64>,
+    pub state_root: Option<String>,
+    pub access_manifest_root: Option<String>,
+    pub non_interference_digest: Option<String>,
+    pub fee: u64,
     pub mine_blocks: u64,
 }
 
@@ -359,11 +391,57 @@ pub struct OpenChannelReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct OpenFactoryReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub factory_id: String,
+    pub input_capacity: u64,
+    pub factory_capacity: u64,
+    pub change_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+    pub participants: Vec<FactoryParticipantReport>,
+    pub scripts: Vec<ResolvedScriptReport>,
+    pub cells: Vec<ChannelCellReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateFactoryReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub factory_out_point: PrintableOutPoint,
+    pub factory_capacity: u64,
+    pub fee_input_capacity: u64,
+    pub fee_change_capacity: u64,
+    pub fee: u64,
+    pub state_root: String,
+    pub access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ParticipantReport {
     pub role: String,
     pub lock_hash: String,
     pub pubkey_sec1: String,
     pub capacity: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryParticipantReport {
+    pub role: String,
+    pub participant_id: String,
+    pub pubkey_sec1: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -964,6 +1042,296 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
             cell("sponsor", 2, &sponsor_output, 0),
             cell("change", 3, &change_output, 0),
         ],
+    })
+}
+
+pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<OpenFactoryReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    ensure!(
+        options.factory_capacity > 0,
+        "factory capacity must be non-zero"
+    );
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for factory opener")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let alice_pubkey = k256_pubkey(&alice_key);
+    let bob_pubkey = k256_pubkey(&bob_key);
+
+    let tip = rpc.tip_header()?;
+    let tip_number = tip.number_value()?;
+    let genesis = rpc
+        .block_by_number(0)?
+        .ok_or_else(|| anyhow!("genesis block is not available from CKB RPC"))?;
+    let chain_id = genesis.header.hash.0;
+    let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
+
+    let factory_input = CellInput::new(funding_cell.out_point.clone(), 0);
+    let factory_id = derive_funding_anchor(&factory_input, 0);
+    let factory_type = data1_script(
+        factory_contract.data_hash.clone(),
+        Bytes::copy_from_slice(&factory_id),
+    );
+
+    let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
+        .unwrap_or_else(|| script_blake2b256(&[b"CKB_MORPH_EMPTY_FACTORY_STATE_ROOT_V1"]));
+    let access_manifest_root = parse_optional_hex32(
+        "access manifest root",
+        options.access_manifest_root.as_deref(),
+    )?
+    .unwrap_or_else(|| script_blake2b256(&[b"CKB_MORPH_EMPTY_FACTORY_ACCESS_MANIFEST_V1"]));
+    let non_interference_digest = parse_optional_hex32(
+        "non-interference digest",
+        options.non_interference_digest.as_deref(),
+    )?
+    .unwrap_or_else(|| script_blake2b256(&[b"CKB_MORPH_INITIAL_FACTORY_NON_INTERFERENCE_V1"]));
+    let participants_commitment =
+        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+    let challenge_policy_commitment =
+        script_blake2b256(&[b"CKB_MORPH_FACTORY_CHALLENGE_POLICY_V1"]);
+    let factory_header = factory_state_header(FactoryHeaderInput {
+        chain_id,
+        factory_id,
+        update_number: 0,
+        state_root,
+        participants_commitment,
+        access_manifest_root,
+        non_interference_digest,
+        challenge_policy_commitment,
+    });
+
+    let factory_output = CellOutput::new_builder()
+        .capacity(options.factory_capacity)
+        .lock(owner_lock.clone())
+        .type_(Some(factory_type.clone()).pack())
+        .build();
+    ensure_output_capacity("factory", &factory_output, factory_header.len())?;
+
+    let change_capacity = funding_cell
+        .capacity
+        .checked_sub(options.factory_capacity)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "funding cell capacity {} cannot cover factory capacity {} and fee {}",
+                funding_cell.capacity,
+                options.factory_capacity,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, change_capacity)?;
+    let change_output = CellOutput::new_builder()
+        .capacity(change_capacity)
+        .lock(owner_lock.clone())
+        .build();
+
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(factory_contract.cell_dep.clone())
+        .input(factory_input)
+        .output(factory_output.clone())
+        .output(change_output.clone())
+        .output_data(Bytes::copy_from_slice(&factory_header).pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let tx_hash_string = sent.tx_hash.clone();
+
+    let cell =
+        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
+            ChannelCellReport {
+                role: role.to_string(),
+                out_point: PrintableOutPoint {
+                    tx_hash: tx_hash_string.clone(),
+                    index,
+                },
+                capacity: output.capacity().unpack(),
+                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+                type_hash: output
+                    .type_()
+                    .to_opt()
+                    .map(|script| hex32(script.calc_script_hash().as_slice())),
+                data_len,
+            }
+        };
+
+    Ok(OpenFactoryReport {
+        tx_hash: tx_hash_string.clone(),
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        factory_id: hex32(&factory_id),
+        input_capacity: funding_cell.capacity,
+        factory_capacity: options.factory_capacity,
+        change_capacity,
+        fee: options.fee,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+        participants: factory_participant_reports(alice_pubkey, bob_pubkey),
+        scripts: vec![ResolvedScriptReport {
+            name: factory_contract.name,
+            out_point: printable_out_point(&factory_contract.out_point),
+            data_hash: format!("{:#x}", factory_contract.data_hash),
+            hash_type: "data1".to_string(),
+        }],
+        cells: vec![
+            cell("factory", 0, &factory_output, factory_header.len()),
+            cell("change", 1, &change_output, 0),
+        ],
+    })
+}
+
+pub fn update_factory(
+    rpc: &CkbRpcClient,
+    options: UpdateFactoryOptions,
+) -> Result<UpdateFactoryReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for factory updater")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    ensure!(
+        factory_cell.output.lock() == owner_lock,
+        "private key does not control the FactoryStateCell lock"
+    );
+    let factory_type = factory_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("factory cell has no type script"))?;
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    ensure!(
+        factory_type.args().raw_data().as_ref() == old_header.factory_id(),
+        "factory type args do not match the factory id in cell data"
+    );
+    let old_update_number = old_header.update_number();
+    let new_update_number = options
+        .update_number
+        .unwrap_or_else(|| old_update_number.saturating_add(1));
+    ensure!(
+        new_update_number > old_update_number,
+        "new update number must be greater than old update number {}",
+        old_update_number
+    );
+
+    let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
+        .unwrap_or_else(|| {
+            derived_factory_update_digest(
+                b"CKB_MORPH_FACTORY_STATE_ROOT_UPDATE_V1",
+                old_header.state_root(),
+                new_update_number,
+            )
+        });
+    let access_manifest_root = parse_optional_hex32(
+        "access manifest root",
+        options.access_manifest_root.as_deref(),
+    )?
+    .unwrap_or_else(|| {
+        derived_factory_update_digest(
+            b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_UPDATE_V1",
+            old_header.access_manifest_root(),
+            new_update_number,
+        )
+    });
+    let non_interference_digest = parse_optional_hex32(
+        "non-interference digest",
+        options.non_interference_digest.as_deref(),
+    )?
+    .unwrap_or_else(|| {
+        derived_factory_update_digest(
+            b"CKB_MORPH_FACTORY_NON_INTERFERENCE_UPDATE_V1",
+            old_header.non_interference_digest(),
+            new_update_number,
+        )
+    });
+
+    let mut new_factory_data = factory_cell.data.to_vec();
+    put_u64(&mut new_factory_data, 68, new_update_number);
+    new_factory_data[76..108].copy_from_slice(&state_root);
+    new_factory_data[140..172].copy_from_slice(&access_manifest_root);
+    new_factory_data[172..204].copy_from_slice(&non_interference_digest);
+    let signature_witness = factory_signature_witness(
+        &new_factory_data,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
+    ensure!(
+        byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
+        "factory cell type script does not use the deployed morph-factory-type code hash"
+    );
+
+    let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    ensure!(
+        fee_cell.out_point != factory_out_point,
+        "fee input cannot be the FactoryStateCell itself"
+    );
+    let fee_change_capacity = fee_cell
+        .capacity
+        .checked_sub(options.fee)
+        .ok_or_else(|| anyhow!("fee input capacity cannot cover fee {}", options.fee))?;
+    ensure_change_capacity(&owner_lock, fee_change_capacity)?;
+    ensure_output_capacity("factory", &factory_cell.output, new_factory_data.len())?;
+    let fee_change_output = CellOutput::new_builder()
+        .capacity(fee_change_capacity)
+        .lock(owner_lock)
+        .build();
+
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(factory_contract.cell_dep)
+        .input(CellInput::new(factory_out_point, 0))
+        .input(CellInput::new(fee_cell.out_point.clone(), 0))
+        .output(factory_cell.output.clone())
+        .output(fee_change_output)
+        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_factory_update_transaction(
+        unsigned,
+        &owner_key,
+        Bytes::copy_from_slice(&signature_witness),
+    )?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let new_factory_tx_hash = sent.tx_hash.clone();
+
+    Ok(UpdateFactoryReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        factory_id: hex32(old_header.factory_id()),
+        old_update_number,
+        new_update_number,
+        factory_out_point: PrintableOutPoint {
+            tx_hash: new_factory_tx_hash,
+            index: 0,
+        },
+        factory_capacity: factory_cell.capacity,
+        fee_input_capacity: fee_cell.capacity,
+        fee_change_capacity,
+        fee: options.fee,
+        state_root: hex32(&state_root),
+        access_manifest_root: hex32(&access_manifest_root),
+        non_interference_digest: hex32(&non_interference_digest),
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
     })
 }
 
@@ -2982,6 +3350,37 @@ fn sign_single_secp_input(
     Ok(tx.as_advanced_builder().witness(witness.as_bytes()).build())
 }
 
+fn sign_factory_update_transaction(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    input_type: Bytes,
+) -> Result<ckb_types::core::TransactionView> {
+    let placeholder_factory_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .input_type(Some(input_type.clone()).pack())
+        .build();
+    let placeholder_fee_witness = WitnessArgs::default();
+    let message = sighash_all_message(
+        tx.hash(),
+        &[
+            placeholder_factory_witness.as_bytes(),
+            placeholder_fee_witness.as_bytes(),
+        ],
+    );
+    let signature = privkey
+        .sign_recoverable(&message)
+        .context("failed to sign CKB factory update transaction")?;
+    let factory_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(signature.serialize())))
+        .input_type(Some(input_type).pack())
+        .build();
+    Ok(tx
+        .as_advanced_builder()
+        .witness(factory_witness.as_bytes())
+        .witness(placeholder_fee_witness.as_bytes())
+        .build())
+}
+
 fn send_and_mine(
     rpc: &CkbRpcClient,
     tx: ckb_types::core::TransactionView,
@@ -3447,6 +3846,39 @@ fn bilateral_signature_witness(
     Ok(witness)
 }
 
+fn factory_signature_witness(
+    factory_header: &[u8],
+    alice_private_key: &str,
+    bob_private_key: &str,
+) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN]> {
+    let header = FactoryStateHeaderV1::parse(factory_header)
+        .map_err(|err| anyhow!("new factory header is invalid: {err:?}"))?;
+    let alice_key = k256_signing_key(alice_private_key)?;
+    let bob_key = k256_signing_key(bob_private_key)?;
+    let mut entries = [
+        ([1u8; BYTE32_LEN], k256_pubkey(&alice_key), alice_key),
+        ([2u8; BYTE32_LEN], k256_pubkey(&bob_key), bob_key),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let digest = header.signing_digest();
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&ecdsa_signature(key, &digest)?);
+    }
+    Ok(witness)
+}
+
 fn witness_with_input_type(input_type: Bytes) -> ckb_types::packed::Bytes {
     WitnessArgs::new_builder()
         .input_type(Some(input_type).pack())
@@ -3641,6 +4073,17 @@ struct InitialStateHeader {
     challenge_policy_commitment: [u8; 32],
 }
 
+struct FactoryHeaderInput {
+    chain_id: [u8; 32],
+    factory_id: [u8; 32],
+    update_number: u64,
+    state_root: [u8; 32],
+    participants_commitment: [u8; 32],
+    access_manifest_root: [u8; 32],
+    non_interference_digest: [u8; 32],
+    challenge_policy_commitment: [u8; 32],
+}
+
 fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V1_LEN] {
     let mut raw = [0u8; STATE_HEADER_V1_LEN];
     put_u16(&mut raw, 0, 1);
@@ -3661,6 +4104,67 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V1_LEN] 
     raw[240..272].copy_from_slice(&input.challenge_policy_commitment);
     put_u16(&mut raw, 272, 1);
     raw
+}
+
+fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
+    let mut raw = [0u8; FACTORY_STATE_HEADER_V1_LEN];
+    put_u16(&mut raw, 0, 1);
+    raw[2..34].copy_from_slice(&input.chain_id);
+    put_u16(&mut raw, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1);
+    raw[36..68].copy_from_slice(&input.factory_id);
+    put_u64(&mut raw, 68, input.update_number);
+    raw[76..108].copy_from_slice(&input.state_root);
+    raw[108..140].copy_from_slice(&input.participants_commitment);
+    raw[140..172].copy_from_slice(&input.access_manifest_root);
+    raw[172..204].copy_from_slice(&input.non_interference_digest);
+    raw[204..236].copy_from_slice(&input.challenge_policy_commitment);
+    put_u16(&mut raw, 236, 1);
+    raw
+}
+
+fn factory_participants_commitment_from_pubkeys(
+    alice_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    bob_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+) -> [u8; 32] {
+    let mut entries = [
+        ([1u8; BYTE32_LEN], alice_pubkey),
+        ([2u8; BYTE32_LEN], bob_pubkey),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    factory_participants_commitment_v1(
+        FACTORY_SIGNATURE_THRESHOLD_V1,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    )
+}
+
+fn factory_participant_reports(
+    alice_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    bob_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+) -> Vec<FactoryParticipantReport> {
+    let mut entries = [
+        ("alice", [1u8; BYTE32_LEN], alice_pubkey),
+        ("bob", [2u8; BYTE32_LEN], bob_pubkey),
+    ];
+    entries.sort_by(|left, right| left.1.cmp(&right.1));
+    entries
+        .into_iter()
+        .map(|(role, participant_id, pubkey)| FactoryParticipantReport {
+            role: role.to_string(),
+            participant_id: hex32(&participant_id),
+            pubkey_sec1: hex_prefixed(&pubkey),
+        })
+        .collect()
+}
+
+fn derived_factory_update_digest(
+    domain: &[u8],
+    previous_value: &[u8],
+    update_number: u64,
+) -> [u8; 32] {
+    script_blake2b256(&[domain, previous_value, &update_number.to_le_bytes()])
 }
 
 fn occupied_capacity(output: &CellOutput, data_len: usize) -> Result<u64> {
@@ -3835,8 +4339,28 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
             Some("XudtConservationMismatch")
         }
         value if value == ScriptError::XudtTypeMismatch as i16 => Some("XudtTypeMismatch"),
+        value if value == ScriptError::FactoryIdMismatch as i16 => Some("FactoryIdMismatch"),
         _ => None,
     }
+}
+
+fn parse_optional_hex32(label: &str, value: Option<&str>) -> Result<Option<[u8; 32]>> {
+    value
+        .map(|value| parse_hex32_array(label, value))
+        .transpose()
+}
+
+fn parse_hex32_array(label: &str, value: &str) -> Result<[u8; 32]> {
+    let stripped = value.strip_prefix("0x").unwrap_or(value);
+    ensure!(
+        stripped.len() == 64,
+        "{label} must be a 32-byte hex string, got {} hex characters",
+        stripped.len()
+    );
+    let decoded = hex::decode(stripped).with_context(|| format!("{label} is not valid hex"))?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
 }
 
 fn parse_h256(value: &str) -> Result<H256> {

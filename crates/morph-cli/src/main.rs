@@ -6,10 +6,11 @@ use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FinaliseChannelOptions,
-    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions,
+    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
     PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
     SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
-    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
+    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
+    XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -198,6 +199,89 @@ enum DevnetCommand {
         /// Raw relative-since value required before finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open a conservative two-party Morph factory state cell on local devnet.
+    OpenFactory {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls a funded local-devnet cell.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 10_000_000_000)]
+        factory_capacity: u64,
+        /// Optional 32-byte state root for the initial factory state.
+        #[arg(long)]
+        state_root: Option<String>,
+        /// Optional 32-byte access-manifest root for the initial factory state.
+        #[arg(long)]
+        access_manifest_root: Option<String>,
+        /// Optional 32-byte non-interference digest for the initial factory state.
+        #[arg(long)]
+        non_interference_digest: Option<String>,
+        /// Absolute fee to reserve for the open-factory transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Advance a Morph factory state cell using all-participant signatures.
+    UpdateFactory {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the FactoryStateCell and fee input.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// New update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// Optional 32-byte replacement state root.
+        #[arg(long)]
+        state_root: Option<String>,
+        /// Optional 32-byte replacement access-manifest root.
+        #[arg(long)]
+        access_manifest_root: Option<String>,
+        /// Optional 32-byte replacement non-interference digest.
+        #[arg(long)]
+        non_interference_digest: Option<String>,
+        /// Absolute fee paid by a normal owner cell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
@@ -1102,6 +1186,145 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         cell.type_hash.as_deref().unwrap_or("none"),
                         cell.data_len
                     );
+                }
+            }
+        }
+        DevnetCommand::OpenFactory {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            state_root,
+            access_manifest_root,
+            non_interference_digest,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::open_factory(
+                &rpc,
+                OpenFactoryOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    state_root,
+                    access_manifest_root,
+                    non_interference_digest,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("factory_id={}", report.factory_id);
+                println!("input_capacity={}", report.input_capacity);
+                println!("factory_capacity={}", report.factory_capacity);
+                println!("change_capacity={}", report.change_capacity);
+                println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for participant in report.participants {
+                    println!(
+                        "participant={} participant_id={} pubkey_sec1={}",
+                        participant.role, participant.participant_id, participant.pubkey_sec1
+                    );
+                }
+                for script in report.scripts {
+                    println!(
+                        "script={} out_point={}:{} data_hash={} hash_type={}",
+                        script.name,
+                        script.out_point.tx_hash,
+                        script.out_point.index,
+                        script.data_hash,
+                        script.hash_type
+                    );
+                }
+                for cell in report.cells {
+                    println!(
+                        "cell={} out_point={}:{} capacity={} lock_hash={} type_hash={} data_len={}",
+                        cell.role,
+                        cell.out_point.tx_hash,
+                        cell.out_point.index,
+                        cell.capacity,
+                        cell.lock_hash,
+                        cell.type_hash.as_deref().unwrap_or("none"),
+                        cell.data_len
+                    );
+                }
+            }
+        }
+        DevnetCommand::UpdateFactory {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            update_number,
+            state_root,
+            access_manifest_root,
+            non_interference_digest,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::update_factory(
+                &rpc,
+                UpdateFactoryOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    update_number,
+                    state_root,
+                    access_manifest_root,
+                    non_interference_digest,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("factory_id={}", report.factory_id);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.factory_out_point.tx_hash, report.factory_out_point.index
+                );
+                println!("factory_capacity={}", report.factory_capacity);
+                println!("fee_input_capacity={}", report.fee_input_capacity);
+                println!("fee_change_capacity={}", report.fee_change_capacity);
+                println!("fee={}", report.fee);
+                println!("state_root={}", report.state_root);
+                println!("access_manifest_root={}", report.access_manifest_root);
+                println!("non_interference_digest={}", report.non_interference_digest);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
                 }
             }
         }

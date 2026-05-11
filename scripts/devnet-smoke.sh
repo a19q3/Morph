@@ -57,6 +57,17 @@ run_json competing-spend-smoke devnet --rpc-url "$RPC_URL" competing-spend-smoke
 run_json xudt-smoke devnet --rpc-url "$RPC_URL" xudt-smoke
 run_json xudt-negative-smoke devnet --rpc-url "$RPC_URL" xudt-negative-smoke
 
+FACTORY_DIR="$OUT_DIR/factory"
+mkdir -p "$FACTORY_DIR"
+log "factory-open -> $FACTORY_DIR/open.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-factory --json >"$FACTORY_DIR/open.json"
+FACTORY_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
+
+log "factory-update -> $FACTORY_DIR/update.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" update-factory \
+  --factory-out-point "$FACTORY_OUT_POINT" \
+  --json >"$FACTORY_DIR/update.json"
+
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"

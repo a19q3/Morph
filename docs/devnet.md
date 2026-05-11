@@ -550,16 +550,43 @@ objects and their fixed byte lengths. The devnet contracts still parse the
 bytes directly; generated Molecule code is a later hardening step, not a
 consensus or node requirement.
 
-Factory proof mode should not be enabled on devnet until the host-side
-rights-dependency predicate has been turned into an on-chain proof format and a
-transaction shape.
+The conservative factory path is now executable on devnet. It is deliberately
+small: one FactoryStateCell, two named participants, all-participant signatures,
+and monotonic update numbers. It does not claim reduced-signature factory exits
+yet.
+
+Open a factory state cell:
+
+```sh
+cargo run -q -p morph-cli -- devnet open-factory --json \
+  > target/open-factory.json
+
+FACTORY_OUT_POINT="$(
+  jq -r '.cells[] | select(.role == "factory") |
+    .out_point.tx_hash + ":" + (.out_point.index | tostring)' \
+    target/open-factory.json
+)"
+```
+
+Advance it with a new signed factory header:
+
+```sh
+cargo run -q -p morph-cli -- devnet update-factory \
+  --factory-out-point "$FACTORY_OUT_POINT" \
+  --json > target/update-factory.json
+```
+
+The update transaction keeps the FactoryStateCell capacity unchanged. A normal
+owner-controlled cell pays the fee and receives change, so the state carrier is
+not silently drained by routine factory updates.
 
 ## Remaining Devnet Gap
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
-vault, watchtower policy/alerts, and a CKB-VM-tested conservative factory type
-script. The remaining devnet work is external watchtower notification
-integration and a factory open/update CLI transaction path.
+vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
+script, and a devnet factory open/update CLI transaction path. The remaining
+devnet work is external watchtower notification integration and factory-local
+exit materialisation.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -575,11 +602,10 @@ cargo run -q -p morph-cli -- validate-factory-state-package \
   --json
 ```
 
-That command checks canonical roots, canonical participant sets,
+That host-side command checks canonical roots, canonical participant sets,
 `non_interference_digest`, the rights-dependency predicate, and conservative
 participant-id/public-key bindings with all-participant signatures over a
-domain-separated factory-state digest. It is not yet a devnet factory
-transaction.
+domain-separated factory-state digest.
 
 The `morph-factory-type` script is one step closer than the host package: it
 already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
