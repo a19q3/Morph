@@ -500,6 +500,7 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --from-block "$OPEN_BLOCK_NUMBER" \
   --detection-depth 3 \
   --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --private-key-file target/watchtower-owner.key \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
   --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
@@ -512,6 +513,7 @@ paths in a config file and run one bounded scan pass:
 ```sh
 cargo run -q -p morph-cli -- devnet watch-config-once \
   --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
   --json
 ```
 
@@ -521,14 +523,17 @@ the persisted cursor written by the previous pass:
 ```sh
 cargo run -q -p morph-cli -- devnet watch-config-loop \
   --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
   --passes 10 \
   --sleep-ms 1000 \
   --json
 ```
 
 The config deliberately does not carry a private key; key material is supplied
-through `--private-key` or `MORPH_DEVNET_PRIVATE_KEY` at runtime. Relative paths
-inside the config are resolved relative to the config file.
+through `--private-key-file`, `MORPH_DEVNET_PRIVATE_KEY_FILE`,
+`--private-key`, or `MORPH_DEVNET_PRIVATE_KEY` at runtime. A key file should
+contain exactly one hex-encoded private key. Relative paths inside the config
+are resolved relative to the config file.
 
 If the watcher should create its own SponsorCell at detection time, omit
 `--sponsor-out-point` and use:
@@ -539,6 +544,7 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --from-block "$OPEN_BLOCK_NUMBER" \
   --detection-depth 3 \
   --auto-fund-sponsor \
+  --private-key-file target/watchtower-owner.key \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
   --json

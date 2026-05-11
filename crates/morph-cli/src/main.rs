@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
@@ -765,12 +767,11 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the sponsor change lock.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
-        private_key: String,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
+        private_key: Option<String>,
+        /// File containing the sponsor private key. Prefer this for watchtower processes.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
+        private_key_file: Option<PathBuf>,
         /// SponsorCell out point, formatted as <tx-hash>:<index>.
         /// Required unless --auto-fund-sponsor is set.
         #[arg(long)]
@@ -830,12 +831,11 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls sponsor funding and change.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
-        private_key: String,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
+        private_key: Option<String>,
+        /// File containing the sponsor private key. Prefer this for watchtower processes.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
+        private_key_file: Option<PathBuf>,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -849,12 +849,11 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls sponsor funding and change.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
-        private_key: String,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
+        private_key: Option<String>,
+        /// File containing the sponsor private key. Prefer this for watchtower processes.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
+        private_key_file: Option<PathBuf>,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -1491,6 +1490,96 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Devnet { rpc_url, command } => run_devnet(&rpc_url, command),
+    }
+}
+
+fn resolve_watchtower_private_key(
+    private_key: Option<String>,
+    private_key_file: Option<PathBuf>,
+) -> Result<String> {
+    ensure!(
+        private_key.is_none() || private_key_file.is_none(),
+        "pass either --private-key or --private-key-file, not both"
+    );
+    if let Some(private_key) = private_key {
+        return canonical_private_key(&private_key, "--private-key");
+    }
+    if let Some(path) = private_key_file {
+        let value = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read private key file {}", path.display()))?;
+        return canonical_private_key(&value, &format!("private key file {}", path.display()));
+    }
+    canonical_private_key(
+        DEFAULT_DEVNET_PRIVATE_KEY,
+        "default local-devnet private key",
+    )
+}
+
+fn canonical_private_key(value: &str, source: &str) -> Result<String> {
+    let mut parts = value.split_whitespace();
+    let Some(first) = parts.next() else {
+        anyhow::bail!("{source} is empty");
+    };
+    ensure!(
+        parts.next().is_none(),
+        "{source} must contain exactly one hex private key"
+    );
+    let raw = first.strip_prefix("0x").unwrap_or(first);
+    ensure!(raw.len() == 64, "{source} must be 32 bytes");
+    let decoded = hex::decode(raw).with_context(|| format!("{source} must be hex encoded"))?;
+    ensure!(decoded.len() == 32, "{source} must be 32 bytes");
+    SigningKey::from_slice(&decoded)
+        .map_err(|err| anyhow::anyhow!("{source} is not a valid secp256k1 private key: {err:?}"))?;
+    Ok(format!("0x{}", raw.to_ascii_lowercase()))
+}
+
+#[cfg(test)]
+mod cli_secret_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_private_key_from_file() {
+        let path = std::env::temp_dir().join(format!(
+            "morph-private-key-{}-{}.txt",
+            std::process::id(),
+            "file"
+        ));
+        fs::write(&path, format!("{}\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        let resolved = resolve_watchtower_private_key(None, Some(path.clone())).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
+    }
+
+    #[test]
+    fn rejects_ambiguous_private_key_sources() {
+        let err = resolve_watchtower_private_key(
+            Some(DEFAULT_DEVNET_PRIVATE_KEY.to_string()),
+            Some(PathBuf::from("key.txt")),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("either --private-key or --private-key-file")
+        );
+    }
+
+    #[test]
+    fn rejects_multi_token_private_key_file() {
+        let path = std::env::temp_dir().join(format!(
+            "morph-private-key-{}-{}.txt",
+            std::process::id(),
+            "multi"
+        ));
+        fs::write(&path, format!("{} extra\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        let err = resolve_watchtower_private_key(None, Some(path.clone())).unwrap_err();
+        fs::remove_file(path).unwrap();
+        assert!(err.to_string().contains("exactly one hex private key"));
+    }
+
+    #[test]
+    fn falls_back_to_devnet_key_for_local_watchers() {
+        let resolved = resolve_watchtower_private_key(None, None).unwrap();
+        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
     }
 }
 
@@ -2428,6 +2517,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::WatchLatestPackage {
             contracts_dir,
             private_key,
+            private_key_file,
             sponsor_out_point,
             store_dir,
             channel_id,
@@ -2450,7 +2540,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &rpc,
                 WatchLatestStatePackageOptions {
                     contracts_dir,
-                    private_key,
+                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
                     sponsor_out_point,
                     store_dir,
                     channel_id,
@@ -2521,6 +2611,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::WatchConfigOnce {
             contracts_dir,
             private_key,
+            private_key_file,
             config,
             json,
         } => {
@@ -2531,7 +2622,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &config_data,
                 watch_config::WatchtowerRuntimeOptions {
                     contracts_dir,
-                    private_key,
+                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
                 },
             )?;
             if json {
@@ -2555,6 +2646,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::WatchConfigLoop {
             contracts_dir,
             private_key,
+            private_key_file,
             config,
             passes,
             sleep_ms,
@@ -2568,7 +2660,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &config_data,
                 watch_config::WatchtowerRuntimeOptions {
                     contracts_dir,
-                    private_key,
+                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
                 },
                 watch_config::WatchtowerConfigLoopOptions {
                     passes,

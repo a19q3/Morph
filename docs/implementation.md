@@ -130,6 +130,9 @@ The multi-channel config runner has both a single-pass form and a bounded loop
 form. The loop does not introduce a separate trust model: every pass uses the
 same policy checks, package validation, confirmation-depth scan, cursor file,
 and sponsor rules as `watch-latest-package`.
+Watchtower private keys are still local devnet keys, but the watchtower entry
+points can read them from a file supplied at runtime. The config file remains
+key-free, and a key file must contain exactly one hex-encoded private key.
 
 ## Current Non-Goals
 
@@ -164,6 +167,8 @@ A devnet demonstration is acceptable only when it includes:
   and resolves runtime paths deterministically;
 - a bounded multi-channel watchtower loop that reuses persisted cursors between
   passes;
+- watchtower key material supplied through runtime flags, environment
+  variables, or a single-key file rather than the config;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   publication submission, and idle scans;
 - a conservative all-participant factory state package with verified nested

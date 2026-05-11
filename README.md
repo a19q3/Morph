@@ -139,6 +139,7 @@ cargo run -p morph-cli -- devnet watch-latest-package \
   --from-block "$OPEN_BLOCK_NUMBER" \
   --detection-depth 3 \
   --auto-fund-sponsor \
+  --private-key-file target/watchtower-owner.key \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
   --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
@@ -152,13 +153,18 @@ private keys are intentionally kept outside the config:
 ```sh
 cargo run -p morph-cli -- devnet watch-config-once \
   --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
   --json
 cargo run -p morph-cli -- devnet watch-config-loop \
   --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
   --passes 10 \
   --sleep-ms 1000 \
   --json
 ```
+
+The watchtower commands also accept `MORPH_DEVNET_PRIVATE_KEY_FILE`; this is
+preferred over placing the sponsor key in shell history or a process list.
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package, its conservative all-participant signed

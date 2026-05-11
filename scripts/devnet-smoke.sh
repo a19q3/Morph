@@ -152,6 +152,10 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
 WATCH_DIR_ABS="$(cd "$WATCH_DIR" && pwd)"
+WATCH_KEY_FILE="$(mktemp "${TMPDIR:-/tmp}/morph-watchtower-key.XXXXXX")"
+trap 'rm -f "$WATCH_KEY_FILE"' EXIT
+printf '%s\n' "${MORPH_DEVNET_PRIVATE_KEY:-0xd00c06bfd800d27397002dca6fb0993d5ba6399b4238b2f29ee9deb97593d2bc}" >"$WATCH_KEY_FILE"
+chmod 600 "$WATCH_KEY_FILE" 2>/dev/null || true
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel --json >"$WATCH_DIR/open.json"
 STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
@@ -209,6 +213,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" mine \
 log "watch-auto-sponsor-publish -> $WATCH_DIR/watch.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-once \
   --config "$WATCH_DIR/watch-config.json" \
+  --private-key-file "$WATCH_KEY_FILE" \
   --json >"$WATCH_DIR/watch.json"
 
 PUBLISHED_STATE_OUT_POINT="$(jq -r '.channels[0].report.publication.state_out_point.tx_hash + ":" + (.channels[0].report.publication.state_out_point.index | tostring)' "$WATCH_DIR/watch.json")"
