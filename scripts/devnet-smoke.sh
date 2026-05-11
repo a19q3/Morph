@@ -90,6 +90,12 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-exit-channel \
   --factory-out-point "$FACTORY_OUT_POINT_AFTER_UPDATE" \
   --factory-vault-out-point "$FACTORY_VAULT_OUT_POINT" \
   --json >"$FACTORY_DIR/exit-channel.json"
+log "factory-local-exit-package -> $FACTORY_DIR/local-exit-package.json"
+jq '.local_exit_package' "$FACTORY_DIR/exit-channel.json" >"$FACTORY_DIR/local-exit-package.json"
+log "factory-local-exit-package-check -> $FACTORY_DIR/local-exit-package-check.json"
+cargo run -q -p morph-cli -- validate-factory-local-exit-package \
+  "$FACTORY_DIR/local-exit-package.json" \
+  --json >"$FACTORY_DIR/local-exit-package-check.json"
 FACTORY_CHILD_STATE_OUT_POINT="$(jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
 FACTORY_CHILD_VAULT_OUT_POINT="$(jq -r '.vault_out_point.tx_hash + ":" + (.vault_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
 FACTORY_CHILD_SPONSOR_OUT_POINT="$(jq -r '.sponsor_out_point.tx_hash + ":" + (.sponsor_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
@@ -113,6 +119,12 @@ log "factory-xudt-smoke -> $FACTORY_XUDT_DIR/smoke.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-smoke \
   --store-dir "$FACTORY_XUDT_DIR/packages" \
   --json >"$FACTORY_XUDT_DIR/smoke.json"
+log "factory-xudt-local-exit-package -> $FACTORY_XUDT_DIR/local-exit-package.json"
+jq '.exit.local_exit_package' "$FACTORY_XUDT_DIR/smoke.json" >"$FACTORY_XUDT_DIR/local-exit-package.json"
+log "factory-xudt-local-exit-package-check -> $FACTORY_XUDT_DIR/local-exit-package-check.json"
+cargo run -q -p morph-cli -- validate-factory-local-exit-package \
+  "$FACTORY_XUDT_DIR/local-exit-package.json" \
+  --json >"$FACTORY_XUDT_DIR/local-exit-package-check.json"
 
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
