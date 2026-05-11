@@ -7,10 +7,10 @@ use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FinaliseChannelOptions,
     FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
-    PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
-    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
-    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
-    XudtSmokeOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryStatePackageOptions,
+    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
+    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
+    XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -279,12 +279,77 @@ enum DevnetCommand {
         /// Optional 32-byte replacement non-interference digest.
         #[arg(long)]
         non_interference_digest: Option<String>,
+        /// Signed factory state package JSON. When set, Alice/Bob keys and root overrides are not used.
+        #[arg(
+            long,
+            conflicts_with_all = [
+                "update_number",
+                "state_root",
+                "access_manifest_root",
+                "non_interference_digest"
+            ]
+        )]
+        factory_state_package: Option<std::path::PathBuf>,
         /// Absolute fee paid by a normal owner cell, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a signed factory state package without broadcasting it.
+    SaveFactoryStatePackage {
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// New update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// Optional 32-byte replacement state root.
+        #[arg(long)]
+        state_root: Option<String>,
+        /// Optional 32-byte replacement access-manifest root.
+        #[arg(long)]
+        access_manifest_root: Option<String>,
+        /// Optional 32-byte replacement non-interference digest.
+        #[arg(long)]
+        non_interference_digest: Option<String>,
+        /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List saved signed factory state packages.
+    ListFactoryStatePackages {
+        /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Optional factory id filter.
+        #[arg(long)]
+        factory_id: Option<String>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select the highest-numbered saved factory state package.
+    LatestFactoryStatePackage {
+        /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Factory id to select.
+        #[arg(long)]
+        factory_id: String,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1277,6 +1342,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             state_root,
             access_manifest_root,
             non_interference_digest,
+            factory_state_package,
             fee,
             mine_blocks,
             json,
@@ -1293,6 +1359,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     state_root,
                     access_manifest_root,
                     non_interference_digest,
+                    factory_state_package,
                     fee,
                     mine_blocks,
                 },
@@ -1322,10 +1389,98 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("state_root={}", report.state_root);
                 println!("access_manifest_root={}", report.access_manifest_root);
                 println!("non_interference_digest={}", report.non_interference_digest);
+                if let Some(path) = &report.factory_state_package {
+                    println!("factory_state_package={path}");
+                }
                 print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
+            }
+        }
+        DevnetCommand::SaveFactoryStatePackage {
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            update_number,
+            state_root,
+            access_manifest_root,
+            non_interference_digest,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_factory_state_package(
+                &rpc,
+                SaveFactoryStatePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    update_number,
+                    state_root,
+                    access_manifest_root,
+                    non_interference_digest,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("factory_id={}", report.package.factory_id);
+                println!("update_number={}", report.package.update_number);
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("state_root={}", report.package.state_root);
+                println!(
+                    "access_manifest_root={}",
+                    report.package.access_manifest_root
+                );
+                println!(
+                    "non_interference_digest={}",
+                    report.package.non_interference_digest
+                );
+            }
+        }
+        DevnetCommand::ListFactoryStatePackages {
+            store_dir,
+            factory_id,
+            json,
+        } => {
+            let packages =
+                packages::list_factory_state_cell_packages(&store_dir, factory_id.as_deref())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "store_dir": store_dir,
+                        "packages": packages,
+                    }))?
+                );
+            } else {
+                println!("package_count={}", packages.len());
+                for record in packages {
+                    println!(
+                        "package={} factory_id={} update_number={} signing_digest={}",
+                        record.path.display(),
+                        record.package.factory_id,
+                        record.package.update_number,
+                        record.package.signing_digest
+                    );
+                }
+            }
+        }
+        DevnetCommand::LatestFactoryStatePackage {
+            store_dir,
+            factory_id,
+            json,
+        } => {
+            let record = packages::latest_factory_state_cell_package(&store_dir, &factory_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&record)?);
+            } else {
+                println!("path={}", record.path.display());
+                println!("factory_id={}", record.package.factory_id);
+                println!("update_number={}", record.package.update_number);
+                println!("signing_digest={}", record.package.signing_digest);
             }
         }
         DevnetCommand::PublishState {

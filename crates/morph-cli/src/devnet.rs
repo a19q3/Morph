@@ -33,9 +33,10 @@ use morph_script_common::{
 use serde::Serialize;
 
 use crate::packages::{
-    PackageOutPoint, StatePackageRecord, StoredStatePackage, WatchCursor, canonical_hex32,
-    default_watch_cursor_path, latest_package, read_package, read_watch_cursor, write_package,
-    write_watch_cursor,
+    PackageOutPoint, StatePackageRecord, StoredFactoryStateCellPackage, StoredStatePackage,
+    WatchCursor, canonical_hex32, default_watch_cursor_path, latest_package,
+    read_factory_state_cell_package, read_package, read_watch_cursor,
+    write_factory_state_cell_package, write_package, write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{
@@ -112,8 +113,21 @@ pub struct UpdateFactoryOptions {
     pub state_root: Option<String>,
     pub access_manifest_root: Option<String>,
     pub non_interference_digest: Option<String>,
+    pub factory_state_package: Option<PathBuf>,
     pub fee: u64,
     pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveFactoryStatePackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_out_point: String,
+    pub update_number: Option<u64>,
+    pub state_root: Option<String>,
+    pub access_manifest_root: Option<String>,
+    pub non_interference_digest: Option<String>,
+    pub store_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -425,8 +439,16 @@ pub struct UpdateFactoryReport {
     pub state_root: String,
     pub access_manifest_root: String,
     pub non_interference_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub factory_state_package: Option<String>,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveFactoryStatePackageReport {
+    pub path: String,
+    pub package: StoredFactoryStateCellPackage,
 }
 
 #[derive(Debug, Serialize)]
@@ -1217,56 +1239,117 @@ pub fn update_factory(
         "factory type args do not match the factory id in cell data"
     );
     let old_update_number = old_header.update_number();
-    let new_update_number = options
-        .update_number
-        .unwrap_or_else(|| old_update_number.saturating_add(1));
-    ensure!(
-        new_update_number > old_update_number,
-        "new update number must be greater than old update number {}",
-        old_update_number
-    );
-
-    let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
+    let (
+        new_factory_data,
+        signature_witness,
+        new_update_number,
+        state_root,
+        access_manifest_root,
+        non_interference_digest,
+        factory_state_package,
+    ) = if let Some(path) = &options.factory_state_package {
+        ensure!(
+            options.update_number.is_none()
+                && options.state_root.is_none()
+                && options.access_manifest_root.is_none()
+                && options.non_interference_digest.is_none(),
+            "factory_state_package cannot be combined with update_number or root overrides"
+        );
+        let package = read_factory_state_cell_package(path)?;
+        let header_bytes = package.header_bytes()?;
+        let witness_bytes = package.witness_bytes()?;
+        let package_header = FactoryStateHeaderV1::parse(&header_bytes)
+            .map_err(|err| anyhow!("factory state package header is invalid: {err:?}"))?;
+        ensure!(
+            old_header.same_context_except_progress(&package_header),
+            "factory state package does not match the current factory context"
+        );
+        ensure!(
+            package_header.update_number() > old_update_number,
+            "factory state package number {} must be greater than old update number {}",
+            package_header.update_number(),
+            old_update_number
+        );
+        let package_update_number = package_header.update_number();
+        let package_state_root =
+            bytes32_from_slice("factory package state root", package_header.state_root())?;
+        let package_access_manifest_root = bytes32_from_slice(
+            "factory package access manifest root",
+            package_header.access_manifest_root(),
+        )?;
+        let package_non_interference_digest = bytes32_from_slice(
+            "factory package non-interference digest",
+            package_header.non_interference_digest(),
+        )?;
+        (
+            header_bytes,
+            witness_bytes,
+            package_update_number,
+            package_state_root,
+            package_access_manifest_root,
+            package_non_interference_digest,
+            Some(path.display().to_string()),
+        )
+    } else {
+        let new_update_number = options
+            .update_number
+            .unwrap_or_else(|| old_update_number.saturating_add(1));
+        ensure!(
+            new_update_number > old_update_number,
+            "new update number must be greater than old update number {}",
+            old_update_number
+        );
+        let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
+            .unwrap_or_else(|| {
+                derived_factory_update_digest(
+                    b"CKB_MORPH_FACTORY_STATE_ROOT_UPDATE_V1",
+                    old_header.state_root(),
+                    new_update_number,
+                )
+            });
+        let access_manifest_root = parse_optional_hex32(
+            "access manifest root",
+            options.access_manifest_root.as_deref(),
+        )?
         .unwrap_or_else(|| {
             derived_factory_update_digest(
-                b"CKB_MORPH_FACTORY_STATE_ROOT_UPDATE_V1",
-                old_header.state_root(),
+                b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_UPDATE_V1",
+                old_header.access_manifest_root(),
                 new_update_number,
             )
         });
-    let access_manifest_root = parse_optional_hex32(
-        "access manifest root",
-        options.access_manifest_root.as_deref(),
-    )?
-    .unwrap_or_else(|| {
-        derived_factory_update_digest(
-            b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_UPDATE_V1",
-            old_header.access_manifest_root(),
-            new_update_number,
-        )
-    });
-    let non_interference_digest = parse_optional_hex32(
-        "non-interference digest",
-        options.non_interference_digest.as_deref(),
-    )?
-    .unwrap_or_else(|| {
-        derived_factory_update_digest(
-            b"CKB_MORPH_FACTORY_NON_INTERFERENCE_UPDATE_V1",
-            old_header.non_interference_digest(),
-            new_update_number,
-        )
-    });
+        let non_interference_digest = parse_optional_hex32(
+            "non-interference digest",
+            options.non_interference_digest.as_deref(),
+        )?
+        .unwrap_or_else(|| {
+            derived_factory_update_digest(
+                b"CKB_MORPH_FACTORY_NON_INTERFERENCE_UPDATE_V1",
+                old_header.non_interference_digest(),
+                new_update_number,
+            )
+        });
 
-    let mut new_factory_data = factory_cell.data.to_vec();
-    put_u64(&mut new_factory_data, 68, new_update_number);
-    new_factory_data[76..108].copy_from_slice(&state_root);
-    new_factory_data[140..172].copy_from_slice(&access_manifest_root);
-    new_factory_data[172..204].copy_from_slice(&non_interference_digest);
-    let signature_witness = factory_signature_witness(
-        &new_factory_data,
-        &options.alice_private_key,
-        &options.bob_private_key,
-    )?;
+        let mut new_factory_data = factory_cell.data.to_vec();
+        put_u64(&mut new_factory_data, 68, new_update_number);
+        new_factory_data[76..108].copy_from_slice(&state_root);
+        new_factory_data[140..172].copy_from_slice(&access_manifest_root);
+        new_factory_data[172..204].copy_from_slice(&non_interference_digest);
+        let signature_witness = factory_signature_witness(
+            &new_factory_data,
+            &options.alice_private_key,
+            &options.bob_private_key,
+        )?;
+        (
+            new_factory_data,
+            signature_witness.to_vec(),
+            new_update_number,
+            state_root,
+            access_manifest_root,
+            non_interference_digest,
+            None,
+        )
+    };
 
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
@@ -1330,8 +1413,85 @@ pub fn update_factory(
         state_root: hex32(&state_root),
         access_manifest_root: hex32(&access_manifest_root),
         non_interference_digest: hex32(&non_interference_digest),
+        factory_state_package,
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+    })
+}
+
+pub fn save_factory_state_package(
+    rpc: &CkbRpcClient,
+    options: SaveFactoryStatePackageOptions,
+) -> Result<SaveFactoryStatePackageReport> {
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    let new_update_number = options
+        .update_number
+        .unwrap_or_else(|| old_header.update_number().saturating_add(1));
+    ensure!(
+        new_update_number > old_header.update_number(),
+        "new update number must be greater than old update number {}",
+        old_header.update_number()
+    );
+    let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
+        .unwrap_or_else(|| {
+            derived_factory_update_digest(
+                b"CKB_MORPH_FACTORY_STATE_ROOT_UPDATE_V1",
+                old_header.state_root(),
+                new_update_number,
+            )
+        });
+    let access_manifest_root = parse_optional_hex32(
+        "access manifest root",
+        options.access_manifest_root.as_deref(),
+    )?
+    .unwrap_or_else(|| {
+        derived_factory_update_digest(
+            b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_UPDATE_V1",
+            old_header.access_manifest_root(),
+            new_update_number,
+        )
+    });
+    let non_interference_digest = parse_optional_hex32(
+        "non-interference digest",
+        options.non_interference_digest.as_deref(),
+    )?
+    .unwrap_or_else(|| {
+        derived_factory_update_digest(
+            b"CKB_MORPH_FACTORY_NON_INTERFERENCE_UPDATE_V1",
+            old_header.non_interference_digest(),
+            new_update_number,
+        )
+    });
+
+    let mut new_factory_data = factory_cell.data.to_vec();
+    put_u64(&mut new_factory_data, 68, new_update_number);
+    new_factory_data[76..108].copy_from_slice(&state_root);
+    new_factory_data[140..172].copy_from_slice(&access_manifest_root);
+    new_factory_data[172..204].copy_from_slice(&non_interference_digest);
+    let signature_witness = factory_signature_witness(
+        &new_factory_data,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+
+    let printable = printable_out_point(&factory_out_point);
+    let package = StoredFactoryStateCellPackage::from_signed_factory_state(
+        &new_factory_data,
+        &signature_witness,
+        Some(PackageOutPoint {
+            tx_hash: printable.tx_hash,
+            index: printable.index,
+        }),
+    )?;
+    let path = write_factory_state_cell_package(&options.store_dir, &package)?;
+
+    Ok(SaveFactoryStatePackageReport {
+        path: path.display().to_string(),
+        package,
     })
 }
 
@@ -4360,6 +4520,17 @@ fn parse_hex32_array(label: &str, value: &str) -> Result<[u8; 32]> {
     let decoded = hex::decode(stripped).with_context(|| format!("{label} is not valid hex"))?;
     let mut out = [0u8; 32];
     out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn bytes32_from_slice(label: &str, value: &[u8]) -> Result<[u8; 32]> {
+    ensure!(
+        value.len() == 32,
+        "{label} must be 32 bytes, got {}",
+        value.len()
+    );
+    let mut out = [0u8; 32];
+    out.copy_from_slice(value);
     Ok(out)
 }
 

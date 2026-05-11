@@ -566,13 +566,36 @@ FACTORY_OUT_POINT="$(
     .out_point.tx_hash + ":" + (.out_point.index | tostring)' \
     target/open-factory.json
 )"
+FACTORY_ID="$(jq -r '.factory_id' target/open-factory.json)"
 ```
 
-Advance it with a new signed factory header:
+Save a reusable signed factory state package:
+
+```sh
+cargo run -q -p morph-cli -- devnet save-factory-state-package \
+  --factory-out-point "$FACTORY_OUT_POINT" \
+  --json > target/factory-state-package.json
+
+FACTORY_PACKAGE_PATH="$(jq -r '.path' target/factory-state-package.json)"
+```
+
+List or select saved packages:
+
+```sh
+cargo run -q -p morph-cli -- devnet list-factory-state-packages \
+  --factory-id "$FACTORY_ID"
+
+cargo run -q -p morph-cli -- devnet latest-factory-state-package \
+  --factory-id "$FACTORY_ID" \
+  --json
+```
+
+Advance the factory by rebuilding a transaction around the signed evidence:
 
 ```sh
 cargo run -q -p morph-cli -- devnet update-factory \
   --factory-out-point "$FACTORY_OUT_POINT" \
+  --factory-state-package "$FACTORY_PACKAGE_PATH" \
   --json > target/update-factory.json
 ```
 

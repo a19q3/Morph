@@ -62,10 +62,25 @@ mkdir -p "$FACTORY_DIR"
 log "factory-open -> $FACTORY_DIR/open.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-factory --json >"$FACTORY_DIR/open.json"
 FACTORY_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
+FACTORY_ID="$(jq -r '.factory_id' "$FACTORY_DIR/open.json")"
+
+log "factory-save-package -> $FACTORY_DIR/package.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-factory-state-package \
+  --factory-out-point "$FACTORY_OUT_POINT" \
+  --store-dir "$FACTORY_DIR/packages" \
+  --json >"$FACTORY_DIR/package.json"
+FACTORY_PACKAGE_PATH="$(jq -r '.path' "$FACTORY_DIR/package.json")"
+
+log "factory-latest-package -> $FACTORY_DIR/latest-package.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" latest-factory-state-package \
+  --factory-id "$FACTORY_ID" \
+  --store-dir "$FACTORY_DIR/packages" \
+  --json >"$FACTORY_DIR/latest-package.json"
 
 log "factory-update -> $FACTORY_DIR/update.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" update-factory \
   --factory-out-point "$FACTORY_OUT_POINT" \
+  --factory-state-package "$FACTORY_PACKAGE_PATH" \
   --json >"$FACTORY_DIR/update.json"
 
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"

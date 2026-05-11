@@ -6,12 +6,16 @@ use anyhow::{Context, Result, anyhow, ensure};
 use morph_script_common::{
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1,
-    BilateralSignatureWitnessV1, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
-    STATE_HEADER_V1_LEN, StateHeaderV1, verify_bilateral_state_signatures,
+    BilateralSignatureWitnessV1, FACTORY_SIGNATURE_COUNT_V1, FACTORY_SIGNATURE_THRESHOLD_V1,
+    FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
+    FACTORY_STATE_HEADER_V1_LEN, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_SETTLING,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN, StateHeaderV1,
+    verify_bilateral_state_signatures, verify_factory_state_signatures,
 };
 use serde::{Deserialize, Serialize};
 
 const PACKAGE_SCHEMA: &str = "morph.state_package.v1";
+const FACTORY_STATE_CELL_PACKAGE_SCHEMA: &str = "morph.factory_state_cell_package.v1";
 const WATCH_CURSOR_SCHEMA: &str = "morph.watch_cursor.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +42,27 @@ pub struct StoredStatePackage {
 pub struct StatePackageRecord {
     pub path: PathBuf,
     pub package: StoredStatePackage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryStateCellPackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub signing_digest: String,
+    pub state_root: String,
+    pub access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub header_hex: String,
+    pub witness_hex: String,
+    pub source_factory_out_point: Option<PackageOutPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryStateCellPackageRecord {
+    pub path: PathBuf,
+    pub package: StoredFactoryStateCellPackage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,7 +208,126 @@ impl WatchCursor {
     }
 }
 
+impl StoredFactoryStateCellPackage {
+    pub fn from_signed_factory_state(
+        header_bytes: &[u8],
+        witness_bytes: &[u8],
+        source_factory_out_point: Option<PackageOutPoint>,
+    ) -> Result<Self> {
+        let header = parse_factory_header(header_bytes)?;
+        let witness = parse_factory_witness(witness_bytes)?;
+        verify_factory_state_signatures(&header, &witness)
+            .map_err(|err| anyhow!("factory state package signatures are invalid: {err:?}"))?;
+
+        let package = Self {
+            schema: FACTORY_STATE_CELL_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(header.factory_id()),
+            update_number: header.update_number(),
+            signing_digest: hex_prefixed(&header.signing_digest()),
+            state_root: hex_prefixed(header.state_root()),
+            access_manifest_root: hex_prefixed(header.access_manifest_root()),
+            non_interference_digest: hex_prefixed(header.non_interference_digest()),
+            header_hex: hex_prefixed(header_bytes),
+            witness_hex: hex_prefixed(witness_bytes),
+            source_factory_out_point,
+        };
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == FACTORY_STATE_CELL_PACKAGE_SCHEMA,
+            "unsupported factory state cell package schema {}",
+            self.schema
+        );
+
+        let header_bytes = self.header_bytes()?;
+        let witness_bytes = self.witness_bytes()?;
+        let header = parse_factory_header(&header_bytes)?;
+        let witness = parse_factory_witness(&witness_bytes)?;
+        ensure!(
+            header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+            "unsupported factory signature scheme {}",
+            header.signature_scheme_id()
+        );
+        verify_factory_state_signatures(&header, &witness)
+            .map_err(|err| anyhow!("factory state package signatures are invalid: {err:?}"))?;
+
+        ensure!(
+            self.factory_id == hex_prefixed(header.factory_id()),
+            "factory state package factory_id does not match header"
+        );
+        ensure!(
+            self.update_number == header.update_number(),
+            "factory state package update_number does not match header"
+        );
+        ensure!(
+            self.signing_digest == hex_prefixed(&header.signing_digest()),
+            "factory state package signing_digest does not match header"
+        );
+        ensure!(
+            self.state_root == hex_prefixed(header.state_root()),
+            "factory state package state_root does not match header"
+        );
+        ensure!(
+            self.access_manifest_root == hex_prefixed(header.access_manifest_root()),
+            "factory state package access_manifest_root does not match header"
+        );
+        ensure!(
+            self.non_interference_digest == hex_prefixed(header.non_interference_digest()),
+            "factory state package non_interference_digest does not match header"
+        );
+        Ok(())
+    }
+
+    pub fn header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(&self.header_hex, FACTORY_STATE_HEADER_V1_LEN, "header_hex")
+    }
+
+    pub fn witness_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.witness_hex,
+            FACTORY_SIGNATURE_WITNESS_V1_LEN,
+            "witness_hex",
+        )
+    }
+
+    pub fn file_name(&self) -> String {
+        let factory = self.factory_id.trim_start_matches("0x");
+        let digest = self.signing_digest.trim_start_matches("0x");
+        format!(
+            "factory-state-cell-{factory}-{:020}-{}.json",
+            self.update_number,
+            &digest[0..16]
+        )
+    }
+}
+
 pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf> {
+    package.validate()?;
+    fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create package directory {}", dir.display()))?;
+    let path = dir.join(package.file_name());
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json)
+        .with_context(|| format!("failed to write temporary package {}", tmp.display()))?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+pub fn write_factory_state_cell_package(
+    dir: &Path,
+    package: &StoredFactoryStateCellPackage,
+) -> Result<PathBuf> {
     package.validate()?;
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
@@ -255,6 +399,17 @@ pub fn read_package(path: &Path) -> Result<StoredStatePackage> {
     Ok(package)
 }
 
+pub fn read_factory_state_cell_package(path: &Path) -> Result<StoredFactoryStateCellPackage> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read factory state package {}", path.display()))?;
+    let package: StoredFactoryStateCellPackage = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse factory state package {}", path.display()))?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory state package {}", path.display()))?;
+    Ok(package)
+}
+
 pub fn list_packages(dir: &Path, channel_id: Option<&str>) -> Result<Vec<StatePackageRecord>> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -300,6 +455,82 @@ pub fn list_packages(dir: &Path, channel_id: Option<&str>) -> Result<Vec<StatePa
             .then_with(|| left.path.cmp(&right.path))
     });
     Ok(records)
+}
+
+pub fn list_factory_state_cell_packages(
+    dir: &Path,
+    factory_id: Option<&str>,
+) -> Result<Vec<FactoryStateCellPackageRecord>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    ensure!(
+        dir.is_dir(),
+        "factory state package path {} is not a directory",
+        dir.display()
+    );
+    let factory_filter = factory_id
+        .map(canonical_hex32)
+        .transpose()
+        .context("invalid factory id filter")?;
+    let mut records = Vec::new();
+    for entry in fs::read_dir(dir)
+        .with_context(|| format!("failed to read package directory {}", dir.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("failed to read package entry in {}", dir.display()))?;
+        let path = entry.path();
+        if !is_factory_state_cell_package_file(&path) {
+            continue;
+        }
+        let package = read_factory_state_cell_package(&path)?;
+        if factory_filter
+            .as_ref()
+            .is_some_and(|factory_id| &package.factory_id != factory_id)
+        {
+            continue;
+        }
+        records.push(FactoryStateCellPackageRecord { path, package });
+    }
+    records.sort_by(|left, right| {
+        left.package
+            .factory_id
+            .cmp(&right.package.factory_id)
+            .then_with(|| left.package.update_number.cmp(&right.package.update_number))
+            .then_with(|| {
+                left.package
+                    .signing_digest
+                    .cmp(&right.package.signing_digest)
+            })
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    Ok(records)
+}
+
+pub fn latest_factory_state_cell_package(
+    dir: &Path,
+    factory_id: &str,
+) -> Result<FactoryStateCellPackageRecord> {
+    let factory_id = canonical_hex32(factory_id)?;
+    let records = list_factory_state_cell_packages(dir, Some(&factory_id))?;
+    records
+        .into_iter()
+        .max_by(|left, right| {
+            left.package
+                .update_number
+                .cmp(&right.package.update_number)
+                .then_with(|| {
+                    left.package
+                        .created_unix_ms
+                        .cmp(&right.package.created_unix_ms)
+                })
+                .then_with(|| {
+                    left.package
+                        .signing_digest
+                        .cmp(&right.package.signing_digest)
+                })
+        })
+        .ok_or_else(|| anyhow!("no factory state package found for factory {factory_id}"))
 }
 
 pub fn latest_package(dir: &Path, channel_id: &str) -> Result<StatePackageRecord> {
@@ -353,6 +584,23 @@ fn parse_witness(raw: &[u8]) -> Result<BilateralSignatureWitnessV1<'_>> {
     Ok(witness)
 }
 
+fn parse_factory_header(raw: &[u8]) -> Result<FactoryStateHeaderV1<'_>> {
+    FactoryStateHeaderV1::parse(raw)
+        .map_err(|err| anyhow!("invalid factory state header encoding: {err:?}"))
+}
+
+fn parse_factory_witness(raw: &[u8]) -> Result<FactorySignatureWitnessV1<'_>> {
+    let witness = FactorySignatureWitnessV1::parse(raw)
+        .map_err(|err| anyhow!("invalid factory signature witness: {err:?}"))?;
+    ensure!(
+        witness.threshold() == FACTORY_SIGNATURE_THRESHOLD_V1
+            && witness.count() == FACTORY_SIGNATURE_COUNT_V1
+            && witness.version() == FACTORY_SIGNATURE_WITNESS_VERSION_V1,
+        "unsupported factory signature witness"
+    );
+    Ok(witness)
+}
+
 fn decode_hex_exact(value: &str, expected_len: usize, field: &str) -> Result<Vec<u8>> {
     let stripped = value.strip_prefix("0x").unwrap_or(value);
     let bytes = hex::decode(stripped).with_context(|| format!("{field} is not valid hex"))?;
@@ -371,6 +619,15 @@ fn is_package_file(path: &Path) -> bool {
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("state-"))
+}
+
+fn is_factory_state_cell_package_file(path: &Path) -> bool {
+    path.is_file()
+        && path.extension().and_then(|ext| ext.to_str()) == Some("json")
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("factory-state-cell-"))
 }
 
 fn hex_prefixed(bytes: &[u8]) -> String {
@@ -393,7 +650,8 @@ mod tests {
     use k256::ecdsa::{Signature, SigningKey};
     use morph_script_common::{
         BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-        ECDSA_SIGNATURE_LEN, participants_commitment_v1,
+        ECDSA_SIGNATURE_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
+        factory_participants_commitment_v1, participants_commitment_v1,
     };
 
     #[test]
@@ -426,6 +684,40 @@ mod tests {
         witness[last] ^= 1;
 
         let err = StoredStatePackage::from_signed_state(&header, &witness, None).unwrap_err();
+        assert!(err.to_string().contains("signatures are invalid"));
+    }
+
+    #[test]
+    fn writes_lists_and_selects_latest_factory_state_cell_package() {
+        let dir = temp_dir("factory-latest");
+        let first = signed_factory_state_cell_package(1);
+        let latest = signed_factory_state_cell_package(4);
+
+        let first_path = write_factory_state_cell_package(&dir, &first).unwrap();
+        let latest_path = write_factory_state_cell_package(&dir, &latest).unwrap();
+
+        let records = list_factory_state_cell_packages(&dir, Some(&first.factory_id)).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].path, first_path);
+        assert_eq!(records[1].path, latest_path);
+
+        let selected = latest_factory_state_cell_package(&dir, &first.factory_id).unwrap();
+        assert_eq!(selected.package.update_number, 4);
+        assert_eq!(selected.path, latest_path);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_tampered_factory_signature_witness() {
+        let package = signed_factory_state_cell_package(2);
+        let header = package.header_bytes().unwrap();
+        let mut witness = package.witness_bytes().unwrap();
+        let last = witness.len() - 1;
+        witness[last] ^= 1;
+
+        let err = StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None)
+            .unwrap_err();
         assert!(err.to_string().contains("signatures are invalid"));
     }
 
@@ -483,6 +775,55 @@ mod tests {
         }
 
         StoredStatePackage::from_signed_state(&header, &witness, None).unwrap()
+    }
+
+    fn signed_factory_state_cell_package(update_number: u64) -> StoredFactoryStateCellPackage {
+        let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut entries = [
+            ([1u8; BYTE32_LEN], pubkey(&alice), alice),
+            ([2u8; BYTE32_LEN], pubkey(&bob), bob),
+        ];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut header = vec![0u8; FACTORY_STATE_HEADER_V1_LEN];
+        put_u16(&mut header, 0, 1);
+        header[2..34].copy_from_slice(&[7u8; BYTE32_LEN]);
+        put_u16(&mut header, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1);
+        header[36..68].copy_from_slice(&[8u8; BYTE32_LEN]);
+        put_u64(&mut header, 68, update_number);
+        header[76..108].copy_from_slice(&[9u8; BYTE32_LEN]);
+        header[108..140].copy_from_slice(&factory_participants_commitment_v1(
+            2,
+            &[
+                (entries[0].0.as_slice(), entries[0].1.as_slice()),
+                (entries[1].0.as_slice(), entries[1].1.as_slice()),
+            ],
+        ));
+        header[140..172].copy_from_slice(&[10u8; BYTE32_LEN]);
+        header[172..204].copy_from_slice(&[11u8; BYTE32_LEN]);
+        header[204..236].copy_from_slice(&[12u8; BYTE32_LEN]);
+        put_u16(&mut header, 236, 1);
+
+        let parsed = FactoryStateHeaderV1::parse(&header).unwrap();
+        let digest = parsed.signing_digest();
+        let mut witness = vec![0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+        put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+        witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+        witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+        for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+            let offset =
+                4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+            witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(pubkey);
+            let sig: Signature = key.sign_prehash(&digest).unwrap();
+            witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+                ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(sig.to_bytes().as_slice());
+        }
+
+        StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None).unwrap()
     }
 
     fn pubkey(key: &SigningKey) -> [u8; COMPRESSED_SECP256K1_PUBKEY_LEN] {
