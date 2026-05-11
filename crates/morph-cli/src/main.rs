@@ -5,12 +5,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FinaliseChannelOptions,
-    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
-    PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryStatePackageOptions,
-    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
-    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
-    XudtNegativeSmokeOptions, XudtSmokeOptions,
+    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactorySmokeOptions,
+    FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions, FundSponsorOptions,
+    OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions, PublishStateOptions,
+    SaveFactoryStatePackageOptions, SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions,
+    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
+    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -350,6 +350,40 @@ enum DevnetCommand {
         /// Factory id to select.
         #[arg(long)]
         factory_id: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> save package -> package update for a conservative factory.
+    FactorySmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 10_000_000_000)]
+        factory_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1481,6 +1515,50 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("factory_id={}", record.package.factory_id);
                 println!("update_number={}", record.package.update_number);
                 println!("signing_digest={}", record.package.signing_digest);
+            }
+        }
+        DevnetCommand::FactorySmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            fee,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_smoke(
+                &rpc,
+                FactorySmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    fee,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package={}", report.saved_package.path);
+                println!(
+                    "package_update_number={}",
+                    report.saved_package.package.update_number
+                );
+                println!(
+                    "selected_package={}",
+                    report.selected_package.path.display()
+                );
+                println!("update_tx_hash={}", report.update.tx_hash);
+                println!("update_status={}", report.update.status);
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.update.metrics);
             }
         }
         DevnetCommand::PublishState {

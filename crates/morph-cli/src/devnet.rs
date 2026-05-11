@@ -33,8 +33,9 @@ use morph_script_common::{
 use serde::Serialize;
 
 use crate::packages::{
-    PackageOutPoint, StatePackageRecord, StoredFactoryStateCellPackage, StoredStatePackage,
-    WatchCursor, canonical_hex32, default_watch_cursor_path, latest_package,
+    FactoryStateCellPackageRecord, PackageOutPoint, StatePackageRecord,
+    StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor, canonical_hex32,
+    default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
     read_factory_state_cell_package, read_package, read_watch_cursor,
     write_factory_state_cell_package, write_package, write_watch_cursor,
 };
@@ -127,6 +128,18 @@ pub struct SaveFactoryStatePackageOptions {
     pub state_root: Option<String>,
     pub access_manifest_root: Option<String>,
     pub non_interference_digest: Option<String>,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactorySmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub fee: u64,
+    pub mine_blocks: u64,
     pub store_dir: PathBuf,
 }
 
@@ -449,6 +462,14 @@ pub struct UpdateFactoryReport {
 pub struct SaveFactoryStatePackageReport {
     pub path: String,
     pub package: StoredFactoryStateCellPackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactorySmokeReport {
+    pub open: OpenFactoryReport,
+    pub saved_package: SaveFactoryStatePackageReport,
+    pub selected_package: FactoryStateCellPackageRecord,
+    pub update: UpdateFactoryReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -1492,6 +1513,66 @@ pub fn save_factory_state_package(
     Ok(SaveFactoryStatePackageReport {
         path: path.display().to_string(),
         package,
+    })
+}
+
+pub fn factory_smoke(
+    rpc: &CkbRpcClient,
+    options: FactorySmokeOptions,
+) -> Result<FactorySmokeReport> {
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let saved_package = save_factory_state_package(
+        rpc,
+        SaveFactoryStatePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            update_number: None,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let selected_package = latest_factory_state_cell_package(&options.store_dir, &open.factory_id)?;
+    let update = update_factory(
+        rpc,
+        UpdateFactoryOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point,
+            update_number: None,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            factory_state_package: Some(selected_package.path.clone()),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(FactorySmokeReport {
+        open,
+        saved_package,
+        selected_package,
+        update,
     })
 }
 
@@ -4371,6 +4452,15 @@ fn channel_cell_out_point(report: &OpenChannelReport, role: &str) -> Result<Stri
         .find(|cell| cell.role == role)
         .map(|cell| printable_out_point_string(&cell.out_point))
         .ok_or_else(|| anyhow!("open-channel report does not contain {role} cell"))
+}
+
+fn factory_cell_out_point(report: &OpenFactoryReport, role: &str) -> Result<String> {
+    report
+        .cells
+        .iter()
+        .find(|cell| cell.role == role)
+        .map(|cell| printable_out_point_string(&cell.out_point))
+        .ok_or_else(|| anyhow!("open-factory report does not contain {role} cell"))
 }
 
 fn printable_out_point_string(out_point: &PrintableOutPoint) -> String {

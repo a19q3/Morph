@@ -603,6 +603,13 @@ The update transaction keeps the FactoryStateCell capacity unchanged. A normal
 owner-controlled cell pays the fee and receives change, so the state carrier is
 not silently drained by routine factory updates.
 
+The same path is available as a single smoke command:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-smoke --json \
+  > target/factory-smoke.json
+```
+
 ## Remaining Devnet Gap
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
