@@ -115,6 +115,45 @@ fn good_partition() -> PartitionedTransaction {
     }
 }
 
+fn factory_right(
+    participant: u8,
+    subchannel: u8,
+    kind: FactoryRightKind,
+    asset_type: Option<u8>,
+    quantity: Amount,
+) -> FactoryRight {
+    FactoryRight {
+        id: FactoryRightId {
+            participant: bytes32(participant),
+            subchannel: bytes32(subchannel),
+            kind,
+            asset_type: asset_type.map(bytes32),
+        },
+        quantity,
+    }
+}
+
+fn factory_update() -> FactoryUpdate {
+    let before = vec![
+        factory_right(1, 10, FactoryRightKind::Balance, None, 100),
+        factory_right(1, 10, FactoryRightKind::ReserveClaim, None, 50),
+        factory_right(1, 10, FactoryRightKind::Membership, None, 1),
+        factory_right(1, 10, FactoryRightKind::ExitPath, None, 1),
+        factory_right(1, 10, FactoryRightKind::SponsorBudgetClaim, None, 20),
+        factory_right(2, 10, FactoryRightKind::Balance, None, 100),
+        factory_right(2, 10, FactoryRightKind::ReserveClaim, None, 50),
+        factory_right(2, 10, FactoryRightKind::Membership, None, 1),
+        factory_right(2, 10, FactoryRightKind::ExitPath, None, 1),
+        factory_right(2, 10, FactoryRightKind::SponsorBudgetClaim, None, 20),
+    ];
+    FactoryUpdate {
+        after: before.clone(),
+        before,
+        touched_participants: BTreeSet::from([bytes32(1)]),
+        authorised_participants: BTreeSet::from([bytes32(1)]),
+    }
+}
+
 #[test]
 fn signing_digest_is_domain_separated_and_state_sensitive() {
     let h1 = header(1, Phase::Settling);
@@ -227,6 +266,67 @@ fn rejects_unrelated_cell_used_for_channel_semantics() {
 
     let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
     assert_eq!(err, MorphError::UnrelatedCellUsed);
+}
+
+#[test]
+fn factory_non_interference_accepts_authorised_local_right_change() {
+    let mut update = factory_update();
+    update.after[0].quantity = 90;
+
+    validate_factory_non_interference(&update).unwrap();
+}
+
+#[test]
+fn factory_non_interference_rejects_untouched_balance_change() {
+    let mut update = factory_update();
+    update.after[5].quantity = 90;
+
+    let err = validate_factory_non_interference(&update).unwrap_err();
+    assert_eq!(err, MorphError::FactoryNonInterferenceViolation);
+}
+
+#[test]
+fn factory_non_interference_rejects_untouched_exit_right_removal() {
+    let mut update = factory_update();
+    update.after.retain(|right| {
+        !(right.id.participant == bytes32(2) && right.id.kind == FactoryRightKind::ExitPath)
+    });
+
+    let err = validate_factory_non_interference(&update).unwrap_err();
+    assert_eq!(err, MorphError::FactoryNonInterferenceViolation);
+}
+
+#[test]
+fn factory_non_interference_rejects_untouched_sponsor_right_creation() {
+    let mut update = factory_update();
+    update.after.push(factory_right(
+        2,
+        11,
+        FactoryRightKind::SponsorBudgetClaim,
+        None,
+        10,
+    ));
+
+    let err = validate_factory_non_interference(&update).unwrap_err();
+    assert_eq!(err, MorphError::FactoryNonInterferenceViolation);
+}
+
+#[test]
+fn factory_non_interference_requires_touched_participant_authorisation() {
+    let mut update = factory_update();
+    update.authorised_participants.clear();
+
+    let err = validate_factory_non_interference(&update).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMissingAuthorisation);
+}
+
+#[test]
+fn factory_non_interference_rejects_duplicate_right_ids() {
+    let mut update = factory_update();
+    update.before.push(update.before[0].clone());
+
+    let err = validate_factory_non_interference(&update).unwrap_err();
+    assert_eq!(err, MorphError::FactoryDuplicateRight);
 }
 
 #[test]

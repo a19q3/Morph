@@ -91,9 +91,14 @@ rotation. Broader operator policy and alerting remain open.
 
 ## M3: Conservative Factory Mode
 
+Status: host-level non-interference predicate implemented; no devnet factory
+script yet.
+
 - Factory state roots and access manifest.
 - Full-participant signature mode.
 - Local exit without reduced signing set.
+- Rights-dependency checks for balances, reserves, membership, exit paths, and
+  sponsor budget claims.
 
 ## M4: Reduced-Signature Factory Mode
 

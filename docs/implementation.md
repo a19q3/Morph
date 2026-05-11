@@ -50,6 +50,14 @@ The sponsor lock is not a general wallet lock. It will pay only transactions
 that produce a settling Morph State Cell for the policy's channel and authorised
 state-number interval. This keeps sponsor capacity out of arbitrary transfers.
 
+Factory mode is still host-side only, but the core crate now has a concrete
+non-interference predicate. A factory-local update is described as changes to a
+set of participant rights: balance, reserve claim, membership, exit path, and
+sponsor budget claim. Any right outside the declared touched participant set
+must be byte-for-byte unchanged, and every touched participant must appear in
+the authorisation set. This is not yet an on-chain proof system; it is the
+executable rule that a future proof bundle must satisfy.
+
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.

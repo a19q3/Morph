@@ -122,6 +122,37 @@ pub struct SponsorSpend {
     pub operation: ChannelOperation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum FactoryRightKind {
+    Balance,
+    ReserveClaim,
+    Membership,
+    ExitPath,
+    SponsorBudgetClaim,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FactoryRightId {
+    pub participant: Bytes32,
+    pub subchannel: Bytes32,
+    pub kind: FactoryRightKind,
+    pub asset_type: Option<Bytes32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryRight {
+    pub id: FactoryRightId,
+    pub quantity: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryUpdate {
+    pub before: Vec<FactoryRight>,
+    pub after: Vec<FactoryRight>,
+    pub touched_participants: BTreeSet<Bytes32>,
+    pub authorised_participants: BTreeSet<Bytes32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CellClass {
     ChannelReserve,

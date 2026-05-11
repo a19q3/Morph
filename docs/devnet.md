@@ -507,11 +507,12 @@ objects and their fixed byte lengths. The devnet contracts still parse the
 bytes directly; generated Molecule code is a later hardening step, not a
 consensus or node requirement.
 
-Factory proof mode should not be enabled on devnet until a concrete
-rights-dependency proof predicate exists.
+Factory proof mode should not be enabled on devnet until the host-side
+rights-dependency predicate has been turned into an on-chain proof format and a
+transaction shape.
 
 ## Remaining Devnet Gap
 
 The current vertical slice is bilateral and covers both CKB-only vaults and a
 devnet CKB+xUDT vault. The remaining devnet work is richer watchtower operator
-policy, emergency sponsor-budget rotation, and factory proof predicates.
+policy and a factory proof transaction path.

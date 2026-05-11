@@ -69,6 +69,12 @@ pub enum MorphError {
     VaultFundingAnchorMismatch,
     #[error("settlement descriptor did not match outputs")]
     DescriptorOutputMismatch,
+    #[error("factory update has duplicate right identifiers")]
+    FactoryDuplicateRight,
+    #[error("factory update touches a participant without authorisation")]
+    FactoryMissingAuthorisation,
+    #[error("factory update changes a right outside the declared touched set")]
+    FactoryNonInterferenceViolation,
 }
 
 pub type Result<T> = std::result::Result<T, MorphError>;
@@ -166,6 +172,32 @@ pub fn validate_sponsor_policy(policy: &SponsorPolicy, spend: &SponsorSpend) -> 
     Ok(())
 }
 
+pub fn validate_factory_non_interference(update: &FactoryUpdate) -> Result<()> {
+    for participant in &update.touched_participants {
+        if !update.authorised_participants.contains(participant) {
+            return Err(MorphError::FactoryMissingAuthorisation);
+        }
+    }
+
+    let before = factory_right_map(&update.before)?;
+    let after = factory_right_map(&update.after)?;
+
+    for (id, before_right) in &before {
+        match after.get(id) {
+            Some(after_right) if after_right.quantity == before_right.quantity => {}
+            Some(_) | None => require_factory_right_change_authorised(update, id)?,
+        }
+    }
+
+    for id in after.keys() {
+        if !before.contains_key(id) {
+            require_factory_right_change_authorised(update, id)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_vault_spend(spend: &VaultSpend) -> Result<()> {
     match spend.operation {
         ChannelOperation::Finalise
@@ -258,6 +290,29 @@ pub fn validate_partition_conservation(
     }
 
     Ok(totals)
+}
+
+fn factory_right_map(rights: &[FactoryRight]) -> Result<BTreeMap<FactoryRightId, &FactoryRight>> {
+    let mut map = BTreeMap::new();
+    for right in rights {
+        if map.insert(right.id.clone(), right).is_some() {
+            return Err(MorphError::FactoryDuplicateRight);
+        }
+    }
+    Ok(map)
+}
+
+fn require_factory_right_change_authorised(
+    update: &FactoryUpdate,
+    id: &FactoryRightId,
+) -> Result<()> {
+    if !update.touched_participants.contains(&id.participant) {
+        return Err(MorphError::FactoryNonInterferenceViolation);
+    }
+    if !update.authorised_participants.contains(&id.participant) {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+    Ok(())
 }
 
 fn require_same_header_context(old: &StateHeader, new: &StateHeader) -> Result<()> {
