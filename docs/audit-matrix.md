@@ -16,6 +16,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor change is uncontaminated | `rejects_sponsor_change_contamination` |
 | Unrelated Cells cannot influence channel validity | `rejects_unrelated_cell_used_for_channel_semantics` |
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
+| Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 
 Missing devnet-level checks:
 

@@ -14,9 +14,9 @@ Status: implemented.
 ## M1: Devnet Bilateral Channel
 
 Status: in progress. The three script ELFs build and offline CKB-VM tests cover
-state publication, stale-state rejection, invalid state signatures, bounded
-sponsor fees, descriptor-bound vault finalisation, and descriptor-output
-mismatch rejection.
+state publication, stale-state rejection, invalid state signatures,
+state-bound sponsor fees, descriptor-bound vault finalisation, and
+descriptor-output mismatch rejection.
 
 Required deliverables:
 

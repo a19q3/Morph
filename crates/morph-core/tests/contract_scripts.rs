@@ -474,6 +474,9 @@ fn vault_lock_rejects_descriptor_output_mismatch() {
 fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
     let mut context = Context::default();
     let wallet_lock = deploy_always_success(&mut context);
+    let state_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![7]));
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_state_data, new_state_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
     let change_hash = wallet_lock.calc_script_hash();
     let sponsor_lock = deploy_contract(
         &mut context,
@@ -481,7 +484,15 @@ fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
         sponsor_policy(change_hash.as_slice().try_into().unwrap(), 1_000),
     );
 
-    let input_out_point = context.create_cell(
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_state_data,
+    );
+    let sponsor_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(sponsor_lock)
@@ -491,7 +502,62 @@ fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
     let tx = TransactionBuilder::default()
         .input(
             CellInput::new_builder()
-                .previous_output(input_out_point)
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(sponsor_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY - 100)
+                .lock(wallet_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(sig_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("bounded sponsor fee should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn sponsor_lock_rejects_fee_without_state_publication() {
+    let mut context = Context::default();
+    let wallet_lock = deploy_always_success(&mut context);
+    let change_hash = wallet_lock.calc_script_hash();
+    let sponsor_lock = deploy_contract(
+        &mut context,
+        "morph-sponsor-lock",
+        sponsor_policy(change_hash.as_slice().try_into().unwrap(), 1_000),
+    );
+
+    let sponsor_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(sponsor_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(sponsor_out_point)
                 .build(),
         )
         .output(
@@ -504,7 +570,5 @@ fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
         .build();
     let tx = context.complete_tx(tx);
 
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("bounded sponsor fee should verify");
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }

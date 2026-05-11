@@ -9,7 +9,8 @@ fixed-width V1 validation subset in no-std CKB scripts:
   and bilateral participant signature verification.
 - `morph-vault-lock`: owns vault settlement, current-state authorisation, and
   descriptor-bound settlement output checks.
-- `morph-sponsor-lock`: owns bounded sponsor budget spending.
+- `morph-sponsor-lock`: owns bounded sponsor budget spending and requires a
+  matching settling StateHeader output.
 
 Build the current scripts with:
 

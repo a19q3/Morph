@@ -22,7 +22,9 @@ The contract crates now implement the fixed-width V1 subset for devnet:
   the expected funding anchor is present, its relative `since` has matured, and
   the settlement outputs match the descriptor commitment in the signed state.
 - Sponsor lock: permits fee payment only within an explicit sponsor policy and
-  counts only outputs returning to the authorised change lock as sponsor change.
+  counts only outputs returning to the authorised change lock as sponsor change;
+  it also requires a matching settling StateHeader output whose channel and
+  state number are admitted by the policy.
 
 The state type script verifies the bilateral V1 participant witness: two sorted
 compressed secp256k1 public keys, two ECDSA signatures over the canonical state
@@ -34,6 +36,10 @@ recipient lock hashes and exact output capacities. The descriptor hash is bound
 inside `settlement_descriptor_commitment`, so a finalisation transaction cannot
 change the settlement recipients or amounts without invalidating the signed
 state.
+
+The sponsor lock is not a general wallet lock. It will pay only transactions
+that produce a settling Morph State Cell for the policy's channel and authorised
+state-number interval. This keeps sponsor capacity out of arbitrary transfers.
 
 ## Current Non-Goals
 

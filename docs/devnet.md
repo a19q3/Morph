@@ -66,6 +66,7 @@ transactions for:
 - vault finalisation accepted when a current settling State Cell is consumed;
 - descriptor output mismatch rejected by `morph-vault-lock`;
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
+- sponsor fee payment rejected when no matching settling StateHeader is produced.
 
 ## Contract Milestone
 

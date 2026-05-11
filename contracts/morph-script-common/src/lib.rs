@@ -51,6 +51,7 @@ pub enum ScriptError {
     SettlementDescriptorEncoding = 26,
     SettlementDescriptorMismatch = 27,
     SettlementOutputMismatch = 28,
+    SponsorStateOutOfRange = 29,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
