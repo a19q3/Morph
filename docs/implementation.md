@@ -76,14 +76,15 @@ package. `print-factory-fixture` emits a sample package with a
 canonical participant sets, digest consistency, and the host-side
 non-interference predicate. This remains the data-layer predicate that a future
 reduced-signature proof bundle would need to satisfy.
-The next factory layer is a conservative all-participant state package:
-`print-factory-state-fixture` wraps the update package, computes a domain
-separated factory-state digest, and signs it with every participant key.
+The next factory layer is a signed state package. `print-factory-state-fixture`
+wraps the update package, computes a domain-separated factory-state digest, and
+signs it with every participant key. `print-reduced-factory-state-fixture`
+emits the narrower host-side form: after the non-interference predicate passes,
+only the authorised participants sign the same style of digest.
 `validate-factory-state-package` verifies the nested update package, the
-participant-id/public-key bindings, coverage of every participant mentioned by
-the update, the all-participant threshold, and every secp256k1 signature. This
-is still not reduced-signature factory logic, but it closes the authority model
-for full-consent factory updates and local exits.
+participant-id/public-key bindings, the selected signature mode, the threshold,
+and every secp256k1 signature. The reduced form is still a host-side proof
+package, not an on-chain reduced-signature factory exit.
 
 For chain publication, the CLI also supports a narrower factory-state-cell
 package. It stores the exact `FactoryStateHeaderV1` bytes and the

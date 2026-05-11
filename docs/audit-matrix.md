@@ -26,6 +26,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
+| Factory reduced host package signs only authorised participants | `validates_reduced_factory_state_package`, `rejects_reduced_factory_state_missing_authorised_signature`, `rejects_reduced_factory_state_extra_participant` |
 
 Implemented devnet-level checks:
 

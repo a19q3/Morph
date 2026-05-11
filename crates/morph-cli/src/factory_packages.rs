@@ -19,6 +19,7 @@ const FACTORY_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE_V1";
 const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package.v1";
 const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1";
 const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
+const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1: &str = "authorised_participants_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredFactoryRight {
@@ -119,7 +120,7 @@ struct DigestPayload {
 struct FactoryStateDigestPayload {
     domain: &'static str,
     schema: &'static str,
-    signature_mode: &'static str,
+    signature_mode: String,
     factory_id: String,
     update_number: u64,
     state_root_before: String,
@@ -273,6 +274,29 @@ impl StoredFactoryStatePackage {
         update_package: StoredFactoryUpdatePackage,
         signing_keys: &[(Bytes32, SigningKey)],
     ) -> Result<Self> {
+        Self::from_update_package_with_mode(
+            update_package,
+            signing_keys,
+            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+        )
+    }
+
+    pub fn from_reduced_update_package(
+        update_package: StoredFactoryUpdatePackage,
+        signing_keys: &[(Bytes32, SigningKey)],
+    ) -> Result<Self> {
+        Self::from_update_package_with_mode(
+            update_package,
+            signing_keys,
+            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1,
+        )
+    }
+
+    fn from_update_package_with_mode(
+        update_package: StoredFactoryUpdatePackage,
+        signing_keys: &[(Bytes32, SigningKey)],
+        signature_mode: &str,
+    ) -> Result<Self> {
         let update_summary = update_package.summary()?;
         ensure!(
             !signing_keys.is_empty(),
@@ -307,7 +331,7 @@ impl StoredFactoryStatePackage {
         let mut package = Self {
             schema: FACTORY_STATE_PACKAGE_SCHEMA.to_string(),
             created_unix_ms: now_unix_ms()?,
-            signature_mode: FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1.to_string(),
+            signature_mode: signature_mode.to_string(),
             factory_id: update_summary.factory_id,
             update_number: update_summary.update_number,
             state_root_before: update_summary.state_root_before,
@@ -338,7 +362,8 @@ impl StoredFactoryStatePackage {
             self.schema
         );
         ensure!(
-            self.signature_mode == FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+            self.signature_mode == FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1
+                || self.signature_mode == FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1,
             "unsupported factory signature mode {}",
             self.signature_mode
         );
@@ -374,7 +399,22 @@ impl StoredFactoryStatePackage {
             !self.participant_keys.is_empty(),
             "factory state package requires at least one participant"
         );
-        let expected_participants = update_participants(&self.update_package)?;
+        let expected_participants = match self.signature_mode.as_str() {
+            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1 => {
+                update_participants(&self.update_package)?
+            }
+            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1 => self
+                .update_package
+                .authorised_participants
+                .iter()
+                .map(|value| canonical_hex32(value))
+                .collect::<Result<BTreeSet<_>>>()?,
+            _ => unreachable!(),
+        };
+        ensure!(
+            !expected_participants.is_empty(),
+            "factory signature mode requires at least one expected signer"
+        );
         let signed_participants = self
             .participant_keys
             .iter()
@@ -386,7 +426,7 @@ impl StoredFactoryStatePackage {
         );
         ensure!(
             self.signature_threshold as usize == self.participant_keys.len(),
-            "all-participant factory mode requires threshold equal to participant count"
+            "factory signature threshold must equal participant key count"
         );
         let canonical_signatures = canonical_factory_signatures(&self.signatures)?;
         ensure!(
@@ -437,7 +477,7 @@ impl StoredFactoryStatePackage {
         let payload = FactoryStateDigestPayload {
             domain: FACTORY_STATE_DIGEST_DOMAIN_V1,
             schema: FACTORY_STATE_PACKAGE_SCHEMA,
-            signature_mode: FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+            signature_mode: self.signature_mode.clone(),
             factory_id: canonical_hex32(&self.factory_id)?,
             update_number: self.update_number,
             state_root_before: canonical_hex32(&self.state_root_before)?,
@@ -568,6 +608,12 @@ pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
         update_package,
         &[(bytes32(1), alice), (bytes32(2), bob)],
     )
+}
+
+pub fn fixture_reduced_state_package() -> Result<StoredFactoryStatePackage> {
+    let update_package = fixture_package()?;
+    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    StoredFactoryStatePackage::from_reduced_update_package(update_package, &[(bytes32(1), alice)])
 }
 
 fn right(
@@ -817,6 +863,17 @@ mod tests {
     }
 
     #[test]
+    fn validates_reduced_factory_state_package() {
+        let package = fixture_reduced_state_package().unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.signature_mode, "authorised_participants_v1");
+        assert_eq!(summary.signature_threshold, 1);
+        assert_eq!(summary.participants, 1);
+        assert_eq!(summary.signatures, 1);
+    }
+
+    #[test]
     fn rejects_missing_factory_state_signature() {
         let mut package = fixture_state_package().unwrap();
         package.signatures.pop();
@@ -857,7 +914,38 @@ mod tests {
         let err = package.validate().unwrap_err();
         assert!(
             err.to_string()
-                .contains("threshold equal to participant count")
+                .contains("threshold must equal participant key count")
         );
+    }
+
+    #[test]
+    fn rejects_reduced_factory_state_missing_authorised_signature() {
+        let mut package = fixture_reduced_state_package().unwrap();
+        package.participant_keys.clear();
+        package.signatures.clear();
+        package.signature_threshold = 0;
+        package.factory_state_digest = package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("at least one participant"));
+    }
+
+    #[test]
+    fn rejects_reduced_factory_state_extra_participant() {
+        let mut package = fixture_reduced_state_package().unwrap();
+        let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let digest = hex32_bytes(&package.factory_state_digest).unwrap();
+        package.participant_keys.push(StoredFactoryParticipantKey {
+            participant: hex_prefixed(&bytes32(2)),
+            pubkey_sec1: pubkey_hex(&bob),
+        });
+        package.signatures.push(
+            sign_factory_digest(&hex_prefixed(&bytes32(2)), &pubkey_hex(&bob), &bob, &digest)
+                .unwrap(),
+        );
+        package.signature_threshold = 2;
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("cover every participant"));
     }
 }

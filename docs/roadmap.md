@@ -111,14 +111,15 @@ JSON operator policy, local JSONL alerts, and policy-gated HTTP webhook alerts.
 ## M3: Conservative Factory Mode
 
 Status: host-level non-interference predicate implemented, conservative
-full-participant factory state packages implemented at the CLI layer, a
-conservative factory type script and factory vault lock execute in CKB-VM
-tests, and the CLI can open a FactoryStateCell plus FactoryVaultCell, save a
-reusable signed factory-state-cell package, select the latest package, publish a
-signed monotonic update on devnet, and materialise a bilateral child channel
-from the factory reserve. The same conservative exit path supports a typed
-factory reserve that releases a CKB+xUDT child vault and then uses the ordinary
-xUDT finalisation path.
+full-participant factory state packages implemented at the CLI layer, and a
+host-side authorised-participant reduced package implemented for the same
+predicate. A conservative factory type script and factory vault lock execute in
+CKB-VM tests, and the CLI can open a FactoryStateCell plus FactoryVaultCell,
+save a reusable signed factory-state-cell package, select the latest package,
+publish a signed monotonic update on devnet, and materialise a bilateral child
+channel from the factory reserve. The same conservative exit path supports a
+typed factory reserve that releases a CKB+xUDT child vault and then uses the
+ordinary xUDT finalisation path.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -127,8 +128,9 @@ xUDT finalisation path.
   sponsor budget claims.
 - Serialisable factory update package with non-interference digest and CLI
   validation.
-- Conservative all-participant factory state package with a domain-separated
-  digest and secp256k1 signature validation.
+- Conservative all-participant and host-side authorised-participant factory
+  state packages with domain-separated digests and secp256k1 signature
+  validation.
 - Conservative factory type script for one-live-FactoryStateCell monotonic
   updates under full-participant signatures.
 - Devnet `open-factory`, `save-factory-state-package`, `update-factory`,

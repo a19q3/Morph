@@ -44,6 +44,8 @@ enum Command {
     PrintFactoryFixture,
     /// Print a conservative all-participant signed factory state package fixture.
     PrintFactoryStateFixture,
+    /// Print a host-side authorised-participant signed factory state package fixture.
+    PrintReducedFactoryStateFixture,
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
     /// Validate a host-side factory non-interference package.
@@ -1108,6 +1110,11 @@ fn main() -> Result<()> {
         }
         Command::PrintFactoryStateFixture => {
             let package = factory_packages::fixture_state_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintReducedFactoryStateFixture => {
+            let package = factory_packages::fixture_reduced_state_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
