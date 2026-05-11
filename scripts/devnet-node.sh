@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DEFAULT_LOCAL_CKB="/Users/arthur/RustroverProjects/ckb/target/debug/ckb"
-CKB_BIN="${CKB_BIN:-$DEFAULT_LOCAL_CKB}"
+CKB_BIN="${CKB_BIN:-}"
 CKB_DIR="${CKB_DIR:-target/devnet/node}"
 RPC_PORT="${RPC_PORT:-18114}"
 P2P_PORT="${P2P_PORT:-18115}"
 DEFAULT_SECP_TYPE_HASH="0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
 BLOCK_ASSEMBLER_CODE_HASH="${BLOCK_ASSEMBLER_CODE_HASH:-$DEFAULT_SECP_TYPE_HASH}"
 BLOCK_ASSEMBLER_ARG="${BLOCK_ASSEMBLER_ARG:-0xc8328aabcd9b9e8e64fbc566c4385c3bdeb219d7}"
+
+if [ -z "$CKB_BIN" ]; then
+  if command -v ckb >/dev/null 2>&1; then
+    CKB_BIN="$(command -v ckb)"
+  else
+    printf "missing ckb binary: set CKB_BIN=/path/to/ckb or place ckb on PATH\n" >&2
+    exit 1
+  fi
+fi
 
 if [ ! -x "$CKB_BIN" ]; then
   printf "missing executable CKB_BIN: %s\n" "$CKB_BIN" >&2

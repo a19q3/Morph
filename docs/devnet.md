@@ -30,10 +30,9 @@ cargo --version
 rustup target list --installed | grep riscv64imac-unknown-none-elf
 ```
 
-The local machine currently has a usable CKB node binary at
-`/Users/arthur/RustroverProjects/ckb/target/debug/ckb`. `ckb-cli` is optional
-for manual inspection; the implementation should use Morph-specific RPC tooling
-for deploy, publish, supersede, and finalise transactions.
+Set `CKB_BIN` to a local CKB node binary, or put `ckb` on `PATH`. `ckb-cli` is
+optional for manual inspection; the implementation uses Morph-specific RPC
+tooling for deploy, publish, supersede, and finalise transactions.
 
 To start an isolated local dev node:
 
@@ -42,10 +41,10 @@ scripts/devnet-node.sh
 ```
 
 By default this initialises `target/devnet/node`, listens on RPC port `18114`,
-enables CKB's `IntegrationTest` RPC module for local block generation, configures
-a secp256k1 block assembler, and uses the local CKB debug binary. Override with
-`CKB_BIN`, `CKB_DIR`, `RPC_PORT`, `P2P_PORT`, `BLOCK_ASSEMBLER_CODE_HASH`, or
-`BLOCK_ASSEMBLER_ARG` when needed.
+enables CKB's `IntegrationTest` RPC module for local block generation, and
+configures a secp256k1 block assembler. Override with `CKB_BIN`, `CKB_DIR`,
+`RPC_PORT`, `P2P_PORT`, `BLOCK_ASSEMBLER_CODE_HASH`, or `BLOCK_ASSEMBLER_ARG`
+when needed.
 
 The default dev block assembler arg is:
 

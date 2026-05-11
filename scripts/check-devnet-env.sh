@@ -30,11 +30,7 @@ check cargo
 check rustup
 check jq
 
-DEFAULT_LOCAL_CKB="/Users/arthur/RustroverProjects/ckb/target/debug/ckb"
 CKB_BIN="${CKB_BIN:-}"
-if [ -z "$CKB_BIN" ] && [ -x "$DEFAULT_LOCAL_CKB" ]; then
-  CKB_BIN="$DEFAULT_LOCAL_CKB"
-fi
 check_bin ckb "$CKB_BIN"
 
 if command -v ckb-cli >/dev/null 2>&1; then
