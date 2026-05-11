@@ -107,6 +107,24 @@ enum Command {
         /// Candidate directory produced by scripts/devnet-smoke.sh.
         #[arg(long)]
         candidate: std::path::PathBuf,
+        /// Fail if the candidate has added or missing transaction entries.
+        #[arg(long)]
+        fail_on_transaction_set_change: bool,
+        /// Fail if any compared transaction status changed.
+        #[arg(long)]
+        fail_on_status_change: bool,
+        /// Maximum allowed absolute total estimated-cycle delta.
+        #[arg(long)]
+        max_abs_total_cycle_delta: Option<u64>,
+        /// Maximum allowed absolute per-transaction estimated-cycle delta.
+        #[arg(long)]
+        max_abs_tx_cycle_delta: Option<u64>,
+        /// Maximum allowed absolute total transaction-size delta.
+        #[arg(long)]
+        max_abs_total_byte_delta: Option<u64>,
+        /// Maximum allowed absolute per-transaction transaction-size delta.
+        #[arg(long)]
+        max_abs_tx_byte_delta: Option<u64>,
         /// Emit machine-readable JSON instead of Markdown.
         #[arg(long)]
         json: bool,
@@ -1334,14 +1352,29 @@ fn main() -> Result<()> {
         Command::DevnetSmokeCompare {
             baseline,
             candidate,
+            fail_on_transaction_set_change,
+            fail_on_status_change,
+            max_abs_total_cycle_delta,
+            max_abs_tx_cycle_delta,
+            max_abs_total_byte_delta,
+            max_abs_tx_byte_delta,
             json,
         } => {
             let comparison = smoke_report::compare_devnet_smoke(&baseline, &candidate)?;
+            let limits = smoke_report::DevnetSmokeComparisonLimits {
+                fail_on_transaction_set_change,
+                fail_on_status_change,
+                max_abs_total_cycle_delta,
+                max_abs_tx_cycle_delta,
+                max_abs_total_byte_delta,
+                max_abs_tx_byte_delta,
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&comparison)?);
             } else {
                 print!("{}", smoke_report::render_comparison_markdown(&comparison));
             }
+            smoke_report::assert_comparison_limits(&comparison, &limits)?;
             Ok(())
         }
         Command::Devnet { rpc_url, command } => run_devnet(&rpc_url, command),

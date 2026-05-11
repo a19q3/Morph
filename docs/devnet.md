@@ -131,12 +131,20 @@ Two completed runs can be compared without replaying devnet:
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-timestamp> \
-  --candidate target/devnet-smoke/<new-timestamp>
+  --candidate target/devnet-smoke/<new-timestamp> \
+  --fail-on-transaction-set-change \
+  --fail-on-status-change \
+  --max-abs-total-byte-delta 0 \
+  --max-abs-tx-byte-delta 0
 ```
 
 The comparison is keyed by smoke file and JSON path, so it reports transaction
 shape changes such as `$.publish` or `$.finalise` becoming larger or more
 expensive.
+When any `--fail-*` or `--max-*` option is supplied, the command still prints
+the comparison report and then exits non-zero if the candidate breaches the
+requested regression gate. This keeps exploratory comparisons readable while
+making CI checks strict.
 
 Devnet transaction reports include two measurement fields:
 

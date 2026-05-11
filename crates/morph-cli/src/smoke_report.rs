@@ -123,6 +123,16 @@ pub struct DevnetSmokeComparison {
     pub transaction_deltas: Vec<TransactionMetricDelta>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DevnetSmokeComparisonLimits {
+    pub fail_on_transaction_set_change: bool,
+    pub fail_on_status_change: bool,
+    pub max_abs_total_cycle_delta: Option<u64>,
+    pub max_abs_tx_cycle_delta: Option<u64>,
+    pub max_abs_total_byte_delta: Option<u64>,
+    pub max_abs_tx_byte_delta: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TransactionMetricDelta {
     pub key: String,
@@ -481,6 +491,83 @@ pub fn compare_summaries(
         ),
         transaction_deltas,
     }
+}
+
+pub fn assert_comparison_limits(
+    comparison: &DevnetSmokeComparison,
+    limits: &DevnetSmokeComparisonLimits,
+) -> Result<()> {
+    if limits.fail_on_transaction_set_change {
+        if !comparison.missing_from_candidate.is_empty() {
+            return Err(anyhow!(
+                "candidate smoke is missing {} baseline transactions",
+                comparison.missing_from_candidate.len()
+            ));
+        }
+        if !comparison.added_in_candidate.is_empty() {
+            return Err(anyhow!(
+                "candidate smoke added {} transactions",
+                comparison.added_in_candidate.len()
+            ));
+        }
+    }
+
+    if limits.fail_on_status_change {
+        if let Some(delta) = comparison
+            .transaction_deltas
+            .iter()
+            .find(|delta| delta.baseline_status != delta.candidate_status)
+        {
+            return Err(anyhow!(
+                "transaction {} status changed from {} to {}",
+                delta.key,
+                delta.baseline_status.as_deref().unwrap_or(""),
+                delta.candidate_status.as_deref().unwrap_or("")
+            ));
+        }
+    }
+
+    if let Some(limit) = limits.max_abs_total_cycle_delta {
+        let actual = abs_i64(comparison.total_estimated_cycles_delta);
+        if actual > limit {
+            return Err(anyhow!("total cycle delta {actual} exceeds limit {limit}"));
+        }
+    }
+    if let Some(limit) = limits.max_abs_total_byte_delta {
+        let actual = abs_i64(comparison.total_tx_size_bytes_delta);
+        if actual > limit {
+            return Err(anyhow!("total byte delta {actual} exceeds limit {limit}"));
+        }
+    }
+    if let Some(limit) = limits.max_abs_tx_cycle_delta {
+        if let Some(delta) = comparison
+            .transaction_deltas
+            .iter()
+            .find(|delta| abs_i64(delta.estimated_cycles_delta) > limit)
+        {
+            return Err(anyhow!(
+                "transaction {} cycle delta {} exceeds limit {}",
+                delta.key,
+                abs_i64(delta.estimated_cycles_delta),
+                limit
+            ));
+        }
+    }
+    if let Some(limit) = limits.max_abs_tx_byte_delta {
+        if let Some(delta) = comparison
+            .transaction_deltas
+            .iter()
+            .find(|delta| abs_i64(delta.tx_size_bytes_delta) > limit)
+        {
+            return Err(anyhow!(
+                "transaction {} byte delta {} exceeds limit {}",
+                delta.key,
+                abs_i64(delta.tx_size_bytes_delta),
+                limit
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
@@ -1070,6 +1157,10 @@ fn signed_delta_usize(baseline: usize, candidate: usize) -> i64 {
     candidate.saturating_sub(baseline) as i64 - baseline.saturating_sub(candidate) as i64
 }
 
+fn abs_i64(value: i64) -> u64 {
+    value.unsigned_abs()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1271,6 +1362,93 @@ mod tests {
 
         fs::remove_dir_all(&baseline_dir).ok();
         fs::remove_dir_all(&candidate_dir).ok();
+    }
+
+    #[test]
+    fn comparison_limits_reject_metric_regressions() {
+        let baseline_dir = temp_report_dir();
+        let candidate_dir = temp_report_dir();
+        fs::create_dir_all(&baseline_dir).unwrap();
+        fs::create_dir_all(&candidate_dir).unwrap();
+        write_metric_json(&baseline_dir, "open.json", "0xaaa", 10, 20);
+        write_metric_json(&candidate_dir, "open.json", "0xbbb", 13, 18);
+
+        let comparison = compare_devnet_smoke(&baseline_dir, &candidate_dir).unwrap();
+        assert_comparison_limits(
+            &comparison,
+            &DevnetSmokeComparisonLimits {
+                max_abs_tx_cycle_delta: Some(3),
+                max_abs_tx_byte_delta: Some(2),
+                ..DevnetSmokeComparisonLimits::default()
+            },
+        )
+        .unwrap();
+        let err = assert_comparison_limits(
+            &comparison,
+            &DevnetSmokeComparisonLimits {
+                max_abs_tx_cycle_delta: Some(2),
+                ..DevnetSmokeComparisonLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("cycle delta"));
+
+        fs::remove_dir_all(&baseline_dir).ok();
+        fs::remove_dir_all(&candidate_dir).ok();
+    }
+
+    #[test]
+    fn comparison_limits_reject_set_and_status_changes() {
+        let baseline = DevnetSmokeSummary {
+            directory: "baseline".to_string(),
+            manifest: BTreeMap::new(),
+            json_files: 1,
+            transactions: vec![TransactionSummary {
+                check: "open".to_string(),
+                path: "$".to_string(),
+                tx_hash: "0xaaa".to_string(),
+                status: Some("Committed".to_string()),
+                block_number: Some(1),
+                estimated_cycles: 10,
+                tx_size_bytes: 20,
+            }],
+            script_failures: Vec::new(),
+            deployed_scripts: Vec::new(),
+            watchtower_alerts: Vec::new(),
+            factory_local_exits: Vec::new(),
+            totals: MetricTotals::default(),
+        };
+        let mut candidate = baseline.clone();
+        candidate.transactions[0].status = Some("Pending".to_string());
+        candidate.transactions.push(TransactionSummary {
+            check: "extra".to_string(),
+            path: "$".to_string(),
+            tx_hash: "0xbbb".to_string(),
+            status: Some("Committed".to_string()),
+            block_number: Some(2),
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
+        });
+
+        let comparison = compare_summaries(&baseline, &candidate);
+        let status_err = assert_comparison_limits(
+            &comparison,
+            &DevnetSmokeComparisonLimits {
+                fail_on_status_change: true,
+                ..DevnetSmokeComparisonLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(status_err.to_string().contains("status changed"));
+        let set_err = assert_comparison_limits(
+            &comparison,
+            &DevnetSmokeComparisonLimits {
+                fail_on_transaction_set_change: true,
+                ..DevnetSmokeComparisonLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(set_err.to_string().contains("added"));
     }
 
     fn passing_assertion_summary() -> DevnetSmokeSummary {

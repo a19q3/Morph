@@ -181,6 +181,8 @@ A devnet demonstration is acceptable only when it includes:
 - smoke assertions that compare deployed script hashes with the local RISC-V
   contract binaries and require the watchtower older-state/publication alerts
   before accepting a run as current evidence;
+- smoke comparison gates for transaction-set, status, cycle, and byte-size
+  regressions between completed devnet runs;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

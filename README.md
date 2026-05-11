@@ -115,7 +115,11 @@ make smoke-report
 make smoke-assert
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
-  --candidate target/devnet-smoke/<new-run>
+  --candidate target/devnet-smoke/<new-run> \
+  --fail-on-transaction-set-change \
+  --fail-on-status-change \
+  --max-abs-total-byte-delta 0 \
+  --max-abs-tx-byte-delta 0
 ```
 
 For watchtower-style deployments, generate an operator policy and pass it to
