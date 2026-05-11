@@ -69,6 +69,7 @@ cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
 cargo run -p morph-cli -- devnet supersede-smoke
+cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
 scripts/devnet-smoke.sh
@@ -77,6 +78,6 @@ scripts/devnet-smoke.sh
 The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
 include CKB `estimate_cycles` output and serialized transaction size for each
 deployment, open, publication, sponsor top-up, supersession, and finalisation
-transaction, including the CKB+xUDT smoke path. `scripts/devnet-smoke.sh` runs
-the real local checks and devnet smoke paths, then writes the JSON and log
-artefacts under `target/devnet-smoke/`.
+transaction, including competing-spend and CKB+xUDT smoke paths.
+`scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
+then writes the JSON and log artefacts under `target/devnet-smoke/`.

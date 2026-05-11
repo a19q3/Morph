@@ -27,6 +27,10 @@ Implemented devnet-level checks:
   `devnet xudt-smoke`;
 - CKB+xUDT tampered settlement rejection on devnet through
   `devnet xudt-negative-smoke`;
+- competing StateCell publication rejection from the node's tx-pool-aware
+  live-cell view, followed by rebuilt publication against the confirmed
+  live StateCell, through
+  `devnet competing-spend-smoke`;
 - node-reported cycle measurement and transaction size reporting;
 - durable signed state-package storage with signature validation and latest
   package selection;
@@ -34,5 +38,4 @@ Implemented devnet-level checks:
 
 Missing devnet-level checks:
 
-- explicit mempool competing-spend behaviour against a live devnet node;
 - factory non-interference proof predicates.

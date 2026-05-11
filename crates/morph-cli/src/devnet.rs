@@ -193,6 +193,21 @@ pub struct SponsorPolicyNegativeSmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompetingSpendSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct XudtSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -486,6 +501,28 @@ pub struct SponsorPolicyNegativeSmokeReport {
     pub rejection: String,
     pub script_failure: ScriptFailureReport,
     pub allowed_publish: PublishStateReport,
+    pub finalise: FinaliseChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingCommitReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CompetingSpendSmokeReport {
+    pub open: OpenChannelReport,
+    pub spare_sponsor: FundSponsorReport,
+    pub pending_publish: PublishStateReport,
+    pub pending_commit: PendingCommitReport,
+    pub rejected_state_number: u64,
+    pub rejected_against_state_out_point: String,
+    pub rejection: String,
+    pub rebuilt_publish: PublishStateReport,
     pub finalise: FinaliseChannelReport,
 }
 
@@ -2351,6 +2388,158 @@ pub fn sponsor_policy_negative_smoke(
     })
 }
 
+pub fn competing_spend_smoke(
+    rpc: &CkbRpcClient,
+    options: CompetingSpendSmokeOptions,
+) -> Result<CompetingSpendSmokeReport> {
+    ensure!(
+        options.mine_blocks > 0,
+        "competing-spend smoke needs --mine-blocks greater than zero to commit the pending tx"
+    );
+    let policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building spare sponsor policy"))?;
+    ensure!(
+        policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the spare sponsor policy budget"
+    );
+
+    let open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(policy_fee),
+            sponsor_max_total_fee: Some(policy_fee),
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "vault")?;
+    let initial_sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+
+    let spare_sponsor = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 2,
+            sponsor_max_state_number: 2,
+            sponsor_max_fee_per_tx: Some(policy_fee),
+            sponsor_max_total_fee: Some(policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let spare_sponsor_out_point = printable_out_point_string(&spare_sponsor.sponsor_out_point);
+
+    let pending_publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            sponsor_out_point: initial_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: 0,
+        },
+    )?;
+    ensure!(
+        pending_publish.status != "Committed",
+        "pending publication unexpectedly committed before a block was generated"
+    );
+
+    let rejection = match publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            sponsor_out_point: spare_sponsor_out_point.clone(),
+            state_number: Some(2),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: 0,
+        },
+    ) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "competing state publication unexpectedly entered tx-pool in tx {}",
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+
+    let pending_commit =
+        mine_pending_transaction(rpc, &pending_publish.tx_hash, options.mine_blocks)?;
+    let live_settling_state_out_point =
+        printable_out_point_string(&pending_publish.state_out_point);
+    let rebuilt_publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: live_settling_state_out_point.clone(),
+            sponsor_out_point: spare_sponsor_out_point,
+            state_number: Some(2),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let finalise_state_out_point = printable_out_point_string(&rebuilt_publish.state_out_point);
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: finalise_state_out_point,
+            vault_out_point,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(CompetingSpendSmokeReport {
+        open,
+        spare_sponsor,
+        pending_publish,
+        pending_commit,
+        rejected_state_number: 2,
+        rejected_against_state_out_point: initial_state_out_point,
+        rejection,
+        rebuilt_publish,
+        finalise,
+    })
+}
+
 fn build_deploy_transaction(
     funding_cell: &LiveCell,
     secp_dep: CellDep,
@@ -2435,6 +2624,34 @@ fn send_and_mine(
         block_number: status.tx_status.block_number.map(|number| number.value()),
         block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
         metrics,
+        mined_blocks,
+    })
+}
+
+fn mine_pending_transaction(
+    rpc: &CkbRpcClient,
+    tx_hash: &str,
+    mine_blocks: u64,
+) -> Result<PendingCommitReport> {
+    let parsed = parse_h256(tx_hash)?;
+    let mut mined_blocks = Vec::new();
+    for _ in 0..mine_blocks {
+        mined_blocks.push(rpc.generate_block()?);
+        let status = rpc.transaction(parsed.clone())?;
+        if status.tx_status.status == Status::Committed {
+            break;
+        }
+    }
+    let status = rpc.wait_transaction_committed(
+        parsed,
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+    )?;
+    Ok(PendingCommitReport {
+        tx_hash: tx_hash.to_string(),
+        status: format!("{:?}", status.tx_status.status),
+        block_number: status.tx_status.block_number.map(|number| number.value()),
+        block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
         mined_blocks,
     })
 }

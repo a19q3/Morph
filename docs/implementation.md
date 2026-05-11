@@ -62,6 +62,8 @@ A devnet demonstration is acceptable only when it includes:
   settles by ordinary xUDT conservation;
 - a CKB+xUDT negative smoke proving that unchanged total supply is not enough:
   the vault lock must reject a tampered recipient-level token distribution;
+- a competing-spend smoke proving that a newer state may need to be rebuilt
+  against the currently live StateCell after an older publication confirms;
 - reusable signed state packages that can be published without channel signing
   keys;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

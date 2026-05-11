@@ -80,9 +80,9 @@ scripts/devnet-smoke.sh
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
-watchtower auto-sponsor path. It expects the node and `jq` to be available, and
-writes logs plus JSON reports under
+competing-spend smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement
+smoke, and the watchtower auto-sponsor path. It expects the node and `jq` to be
+available, and writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
@@ -307,6 +307,22 @@ The JSON form keeps the same per-transaction `metrics` object on each step, so
 benchmark scripts can compare open, stale publication, supersession, sponsor
 top-up, and finalisation separately.
 
+The competing-spend smoke makes the mempool assumption explicit:
+
+```sh
+cargo run -q -p morph-cli -- devnet competing-spend-smoke --json
+```
+
+It opens a channel, creates a spare SponsorCell for state `2`, publishes state
+`1` without mining it, then attempts to publish state `2` against the same old
+active StateCell while state `1` is still pending. The expected result is a CKB
+node rejection because the old StateCell is no longer live from the node's
+tx-pool-aware view; it is not a successful replacement. The smoke then mines
+state `1`, rebuilds the state `2` publication against the now live settling
+StateCell, and finalises normally. This is the practical rule the paper
+describes: a signed state package is reusable evidence, not a permanently fixed
+transaction body.
+
 There is also a live negative smoke for sponsor policy enforcement:
 
 ```sh
@@ -447,6 +463,5 @@ rights-dependency proof predicate exists.
 ## Remaining Devnet Gap
 
 The current vertical slice is bilateral and covers both CKB-only vaults and a
-devnet CKB+xUDT vault. The remaining devnet work is a mempool-level
-competing-spend case, richer watchtower operator policy, and emergency
-sponsor-budget rotation.
+devnet CKB+xUDT vault. The remaining devnet work is richer watchtower operator
+policy, emergency sponsor-budget rotation, and factory proof predicates.
