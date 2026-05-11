@@ -22,7 +22,8 @@ Current implementation stage:
   state publication, vault finalisation, and per-transaction cycle/size
   reporting from the node. It also stores reusable signed state packages for
   watchtower-style publication and validates optional watchtower operator
-  policies before confirmed-block scanning.
+  policies before confirmed-block scanning. Watchtower alerts can be written to
+  JSONL and posted to a policy-gated HTTP webhook.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
@@ -46,11 +47,11 @@ and the `morph-state-type` CKB script; conservative factory state signatures
 are verified by `morph-factory-type`. The current devnet path opens a channel,
 publishes a signed settling state using sponsor capacity, supersedes it with a
 higher signed state, and finalises the vault without modifying CKB consensus.
-It also opens a conservative factory, advances its state, materialises a child
-bilateral channel from the factory reserve, and then publishes and finalises
-that child channel. The CKB+xUDT smoke path mints a local test asset into the
-vault and settles exact token balances through the same StateCell and VaultCell
-authority model.
+It also opens a conservative factory, advances its state, materialises plain
+CKB and CKB+xUDT child bilateral channels from the factory reserve, and then
+publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
+local test asset into the vault and settle exact token balances through the
+same StateCell and VaultCell authority model.
 
 ## Repository Layout
 
@@ -116,14 +117,15 @@ cargo run -p morph-cli -- devnet watch-latest-package \
   --auto-fund-sponsor \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
+  --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
   --json
 ```
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package and its conservative all-participant signed
 state package. The devnet CLI also includes `open-factory`,
-`update-factory`, and `factory-exit-channel` for the conservative on-chain
-path:
+`update-factory`, `factory-exit-channel`, and `factory-xudt-smoke` for the
+conservative on-chain path:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json
