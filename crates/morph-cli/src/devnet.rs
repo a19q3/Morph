@@ -35,6 +35,7 @@ use crate::packages::{
     write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
+use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
@@ -123,6 +124,7 @@ pub struct WatchLatestStatePackageOptions {
     pub channel_id: String,
     pub from_block: u64,
     pub cursor_file: Option<PathBuf>,
+    pub watch_policy: Option<PathBuf>,
     pub ignore_cursor: bool,
     pub detection_depth: u64,
     pub timeout_secs: u64,
@@ -1463,6 +1465,20 @@ pub fn watch_latest_state_package(
         !options.auto_fund_sponsor || options.mine_blocks > 0,
         "auto sponsor funding requires --mine-blocks greater than zero on devnet"
     );
+    if let Some(path) = &options.watch_policy {
+        let policy = read_watchtower_policy(path)?;
+        policy.validate_run(&WatchPolicyRun {
+            channel_id: &options.channel_id,
+            detection_depth: options.detection_depth,
+            timeout_secs: options.timeout_secs,
+            poll_ms: options.poll_ms,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+            sponsor_out_point_present: options.sponsor_out_point.is_some(),
+            auto_fund_sponsor: options.auto_fund_sponsor,
+            auto_sponsor_capacity: options.auto_sponsor_capacity,
+        })?;
+    }
     let channel_id = canonical_hex32(&options.channel_id)?;
     let selected_package = latest_package(&options.store_dir, &channel_id)?;
     let selected_state_number = selected_package.package.state_number;

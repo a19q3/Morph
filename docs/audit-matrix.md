@@ -18,6 +18,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
+| Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 
@@ -39,6 +40,8 @@ Implemented devnet-level checks:
   `devnet sponsor-budget-negative-smoke`;
 - sponsor state-number range rejection through
   `devnet sponsor-policy-negative-smoke`;
+- watchtower policy checking for confirmation depth, fee, sponsor mode, and
+  automatic sponsor capacity before confirmed-block scanning starts;
 - node-reported cycle measurement and transaction size reporting, summarised by
   `devnet-smoke-report`;
 - durable signed state-package storage with signature validation and latest

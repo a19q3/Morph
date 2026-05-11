@@ -73,13 +73,18 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
   --store-dir "$WATCH_DIR/packages" \
   --json >"$WATCH_DIR/package.json"
 
+log "watch-auto-sponsor-policy -> $WATCH_DIR/watch-policy.json"
+cargo run -q -p morph-cli -- print-watch-policy-fixture >"$WATCH_DIR/watch-policy.json"
+
 log "watch-auto-sponsor-publish -> $WATCH_DIR/watch.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
   --channel-id "$CHANNEL_ID" \
   --from-block "$OPEN_BLOCK" \
   --store-dir "$WATCH_DIR/packages" \
+  --detection-depth 3 \
   --auto-fund-sponsor \
-  --timeout-secs 10 \
+  --watch-policy "$WATCH_DIR/watch-policy.json" \
+  --timeout-secs 30 \
   --poll-ms 250 \
   --json >"$WATCH_DIR/watch.json"
 

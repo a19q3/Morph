@@ -21,6 +21,7 @@ mod factory_packages;
 mod packages;
 mod rpc;
 mod smoke_report;
+mod watch_policy;
 
 #[derive(Debug, Parser)]
 #[command(name = "morph")]
@@ -38,6 +39,8 @@ enum Command {
     PrintFixture,
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
+    /// Print a sample watchtower operator policy.
+    PrintWatchPolicyFixture,
     /// Validate a host-side factory non-interference package.
     ValidateFactoryPackage {
         /// Path to the factory update package JSON.
@@ -338,6 +341,9 @@ enum DevnetCommand {
         /// Cursor JSON path. Defaults to the state-package store for this channel.
         #[arg(long)]
         cursor_file: Option<std::path::PathBuf>,
+        /// Optional watchtower policy JSON that bounds this run.
+        #[arg(long)]
+        watch_policy: Option<std::path::PathBuf>,
         /// Start from --from-block even when a saved cursor exists.
         #[arg(long)]
         ignore_cursor: bool,
@@ -772,6 +778,11 @@ fn main() -> Result<()> {
         Command::PrintFactoryFixture => {
             let package = factory_packages::fixture_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintWatchPolicyFixture => {
+            let policy = watch_policy::fixture_policy();
+            println!("{}", serde_json::to_string_pretty(&policy)?);
             Ok(())
         }
         Command::ValidateFactoryPackage { path, json } => {
@@ -1232,6 +1243,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             channel_id,
             from_block,
             cursor_file,
+            watch_policy,
             ignore_cursor,
             detection_depth,
             timeout_secs,
@@ -1252,6 +1264,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     channel_id,
                     from_block,
                     cursor_file,
+                    watch_policy,
                     ignore_cursor,
                     detection_depth,
                     timeout_secs,

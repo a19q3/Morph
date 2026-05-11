@@ -65,6 +65,14 @@ canonical participant sets, digest consistency, and the host-side
 non-interference predicate. This is intentionally a data-layer milestone before
 any devnet factory script.
 
+The watchtower scanner may also be bound by a small operator policy before it
+reads blocks or publishes a transaction. The policy is a JSON object generated
+by `print-watch-policy-fixture`; it can bind the channel id and constrain
+confirmation depth, runtime window, polling interval, fee, explicit sponsor
+usage, auto-funded sponsor rotation, auto-sponsor capacity, and devnet mining
+requirements. This keeps deployment assumptions in an auditable file rather
+than relying only on command-line convention.
+
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
@@ -92,6 +100,8 @@ A devnet demonstration is acceptable only when it includes:
   on-chain and can be resolved by rotating to a fresh SponsorCell;
 - reusable signed state packages that can be published without channel signing
   keys;
+- a watchtower operator policy that bounds confirmation depth, fees, sponsor
+  mode, and automatic sponsor capacity before publication;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

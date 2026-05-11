@@ -451,11 +451,14 @@ height, wait for a confirmation depth, and publish only if the observed
 StateCell is older than the latest saved package:
 
 ```sh
+cargo run -q -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
+
 cargo run -q -p morph-cli -- devnet watch-latest-package \
   --channel-id "$CHANNEL_ID" \
   --from-block "$OPEN_BLOCK_NUMBER" \
   --detection-depth 3 \
   --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --watch-policy target/watch-policy.json \
   --json
 ```
 
@@ -468,8 +471,17 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --from-block "$OPEN_BLOCK_NUMBER" \
   --detection-depth 3 \
   --auto-fund-sponsor \
+  --watch-policy target/watch-policy.json \
   --json
 ```
+
+The watch policy is deliberately small. It bounds the operational assumptions
+that matter to safety on a confirmation-based chain: minimum confirmation
+depth, minimum runtime window, maximum polling interval, maximum fee, whether a
+pre-existing SponsorCell may be used, whether auto-funded sponsor rotation is
+required, and the largest auto-sponsor capacity the watcher may lock. It may
+also bind itself to one canonical channel id. The policy is checked before the
+scanner reads blocks or publishes a transaction.
 
 The automatically funded SponsorCell is deliberately narrow: it is bound to the
 selected latest package's state number and carries a fee budget of twice the
@@ -526,8 +538,8 @@ transaction shape.
 ## Remaining Devnet Gap
 
 The current vertical slice is bilateral and covers both CKB-only vaults and a
-devnet CKB+xUDT vault. The remaining devnet work is richer watchtower operator
-policy and a factory proof transaction path.
+devnet CKB+xUDT vault. The remaining devnet work is watchtower alerting and a
+factory proof transaction path.
 
 The factory research track has a host-side package format that can be exercised
 without a node:

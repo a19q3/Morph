@@ -19,7 +19,8 @@ Current implementation stage:
   native CKB devnet JSON-RPC checks, contract deployment, channel opening,
   state publication, vault finalisation, and per-transaction cycle/size
   reporting from the node. It also stores reusable signed state packages for
-  watchtower-style publication.
+  watchtower-style publication and validates optional watchtower operator
+  policies before confirmed-block scanning.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
@@ -91,6 +92,20 @@ cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
   --candidate target/devnet-smoke/<new-run>
+```
+
+For watchtower-style deployments, generate an operator policy and pass it to
+the scanner before it publishes any package:
+
+```sh
+cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
+cargo run -p morph-cli -- devnet watch-latest-package \
+  --channel-id "$CHANNEL_ID" \
+  --from-block "$OPEN_BLOCK_NUMBER" \
+  --detection-depth 3 \
+  --auto-fund-sponsor \
+  --watch-policy target/watch-policy.json \
+  --json
 ```
 
 For the factory research track, the CLI can also print and validate a
