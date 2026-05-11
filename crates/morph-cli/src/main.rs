@@ -17,6 +17,7 @@ use morph_core::*;
 use rpc::{CkbRpcClient, HeaderView};
 
 mod devnet;
+mod factory_packages;
 mod packages;
 mod rpc;
 mod smoke_report;
@@ -35,6 +36,16 @@ enum Command {
     ValidateFixture,
     /// Print a JSON state header fixture and signing digest.
     PrintFixture,
+    /// Print a valid host-side factory non-interference package fixture.
+    PrintFactoryFixture,
+    /// Validate a host-side factory non-interference package.
+    ValidateFactoryPackage {
+        /// Path to the factory update package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Summarise a completed scripts/devnet-smoke.sh output directory.
     DevnetSmokeReport {
         /// Directory produced by scripts/devnet-smoke.sh.
@@ -746,6 +757,36 @@ fn main() -> Result<()> {
     match cli.command {
         Command::ValidateFixture => validate_fixture(),
         Command::PrintFixture => print_fixture(),
+        Command::PrintFactoryFixture => {
+            let package = factory_packages::fixture_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::ValidateFactoryPackage { path, json } => {
+            let package = factory_packages::read_factory_update_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("state_root_before={}", summary.state_root_before);
+                println!("state_root_after={}", summary.state_root_after);
+                println!("touched_participants={}", summary.touched_participants);
+                println!(
+                    "authorised_participants={}",
+                    summary.authorised_participants
+                );
+                println!("rights_before={}", summary.rights_before);
+                println!("rights_after={}", summary.rights_after);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+            }
+            Ok(())
+        }
         Command::DevnetSmokeReport { dir, json } => {
             let summary = smoke_report::summarize_devnet_smoke(&dir)?;
             if json {

@@ -58,3 +58,6 @@ Implemented host-level factory checks:
 - rejection of balance changes, exit-right removals, and sponsor-budget
   creations outside the touched set;
 - duplicate right-id rejection before proof evaluation.
+- serialisable factory update package with canonical roots, canonical
+  participant sets, non-interference digest checking, and CLI validation through
+  `print-factory-fixture` / `validate-factory-package`.

@@ -89,3 +89,11 @@ then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
 ```
+
+For the factory research track, the CLI can also print and validate a
+host-side non-interference package:
+
+```sh
+cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json
+cargo run -p morph-cli -- validate-factory-package target/factory-update.json --json
+```

@@ -58,6 +58,13 @@ must be byte-for-byte unchanged, and every touched participant must appear in
 the authorisation set. This is not yet an on-chain proof system; it is the
 executable rule that a future proof bundle must satisfy.
 
+The CLI can now serialise that predicate as a deterministic factory update
+package. `print-factory-fixture` emits a sample package with a
+`non_interference_digest`; `validate-factory-package` checks canonical roots,
+canonical participant sets, digest consistency, and the host-side
+non-interference predicate. This is intentionally a data-layer milestone before
+any devnet factory script.
+
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.

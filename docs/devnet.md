@@ -516,3 +516,17 @@ transaction shape.
 The current vertical slice is bilateral and covers both CKB-only vaults and a
 devnet CKB+xUDT vault. The remaining devnet work is richer watchtower operator
 policy and a factory proof transaction path.
+
+The factory research track has a host-side package format that can be exercised
+without a node:
+
+```sh
+cargo run -q -p morph-cli -- print-factory-fixture > target/factory-update.json
+cargo run -q -p morph-cli -- validate-factory-package \
+  target/factory-update.json \
+  --json
+```
+
+That command checks canonical roots, canonical participant sets,
+`non_interference_digest`, and the rights-dependency predicate. It is not yet a
+devnet factory transaction.

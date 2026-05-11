@@ -99,6 +99,8 @@ script yet.
 - Local exit without reduced signing set.
 - Rights-dependency checks for balances, reserves, membership, exit paths, and
   sponsor budget claims.
+- Serialisable factory update package with non-interference digest and CLI
+  validation.
 
 ## M4: Reduced-Signature Factory Mode
 
