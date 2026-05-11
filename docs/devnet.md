@@ -694,7 +694,9 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 
 The repository-level `scripts/devnet-smoke.sh` includes the additional
 factory-local exit, child publication, child finalisation, and factory xUDT
-child-channel steps.
+child-channel steps. `devnet-smoke-report` validates any embedded
+`local_exit_package` while building the summary, so a malformed package fails
+the report rather than being silently displayed.
 
 ## Remaining Devnet Gap
 

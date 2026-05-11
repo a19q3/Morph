@@ -6,6 +6,8 @@ use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::packages::StoredFactoryLocalExitPackage;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetSmokeSummary {
     pub directory: String,
@@ -13,6 +15,7 @@ pub struct DevnetSmokeSummary {
     pub json_files: usize,
     pub transactions: Vec<TransactionSummary>,
     pub script_failures: Vec<ScriptFailureSummary>,
+    pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
 
@@ -34,6 +37,21 @@ pub struct ScriptFailureSummary {
     pub source: Option<String>,
     pub error_code: Option<i64>,
     pub morph_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryLocalExitEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub exit_digest: String,
+    pub child_channel_id: String,
+    pub child_state_number: u64,
+    pub child_phase: String,
+    pub descriptor_version: u16,
+    pub state_output_index: u32,
+    pub vault_output_index: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -80,6 +98,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
 
     let mut transactions = Vec::new();
     let mut script_failures = Vec::new();
+    let mut factory_local_exits = Vec::new();
     for path in &json_paths {
         let relative = path
             .strip_prefix(dir)
@@ -91,7 +110,15 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             .with_context(|| format!("failed to read smoke JSON {}", path.display()))?;
         let value: Value = serde_json::from_slice(&raw)
             .with_context(|| format!("failed to parse smoke JSON {}", path.display()))?;
-        collect_from_value(&check, "$", &value, &mut transactions, &mut script_failures);
+        collect_from_value(
+            &check,
+            "$",
+            &value,
+            &mut transactions,
+            &mut script_failures,
+            &mut factory_local_exits,
+        )
+        .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
     }
 
     let totals = summarise_totals(&transactions);
@@ -101,6 +128,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         json_files: json_paths.len(),
         transactions,
         script_failures,
+        factory_local_exits,
         totals,
     })
 }
@@ -246,6 +274,29 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
             ));
         }
     }
+    out.push('\n');
+
+    out.push_str("## Factory Local Exits\n\n");
+    if summary.factory_local_exits.is_empty() {
+        out.push_str("No factory local-exit evidence packages were recorded.\n");
+    } else {
+        out.push_str("| Check | Path | Update | Child state | Phase | Descriptor | State out | Vault out | Exit digest |\n");
+        out.push_str("| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | --- |\n");
+        for exit in &summary.factory_local_exits {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
+                table_cell(&exit.check),
+                table_cell(&exit.path),
+                exit.update_number,
+                exit.child_state_number,
+                table_cell(&exit.child_phase),
+                exit.descriptor_version,
+                exit.state_output_index,
+                exit.vault_output_index,
+                exit.exit_digest
+            ));
+        }
+    }
 
     out
 }
@@ -369,9 +420,10 @@ fn collect_from_value(
     value: &Value,
     transactions: &mut Vec<TransactionSummary>,
     script_failures: &mut Vec<ScriptFailureSummary>,
-) {
+    factory_local_exits: &mut Vec<FactoryLocalExitEvidenceSummary>,
+) -> Result<()> {
     let Value::Object(object) = value else {
-        return;
+        return Ok(());
     };
 
     if let Some(tx) = transaction_from_object(check, path, object) {
@@ -388,6 +440,29 @@ fn collect_from_value(
         });
     }
 
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_local_exit_package.v1") {
+        let package: StoredFactoryLocalExitPackage =
+            serde_json::from_value(Value::Object(object.clone())).with_context(|| {
+                format!("failed to decode factory local-exit package at {path}")
+            })?;
+        let summary = package
+            .summary()
+            .with_context(|| format!("invalid factory local-exit package at {path}"))?;
+        factory_local_exits.push(FactoryLocalExitEvidenceSummary {
+            check: check.to_string(),
+            path: path.to_string(),
+            factory_id: summary.factory_id,
+            update_number: summary.update_number,
+            exit_digest: summary.exit_digest,
+            child_channel_id: summary.child_channel_id,
+            child_state_number: summary.child_state_number,
+            child_phase: summary.child_phase,
+            descriptor_version: summary.descriptor_version,
+            state_output_index: summary.state_output_index,
+            vault_output_index: summary.vault_output_index,
+        });
+    }
+
     for (key, child) in object {
         collect_from_value(
             check,
@@ -395,8 +470,10 @@ fn collect_from_value(
             child,
             transactions,
             script_failures,
-        );
+            factory_local_exits,
+        )?;
     }
+    Ok(())
 }
 
 fn transaction_from_object(
@@ -522,18 +599,32 @@ mod tests {
             }"#,
         )
         .unwrap();
+        let local_exit_package =
+            serde_json::to_string(&crate::packages::fixture_factory_local_exit_package().unwrap())
+                .unwrap();
+        fs::write(
+            dir.join("factory.json"),
+            format!(r#"{{"exit": {{"local_exit_package": {local_exit_package}}}}}"#),
+        )
+        .unwrap();
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 2);
+        assert_eq!(summary.json_files, 3);
         assert_eq!(summary.transactions.len(), 2);
         assert_eq!(summary.script_failures.len(), 1);
+        assert_eq!(summary.factory_local_exits.len(), 1);
+        assert_eq!(
+            summary.factory_local_exits[0].path,
+            "$.exit.local_exit_package"
+        );
         assert_eq!(summary.totals.total_estimated_cycles, 44);
         assert_eq!(summary.totals.total_tx_size_bytes, 66);
 
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("StateSinceNotMature"));
         assert!(markdown.contains("0xabc"));
+        assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
     }

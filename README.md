@@ -97,7 +97,9 @@ exit, and finalisation transaction, including finalise-since, sponsor budget,
 competing-spend, and CKB+xUDT smoke paths.
 `scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
 then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
-`target/devnet-smoke/`. To rebuild the summary for a previous run:
+`target/devnet-smoke/`. Summary generation also validates any factory
+local-exit evidence package embedded in the smoke JSON. To rebuild the summary
+for a previous run:
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
