@@ -22,11 +22,15 @@ protocol semantics locally and keeps devnet broadcast commands as a runbook.
 Expected tools for full devnet execution:
 
 ```sh
-ckb --version
-ckb-cli --version
+CKB_BIN=/path/to/ckb scripts/check-devnet-env.sh
 cargo --version
 rustup target list --installed | grep riscv64imac-unknown-none-elf
 ```
+
+The local machine currently has a usable CKB node binary at
+`/Users/arthur/RustroverProjects/ckb/target/debug/ckb`. `ckb-cli` is optional
+for manual inspection; the implementation should use Morph-specific RPC tooling
+for deploy, publish, supersede, and finalise transactions.
 
 ## Current Smoke Checks
 
@@ -85,8 +89,7 @@ rights-dependency proof predicate exists.
 
 ## Remaining Devnet Gap
 
-The local machine still needs `ckb` and `ckb-cli` on PATH before the scripts can
-be deployed and exercised against a live devnet node. Until then, the repository
-can build the script ELFs and run host-side plus offline CKB-VM tests, but it
-cannot broadcast funding, publication, supersession, or finalisation
-transactions.
+The local machine now has a CKB node binary, but the repository still needs
+Morph-specific RPC transaction tooling before it can broadcast funding,
+publication, supersession, or finalisation transactions against a live devnet
+node.
