@@ -43,6 +43,8 @@ Implemented devnet-level checks:
   monotonic factory updates;
 - CKB-VM factory type execution for a bounded reduced-rights update where one
   authorised participant can decrease only their own committed rights;
+- devnet publication of a bounded reduced-rights factory package through
+  `devnet factory-reduced-rights-smoke`;
 - CKB-VM factory local-exit execution with a FactoryVaultCell, committed
   child-channel evidence, reserve conservation, and CKB+xUDT child-vault
   materialisation;

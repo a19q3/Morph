@@ -38,10 +38,11 @@ use crate::packages::{
     FactoryStateCellPackageRecord, PackageOutPoint, StatePackageRecord,
     StoredFactoryLocalExitPackage, StoredFactoryReducedRightsPackage,
     StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor, canonical_hex32,
-    default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
-    read_factory_state_cell_update_package, read_package, read_watch_cursor,
-    reduced_rights_package_from_factory_header, write_factory_reduced_rights_package,
-    write_factory_state_cell_package, write_package, write_watch_cursor,
+    default_watch_cursor_path, fixture_factory_reduced_rights_package,
+    latest_factory_state_cell_package, latest_package, read_factory_state_cell_update_package,
+    read_package, read_watch_cursor, reduced_rights_package_from_factory_header,
+    write_factory_reduced_rights_package, write_factory_state_cell_package, write_package,
+    write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{
@@ -157,6 +158,20 @@ pub struct FactorySmokeOptions {
     pub bob_private_key: String,
     pub factory_capacity: u64,
     pub factory_vault_capacity: u64,
+    pub fee: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactoryReducedRightsSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub touched_after_balance: u128,
     pub fee: u64,
     pub mine_blocks: u64,
     pub store_dir: PathBuf,
@@ -599,6 +614,13 @@ pub struct FactorySmokeReport {
     pub open: OpenFactoryReport,
     pub saved_package: SaveFactoryStatePackageReport,
     pub selected_package: FactoryStateCellPackageRecord,
+    pub update: UpdateFactoryReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedRightsSmokeReport {
+    pub open: OpenFactoryReport,
+    pub package: SaveFactoryReducedRightsPackageReport,
     pub update: UpdateFactoryReport,
 }
 
@@ -1869,6 +1891,65 @@ pub fn factory_smoke(
         open,
         saved_package,
         selected_package,
+        update,
+    })
+}
+
+pub fn factory_reduced_rights_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryReducedRightsSmokeOptions,
+) -> Result<FactoryReducedRightsSmokeReport> {
+    let roots = fixture_factory_reduced_rights_package()?;
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: None,
+            state_root: Some(roots.old_state_root),
+            access_manifest_root: Some(roots.old_access_manifest_root),
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let package = save_factory_reduced_rights_package(
+        rpc,
+        SaveFactoryReducedRightsPackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            update_number: None,
+            touched_after_balance: options.touched_after_balance,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let update = update_factory(
+        rpc,
+        UpdateFactoryOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point,
+            update_number: None,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            factory_state_package: Some(PathBuf::from(&package.path)),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(FactoryReducedRightsSmokeReport {
+        open,
+        package,
         update,
     })
 }

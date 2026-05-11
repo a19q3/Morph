@@ -66,6 +66,9 @@ run_json sponsor-budget-negative-smoke devnet --rpc-url "$RPC_URL" sponsor-budge
 run_json competing-spend-smoke devnet --rpc-url "$RPC_URL" competing-spend-smoke
 run_json xudt-smoke devnet --rpc-url "$RPC_URL" xudt-smoke
 run_json xudt-negative-smoke devnet --rpc-url "$RPC_URL" xudt-negative-smoke
+mkdir -p "$OUT_DIR/factory-reduced-rights-packages"
+run_json factory-reduced-rights-smoke devnet --rpc-url "$RPC_URL" factory-reduced-rights-smoke \
+  --store-dir "$OUT_DIR/factory-reduced-rights-packages"
 
 FACTORY_DIR="$OUT_DIR/factory"
 mkdir -p "$FACTORY_DIR"

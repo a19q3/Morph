@@ -83,9 +83,10 @@ make devnet-smoke
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
 finalise-since negative smoke, sponsor-budget negative smoke, competing-spend
-smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
-watchtower auto-sponsor path. It expects the node and `jq` to be available, and
-writes logs plus JSON reports under
+smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, bounded
+reduced-rights factory update smoke, and the watchtower auto-sponsor path. It
+expects the node and `jq` to be available, and writes logs plus JSON reports
+under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed; the default is four blocks to avoid proposal-window
 flakiness on local devnet. On success it also refreshes the
@@ -212,6 +213,17 @@ cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
 cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
+```
+
+The reduced-rights factory path has a dedicated smoke command. It opens a
+FactoryStateCell whose roots match the bounded rights fixture, stores a
+reusable reduced-rights package, validates that the old package header matches
+the live factory cell, and publishes the update through the ordinary
+`update-factory --factory-state-package` path:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-reduced-rights-smoke --json \
+  > target/factory-reduced-rights-smoke.json
 ```
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the

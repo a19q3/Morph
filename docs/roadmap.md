@@ -160,7 +160,8 @@ finalisation path.
 - CLI package generation and `update-factory --factory-state-package`
   publication support for the bounded reduced-rights witness.
 - Devnet `open-factory`, `save-factory-state-package`, `update-factory`,
-  `factory-exit-channel`, and `factory-smoke` commands.
+  `factory-exit-channel`, `factory-smoke`, and
+  `factory-reduced-rights-smoke` commands.
 
 ## M4: Reduced-Signature Factory Mode
 
@@ -173,6 +174,7 @@ Implemented:
 - old/new rights-root and access-manifest-root checks;
 - non-interference digest binding;
 - one authorised signature over the new FactoryStateHeader;
+- devnet smoke coverage for reduced-rights package publication;
 - rejection of touched-right inflation and unrelated participant mutation in
   CKB-VM tests.
 
@@ -180,5 +182,4 @@ Still open:
 
 - reduced-signature value-releasing factory exits;
 - general Merkle proof bundles for larger factories;
-- benchmarked cycle limits for larger proof shapes;
-- devnet smoke coverage for reduced-rights package publication.
+- benchmarked cycle limits for larger proof shapes.

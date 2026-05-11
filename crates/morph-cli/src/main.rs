@@ -8,13 +8,13 @@ use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitChannelOptions,
-    FactoryExitChannelTamper, FactorySmokeOptions, FactoryXudtNegativeSmokeOptions,
-    FactoryXudtSmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
-    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
-    PublishStateOptions, SaveFactoryReducedRightsPackageOptions, SaveFactoryStatePackageOptions,
-    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
-    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
-    XudtNegativeSmokeOptions, XudtSmokeOptions,
+    FactoryExitChannelTamper, FactoryReducedRightsSmokeOptions, FactorySmokeOptions,
+    FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions, FinaliseChannelOptions,
+    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryReducedRightsPackageOptions,
+    SaveFactoryStatePackageOptions, SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions,
+    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
+    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -494,6 +494,46 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> save reduced-rights package -> package update for a bounded reduced factory proof.
+    FactoryReducedRightsSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key. Alice signs the reduced update.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// New Alice balance quantity in the bounded rights fixture. Must be lower than 100.
+        #[arg(long, default_value_t = 90)]
+        touched_after_balance: u128,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where reduced-rights factory packages are stored.
         #[arg(long, default_value = "target/morph-factory-state-packages")]
         store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
@@ -2199,6 +2239,65 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("update_status={}", report.update.status);
                 print_metrics(&report.open.metrics);
                 print_metrics(&report.update.metrics);
+            }
+        }
+        DevnetCommand::FactoryReducedRightsSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            touched_after_balance,
+            fee,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_reduced_rights_smoke(
+                &rpc,
+                FactoryReducedRightsSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    touched_after_balance,
+                    fee,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!(
+                    "old_update_number={}",
+                    report.package.package.old_update_number
+                );
+                println!(
+                    "new_update_number={}",
+                    report.package.package.new_update_number
+                );
+                println!("update_tx_hash={}", report.update.tx_hash);
+                println!("update_status={}", report.update.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.update.factory_out_point.tx_hash, report.update.factory_out_point.index
+                );
+                println!(
+                    "non_interference_digest={}",
+                    report.update.non_interference_digest
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.update.metrics);
+                for hash in report.update.mined_blocks {
+                    println!("mined_block={hash}");
+                }
             }
         }
         DevnetCommand::FactoryXudtSmoke {

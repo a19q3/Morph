@@ -7,7 +7,7 @@ use ckb_hash::blake2b_256;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::packages::StoredFactoryLocalExitPackage;
+use crate::packages::{StoredFactoryLocalExitPackage, StoredFactoryReducedRightsPackage};
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
 #[derive(Debug, Clone, Serialize)]
@@ -20,6 +20,7 @@ pub struct DevnetSmokeSummary {
     pub deployed_scripts: Vec<DeployedScriptSummary>,
     pub watchtower_alerts: Vec<WatchtowerAlertSummary>,
     pub watchtower_services: Vec<WatchtowerServiceSummary>,
+    pub factory_reduced_rights_updates: Vec<FactoryReducedRightsEvidenceSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
@@ -37,6 +38,7 @@ pub struct DevnetSmokeAssertionReport {
     pub watchtower_alerts: usize,
     pub watchtower_publication_alerts: usize,
     pub watchtower_service_records: usize,
+    pub factory_reduced_rights_updates: usize,
     pub factory_local_exits: usize,
 }
 
@@ -117,6 +119,21 @@ pub struct FactoryLocalExitEvidenceSummary {
     pub vault_output_index: u32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryReducedRightsEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MetricTotals {
     pub transaction_count: usize,
@@ -176,6 +193,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut deployed_scripts = Vec::new();
     let mut watchtower_alerts = Vec::new();
     let mut watchtower_services = Vec::new();
+    let mut factory_reduced_rights_updates = Vec::new();
     let mut factory_local_exits = Vec::new();
     {
         let mut collections = SmokeCollections {
@@ -183,6 +201,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             script_failures: &mut script_failures,
             deployed_scripts: &mut deployed_scripts,
             watchtower_services: &mut watchtower_services,
+            factory_reduced_rights_updates: &mut factory_reduced_rights_updates,
             factory_local_exits: &mut factory_local_exits,
         };
         for path in &json_paths {
@@ -214,6 +233,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         deployed_scripts,
         watchtower_alerts,
         watchtower_services,
+        factory_reduced_rights_updates,
         factory_local_exits,
         totals,
     })
@@ -253,6 +273,7 @@ pub fn assert_default_devnet_smoke(
             .filter(|alert| alert.event == "publication_submitted")
             .count(),
         watchtower_service_records: summary.watchtower_services.len(),
+        factory_reduced_rights_updates: summary.factory_reduced_rights_updates.len(),
         factory_local_exits: summary.factory_local_exits.len(),
     })
 }
@@ -322,6 +343,7 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
 
     assert_watchtower_alert_coverage(summary)?;
     assert_watchtower_service_coverage(summary)?;
+    assert_factory_reduced_rights_coverage(summary)?;
 
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
         return Err(anyhow!(
@@ -359,6 +381,36 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
             EXPECTED_FACTORY_CKB_EXITS,
             EXPECTED_FACTORY_XUDT_EXITS
         ));
+    }
+    Ok(())
+}
+
+fn assert_factory_reduced_rights_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let update_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-reduced-rights-smoke"
+            && tx.path == "$.update"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !update_committed {
+        return Err(anyhow!(
+            "missing committed factory-reduced-rights smoke update transaction"
+        ));
+    }
+
+    if summary.factory_reduced_rights_updates.is_empty() {
+        return Err(anyhow!("missing factory reduced-rights package evidence"));
+    }
+    for update in &summary.factory_reduced_rights_updates {
+        if update.new_update_number <= update.old_update_number {
+            return Err(anyhow!(
+                "factory reduced-rights update must be strictly monotonic"
+            ));
+        }
+        if update.signing_digest.is_empty() || update.non_interference_digest.is_empty() {
+            return Err(anyhow!(
+                "factory reduced-rights update must include signing and non-interference digests"
+            ));
+        }
     }
     Ok(())
 }
@@ -787,6 +839,26 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Factory Reduced-Rights Updates\n\n");
+    if summary.factory_reduced_rights_updates.is_empty() {
+        out.push_str("No factory reduced-rights packages were recorded.\n");
+    } else {
+        out.push_str("| Check | Path | Old update | New update | Signing digest | Non-interference digest |\n");
+        out.push_str("| --- | --- | ---: | ---: | --- | --- |\n");
+        for update in &summary.factory_reduced_rights_updates {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | `{}` | `{}` |\n",
+                table_cell(&update.check),
+                table_cell(&update.path),
+                update.old_update_number,
+                update.new_update_number,
+                update.signing_digest,
+                update.non_interference_digest
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Local Exits\n\n");
     if summary.factory_local_exits.is_empty() {
         out.push_str("No factory local-exit evidence packages were recorded.\n");
@@ -1066,6 +1138,7 @@ struct SmokeCollections<'a> {
     script_failures: &'a mut Vec<ScriptFailureSummary>,
     deployed_scripts: &'a mut Vec<DeployedScriptSummary>,
     watchtower_services: &'a mut Vec<WatchtowerServiceSummary>,
+    factory_reduced_rights_updates: &'a mut Vec<FactoryReducedRightsEvidenceSummary>,
     factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
 }
 
@@ -1130,6 +1203,33 @@ fn collect_from_value(
                 descriptor_version: summary.descriptor_version,
                 state_output_index: summary.state_output_index,
                 vault_output_index: summary.vault_output_index,
+            });
+    }
+
+    if object.get("schema").and_then(Value::as_str)
+        == Some("morph.factory_reduced_rights_package.v1")
+    {
+        let package: StoredFactoryReducedRightsPackage =
+            serde_json::from_value(Value::Object(object.clone())).with_context(|| {
+                format!("failed to decode factory reduced-rights package at {path}")
+            })?;
+        let summary = package
+            .summary()
+            .with_context(|| format!("invalid factory reduced-rights package at {path}"))?;
+        collections
+            .factory_reduced_rights_updates
+            .push(FactoryReducedRightsEvidenceSummary {
+                check: check.to_string(),
+                path: path.to_string(),
+                factory_id: summary.factory_id,
+                old_update_number: summary.old_update_number,
+                new_update_number: summary.new_update_number,
+                signing_digest: summary.signing_digest,
+                old_state_root: summary.old_state_root,
+                new_state_root: summary.new_state_root,
+                old_access_manifest_root: summary.old_access_manifest_root,
+                new_access_manifest_root: summary.new_access_manifest_root,
+                non_interference_digest: summary.non_interference_digest,
             });
     }
 
@@ -1344,6 +1444,15 @@ mod tests {
             format!(r#"{{"exit": {{"local_exit_package": {local_exit_package}}}}}"#),
         )
         .unwrap();
+        let reduced_package = serde_json::to_string(
+            &crate::packages::fixture_factory_reduced_rights_package().unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("factory-reduced.json"),
+            format!(r#"{{"package": {reduced_package}}}"#),
+        )
+        .unwrap();
         fs::write(
             dir.join("deploy.json"),
             r#"{
@@ -1408,7 +1517,7 @@ mod tests {
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 6);
+        assert_eq!(summary.json_files, 7);
         assert_eq!(summary.transactions.len(), 2);
         assert_eq!(summary.script_failures.len(), 1);
         assert_eq!(summary.deployed_scripts.len(), 1);
@@ -1418,6 +1527,8 @@ mod tests {
             summary.factory_local_exits[0].path,
             "$.exit.local_exit_package"
         );
+        assert_eq!(summary.factory_reduced_rights_updates.len(), 1);
+        assert_eq!(summary.factory_reduced_rights_updates[0].path, "$.package");
         assert_eq!(summary.watchtower_alerts.len(), 2);
         assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
         assert_eq!(summary.watchtower_services.len(), 2);
@@ -1442,6 +1553,7 @@ mod tests {
         assert!(markdown.contains("Deployed Scripts"));
         assert!(markdown.contains("Watchtower Alerts"));
         assert!(markdown.contains("Watchtower Service"));
+        assert!(markdown.contains("Factory Reduced-Rights Updates"));
         assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
@@ -1611,6 +1723,7 @@ mod tests {
             deployed_scripts: Vec::new(),
             watchtower_alerts: Vec::new(),
             watchtower_services: Vec::new(),
+            factory_reduced_rights_updates: Vec::new(),
             factory_local_exits: Vec::new(),
             totals: MetricTotals::default(),
         };
@@ -1654,7 +1767,11 @@ mod tests {
             directory: "target/devnet-smoke/test".to_string(),
             manifest,
             json_files: 36,
-            transactions: Vec::new(),
+            transactions: vec![transaction(
+                "factory-reduced-rights-smoke",
+                "$.update",
+                "Committed",
+            )],
             script_failures: vec![
                 failure(
                     "factory-xudt-negative/smoke",
@@ -1672,6 +1789,7 @@ mod tests {
             ],
             watchtower_alerts: watchtower_alerts(),
             watchtower_services: watchtower_services(),
+            factory_reduced_rights_updates: vec![factory_reduced_rights_update()],
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
                 factory_exit("factory/local-exit-package", 1),
@@ -1693,6 +1811,18 @@ mod tests {
         }
     }
 
+    fn transaction(check: &str, path: &str, status: &str) -> TransactionSummary {
+        TransactionSummary {
+            check: check.to_string(),
+            path: path.to_string(),
+            tx_hash: "0xabc".to_string(),
+            status: Some(status.to_string()),
+            block_number: Some(1),
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
+        }
+    }
+
     fn failure(check: &str, morph_error: &str, error_code: i64) -> ScriptFailureSummary {
         ScriptFailureSummary {
             check: check.to_string(),
@@ -1700,6 +1830,22 @@ mod tests {
             source: Some("Inputs[0].Type".to_string()),
             error_code: Some(error_code),
             morph_error: Some(morph_error.to_string()),
+        }
+    }
+
+    fn factory_reduced_rights_update() -> FactoryReducedRightsEvidenceSummary {
+        FactoryReducedRightsEvidenceSummary {
+            check: "factory-reduced-rights-smoke".to_string(),
+            path: "$.package.package".to_string(),
+            factory_id: "0x00".to_string(),
+            old_update_number: 0,
+            new_update_number: 1,
+            signing_digest: "0x11".to_string(),
+            old_state_root: "0x22".to_string(),
+            new_state_root: "0x33".to_string(),
+            old_access_manifest_root: "0x44".to_string(),
+            new_access_manifest_root: "0x55".to_string(),
+            non_interference_digest: "0x66".to_string(),
         }
     }
 

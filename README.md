@@ -59,8 +59,9 @@ publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
 local test asset into the vault and settle exact token balances through the
 same StateCell and VaultCell authority model.
 The reduced-signature factory work is deliberately narrow at this stage:
-CKB-VM tests cover a fixed-width proof for claim-reducing rights updates, but
-reduced-signature factory exits remain behind the proof-system gate.
+CKB-VM tests and devnet smoke cover a fixed-width proof for claim-reducing
+rights updates, while reduced-signature factory exits remain behind the
+proof-system gate.
 
 ## Repository Layout
 
@@ -98,6 +99,7 @@ cargo run -p morph-cli -- devnet sponsor-budget-negative-smoke
 cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
+cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 make devnet-smoke
 ```
