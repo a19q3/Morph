@@ -31,8 +31,8 @@ The contract crates now implement the fixed-width V1 subset for devnet:
   the settlement outputs match the descriptor commitment in the signed state.
 - Sponsor lock: permits fee payment only within an explicit sponsor policy and
   counts only outputs returning to the authorised change lock as sponsor change;
-  it also requires a matching settling StateHeader output whose channel and
-  state number are admitted by the policy.
+  it also requires a real settling Morph State Cell whose type hash, channel,
+  and state number are admitted by the policy.
 
 The state type script verifies the bilateral V1 participant witness: two sorted
 compressed secp256k1 public keys, two ECDSA signatures over the canonical state
@@ -59,8 +59,10 @@ the settlement recipients, capacities, asset type, or token amounts without
 invalidating the signed state.
 
 The sponsor lock is not a general wallet lock. It will pay only transactions
-that produce a settling Morph State Cell for the policy's channel and authorised
-state-number interval. This keeps sponsor capacity out of arbitrary transfers.
+that produce a settling Morph State Cell for the policy's channel, authorised
+state-number interval, and expected StateType hash. Arbitrary output data that
+looks like a StateHeader is not enough. This keeps sponsor capacity out of
+arbitrary transfers and out of fake-publication fee drains.
 
 Factory mode now has both a host-side predicate and a conservative devnet state
 track. A factory-local update is described as changes to a set of participant

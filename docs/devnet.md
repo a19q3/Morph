@@ -310,7 +310,13 @@ max_state_number = u64::MAX
 max_fee_per_tx   = sponsor_capacity / 2
 max_total_fee    = sponsor_capacity
 expiry           = u64::MAX
+state_type_hash  = current Morph StateType hash
 ```
+
+The sponsor script does not treat arbitrary output data as a publication. The
+policy binds the expected Morph StateType hash, and the sponsor lock rejects a
+fee spend unless the settling StateHeader appears in an output carrying that
+exact type.
 
 For watchtower-style runs, use tighter policy bounds:
 

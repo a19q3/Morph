@@ -434,7 +434,7 @@ pub struct SponsorPolicyReport {
     pub max_total_fee: u64,
     pub already_spent: u64,
     pub expiry: u64,
-    pub allowed_sponsor_source: String,
+    pub publication_state_type_hash: String,
     pub change_lock_hash: String,
 }
 
@@ -1036,6 +1036,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
         sponsor_policy_settings,
+        state_type.calc_script_hash().unpack(),
         change_lock_hash.as_slice().try_into().unwrap(),
     );
     let sponsor_lock = data1_script(
@@ -1188,8 +1189,8 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         vault_capacity: options.vault_capacity,
         sponsor_capacity: options.sponsor_capacity,
         sponsor_policy: sponsor_policy_report(
-            &channel_id,
             sponsor_policy_settings,
+            state_type.calc_script_hash().unpack(),
             change_lock_hash.as_slice().try_into().unwrap(),
         ),
         change_capacity,
@@ -2275,6 +2276,7 @@ pub fn factory_exit_channel(
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
         sponsor_policy_settings,
+        state_type_hash,
         owner_lock_hash.as_slice().try_into().unwrap(),
     );
     let sponsor_lock = data1_script(
@@ -2696,6 +2698,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
         sponsor_policy_settings,
+        state_type.calc_script_hash().unpack(),
         owner_lock_hash.as_slice().try_into().unwrap(),
     );
     let sponsor_lock = data1_script(
@@ -2859,8 +2862,8 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         vault_capacity: options.vault_capacity,
         sponsor_capacity: options.sponsor_capacity,
         sponsor_policy: sponsor_policy_report(
-            &channel_id,
             sponsor_policy_settings,
+            state_type.calc_script_hash().unpack(),
             owner_lock_hash.as_slice().try_into().unwrap(),
         ),
         change_capacity,
@@ -3387,6 +3390,13 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
     let state_cell = load_live_cell(rpc, state_out_point)?;
     let header = StateHeaderV1::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+    let state_type_hash: [u8; 32] = state_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("state cell does not carry a type script"))?
+        .calc_script_hash()
+        .unpack();
 
     let tip_number = rpc.tip_header()?.number_value()?;
     let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
@@ -3407,8 +3417,12 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         options.sponsor_max_total_fee,
     )?;
     let change_lock_hash_array: [u8; 32] = change_lock_hash.as_slice().try_into().unwrap();
-    let sponsor_policy =
-        sponsor_policy_bytes(channel_id, sponsor_policy_settings, change_lock_hash_array);
+    let sponsor_policy = sponsor_policy_bytes(
+        channel_id,
+        sponsor_policy_settings,
+        state_type_hash,
+        change_lock_hash_array,
+    );
     let sponsor_lock = data1_script(
         sponsor_contract.data_hash.clone(),
         Bytes::copy_from_slice(&sponsor_policy),
@@ -3462,8 +3476,8 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         },
         sponsor_capacity: options.sponsor_capacity,
         sponsor_policy: sponsor_policy_report(
-            channel_id,
             sponsor_policy_settings,
+            state_type_hash,
             change_lock_hash_array,
         ),
         change_capacity,
@@ -5344,6 +5358,7 @@ fn sponsor_policy_settings(
 fn sponsor_policy_bytes(
     channel_id: &[u8; 32],
     settings: SponsorPolicySettings,
+    publication_state_type_hash: [u8; 32],
     change_lock_hash: [u8; 32],
 ) -> [u8; SPONSOR_POLICY_V1_LEN] {
     let mut raw = [0u8; SPONSOR_POLICY_V1_LEN];
@@ -5354,14 +5369,14 @@ fn sponsor_policy_bytes(
     put_u64(&mut raw, 56, settings.max_total_fee);
     put_u64(&mut raw, 64, 0);
     put_u64(&mut raw, 72, u64::MAX);
-    raw[80..112].copy_from_slice(channel_id);
+    raw[80..112].copy_from_slice(&publication_state_type_hash);
     raw[112..144].copy_from_slice(&change_lock_hash);
     raw
 }
 
 fn sponsor_policy_report(
-    channel_id: &[u8; 32],
     settings: SponsorPolicySettings,
+    publication_state_type_hash: [u8; 32],
     change_lock_hash: [u8; 32],
 ) -> SponsorPolicyReport {
     SponsorPolicyReport {
@@ -5371,7 +5386,7 @@ fn sponsor_policy_report(
         max_total_fee: settings.max_total_fee,
         already_spent: 0,
         expiry: u64::MAX,
-        allowed_sponsor_source: hex32(channel_id),
+        publication_state_type_hash: hex32(&publication_state_type_hash),
         change_lock_hash: hex32(&change_lock_hash),
     }
 }
@@ -5762,6 +5777,7 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
         value if value == ScriptError::FactoryReserveMismatch as i16 => {
             Some("FactoryReserveMismatch")
         }
+        value if value == ScriptError::StateTypeMismatch as i16 => Some("StateTypeMismatch"),
         _ => None,
     }
 }

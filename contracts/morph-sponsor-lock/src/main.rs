@@ -6,7 +6,9 @@ use ckb_std::ckb_constants::Source;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
-use ckb_std::high_level::{load_cell_capacity, load_cell_data, load_cell_lock_hash, load_script};
+use ckb_std::high_level::{
+    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_cell_type_hash, load_script,
+};
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
@@ -69,6 +71,12 @@ fn validate_sponsored_state(policy: &SponsorPolicyV1) -> Result<()> {
                             || header.state_number() > policy.max_state_number()
                         {
                             return Err(ScriptError::SponsorStateOutOfRange);
+                        }
+                        let type_hash = load_cell_type_hash(index, Source::Output)
+                            .map_err(|_| ScriptError::Encoding)?
+                            .ok_or(ScriptError::StateTypeMismatch)?;
+                        if type_hash.as_slice() != policy.publication_state_type_hash() {
+                            return Err(ScriptError::StateTypeMismatch);
                         }
                         found = true;
                     }

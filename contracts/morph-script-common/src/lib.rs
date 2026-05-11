@@ -92,6 +92,7 @@ pub enum ScriptError {
     FactoryIdMismatch = 34,
     FactoryLocalExitMismatch = 35,
     FactoryReserveMismatch = 36,
+    StateTypeMismatch = 37,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -720,7 +721,7 @@ impl<'a> SponsorPolicyV1<'a> {
         read_u64(self.raw, 72)
     }
 
-    pub fn allowed_sponsor_source(&self) -> &'a [u8] {
+    pub fn publication_state_type_hash(&self) -> &'a [u8] {
         field(self.raw, 80, 32)
     }
 
@@ -1091,7 +1092,7 @@ mod tests {
         assert_eq!(policy.max_total_fee(), 40);
         assert_eq!(policy.already_spent(), 50);
         assert_eq!(policy.expiry(), 60);
-        assert_eq!(policy.allowed_sponsor_source(), &[2u8; 32]);
+        assert_eq!(policy.publication_state_type_hash(), &[2u8; 32]);
         assert_eq!(policy.change_lock(), &[3u8; 32]);
     }
 
@@ -1121,7 +1122,7 @@ mod tests {
             "xudt_type_hash: Byte32",
             "xudt_amount: uint128",
             "max_fee_per_tx: uint64",
-            "allowed_sponsor_source: Byte32",
+            "publication_state_type_hash: Byte32",
             "change_lock_hash: Byte32",
             "participant_0_id: Byte32",
             "non_interference_digest: Byte32",

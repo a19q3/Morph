@@ -147,6 +147,6 @@ struct SponsorPolicyV1 {
     max_total_fee: uint64,
     already_spent: uint64,
     expiry: uint64,
-    allowed_sponsor_source: Byte32,
+    publication_state_type_hash: Byte32,
     change_lock_hash: Byte32,
 }

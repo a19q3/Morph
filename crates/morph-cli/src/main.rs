@@ -3253,7 +3253,10 @@ fn print_sponsor_policy(policy: &devnet::SponsorPolicyReport) {
     println!("sponsor_max_state_number={}", policy.max_state_number);
     println!("sponsor_max_fee_per_tx={}", policy.max_fee_per_tx);
     println!("sponsor_max_total_fee={}", policy.max_total_fee);
-    println!("sponsor_allowed_source={}", policy.allowed_sponsor_source);
+    println!(
+        "sponsor_publication_state_type_hash={}",
+        policy.publication_state_type_hash
+    );
     println!("sponsor_change_lock_hash={}", policy.change_lock_hash);
 }
 

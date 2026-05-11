@@ -19,7 +19,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor change is uncontaminated | `rejects_sponsor_change_contamination` |
 | Unrelated Cells cannot influence channel validity | `rejects_unrelated_cell_used_for_channel_semantics` |
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
-| Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
+| Sponsor fee pays a real Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication`, `sponsor_lock_rejects_fake_state_header_without_state_type` |
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
