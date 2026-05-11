@@ -4,18 +4,26 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use morph_script_common::{
+    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
-    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1,
-    BilateralSignatureWitnessV1, FACTORY_SIGNATURE_COUNT_V1, FACTORY_SIGNATURE_THRESHOLD_V1,
-    FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
-    FACTORY_STATE_HEADER_V1_LEN, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_SETTLING,
+    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
+    BilateralSignatureWitnessV1, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryLocalExitWitnessV1,
+    FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
     SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN, StateHeaderV1,
-    verify_bilateral_state_signatures, verify_factory_state_signatures,
+    blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
+    factory_participants_commitment_v1, participants_commitment_v1,
+    settlement_descriptor_commitment_v1, verify_bilateral_state_signatures,
+    verify_factory_state_signatures,
 };
 use serde::{Deserialize, Serialize};
 
 const PACKAGE_SCHEMA: &str = "morph.state_package.v1";
 const FACTORY_STATE_CELL_PACKAGE_SCHEMA: &str = "morph.factory_state_cell_package.v1";
+const FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_local_exit_package.v1";
 const WATCH_CURSOR_SCHEMA: &str = "morph.watch_cursor.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +71,43 @@ pub struct StoredFactoryStateCellPackage {
 pub struct FactoryStateCellPackageRecord {
     pub path: PathBuf,
     pub package: StoredFactoryStateCellPackage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryLocalExitPackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub factory_signing_digest: String,
+    pub exit_digest: String,
+    pub child_channel_id: String,
+    pub child_funding_anchor: String,
+    pub child_state_number: u64,
+    pub child_phase: String,
+    pub descriptor_version: u16,
+    pub descriptor_commitment: String,
+    pub state_output_index: u32,
+    pub vault_output_index: u32,
+    pub state_type_hash: String,
+    pub state_lock_hash: String,
+    pub vault_lock_hash: String,
+    pub factory_header_hex: String,
+    pub local_exit_witness_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryLocalExitPackageSummary {
+    pub factory_id: String,
+    pub update_number: u64,
+    pub factory_signing_digest: String,
+    pub exit_digest: String,
+    pub child_channel_id: String,
+    pub child_state_number: u64,
+    pub child_phase: String,
+    pub descriptor_version: u16,
+    pub state_output_index: u32,
+    pub vault_output_index: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -305,6 +350,148 @@ impl StoredFactoryStateCellPackage {
     }
 }
 
+impl StoredFactoryLocalExitPackage {
+    pub fn from_factory_local_exit(
+        factory_header_bytes: &[u8],
+        local_exit_witness_bytes: &[u8],
+    ) -> Result<Self> {
+        let factory_header = parse_factory_header(factory_header_bytes)?;
+        let witness = parse_factory_local_exit_witness(local_exit_witness_bytes)?;
+        let exit_state = parse_header(witness.exit_state_header())?;
+        validate_factory_local_exit_pair(&factory_header, &witness)?;
+
+        let package = Self {
+            schema: FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(factory_header.factory_id()),
+            update_number: factory_header.update_number(),
+            factory_signing_digest: hex_prefixed(&factory_header.signing_digest()),
+            exit_digest: hex_prefixed(&witness.exit_digest()),
+            child_channel_id: hex_prefixed(exit_state.channel_id()),
+            child_funding_anchor: hex_prefixed(exit_state.funding_anchor()),
+            child_state_number: exit_state.state_number(),
+            child_phase: phase_label(exit_state.phase()).to_string(),
+            descriptor_version: exit_state.descriptor_version(),
+            descriptor_commitment: hex_prefixed(exit_state.settlement_descriptor_commitment()),
+            state_output_index: witness.state_output_index(),
+            vault_output_index: witness.vault_output_index(),
+            state_type_hash: hex_prefixed(witness.state_type_hash()),
+            state_lock_hash: hex_prefixed(witness.state_lock_hash()),
+            vault_lock_hash: hex_prefixed(witness.vault_lock_hash()),
+            factory_header_hex: hex_prefixed(factory_header_bytes),
+            local_exit_witness_hex: hex_prefixed(local_exit_witness_bytes),
+        };
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA,
+            "unsupported factory local-exit package schema {}",
+            self.schema
+        );
+
+        let factory_header_bytes = self.factory_header_bytes()?;
+        let witness_bytes = self.local_exit_witness_bytes()?;
+        let factory_header = parse_factory_header(&factory_header_bytes)?;
+        let witness = parse_factory_local_exit_witness(&witness_bytes)?;
+        let exit_state = parse_header(witness.exit_state_header())?;
+        validate_factory_local_exit_pair(&factory_header, &witness)?;
+
+        ensure!(
+            self.factory_id == hex_prefixed(factory_header.factory_id()),
+            "factory local-exit package factory_id does not match header"
+        );
+        ensure!(
+            self.update_number == factory_header.update_number(),
+            "factory local-exit package update_number does not match header"
+        );
+        ensure!(
+            self.factory_signing_digest == hex_prefixed(&factory_header.signing_digest()),
+            "factory local-exit package signing digest does not match header"
+        );
+        ensure!(
+            self.exit_digest == hex_prefixed(&witness.exit_digest()),
+            "factory local-exit package exit digest does not match witness"
+        );
+        ensure!(
+            self.child_channel_id == hex_prefixed(exit_state.channel_id()),
+            "factory local-exit package child_channel_id does not match exit StateHeader"
+        );
+        ensure!(
+            self.child_funding_anchor == hex_prefixed(exit_state.funding_anchor()),
+            "factory local-exit package child_funding_anchor does not match exit StateHeader"
+        );
+        ensure!(
+            self.child_state_number == exit_state.state_number(),
+            "factory local-exit package child_state_number does not match exit StateHeader"
+        );
+        ensure!(
+            self.child_phase == phase_label(exit_state.phase()),
+            "factory local-exit package child_phase does not match exit StateHeader"
+        );
+        ensure!(
+            self.descriptor_version == exit_state.descriptor_version(),
+            "factory local-exit package descriptor_version does not match exit StateHeader"
+        );
+        ensure!(
+            self.descriptor_commitment
+                == hex_prefixed(exit_state.settlement_descriptor_commitment()),
+            "factory local-exit package descriptor_commitment does not match exit StateHeader"
+        );
+        ensure!(
+            self.state_output_index == witness.state_output_index(),
+            "factory local-exit package state_output_index does not match witness"
+        );
+        ensure!(
+            self.vault_output_index == witness.vault_output_index(),
+            "factory local-exit package vault_output_index does not match witness"
+        );
+        ensure!(
+            self.state_type_hash == hex_prefixed(witness.state_type_hash()),
+            "factory local-exit package state_type_hash does not match witness"
+        );
+        ensure!(
+            self.state_lock_hash == hex_prefixed(witness.state_lock_hash()),
+            "factory local-exit package state_lock_hash does not match witness"
+        );
+        ensure!(
+            self.vault_lock_hash == hex_prefixed(witness.vault_lock_hash()),
+            "factory local-exit package vault_lock_hash does not match witness"
+        );
+        Ok(())
+    }
+
+    pub fn summary(&self) -> Result<FactoryLocalExitPackageSummary> {
+        self.validate()?;
+        Ok(FactoryLocalExitPackageSummary {
+            factory_id: self.factory_id.clone(),
+            update_number: self.update_number,
+            factory_signing_digest: self.factory_signing_digest.clone(),
+            exit_digest: self.exit_digest.clone(),
+            child_channel_id: self.child_channel_id.clone(),
+            child_state_number: self.child_state_number,
+            child_phase: self.child_phase.clone(),
+            descriptor_version: self.descriptor_version,
+            state_output_index: self.state_output_index,
+            vault_output_index: self.vault_output_index,
+        })
+    }
+
+    pub fn factory_header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.factory_header_hex,
+            FACTORY_STATE_HEADER_V1_LEN,
+            "factory_header_hex",
+        )
+    }
+
+    pub fn local_exit_witness_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex(&self.local_exit_witness_hex, "local_exit_witness_hex")
+    }
+}
+
 pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf> {
     package.validate()?;
     fs::create_dir_all(dir)
@@ -408,6 +595,132 @@ pub fn read_factory_state_cell_package(path: &Path) -> Result<StoredFactoryState
         .validate()
         .with_context(|| format!("invalid factory state package {}", path.display()))?;
     Ok(package)
+}
+
+pub fn read_factory_local_exit_package(path: &Path) -> Result<StoredFactoryLocalExitPackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read factory local-exit package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryLocalExitPackage =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "failed to parse factory local-exit package {}",
+                path.display()
+            )
+        })?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory local-exit package {}", path.display()))?;
+    Ok(package)
+}
+
+pub fn fixture_factory_local_exit_package() -> Result<StoredFactoryLocalExitPackage> {
+    let alice = k256::ecdsa::SigningKey::from_slice(&[1u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Alice key: {err:?}"))?;
+    let bob = k256::ecdsa::SigningKey::from_slice(&[2u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Bob key: {err:?}"))?;
+    let mut factory_entries = [
+        ([1u8; BYTE32_LEN], compressed_pubkey(&alice), alice),
+        ([2u8; BYTE32_LEN], compressed_pubkey(&bob), bob),
+    ];
+    factory_entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let participant_pubkeys = [
+        factory_entries[0].1.as_slice(),
+        factory_entries[1].1.as_slice(),
+    ];
+
+    let descriptor = bilateral_ckb_descriptor(
+        [21u8; BYTE32_LEN],
+        6_000_000_000,
+        [22u8; BYTE32_LEN],
+        4_000_000_000,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let child_channel_id = [31u8; BYTE32_LEN];
+    let funding_anchor = [32u8; BYTE32_LEN];
+    let mut state_header = vec![0u8; STATE_HEADER_V1_LEN];
+    put_u16(&mut state_header, 0, 1);
+    state_header[2..34].copy_from_slice(&[30u8; BYTE32_LEN]);
+    put_u16(
+        &mut state_header,
+        34,
+        SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+    );
+    state_header[36..68].copy_from_slice(&child_channel_id);
+    state_header[68..100].copy_from_slice(&funding_anchor);
+    put_u64(&mut state_header, 100, 0);
+    state_header[108] = 0;
+    state_header[109] = PHASE_ACTIVE;
+    state_header[110..142].copy_from_slice(&participants_commitment_v1(2, &participant_pubkeys));
+    state_header[142..174]
+        .copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V1"]));
+    state_header[174..206].copy_from_slice(&descriptor_commitment);
+    put_u16(&mut state_header, 206, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    state_header[208..240].copy_from_slice(&script_blake2b256(&[
+        b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD_V1",
+    ]));
+    state_header[240..272].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_CHALLENGE_POLICY_V1"]));
+    put_u16(&mut state_header, 272, 1);
+
+    let state_output_index = 1u32;
+    let vault_output_index = 2u32;
+    let state_type_hash = [41u8; BYTE32_LEN];
+    let vault_lock_hash = [42u8; BYTE32_LEN];
+    let state_lock_hash = [43u8; BYTE32_LEN];
+    let exit_digest = factory_local_exit_digest_v1(
+        state_output_index,
+        vault_output_index,
+        &state_type_hash,
+        &vault_lock_hash,
+        &state_lock_hash,
+        &state_header,
+        &descriptor,
+    );
+
+    let mut factory_header = vec![0u8; FACTORY_STATE_HEADER_V1_LEN];
+    put_u16(&mut factory_header, 0, 1);
+    factory_header[2..34].copy_from_slice(&[50u8; BYTE32_LEN]);
+    put_u16(
+        &mut factory_header,
+        34,
+        SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+    );
+    factory_header[36..68].copy_from_slice(&[51u8; BYTE32_LEN]);
+    put_u64(&mut factory_header, 68, 2);
+    factory_header[76..108].copy_from_slice(&[52u8; BYTE32_LEN]);
+    factory_header[108..140].copy_from_slice(&factory_participants_commitment_v1(
+        2,
+        &[
+            (
+                factory_entries[0].0.as_slice(),
+                factory_entries[0].1.as_slice(),
+            ),
+            (
+                factory_entries[1].0.as_slice(),
+                factory_entries[1].1.as_slice(),
+            ),
+        ],
+    ));
+    factory_header[140..172].copy_from_slice(&[53u8; BYTE32_LEN]);
+    factory_header[172..204].copy_from_slice(&exit_digest);
+    factory_header[204..236].copy_from_slice(&[54u8; BYTE32_LEN]);
+    put_u16(&mut factory_header, 236, 1);
+
+    let factory_signature = signed_factory_witness(&factory_header, &factory_entries)?;
+    let local_exit_witness = factory_local_exit_witness_bytes(
+        &factory_signature,
+        state_output_index,
+        vault_output_index,
+        &state_type_hash,
+        &vault_lock_hash,
+        &state_lock_hash,
+        &state_header,
+        &descriptor,
+    );
+    StoredFactoryLocalExitPackage::from_factory_local_exit(&factory_header, &local_exit_witness)
 }
 
 pub fn list_packages(dir: &Path, channel_id: Option<&str>) -> Result<Vec<StatePackageRecord>> {
@@ -601,15 +914,77 @@ fn parse_factory_witness(raw: &[u8]) -> Result<FactorySignatureWitnessV1<'_>> {
     Ok(witness)
 }
 
+fn parse_factory_local_exit_witness(raw: &[u8]) -> Result<FactoryLocalExitWitnessV1<'_>> {
+    FactoryLocalExitWitnessV1::parse(raw)
+        .map_err(|err| anyhow!("invalid factory local-exit witness: {err:?}"))
+}
+
+fn validate_factory_local_exit_pair(
+    factory_header: &FactoryStateHeaderV1<'_>,
+    witness: &FactoryLocalExitWitnessV1<'_>,
+) -> Result<()> {
+    ensure!(
+        factory_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        "unsupported factory signature scheme {}",
+        factory_header.signature_scheme_id()
+    );
+    let factory_signature = witness
+        .factory_signature()
+        .map_err(|err| anyhow!("invalid embedded factory signature witness: {err:?}"))?;
+    verify_factory_state_signatures(factory_header, &factory_signature)
+        .map_err(|err| anyhow!("embedded factory signatures are invalid: {err:?}"))?;
+
+    let exit_digest = witness.exit_digest();
+    ensure!(
+        factory_header.non_interference_digest() == exit_digest.as_slice(),
+        "factory header non_interference_digest does not match local-exit digest"
+    );
+
+    let exit_state = parse_header(witness.exit_state_header())?;
+    ensure!(
+        exit_state.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        "unsupported child state signature scheme {}",
+        exit_state.signature_scheme_id()
+    );
+    ensure!(
+        exit_state.state_number() == 0,
+        "factory local exit must materialise child state number 0"
+    );
+    ensure!(
+        exit_state.phase() == PHASE_ACTIVE,
+        "factory local exit must materialise an active child StateCell"
+    );
+    let descriptor_commitment =
+        settlement_descriptor_commitment_v1(witness.settlement_descriptor());
+    ensure!(
+        exit_state.settlement_descriptor_commitment() == descriptor_commitment.as_slice(),
+        "exit StateHeader descriptor commitment does not match local-exit descriptor"
+    );
+    let expected_descriptor_version = match witness.settlement_descriptor().len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+        _ => unreachable!("FactoryLocalExitWitnessV1::parse accepted only known descriptors"),
+    };
+    ensure!(
+        exit_state.descriptor_version() == expected_descriptor_version,
+        "exit StateHeader descriptor version does not match descriptor encoding"
+    );
+    Ok(())
+}
+
 fn decode_hex_exact(value: &str, expected_len: usize, field: &str) -> Result<Vec<u8>> {
-    let stripped = value.strip_prefix("0x").unwrap_or(value);
-    let bytes = hex::decode(stripped).with_context(|| format!("{field} is not valid hex"))?;
+    let bytes = decode_hex(value, field)?;
     ensure!(
         bytes.len() == expected_len,
         "{field} must be {expected_len} bytes, got {}",
         bytes.len()
     );
     Ok(bytes)
+}
+
+fn decode_hex(value: &str, field: &str) -> Result<Vec<u8>> {
+    let stripped = value.strip_prefix("0x").unwrap_or(value);
+    hex::decode(stripped).with_context(|| format!("{field} is not valid hex"))
 }
 
 fn is_package_file(path: &Path) -> bool {
@@ -634,6 +1009,120 @@ fn hex_prefixed(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
 
+fn compressed_pubkey(key: &k256::ecdsa::SigningKey) -> [u8; COMPRESSED_SECP256K1_PUBKEY_LEN] {
+    let encoded = key.verifying_key().to_encoded_point(true);
+    let mut out = [0u8; COMPRESSED_SECP256K1_PUBKEY_LEN];
+    out.copy_from_slice(encoded.as_bytes());
+    out
+}
+
+fn bilateral_ckb_descriptor(
+    left_lock_hash: [u8; BYTE32_LEN],
+    left_capacity: u64,
+    right_lock_hash: [u8; BYTE32_LEN],
+    right_capacity: u64,
+) -> [u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN] {
+    let mut entries = [
+        (left_lock_hash, left_capacity),
+        (right_lock_hash, right_capacity),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut raw = [0u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    raw[2] = 2;
+    raw[3] = 0;
+    for (index, (lock_hash, capacity)) in entries.iter().enumerate() {
+        let offset = 4 + index * (BYTE32_LEN + 8);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+        put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+    }
+    raw
+}
+
+fn signed_factory_witness(
+    factory_header: &[u8],
+    entries: &[(
+        [u8; BYTE32_LEN],
+        [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+        k256::ecdsa::SigningKey,
+    )],
+) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN]> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    ensure!(
+        entries.len() == FACTORY_SIGNATURE_COUNT_V1 as usize,
+        "factory local-exit fixture must have {} signers",
+        FACTORY_SIGNATURE_COUNT_V1
+    );
+    let header = parse_factory_header(factory_header)?;
+    let digest = header.signing_digest();
+    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        let sig: k256::ecdsa::Signature = key
+            .sign_prehash(&digest)
+            .map_err(|err| anyhow!("failed to sign factory local-exit fixture: {err:?}"))?;
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(sig.to_bytes().as_slice());
+    }
+    Ok(raw)
+}
+
+fn factory_local_exit_witness_bytes(
+    factory_signature: &[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN],
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8; BYTE32_LEN],
+    vault_lock_hash: &[u8; BYTE32_LEN],
+    state_lock_hash: &[u8; BYTE32_LEN],
+    state_header: &[u8],
+    descriptor: &[u8],
+) -> Vec<u8> {
+    let mut raw = vec![
+        0u8;
+        2 + FACTORY_SIGNATURE_WITNESS_V1_LEN
+            + 8
+            + 3 * BYTE32_LEN
+            + STATE_HEADER_V1_LEN
+            + descriptor.len()
+    ];
+    put_u16(&mut raw, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    raw[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(factory_signature);
+    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
+    put_u32(&mut raw, offset, state_output_index);
+    offset += 4;
+    put_u32(&mut raw, offset, vault_output_index);
+    offset += 4;
+    raw[offset..offset + BYTE32_LEN].copy_from_slice(state_type_hash);
+    offset += BYTE32_LEN;
+    raw[offset..offset + BYTE32_LEN].copy_from_slice(vault_lock_hash);
+    offset += BYTE32_LEN;
+    raw[offset..offset + BYTE32_LEN].copy_from_slice(state_lock_hash);
+    offset += BYTE32_LEN;
+    raw[offset..offset + STATE_HEADER_V1_LEN].copy_from_slice(state_header);
+    offset += STATE_HEADER_V1_LEN;
+    raw[offset..offset + descriptor.len()].copy_from_slice(descriptor);
+    raw
+}
+
+fn phase_label(phase: u8) -> &'static str {
+    match phase {
+        PHASE_ACTIVE => "active",
+        PHASE_SETTLING => "settling",
+        _ => "unknown",
+    }
+}
+
 fn now_unix_ms() -> Result<u64> {
     Ok(SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -641,6 +1130,18 @@ fn now_unix_ms() -> Result<u64> {
         .as_millis()
         .try_into()
         .context("unix time does not fit in u64 milliseconds")?)
+}
+
+fn put_u16(out: &mut [u8], offset: usize, value: u16) {
+    out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(out: &mut [u8], offset: usize, value: u32) {
+    out[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(out: &mut [u8], offset: usize, value: u64) {
+    out[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -719,6 +1220,47 @@ mod tests {
         let err = StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None)
             .unwrap_err();
         assert!(err.to_string().contains("signatures are invalid"));
+    }
+
+    #[test]
+    fn validates_factory_local_exit_package() {
+        let package = fixture_factory_local_exit_package().unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.update_number, 2);
+        assert_eq!(summary.child_state_number, 0);
+        assert_eq!(summary.child_phase, "active");
+        assert_eq!(summary.state_output_index, 1);
+        assert_eq!(summary.vault_output_index, 2);
+    }
+
+    #[test]
+    fn rejects_tampered_factory_local_exit_descriptor() {
+        let mut package = fixture_factory_local_exit_package().unwrap();
+        let mut witness = package.local_exit_witness_bytes().unwrap();
+        let last = witness.len() - 1;
+        witness[last] ^= 1;
+        package.local_exit_witness_hex = hex_prefixed(&witness);
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("non_interference_digest does not match local-exit digest")
+        );
+    }
+
+    #[test]
+    fn rejects_tampered_factory_local_exit_header_signature() {
+        let mut package = fixture_factory_local_exit_package().unwrap();
+        let mut header = package.factory_header_bytes().unwrap();
+        header[76] ^= 1;
+        package.factory_header_hex = hex_prefixed(&header);
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("embedded factory signatures are invalid")
+        );
     }
 
     #[test]

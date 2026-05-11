@@ -46,6 +46,8 @@ enum Command {
     PrintFactoryStateFixture,
     /// Print a host-side authorised-participant signed factory state package fixture.
     PrintReducedFactoryStateFixture,
+    /// Print a valid factory local-exit evidence package fixture.
+    PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
     /// Validate a host-side factory non-interference package.
@@ -59,6 +61,14 @@ enum Command {
     /// Validate a conservative all-participant signed factory state package.
     ValidateFactoryStatePackage {
         /// Path to the factory state package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a factory local-exit evidence package.
+    ValidateFactoryLocalExitPackage {
+        /// Path to the factory local-exit package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -1118,6 +1128,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintFactoryLocalExitFixture => {
+            let package = packages::fixture_factory_local_exit_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintWatchPolicyFixture => {
             let policy = watch_policy::fixture_policy();
             println!("{}", serde_json::to_string_pretty(&policy)?);
@@ -1168,6 +1183,26 @@ fn main() -> Result<()> {
                 println!("participants={}", summary.participants);
                 println!("signatures={}", summary.signatures);
                 println!("factory_state_digest={}", summary.factory_state_digest);
+            }
+            Ok(())
+        }
+        Command::ValidateFactoryLocalExitPackage { path, json } => {
+            let package = packages::read_factory_local_exit_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory local-exit package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("factory_signing_digest={}", summary.factory_signing_digest);
+                println!("exit_digest={}", summary.exit_digest);
+                println!("child_channel_id={}", summary.child_channel_id);
+                println!("child_state_number={}", summary.child_state_number);
+                println!("child_phase={}", summary.child_phase);
+                println!("descriptor_version={}", summary.descriptor_version);
+                println!("state_output_index={}", summary.state_output_index);
+                println!("vault_output_index={}", summary.vault_output_index);
             }
             Ok(())
         }

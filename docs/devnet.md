@@ -681,6 +681,17 @@ cargo run -q -p morph-cli -- devnet factory-xudt-smoke --json \
   > target/factory-xudt-smoke.json
 ```
 
+Each `factory-exit-channel` and `factory-xudt-smoke` report includes
+`local_exit_package`. To validate that package independently:
+
+```sh
+jq '.exit.local_exit_package' target/factory-xudt-smoke.json \
+  > target/factory-local-exit.json
+cargo run -q -p morph-cli -- validate-factory-local-exit-package \
+  target/factory-local-exit.json \
+  --json
+```
+
 The repository-level `scripts/devnet-smoke.sh` includes the additional
 factory-local exit, child publication, child finalisation, and factory xUDT
 child-channel steps.
@@ -692,8 +703,7 @@ vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
 script, a factory reserve lock, devnet factory open/update transactions, and
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
 child bilateral channels.
-The remaining devnet work is external watchtower notification integration and a
-formal reduced-signature factory proof path.
+The remaining devnet work is a formal reduced-signature factory proof path.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -707,12 +717,20 @@ cargo run -q -p morph-cli -- print-factory-state-fixture > target/factory-state.
 cargo run -q -p morph-cli -- validate-factory-state-package \
   target/factory-state.json \
   --json
+cargo run -q -p morph-cli -- print-factory-local-exit-fixture \
+  > target/factory-local-exit.json
+cargo run -q -p morph-cli -- validate-factory-local-exit-package \
+  target/factory-local-exit.json \
+  --json
 ```
 
 That host-side command checks canonical roots, canonical participant sets,
 `non_interference_digest`, the rights-dependency predicate, and conservative
 participant-id/public-key bindings with all-participant signatures over a
-domain-separated factory-state digest.
+domain-separated factory-state digest. The local-exit package validator checks
+the embedded factory signatures, child state number and phase, settlement
+descriptor commitment, output indices, script hashes, and the digest bound into
+the updated FactoryStateHeader.
 
 The `morph-factory-type` script is one step closer than the host package: it
 already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,

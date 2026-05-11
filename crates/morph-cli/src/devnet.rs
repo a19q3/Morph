@@ -36,8 +36,8 @@ use serde::Serialize;
 
 use crate::packages::{
     FactoryStateCellPackageRecord, PackageOutPoint, StatePackageRecord,
-    StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor, canonical_hex32,
-    default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
+    StoredFactoryLocalExitPackage, StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor,
+    canonical_hex32, default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
     read_factory_state_cell_package, read_package, read_watch_cursor,
     write_factory_state_cell_package, write_package, write_watch_cursor,
 };
@@ -511,6 +511,7 @@ pub struct FactoryExitChannelReport {
     pub factory_vault_input_xudt_amount: Option<u128>,
     pub factory_vault_change_xudt_amount: Option<u128>,
     pub xudt_type_hash: Option<String>,
+    pub local_exit_package: StoredFactoryLocalExitPackage,
     pub sponsor_capacity: u64,
     pub fee_change_capacity: u64,
     pub fee: u64,
@@ -2238,6 +2239,11 @@ pub fn factory_exit_channel(
         &state_header,
         &descriptor,
     )?;
+    let local_exit_package = StoredFactoryLocalExitPackage::from_factory_local_exit(
+        &new_factory_data,
+        &local_exit_witness,
+    )
+    .context("constructed factory local-exit package is invalid")?;
 
     let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     ensure!(
@@ -2346,6 +2352,7 @@ pub fn factory_exit_channel(
         xudt_type_hash: child_xudt
             .as_ref()
             .map(|(_, xudt_type_hash, _, _, _, _)| hex32(xudt_type_hash)),
+        local_exit_package,
         sponsor_capacity: options.sponsor_capacity,
         fee_change_capacity,
         fee: options.fee,

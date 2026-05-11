@@ -169,6 +169,9 @@ A devnet demonstration is acceptable only when it includes:
 - a conservative factory-local exit path that releases reserve capacity into a
   bilateral child channel, including a CKB+xUDT child vault path, then
   publishes and finalises that child channel on devnet;
+- a reusable factory local-exit evidence package that binds the updated
+  FactoryStateHeader, embedded factory signatures, child StateHeader,
+  settlement descriptor, output indices, and local-exit digest;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

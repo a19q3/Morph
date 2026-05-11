@@ -23,7 +23,8 @@ Current implementation stage:
   reporting from the node. It also stores reusable signed state packages for
   watchtower-style publication and validates optional watchtower operator
   policies before confirmed-block scanning. Watchtower alerts can be written to
-  JSONL and posted to a policy-gated HTTP webhook.
+  JSONL and posted to a policy-gated HTTP webhook. Factory local-exit reports
+  include a reusable evidence package that can be independently validated.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
@@ -137,4 +138,8 @@ cargo run -p morph-cli -- print-reduced-factory-state-fixture \
   > target/factory-state-reduced.json
 cargo run -p morph-cli -- validate-factory-state-package \
   target/factory-state-reduced.json --json
+cargo run -p morph-cli -- print-factory-local-exit-fixture \
+  > target/factory-local-exit.json
+cargo run -p morph-cli -- validate-factory-local-exit-package \
+  target/factory-local-exit.json --json
 ```
