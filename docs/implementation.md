@@ -62,6 +62,8 @@ A devnet demonstration is acceptable only when it includes:
   settles by ordinary xUDT conservation;
 - a CKB+xUDT negative smoke proving that unchanged total supply is not enough:
   the vault lock must reject a tampered recipient-level token distribution;
+- a finalise-since negative smoke proving that an immature finalisation is
+  rejected and that finalisation resumes after explicit maturity blocks;
 - a competing-spend smoke proving that a newer state may need to be rebuilt
   against the currently live StateCell after an older publication confirms;
 - a sponsor-budget negative smoke proving that a too-low fee cap is rejected

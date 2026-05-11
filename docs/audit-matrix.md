@@ -23,6 +23,8 @@ Implemented devnet-level checks:
 
 - real CKB transaction construction for deploy, open, publish, supersede,
   sponsor top-up, and finalise;
+- finalise-since rejection and maturity-block finalisation through
+  `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through
   `devnet xudt-smoke`;
 - CKB+xUDT tampered settlement rejection on devnet through

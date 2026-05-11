@@ -5,11 +5,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions,
-    OpenChannelOptions, PublishLatestStatePackageOptions, PublishStateOptions,
-    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
-    SupersedeSmokeOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
-    XudtSmokeOptions,
+    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FinaliseChannelOptions,
+    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
+    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
+    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -453,6 +453,49 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove live devnet rejects finalisation when the StateCell input since is too low.
+    FinaliseSinceNegativeSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the channel vault lock, in shannons.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        vault_capacity: u64,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required by channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Emit machine-readable JSON.
@@ -1350,6 +1393,61 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     report.supersede_publish.metrics.estimated_cycles,
                     report.finalise.metrics.estimated_cycles
                 );
+            }
+        }
+        DevnetCommand::FinaliseSinceNegativeSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::finalise_since_negative_smoke(
+                &rpc,
+                FinaliseSinceNegativeSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("open_tx={}", report.open.tx_hash);
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!("rejected_input_since={}", report.rejected_input_since);
+                println!("required_finalise_since={}", report.required_finalise_since);
+                println!("rejection={}", report.rejection);
+                if let Some(source) = &report.script_failure.source {
+                    println!("script_failure_source={source}");
+                }
+                if let Some(code) = report.script_failure.error_code {
+                    println!("script_failure_error_code={code}");
+                }
+                if let Some(name) = &report.script_failure.morph_error {
+                    println!("script_failure_morph_error={name}");
+                }
+                for hash in report.maturity_blocks {
+                    println!("maturity_block={hash}");
+                }
+                println!("finalise_tx={}", report.finalise.tx_hash);
+                println!("channel_id={}", report.finalise.channel_id);
+                println!("finalise_status={}", report.finalise.status);
             }
         }
         DevnetCommand::XudtSmoke {

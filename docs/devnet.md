@@ -80,10 +80,10 @@ scripts/devnet-smoke.sh
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-sponsor-budget negative smoke, competing-spend smoke, CKB+xUDT settlement
-smoke, CKB+xUDT negative settlement smoke, and the watchtower auto-sponsor
-path. It expects the node and `jq` to be available, and writes logs plus JSON
-reports under
+finalise-since negative smoke, sponsor-budget negative smoke, competing-spend
+smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
+watchtower auto-sponsor path. It expects the node and `jq` to be available, and
+writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
@@ -307,6 +307,19 @@ cycles=open:<n> stale_publish:<n> sponsor_top_up:<n> supersede_publish:<n> final
 The JSON form keeps the same per-transaction `metrics` object on each step, so
 benchmark scripts can compare open, stale publication, supersession, sponsor
 top-up, and finalisation separately.
+
+The finalise-since negative smoke checks the challenge-window guard:
+
+```sh
+cargo run -q -p morph-cli -- devnet finalise-since-negative-smoke --json
+```
+
+It opens a channel, publishes state `1`, then attempts to finalise with the
+StateCell input `since` set to zero while the channel requires the configured
+relative `since`. The expected rejection is Morph error `StateSinceNotMature`.
+The smoke then mines the configured number of maturity blocks and finalises with
+the required `since`. This keeps the devnet model explicitly block-confirmation
+based.
 
 The competing-spend smoke makes the mempool assumption explicit:
 

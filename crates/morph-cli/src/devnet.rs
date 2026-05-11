@@ -178,6 +178,21 @@ pub struct SupersedeSmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct FinaliseSinceNegativeSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SponsorPolicyNegativeSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -506,6 +521,18 @@ pub struct SupersedeSmokeReport {
     pub stale_publish: PublishStateReport,
     pub sponsor_top_up: FundSponsorReport,
     pub supersede_publish: PublishStateReport,
+    pub finalise: FinaliseChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FinaliseSinceNegativeSmokeReport {
+    pub open: OpenChannelReport,
+    pub publish: PublishStateReport,
+    pub rejected_input_since: u64,
+    pub required_finalise_since: u64,
+    pub rejection: String,
+    pub script_failure: ScriptFailureReport,
+    pub maturity_blocks: Vec<String>,
     pub finalise: FinaliseChannelReport,
 }
 
@@ -2299,6 +2326,132 @@ pub fn supersede_smoke(
         stale_publish,
         sponsor_top_up,
         supersede_publish,
+        finalise,
+    })
+}
+
+pub fn finalise_since_negative_smoke(
+    rpc: &CkbRpcClient,
+    options: FinaliseSinceNegativeSmokeOptions,
+) -> Result<FinaliseSinceNegativeSmokeReport> {
+    ensure!(
+        options.finalise_since > 0,
+        "finalise-since negative smoke needs a non-zero finalise since"
+    );
+    let policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building sponsor policy"))?;
+    ensure!(
+        policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the smoke policy budget"
+    );
+
+    let open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(policy_fee),
+            sponsor_max_total_fee: Some(policy_fee),
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "vault")?;
+    let sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point,
+            sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let settling_state_out_point = printable_out_point_string(&publish.state_out_point);
+
+    let rejected_input_since = 0;
+    let rejection = match finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: settling_state_out_point.clone(),
+            vault_out_point: vault_out_point.clone(),
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: rejected_input_since,
+            fee: options.fee,
+            mine_blocks: 0,
+        },
+    ) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "finalise unexpectedly accepted input since {} in tx {}",
+                rejected_input_since,
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::StateSinceNotMature as i16),
+        "expected StateSinceNotMature from finalise path, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
+
+    let mut maturity_blocks = Vec::new();
+    for _ in 0..options.finalise_since {
+        maturity_blocks.push(rpc.generate_block()?);
+    }
+
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: settling_state_out_point,
+            vault_out_point,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(FinaliseSinceNegativeSmokeReport {
+        open,
+        publish,
+        rejected_input_since,
+        required_finalise_since: options.finalise_since,
+        rejection,
+        script_failure,
+        maturity_blocks,
         finalise,
     })
 }
