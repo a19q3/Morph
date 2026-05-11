@@ -22,6 +22,8 @@ pub struct DevnetSmokeSummary {
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetSmokeAssertionReport {
     pub directory: String,
+    pub git_commit: Option<String>,
+    pub git_dirty: Option<String>,
     pub transaction_count: usize,
     pub committed_count: usize,
     pub expected_script_failures: usize,
@@ -155,6 +157,8 @@ pub fn assert_default_devnet_smoke(dir: &Path) -> Result<DevnetSmokeAssertionRep
     let summary = summarize_devnet_smoke(dir)?;
     assert_devnet_smoke_summary(&summary)?;
     Ok(DevnetSmokeAssertionReport {
+        git_commit: summary.manifest.get("git_commit").cloned(),
+        git_dirty: summary.manifest.get("git_dirty").cloned(),
         directory: summary.directory,
         transaction_count: summary.totals.transaction_count,
         committed_count: summary.totals.committed_count,

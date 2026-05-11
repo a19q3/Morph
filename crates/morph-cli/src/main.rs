@@ -1293,6 +1293,12 @@ fn main() -> Result<()> {
             } else {
                 println!("devnet smoke assertions ok");
                 println!("directory={}", report.directory);
+                if let Some(git_commit) = &report.git_commit {
+                    println!("git_commit={git_commit}");
+                }
+                if let Some(git_dirty) = &report.git_dirty {
+                    println!("git_dirty={git_dirty}");
+                }
                 println!("transactions={}", report.transaction_count);
                 println!("committed={}", report.committed_count);
                 println!(
