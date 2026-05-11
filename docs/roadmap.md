@@ -21,7 +21,8 @@ The CLI can check/mine a local CKB devnet, deploy the Morph contract binaries,
 open a channel, publish a signed settling state, top up sponsor capacity,
 publish a newer signed state over the old settling state, and finalise the
 vault through native JSON-RPC. Each transaction report includes node-estimated
-cycles and serialized transaction size.
+cycles and serialized transaction size. SponsorCells can carry explicit
+state-number and fee-budget bounds.
 
 Required deliverables:
 
@@ -35,6 +36,7 @@ Required deliverables:
 - RPC transaction builder.
 - Publish, supersede, and finalise devnet path.
 - Per-transaction cycle and size reporting from the devnet node.
+- Configurable SponsorCell state-number and fee-budget policy.
 
 Acceptance criteria:
 
@@ -46,6 +48,7 @@ Acceptance criteria:
   descriptor outputs;
 - channel reserve cannot pay publication fees;
 - sponsor policy cannot spend outside its budget;
+- sponsor policy rejects publication outside its state-number range;
 - xUDT type mismatch is rejected in host-side invariants.
 - JSON devnet reports expose `estimated_cycles` and `tx_size_bytes` for every
   lifecycle transaction.
@@ -54,7 +57,8 @@ Acceptance criteria:
 
 Status: partially implemented for durable state package persistence, latest
 package selection, publish-from-latest-package rebuilding, and confirmation
-depth block polling. Fee-policy automation remains open.
+depth block polling. Sponsor policy bounds are configurable; sponsor rotation
+automation remains open.
 
 - State package persistence.
 - Detection-depth polling.

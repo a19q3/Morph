@@ -27,7 +27,7 @@ Current implementation stage:
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
   gated by a unique current settling State Cell and relative `since`.
 - `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
-  fee spending and clean sponsor change.
+  fee spending, state-number policy checks, and clean sponsor change.
 
 This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable

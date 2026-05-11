@@ -66,6 +66,10 @@ pub struct OpenChannelOptions {
     pub alice_capacity: Option<u64>,
     pub bob_capacity: Option<u64>,
     pub sponsor_capacity: u64,
+    pub sponsor_min_state_number: u64,
+    pub sponsor_max_state_number: u64,
+    pub sponsor_max_fee_per_tx: Option<u64>,
+    pub sponsor_max_total_fee: Option<u64>,
     pub fee: u64,
     pub finalise_since: u64,
     pub mine_blocks: u64,
@@ -127,6 +131,10 @@ pub struct FundSponsorOptions {
     pub private_key: String,
     pub state_out_point: String,
     pub sponsor_capacity: u64,
+    pub sponsor_min_state_number: u64,
+    pub sponsor_max_state_number: u64,
+    pub sponsor_max_fee_per_tx: Option<u64>,
+    pub sponsor_max_total_fee: Option<u64>,
     pub fee: u64,
     pub mine_blocks: u64,
 }
@@ -161,10 +169,30 @@ pub struct SupersedeSmokeOptions {
     pub mine_blocks: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SponsorPolicySettings {
+    min_state_number: u64,
+    max_state_number: u64,
+    max_fee_per_tx: u64,
+    max_total_fee: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct TransactionMetrics {
     pub estimated_cycles: u64,
     pub tx_size_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SponsorPolicyReport {
+    pub min_state_number: u64,
+    pub max_state_number: u64,
+    pub max_fee_per_tx: u64,
+    pub max_total_fee: u64,
+    pub already_spent: u64,
+    pub expiry: u64,
+    pub allowed_sponsor_source: String,
+    pub change_lock_hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -211,6 +239,7 @@ pub struct OpenChannelReport {
     pub state_capacity: u64,
     pub vault_capacity: u64,
     pub sponsor_capacity: u64,
+    pub sponsor_policy: SponsorPolicyReport,
     pub change_capacity: u64,
     pub fee: u64,
     pub metrics: TransactionMetrics,
@@ -312,6 +341,7 @@ pub struct FundSponsorReport {
     pub state_number: u64,
     pub sponsor_out_point: PrintableOutPoint,
     pub sponsor_capacity: u64,
+    pub sponsor_policy: SponsorPolicyReport,
     pub change_capacity: u64,
     pub fee: u64,
     pub metrics: TransactionMetrics,
@@ -513,10 +543,16 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
 
     let change_lock_hash = owner_lock.calc_script_hash();
+    let sponsor_policy_settings = sponsor_policy_settings(
+        options.sponsor_capacity,
+        options.sponsor_min_state_number,
+        options.sponsor_max_state_number,
+        options.sponsor_max_fee_per_tx,
+        options.sponsor_max_total_fee,
+    )?;
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
-        options.sponsor_capacity / 2,
-        options.sponsor_capacity,
+        sponsor_policy_settings,
         change_lock_hash.as_slice().try_into().unwrap(),
     );
     let sponsor_lock = data1_script(
@@ -667,6 +703,11 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         state_capacity,
         vault_capacity: options.vault_capacity,
         sponsor_capacity: options.sponsor_capacity,
+        sponsor_policy: sponsor_policy_report(
+            &channel_id,
+            sponsor_policy_settings,
+            change_lock_hash.as_slice().try_into().unwrap(),
+        ),
         change_capacity,
         fee: options.fee,
         metrics: sent.metrics,
@@ -1016,12 +1057,16 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         .channel_id()
         .try_into()
         .map_err(|_| anyhow!("state header channel id is not 32 bytes"))?;
-    let sponsor_policy = sponsor_policy_bytes(
-        channel_id,
-        options.sponsor_capacity / 2,
+    let sponsor_policy_settings = sponsor_policy_settings(
         options.sponsor_capacity,
-        change_lock_hash.as_slice().try_into().unwrap(),
-    );
+        options.sponsor_min_state_number,
+        options.sponsor_max_state_number,
+        options.sponsor_max_fee_per_tx,
+        options.sponsor_max_total_fee,
+    )?;
+    let change_lock_hash_array: [u8; 32] = change_lock_hash.as_slice().try_into().unwrap();
+    let sponsor_policy =
+        sponsor_policy_bytes(channel_id, sponsor_policy_settings, change_lock_hash_array);
     let sponsor_lock = data1_script(
         sponsor_contract.data_hash.clone(),
         Bytes::copy_from_slice(&sponsor_policy),
@@ -1074,6 +1119,11 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
             index: 0,
         },
         sponsor_capacity: options.sponsor_capacity,
+        sponsor_policy: sponsor_policy_report(
+            channel_id,
+            sponsor_policy_settings,
+            change_lock_hash_array,
+        ),
         change_capacity,
         fee: options.fee,
         metrics: sent.metrics,
@@ -1237,6 +1287,10 @@ pub fn supersede_smoke(
             alice_capacity: options.alice_capacity,
             bob_capacity: options.bob_capacity,
             sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 0,
+            sponsor_max_state_number: u64::MAX,
+            sponsor_max_fee_per_tx: None,
+            sponsor_max_total_fee: None,
             fee: options.fee,
             finalise_since: options.finalise_since,
             mine_blocks: options.mine_blocks,
@@ -1270,6 +1324,10 @@ pub fn supersede_smoke(
             private_key: options.private_key.clone(),
             state_out_point: stale_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 0,
+            sponsor_max_state_number: u64::MAX,
+            sponsor_max_fee_per_tx: None,
+            sponsor_max_total_fee: None,
             fee: options.fee,
             mine_blocks: options.mine_blocks,
         },
@@ -1825,23 +1883,74 @@ fn derive_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
     script_blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
 }
 
+fn sponsor_policy_settings(
+    sponsor_capacity: u64,
+    min_state_number: u64,
+    max_state_number: u64,
+    max_fee_per_tx: Option<u64>,
+    max_total_fee: Option<u64>,
+) -> Result<SponsorPolicySettings> {
+    ensure!(
+        min_state_number <= max_state_number,
+        "sponsor min state number must be <= max state number"
+    );
+    let max_total_fee = max_total_fee.unwrap_or(sponsor_capacity);
+    let default_max_fee_per_tx = (sponsor_capacity / 2).max(1);
+    let max_fee_per_tx = max_fee_per_tx.unwrap_or(default_max_fee_per_tx);
+    ensure!(
+        max_fee_per_tx > 0,
+        "sponsor max fee per tx must be non-zero"
+    );
+    ensure!(max_total_fee > 0, "sponsor max total fee must be non-zero");
+    ensure!(
+        max_fee_per_tx <= max_total_fee,
+        "sponsor max fee per tx cannot exceed max total fee"
+    );
+    ensure!(
+        max_total_fee <= sponsor_capacity,
+        "sponsor max total fee cannot exceed sponsor capacity"
+    );
+    Ok(SponsorPolicySettings {
+        min_state_number,
+        max_state_number,
+        max_fee_per_tx,
+        max_total_fee,
+    })
+}
+
 fn sponsor_policy_bytes(
     channel_id: &[u8; 32],
-    max_fee_per_tx: u64,
-    max_total_fee: u64,
+    settings: SponsorPolicySettings,
     change_lock_hash: [u8; 32],
 ) -> [u8; SPONSOR_POLICY_V1_LEN] {
     let mut raw = [0u8; SPONSOR_POLICY_V1_LEN];
     raw[0..32].copy_from_slice(channel_id);
-    put_u64(&mut raw, 32, 0);
-    put_u64(&mut raw, 40, u64::MAX);
-    put_u64(&mut raw, 48, max_fee_per_tx);
-    put_u64(&mut raw, 56, max_total_fee);
+    put_u64(&mut raw, 32, settings.min_state_number);
+    put_u64(&mut raw, 40, settings.max_state_number);
+    put_u64(&mut raw, 48, settings.max_fee_per_tx);
+    put_u64(&mut raw, 56, settings.max_total_fee);
     put_u64(&mut raw, 64, 0);
     put_u64(&mut raw, 72, u64::MAX);
     raw[80..112].copy_from_slice(channel_id);
     raw[112..144].copy_from_slice(&change_lock_hash);
     raw
+}
+
+fn sponsor_policy_report(
+    channel_id: &[u8; 32],
+    settings: SponsorPolicySettings,
+    change_lock_hash: [u8; 32],
+) -> SponsorPolicyReport {
+    SponsorPolicyReport {
+        min_state_number: settings.min_state_number,
+        max_state_number: settings.max_state_number,
+        max_fee_per_tx: settings.max_fee_per_tx,
+        max_total_fee: settings.max_total_fee,
+        already_spent: 0,
+        expiry: u64::MAX,
+        allowed_sponsor_source: hex32(channel_id),
+        change_lock_hash: hex32(&change_lock_hash),
+    }
 }
 
 fn bilateral_ckb_descriptor(

@@ -223,12 +223,22 @@ fn descriptor_bytes(
 }
 
 fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
+    sponsor_policy_with_bounds(change_lock_hash, 0, u64::MAX, max_fee, max_fee)
+}
+
+fn sponsor_policy_with_bounds(
+    change_lock_hash: &[u8; 32],
+    min_state_number: u64,
+    max_state_number: u64,
+    max_fee_per_tx: u64,
+    max_total_fee: u64,
+) -> Vec<u8> {
     let mut raw = [0u8; SPONSOR_POLICY_V1_LEN];
     raw[0..32].fill(3);
-    put_u64(&mut raw, 32, 0);
-    put_u64(&mut raw, 40, u64::MAX);
-    put_u64(&mut raw, 48, max_fee);
-    put_u64(&mut raw, 56, max_fee);
+    put_u64(&mut raw, 32, min_state_number);
+    put_u64(&mut raw, 40, max_state_number);
+    put_u64(&mut raw, 48, max_fee_per_tx);
+    put_u64(&mut raw, 56, max_total_fee);
     put_u64(&mut raw, 64, 0);
     put_u64(&mut raw, 72, u64::MAX);
     raw[80..112].fill(9);
@@ -710,6 +720,140 @@ fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("bounded sponsor fee should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn sponsor_lock_rejects_fee_above_per_tx_limit() {
+    let mut context = Context::default();
+    let wallet_lock = deploy_always_success(&mut context);
+    let state_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![7]));
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_state_data, new_state_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
+    let change_hash = wallet_lock.calc_script_hash();
+    let sponsor_lock = deploy_contract(
+        &mut context,
+        "morph-sponsor-lock",
+        sponsor_policy(change_hash.as_slice().try_into().unwrap(), 50),
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_state_data,
+    );
+    let sponsor_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(sponsor_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(sponsor_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY - 100)
+                .lock(wallet_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(sig_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn sponsor_lock_rejects_state_number_outside_policy_range() {
+    let mut context = Context::default();
+    let wallet_lock = deploy_always_success(&mut context);
+    let state_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![7]));
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_state_data, new_state_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
+    let change_hash = wallet_lock.calc_script_hash();
+    let sponsor_lock = deploy_contract(
+        &mut context,
+        "morph-sponsor-lock",
+        sponsor_policy_with_bounds(
+            change_hash.as_slice().try_into().unwrap(),
+            3,
+            10,
+            1_000,
+            1_000,
+        ),
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_state_data,
+    );
+    let sponsor_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(sponsor_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(sponsor_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY - 100)
+                .lock(wallet_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(sig_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

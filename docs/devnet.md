@@ -117,6 +117,8 @@ transactions for:
 - descriptor output mismatch rejected by `morph-vault-lock`;
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
 - sponsor fee payment rejected when no matching settling StateHeader is produced.
+- sponsor fee payment rejected when the fee exceeds the per-transaction policy.
+- sponsor fee payment rejected when the state number is outside the policy range.
 
 The CLI speaks directly to CKB JSON-RPC and does not require `ckb-cli`:
 
@@ -181,6 +183,39 @@ keys, consumes the SponsorCell, and returns sponsor change to the opener's
 wallet lock. `finalise-channel` consumes the settling StateCell and VaultCell,
 materialises the descriptor outputs, and returns the StateCell carrier capacity
 minus fee to the opener's wallet lock.
+
+## Sponsor Policy
+
+`open-channel` and `fund-sponsor` both create a SponsorCell with an explicit
+`SponsorPolicyV1`. The default policy is intentionally broad for local devnet
+smoke tests:
+
+```text
+min_state_number = 0
+max_state_number = u64::MAX
+max_fee_per_tx   = sponsor_capacity / 2
+max_total_fee    = sponsor_capacity
+expiry           = u64::MAX
+```
+
+For watchtower-style runs, use tighter policy bounds:
+
+```sh
+cargo run -q -p morph-cli -- devnet fund-sponsor \
+  --state-out-point "$SETTLING_STATE_OUT_POINT" \
+  --sponsor-capacity 50000000000 \
+  --sponsor-min-state-number 2 \
+  --sponsor-max-state-number 2 \
+  --sponsor-max-fee-per-tx 200000000 \
+  --sponsor-max-total-fee 400000000 \
+  --json
+```
+
+The CLI reports the policy in JSON and in the non-JSON output. The contract
+checks the same fields on-chain: the publication must create a settling
+StateHeader for the channel, its state number must fall inside the policy
+range, the fee must not exceed `max_fee_per_tx`, and the remaining sponsor
+capacity must return to the authorised change lock.
 
 To exercise the newer-state-wins path, top up a fresh SponsorCell against the
 currently live settling StateCell and publish a higher state number:
@@ -322,4 +357,4 @@ rights-dependency proof predicate exists.
 
 The current vertical slice is CKB-only and bilateral. The next devnet work is
 to add xUDT vault cells, a mempool-level competing-spend case, detection-depth
-watchtower polling, and emergency sponsor-budget policy.
+watchtower automation, and emergency sponsor-budget rotation.

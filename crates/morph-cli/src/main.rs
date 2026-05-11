@@ -131,6 +131,18 @@ enum DevnetCommand {
         /// Capacity placed under the sponsor lock, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
         sponsor_capacity: u64,
+        /// Lowest state number the initial SponsorCell may pay for.
+        #[arg(long, default_value_t = 0)]
+        sponsor_min_state_number: u64,
+        /// Highest state number the initial SponsorCell may pay for.
+        #[arg(long, default_value_t = u64::MAX)]
+        sponsor_max_state_number: u64,
+        /// Maximum fee this SponsorCell may pay in one publication transaction.
+        #[arg(long)]
+        sponsor_max_fee_per_tx: Option<u64>,
+        /// Maximum total fee this SponsorCell may pay.
+        #[arg(long)]
+        sponsor_max_total_fee: Option<u64>,
         /// Absolute fee to reserve for the open-channel transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
@@ -324,6 +336,18 @@ enum DevnetCommand {
         /// Capacity placed under the sponsor lock, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
         sponsor_capacity: u64,
+        /// Lowest state number the SponsorCell may pay for.
+        #[arg(long, default_value_t = 0)]
+        sponsor_min_state_number: u64,
+        /// Highest state number the SponsorCell may pay for.
+        #[arg(long, default_value_t = u64::MAX)]
+        sponsor_max_state_number: u64,
+        /// Maximum fee this SponsorCell may pay in one publication transaction.
+        #[arg(long)]
+        sponsor_max_fee_per_tx: Option<u64>,
+        /// Maximum total fee this SponsorCell may pay.
+        #[arg(long)]
+        sponsor_max_total_fee: Option<u64>,
         /// Absolute fee for the funding transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
@@ -571,6 +595,10 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             alice_capacity,
             bob_capacity,
             sponsor_capacity,
+            sponsor_min_state_number,
+            sponsor_max_state_number,
+            sponsor_max_fee_per_tx,
+            sponsor_max_total_fee,
             fee,
             finalise_since,
             mine_blocks,
@@ -587,6 +615,10 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     alice_capacity,
                     bob_capacity,
                     sponsor_capacity,
+                    sponsor_min_state_number,
+                    sponsor_max_state_number,
+                    sponsor_max_fee_per_tx,
+                    sponsor_max_total_fee,
                     fee,
                     finalise_since,
                     mine_blocks,
@@ -610,6 +642,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("state_capacity={}", report.state_capacity);
                 println!("vault_capacity={}", report.vault_capacity);
                 println!("sponsor_capacity={}", report.sponsor_capacity);
+                print_sponsor_policy(&report.sponsor_policy);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
                 print_metrics(&report.metrics);
@@ -883,6 +916,10 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             state_out_point,
             sponsor_capacity,
+            sponsor_min_state_number,
+            sponsor_max_state_number,
+            sponsor_max_fee_per_tx,
+            sponsor_max_total_fee,
             fee,
             mine_blocks,
             json,
@@ -894,6 +931,10 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     private_key,
                     state_out_point,
                     sponsor_capacity,
+                    sponsor_min_state_number,
+                    sponsor_max_state_number,
+                    sponsor_max_fee_per_tx,
+                    sponsor_max_total_fee,
                     fee,
                     mine_blocks,
                 },
@@ -916,6 +957,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     report.sponsor_out_point.tx_hash, report.sponsor_out_point.index
                 );
                 println!("sponsor_capacity={}", report.sponsor_capacity);
+                print_sponsor_policy(&report.sponsor_policy);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
                 print_metrics(&report.metrics);
@@ -1051,6 +1093,15 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
 fn print_metrics(metrics: &devnet::TransactionMetrics) {
     println!("estimated_cycles={}", metrics.estimated_cycles);
     println!("tx_size_bytes={}", metrics.tx_size_bytes);
+}
+
+fn print_sponsor_policy(policy: &devnet::SponsorPolicyReport) {
+    println!("sponsor_min_state_number={}", policy.min_state_number);
+    println!("sponsor_max_state_number={}", policy.max_state_number);
+    println!("sponsor_max_fee_per_tx={}", policy.max_fee_per_tx);
+    println!("sponsor_max_total_fee={}", policy.max_total_fee);
+    println!("sponsor_allowed_source={}", policy.allowed_sponsor_source);
+    println!("sponsor_change_lock_hash={}", policy.change_lock_hash);
 }
 
 fn print_tip(tip: &HeaderView) -> Result<()> {
