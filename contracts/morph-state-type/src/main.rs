@@ -4,18 +4,20 @@
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
 #[cfg(target_arch = "riscv64")]
-use ckb_std::ckb_types::prelude::Unpack;
+use ckb_std::ckb_types::prelude::*;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
     load_cell_capacity, load_cell_data, load_cell_occupied_capacity, load_input, load_script,
+    load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, PHASE_SETTLING, Result, ScriptError, StateHeaderV1, read_u64,
+    BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_SETTLING, Result, ScriptError, StateHeaderV1,
+    read_u64, verify_bilateral_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -82,6 +84,7 @@ fn validate_supersede(
     if !old_header.same_context_except_progress(&new_header) {
         return Err(ScriptError::HeaderContextChanged);
     }
+    validate_participant_authorisation(&new_header)?;
 
     let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
     let occupied =
@@ -91,6 +94,19 @@ fn validate_supersede(
     }
 
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_participant_authorisation(header: &StateHeaderV1) -> Result<()> {
+    let witness_args = load_witness_args(0, Source::GroupInput)
+        .map_err(|_| ScriptError::ParticipantWitnessMissing)?;
+    let input_type = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(ScriptError::ParticipantWitnessMissing)?;
+    let raw = input_type.raw_data();
+    let witness = BilateralSignatureWitnessV1::parse(raw.as_ref())?;
+    verify_bilateral_state_signatures(header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]

@@ -69,6 +69,18 @@ impl StateCell {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ParticipantSignature {
+    pub pubkey_sec1: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateAuthorization {
+    pub threshold: u8,
+    pub signatures: Vec<ParticipantSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetRegistry {
     pub xudt_types: BTreeSet<Bytes32>,
 }
@@ -251,7 +263,7 @@ pub struct PartitionTotals {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateTransitionContext {
     pub referenced_funding_anchor: Bytes32,
-    pub signatures_valid: bool,
+    pub authorization: StateAuthorization,
     pub asset_registry: AssetRegistry,
     pub partition: PartitionedTransaction,
 }

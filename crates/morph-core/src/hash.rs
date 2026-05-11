@@ -1,8 +1,9 @@
 use blake2b_rs::Blake2bBuilder;
 
-use crate::types::{Mode, Phase, StateHeader};
+use crate::types::{Bytes32, Mode, Phase, StateHeader};
 
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
+pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
 
 pub trait SigningBytes {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>);
@@ -14,6 +15,21 @@ pub fn blake2b256(data: &[u8]) -> [u8; 32] {
         .personal(b"ckb-default-hash")
         .build();
     hasher.update(data);
+    hasher.finalize(&mut out);
+    out
+}
+
+pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
+    let mut out = [0u8; 32];
+    let mut hasher = Blake2bBuilder::new(32)
+        .personal(b"ckb-default-hash")
+        .build();
+    hasher.update(PARTICIPANTS_DOMAIN_V1);
+    hasher.update(&[threshold]);
+    hasher.update(&[pubkeys.len() as u8]);
+    for pubkey in pubkeys {
+        hasher.update(pubkey);
+    }
     hasher.finalize(&mut out);
     out
 }

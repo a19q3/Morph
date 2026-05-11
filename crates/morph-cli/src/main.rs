@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use k256::ecdsa::signature::hazmat::PrehashSigner;
+use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
 
 #[derive(Debug, Parser)]
@@ -90,19 +92,21 @@ impl Fixture {
             tx_fee: 100,
             authorised_reserve_refund: 0,
         };
-        let old_state = StateCell {
+        let mut old_state = StateCell {
             header: header(1, Phase::Active),
             capacity: 10_000,
             occupied_capacity: 1_000,
         };
-        let new_state = StateCell {
+        let mut new_state = StateCell {
             header: header(2, Phase::Settling),
             capacity: 10_000,
             occupied_capacity: 1_000,
         };
+        let authorization = authorization_for(&mut new_state.header);
+        old_state.header.participants_commitment = new_state.header.participants_commitment;
         let transition = StateTransitionContext {
             referenced_funding_anchor: bytes32(3),
-            signatures_valid: true,
+            authorization,
             asset_registry: registry.clone(),
             partition: partition.clone(),
         };
@@ -144,6 +148,43 @@ impl Fixture {
             sponsor_spend,
             vault_spend,
         }
+    }
+}
+
+fn signing_key(byte: u8) -> SigningKey {
+    SigningKey::from_slice(&[byte; 32]).unwrap()
+}
+
+fn pubkey(key: &SigningKey) -> Vec<u8> {
+    key.verifying_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .to_vec()
+}
+
+fn signature(key: &SigningKey, digest: &[u8; 32]) -> Vec<u8> {
+    let sig: Signature = key.sign_prehash(digest).unwrap();
+    sig.to_bytes().as_slice().to_vec()
+}
+
+fn authorization_for(header: &mut StateHeader) -> StateAuthorization {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
+    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let digest = header.signing_digest();
+    StateAuthorization {
+        threshold: 2,
+        signatures: entries
+            .iter()
+            .map(|(pubkey, key)| ParticipantSignature {
+                pubkey_sec1: pubkey.clone(),
+                signature: signature(key, &digest),
+            })
+            .collect(),
     }
 }
 

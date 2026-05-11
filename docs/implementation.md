@@ -23,9 +23,10 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 - Sponsor lock: permits fee payment only within an explicit sponsor policy and
   counts only outputs returning to the authorised change lock as sponsor change.
 
-These scripts are intentionally structural. They enforce the Cell and accounting
-boundaries first; participant signature verification is the next implementation
-step, not a skipped concern.
+The state type script verifies the bilateral V1 participant witness: two sorted
+compressed secp256k1 public keys, two ECDSA signatures over the canonical state
+header digest, and a participant commitment that must match the signed header.
+Sponsor inputs and fee selection remain outside that state-signature domain.
 
 ## Current Non-Goals
 

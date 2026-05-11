@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use k256::ecdsa::signature::hazmat::PrehashSigner;
+use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
 
 fn header(n: u64, phase: Phase) -> StateHeader {
@@ -20,6 +22,62 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 1,
     }
+}
+
+fn signing_key(byte: u8) -> SigningKey {
+    SigningKey::from_slice(&[byte; 32]).unwrap()
+}
+
+fn pubkey(key: &SigningKey) -> Vec<u8> {
+    key.verifying_key()
+        .to_encoded_point(true)
+        .as_bytes()
+        .to_vec()
+}
+
+fn signature(key: &SigningKey, digest: &[u8; 32]) -> Vec<u8> {
+    let sig: Signature = key.sign_prehash(digest).unwrap();
+    sig.to_bytes().as_slice().to_vec()
+}
+
+fn authorization_for(header: &mut StateHeader) -> StateAuthorization {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
+    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let digest = header.signing_digest();
+    StateAuthorization {
+        threshold: 2,
+        signatures: entries
+            .iter()
+            .map(|(pubkey, key)| ParticipantSignature {
+                pubkey_sec1: pubkey.clone(),
+                signature: signature(key, &digest),
+            })
+            .collect(),
+    }
+}
+
+fn signed_cells(
+    old_number: u64,
+    old_phase: Phase,
+    new_number: u64,
+    new_phase: Phase,
+) -> (StateCell, StateCell, StateTransitionContext) {
+    let mut old = state(old_number, old_phase);
+    let mut new = state(new_number, new_phase);
+    let authorization = authorization_for(&mut new.header);
+    old.header.participants_commitment = new.header.participants_commitment;
+    let ctx = StateTransitionContext {
+        referenced_funding_anchor: bytes32(3),
+        authorization,
+        asset_registry: registry(),
+        partition: good_partition(),
+    };
+    (old, new, ctx)
 }
 
 fn state(n: u64, phase: Phase) -> StateCell {
@@ -57,15 +115,6 @@ fn good_partition() -> PartitionedTransaction {
     }
 }
 
-fn transition_context() -> StateTransitionContext {
-    StateTransitionContext {
-        referenced_funding_anchor: bytes32(3),
-        signatures_valid: true,
-        asset_registry: registry(),
-        partition: good_partition(),
-    }
-}
-
 #[test]
 fn signing_digest_is_domain_separated_and_state_sensitive() {
     let h1 = header(1, Phase::Settling);
@@ -78,26 +127,22 @@ fn signing_digest_is_domain_separated_and_state_sensitive() {
 
 #[test]
 fn accepts_valid_state_supersession() {
-    let old = state(1, Phase::Active);
-    let new = state(2, Phase::Settling);
+    let (old, new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
 
-    validate_state_transition(&old, &new, &transition_context()).unwrap();
+    validate_state_transition(&old, &new, &ctx).unwrap();
 }
 
 #[test]
 fn rejects_stale_or_equal_state_number() {
-    let old = state(2, Phase::Settling);
-    let new = state(2, Phase::Settling);
+    let (old, new, ctx) = signed_cells(2, Phase::Settling, 2, Phase::Settling);
 
-    let err = validate_state_transition(&old, &new, &transition_context()).unwrap_err();
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::NonMonotonicStateNumber);
 }
 
 #[test]
 fn rejects_wrong_funding_anchor_reference() {
-    let old = state(1, Phase::Active);
-    let new = state(2, Phase::Settling);
-    let mut ctx = transition_context();
+    let (old, new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     ctx.referenced_funding_anchor = bytes32(99);
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
@@ -106,12 +151,20 @@ fn rejects_wrong_funding_anchor_reference() {
 
 #[test]
 fn rejects_changed_header_context() {
-    let old = state(1, Phase::Active);
-    let mut new = state(2, Phase::Settling);
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.descriptor_version = 2;
 
-    let err = validate_state_transition(&old, &new, &transition_context()).unwrap_err();
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::HeaderContextChanged);
+}
+
+#[test]
+fn rejects_invalid_state_signature() {
+    let (old, new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    ctx.authorization.signatures[0].signature[0] ^= 1;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::InvalidStateSignatures);
 }
 
 #[test]

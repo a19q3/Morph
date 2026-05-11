@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
+use k256::ecdsa::signature::hazmat::PrehashVerifier;
+use k256::ecdsa::{Signature, VerifyingKey};
 use thiserror::Error;
 
+use crate::hash::participants_commitment;
 use crate::types::*;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -16,6 +19,10 @@ pub enum MorphError {
     HeaderContextChanged,
     #[error("participant signatures over canonical header are invalid")]
     InvalidStateSignatures,
+    #[error("participant set does not match signed state header")]
+    ParticipantSetMismatch,
+    #[error("participant signature encoding is invalid")]
+    ParticipantSignatureEncoding,
     #[error("referenced funding anchor does not match signed state header")]
     FundingAnchorMismatch,
     #[error("output capacity is below occupied capacity")]
@@ -81,13 +88,52 @@ pub fn validate_state_transition(
         return Err(MorphError::NewStateNotSettling);
     }
     require_same_header_context(&old.header, &new.header)?;
-    if !ctx.signatures_valid {
-        return Err(MorphError::InvalidStateSignatures);
-    }
+    validate_state_authorization(&new.header, &ctx.authorization)?;
     if ctx.referenced_funding_anchor != new.header.funding_anchor {
         return Err(MorphError::FundingAnchorMismatch);
     }
     validate_partition_conservation(&ctx.partition, &ctx.asset_registry)?;
+    Ok(())
+}
+
+pub fn validate_state_authorization(
+    header: &StateHeader,
+    authorization: &StateAuthorization,
+) -> Result<()> {
+    if authorization.threshold == 0
+        || authorization.signatures.len() < authorization.threshold as usize
+    {
+        return Err(MorphError::ParticipantSetMismatch);
+    }
+
+    let pubkeys: Vec<&[u8]> = authorization
+        .signatures
+        .iter()
+        .map(|signature| signature.pubkey_sec1.as_slice())
+        .collect();
+    if !pubkeys.windows(2).all(|window| window[0] < window[1]) {
+        return Err(MorphError::ParticipantSetMismatch);
+    }
+    if participants_commitment(authorization.threshold, &pubkeys) != header.participants_commitment
+    {
+        return Err(MorphError::ParticipantSetMismatch);
+    }
+
+    let digest = header.signing_digest();
+    let mut valid = 0usize;
+    for participant_signature in &authorization.signatures {
+        let verifying_key = VerifyingKey::from_sec1_bytes(&participant_signature.pubkey_sec1)
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        let signature = Signature::try_from(participant_signature.signature.as_slice())
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| MorphError::InvalidStateSignatures)?;
+        valid += 1;
+    }
+    if valid < authorization.threshold as usize {
+        return Err(MorphError::InvalidStateSignatures);
+    }
     Ok(())
 }
 

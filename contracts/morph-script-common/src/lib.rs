@@ -1,10 +1,24 @@
 #![no_std]
 
+use ckb_hash::new_blake2b;
+use k256::ecdsa::signature::hazmat::PrehashVerifier;
+use k256::ecdsa::{Signature, VerifyingKey};
+
 pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_V1_LEN: usize = 274;
 pub const SPONSOR_POLICY_V1_LEN: usize = 144;
+pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
+pub const ECDSA_SIGNATURE_LEN: usize = 64;
+pub const BILATERAL_SIGNATURE_WITNESS_V1_LEN: usize =
+    2 + 1 + 1 + (2 * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN));
 
 pub const PHASE_SETTLING: u8 = 2;
+pub const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1: u16 = 1;
+pub const BILATERAL_SIGNATURE_WITNESS_VERSION_V1: u16 = 1;
+pub const BILATERAL_SIGNATURE_THRESHOLD_V1: u8 = 2;
+pub const BILATERAL_SIGNATURE_COUNT_V1: u8 = 2;
+pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
+pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
 
 #[repr(i8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +39,10 @@ pub enum ScriptError {
     SponsorBudgetExceeded = 18,
     SponsorChangeLockMismatch = 19,
     CapacityUnderflow = 20,
+    ParticipantWitnessMissing = 21,
+    ParticipantWitnessEncoding = 22,
+    ParticipantCommitmentMismatch = 23,
+    InvalidParticipantSignature = 24,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -102,6 +120,10 @@ impl<'a> StateHeaderV1<'a> {
         read_u16(self.raw, 272)
     }
 
+    pub fn signing_digest(&self) -> [u8; 32] {
+        blake2b256(&[STATE_DOMAIN_V1, self.raw])
+    }
+
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
         self.protocol_version() == next.protocol_version()
             && self.chain_id() == next.chain_id()
@@ -116,6 +138,80 @@ impl<'a> StateHeaderV1<'a> {
             && self.challenge_policy_commitment() == next.challenge_policy_commitment()
             && self.state_layout_version() == next.state_layout_version()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilateralSignatureWitnessV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BilateralSignatureWitnessV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != BILATERAL_SIGNATURE_WITNESS_V1_LEN {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != BILATERAL_SIGNATURE_WITNESS_VERSION_V1
+            || witness.threshold() != BILATERAL_SIGNATURE_THRESHOLD_V1
+            || witness.count() != BILATERAL_SIGNATURE_COUNT_V1
+        {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        if witness.pubkey(0) >= witness.pubkey(1) {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn threshold(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn pubkey(&self, index: usize) -> &'a [u8] {
+        let offset = participant_offset(index);
+        field(self.raw, offset, COMPRESSED_SECP256K1_PUBKEY_LEN)
+    }
+
+    pub fn signature(&self, index: usize) -> &'a [u8] {
+        let offset = participant_offset(index) + COMPRESSED_SECP256K1_PUBKEY_LEN;
+        field(self.raw, offset, ECDSA_SIGNATURE_LEN)
+    }
+
+    pub fn participants_commitment(&self) -> [u8; 32] {
+        participants_commitment_v1(self.threshold(), &[self.pubkey(0), self.pubkey(1)])
+    }
+}
+
+pub fn verify_bilateral_state_signatures(
+    header: &StateHeaderV1,
+    witness: &BilateralSignatureWitnessV1,
+) -> Result<()> {
+    if header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1 {
+        return Err(ScriptError::ParticipantWitnessEncoding);
+    }
+    if header.participants_commitment() != witness.participants_commitment().as_slice() {
+        return Err(ScriptError::ParticipantCommitmentMismatch);
+    }
+
+    let digest = header.signing_digest();
+    for index in 0..BILATERAL_SIGNATURE_COUNT_V1 as usize {
+        let verifying_key = VerifyingKey::from_sec1_bytes(witness.pubkey(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        let signature = Signature::try_from(witness.signature(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| ScriptError::InvalidParticipantSignature)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,9 +280,83 @@ pub fn field(raw: &[u8], offset: usize, len: usize) -> &[u8] {
     &raw[offset..offset + len]
 }
 
+pub fn blake2b256(chunks: &[&[u8]]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let mut hasher = new_blake2b();
+    for chunk in chunks {
+        hasher.update(chunk);
+    }
+    hasher.finalize(&mut out);
+    out
+}
+
+pub fn participants_commitment_v1(threshold: u8, pubkeys: &[&[u8]]) -> [u8; 32] {
+    let count = [pubkeys.len() as u8];
+    let threshold = [threshold];
+    let mut hasher = new_blake2b();
+    hasher.update(PARTICIPANTS_DOMAIN_V1);
+    hasher.update(&threshold);
+    hasher.update(&count);
+    for pubkey in pubkeys {
+        hasher.update(pubkey);
+    }
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
+
+fn participant_offset(index: usize) -> usize {
+    4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use k256::ecdsa::SigningKey;
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    fn signing_key(byte: u8) -> SigningKey {
+        SigningKey::from_slice(&[byte; 32]).unwrap()
+    }
+
+    fn pubkey(key: &SigningKey) -> [u8; COMPRESSED_SECP256K1_PUBKEY_LEN] {
+        let encoded = key.verifying_key().to_encoded_point(true);
+        let mut out = [0u8; COMPRESSED_SECP256K1_PUBKEY_LEN];
+        out.copy_from_slice(encoded.as_bytes());
+        out
+    }
+
+    fn signature(key: &SigningKey, digest: &[u8; 32]) -> [u8; ECDSA_SIGNATURE_LEN] {
+        let sig: Signature = key.sign_prehash(digest).unwrap();
+        let mut out = [0u8; ECDSA_SIGNATURE_LEN];
+        out.copy_from_slice(sig.to_bytes().as_slice());
+        out
+    }
+
+    fn signed_bilateral_witness(
+        key0: &SigningKey,
+        key1: &SigningKey,
+        digest: &[u8; 32],
+    ) -> [u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN] {
+        let mut entries = [
+            (pubkey(key0), signature(key0, digest)),
+            (pubkey(key1), signature(key1, digest)),
+        ];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
+        put_u16(&mut raw, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);
+        raw[2] = BILATERAL_SIGNATURE_THRESHOLD_V1;
+        raw[3] = BILATERAL_SIGNATURE_COUNT_V1;
+        for (index, (pubkey, sig)) in entries.iter().enumerate() {
+            let offset = participant_offset(index);
+            raw[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
+            raw[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
+                ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(sig);
+        }
+        raw
+    }
 
     fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
         raw[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
@@ -284,5 +454,45 @@ mod tests {
         assert_eq!(policy.expiry(), 60);
         assert_eq!(policy.allowed_sponsor_source(), &[2u8; 32]);
         assert_eq!(policy.change_lock(), &[3u8; 32]);
+    }
+
+    #[test]
+    fn verifies_real_bilateral_state_signatures() {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [pubkey(&key0), pubkey(&key1)];
+        entries.sort();
+
+        let mut raw = header_bytes(7, PHASE_SETTLING);
+        let commitment =
+            participants_commitment_v1(2, &[entries[0].as_slice(), entries[1].as_slice()]);
+        raw[110..142].copy_from_slice(&commitment);
+        let header = StateHeaderV1::parse(&raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &header.signing_digest());
+        let witness = BilateralSignatureWitnessV1::parse(&witness_raw).unwrap();
+
+        verify_bilateral_state_signatures(&header, &witness).unwrap();
+    }
+
+    #[test]
+    fn rejects_bad_bilateral_state_signature() {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [pubkey(&key0), pubkey(&key1)];
+        entries.sort();
+
+        let mut raw = header_bytes(7, PHASE_SETTLING);
+        let commitment =
+            participants_commitment_v1(2, &[entries[0].as_slice(), entries[1].as_slice()]);
+        raw[110..142].copy_from_slice(&commitment);
+        let header = StateHeaderV1::parse(&raw).unwrap();
+        let mut witness_raw = signed_bilateral_witness(&key0, &key1, &header.signing_digest());
+        witness_raw[BILATERAL_SIGNATURE_WITNESS_V1_LEN - 1] ^= 1;
+        let witness = BilateralSignatureWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_bilateral_state_signatures(&header, &witness).unwrap_err(),
+            ScriptError::InvalidParticipantSignature
+        );
     }
 }

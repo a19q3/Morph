@@ -7,6 +7,6 @@ pub mod hash;
 pub mod types;
 pub mod validation;
 
-pub use hash::{SigningBytes, blake2b256};
+pub use hash::{SigningBytes, blake2b256, participants_commitment};
 pub use types::*;
 pub use validation::*;

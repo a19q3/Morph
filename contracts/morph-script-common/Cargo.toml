@@ -8,4 +8,5 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-
+ckb-hash.workspace = true
+k256.workspace = true

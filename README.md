@@ -25,8 +25,9 @@ Current implementation stage:
 
 This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable
-checks. Participant signature verification and devnet broadcast tooling are the
-next milestone; this repository does not use an always-success placeholder.
+checks. Participant state signatures are verified in both host-side invariants
+and the `morph-state-type` CKB script; live devnet broadcast tooling is the next
+remaining milestone.
 
 ## Repository Layout
 

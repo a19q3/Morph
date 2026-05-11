@@ -2,11 +2,18 @@ use ckb_testtool::builtin::ALWAYS_SUCCESS;
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
     core::{ScriptHashType, TransactionBuilder},
-    packed::{CellInput, CellOutput},
+    packed::{CellInput, CellOutput, WitnessArgs},
     prelude::*,
 };
 use ckb_testtool::context::Context;
-use morph_script_common::{PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN};
+use k256::ecdsa::signature::hazmat::PrehashSigner;
+use k256::ecdsa::{Signature, SigningKey};
+use morph_script_common::{
+    BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
+    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN,
+    STATE_HEADER_V1_LEN, StateHeaderV1, participants_commitment_v1,
+};
 use std::fs;
 use std::path::PathBuf;
 
@@ -70,7 +77,25 @@ fn state_args(finalise_since: u64) -> Vec<u8> {
     args
 }
 
-fn header_bytes(state_number: u64, phase: u8) -> Bytes {
+fn signing_key(byte: u8) -> SigningKey {
+    SigningKey::from_slice(&[byte; 32]).unwrap()
+}
+
+fn pubkey(key: &SigningKey) -> [u8; COMPRESSED_SECP256K1_PUBKEY_LEN] {
+    let encoded = key.verifying_key().to_encoded_point(true);
+    let mut out = [0u8; COMPRESSED_SECP256K1_PUBKEY_LEN];
+    out.copy_from_slice(encoded.as_bytes());
+    out
+}
+
+fn signature(key: &SigningKey, digest: &[u8; 32]) -> [u8; ECDSA_SIGNATURE_LEN] {
+    let sig: Signature = key.sign_prehash(digest).unwrap();
+    let mut out = [0u8; ECDSA_SIGNATURE_LEN];
+    out.copy_from_slice(sig.to_bytes().as_slice());
+    out
+}
+
+fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V1_LEN] {
     let mut raw = [0u8; STATE_HEADER_V1_LEN];
     put_u16(&mut raw, 0, 1);
     raw[2..34].fill(2);
@@ -87,7 +112,57 @@ fn header_bytes(state_number: u64, phase: u8) -> Bytes {
     raw[208..240].fill(8);
     raw[240..272].fill(9);
     put_u16(&mut raw, 272, 1);
-    raw.to_vec().into()
+    raw
+}
+
+fn signed_state_pair(
+    old_number: u64,
+    old_phase: u8,
+    new_number: u64,
+    new_phase: u8,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+    let mut old = header_raw(old_number, old_phase);
+    old[110..142].copy_from_slice(&commitment);
+    let mut new = header_raw(new_number, new_phase);
+    new[110..142].copy_from_slice(&commitment);
+
+    let header = StateHeaderV1::parse(&new).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = BILATERAL_SIGNATURE_THRESHOLD_V1;
+    witness[3] = BILATERAL_SIGNATURE_COUNT_V1;
+    for (index, (pubkey, key)) in entries.iter().enumerate() {
+        let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
+        witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn header_bytes(state_number: u64, phase: u8) -> Bytes {
+    header_raw(state_number, phase).to_vec().into()
+}
+
+fn witness_with_input_type(input_type: Bytes) -> ckb_testtool::ckb_types::packed::Bytes {
+    WitnessArgs::new_builder()
+        .input_type(Some(input_type).pack())
+        .build()
+        .as_bytes()
+        .pack()
 }
 
 fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
@@ -110,6 +185,7 @@ fn state_type_accepts_newer_settling_state() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_data, new_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
 
     let input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -117,7 +193,7 @@ fn state_type_accepts_newer_settling_state() {
             .lock(lock.clone())
             .type_(Some(state_type.clone()).pack())
             .build(),
-        header_bytes(1, 1),
+        old_data,
     );
     let input = CellInput::new_builder()
         .previous_output(input_out_point)
@@ -131,7 +207,8 @@ fn state_type_accepts_newer_settling_state() {
     let tx = TransactionBuilder::default()
         .input(input)
         .output(output)
-        .output_data(header_bytes(2, PHASE_SETTLING).pack())
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
         .build();
     let tx = context.complete_tx(tx);
 
@@ -146,6 +223,7 @@ fn state_type_rejects_equal_state_number() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_data, new_data, sig_witness) = signed_state_pair(2, 1, 2, PHASE_SETTLING);
 
     let input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -153,7 +231,7 @@ fn state_type_rejects_equal_state_number() {
             .lock(lock.clone())
             .type_(Some(state_type.clone()).pack())
             .build(),
-        header_bytes(2, 1),
+        old_data,
     );
     let input = CellInput::new_builder()
         .previous_output(input_out_point)
@@ -166,7 +244,46 @@ fn state_type_rejects_equal_state_number() {
     let tx = TransactionBuilder::default()
         .input(input)
         .output(output)
-        .output_data(header_bytes(2, PHASE_SETTLING).pack())
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_invalid_participant_signature() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_data, new_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
+    let mut sig_witness = sig_witness.to_vec();
+    let last = sig_witness.len() - 1;
+    sig_witness[last] ^= 1;
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness.into()))
         .build();
     let tx = context.complete_tx(tx);
 

@@ -41,6 +41,7 @@ These checks exercise the same invariants that the scripts must enforce:
 
 - one live State Cell transition;
 - monotonic state number;
+- secp256k1 ECDSA participant signatures over the canonical state header;
 - canonical funding anchor binding;
 - no channel-paid publication fees;
 - reserve/business CKB separation;
@@ -61,6 +62,7 @@ transactions for:
 
 - newer-state publication accepted by `morph-state-type`;
 - equal state number rejected by `morph-state-type`;
+- invalid participant signature rejected by `morph-state-type`;
 - vault finalisation accepted when a current settling State Cell is consumed;
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
 
