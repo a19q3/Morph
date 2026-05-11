@@ -13,30 +13,36 @@ Status: implemented.
 
 ## M1: Devnet Bilateral Channel
 
-Status: in progress. The three script ELFs build, offline CKB-VM tests cover
-state publication, stale-state rejection, invalid state signatures,
-state-bound sponsor fees, descriptor-bound vault finalisation, and
-descriptor-output mismatch rejection, and the CLI can check/mine a local CKB
-devnet and deploy the Morph contract binaries through native JSON-RPC.
+Status: implemented for the bilateral CKB-only path. The four script ELFs
+build, offline CKB-VM tests cover state-lock delegation, state publication,
+stale-state rejection, invalid state signatures, state-bound sponsor fees,
+descriptor-bound vault finalisation, and descriptor-output mismatch rejection.
+The CLI can check/mine a local CKB devnet, deploy the Morph contract binaries,
+open a channel, publish a newer signed settling state with sponsor capacity,
+and finalise the vault through native JSON-RPC.
 
 Required deliverables:
 
 - Fixed-width V1 wire types, later replaced or generated from Molecule.
+- `morph-state-lock` contract.
 - `morph-state-type` contract.
 - `morph-vault-lock` contract.
 - `morph-sponsor-lock` contract.
 - Native devnet RPC check/mine/wait commands.
 - Devnet contract deployment transaction.
 - RPC transaction builder.
-- Publish, supersede, and finalise integration test.
+- Publish, supersede, and finalise devnet path.
 
 Acceptance criteria:
 
-- the stale-state transaction is superseded by a newer state before `since`;
-- channel reserve cannot pay fees;
+- a canonical StateCell is created from the funding input and output index;
+- a newer signed state can replace the active StateCell and enter settling;
+- sponsor capacity pays publication fees without touching vault value;
+- finalisation consumes the settling StateCell and vault, then materialises the
+  descriptor outputs;
+- channel reserve cannot pay publication fees;
 - sponsor policy cannot spend outside its budget;
-- xUDT type mismatch is rejected;
-- cycle counts are recorded.
+- xUDT type mismatch is rejected in host-side invariants.
 
 ## M2: Watchtower
 

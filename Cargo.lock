@@ -1651,6 +1651,7 @@ dependencies = [
  "hex",
  "k256",
  "morph-core",
+ "morph-script-common",
  "reqwest",
  "serde",
  "serde_json",
@@ -1680,6 +1681,14 @@ dependencies = [
 
 [[package]]
 name = "morph-sponsor-lock"
+version = "0.1.0"
+dependencies = [
+ "ckb-std",
+ "morph-script-common",
+]
+
+[[package]]
+name = "morph-state-lock"
 version = "0.1.0"
 dependencies = [
  "ckb-std",

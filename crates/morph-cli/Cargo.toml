@@ -17,6 +17,7 @@ clap.workspace = true
 hex.workspace = true
 k256.workspace = true
 morph-core = { path = "../morph-core" }
+morph-script-common = { path = "../../contracts/morph-script-common" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

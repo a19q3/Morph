@@ -4,6 +4,7 @@ members = [
   "crates/morph-core",
   "crates/morph-cli",
   "contracts/morph-script-common",
+  "contracts/morph-state-lock",
   "contracts/morph-state-type",
   "contracts/morph-vault-lock",
   "contracts/morph-sponsor-lock",

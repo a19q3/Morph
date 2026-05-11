@@ -2,15 +2,15 @@
 
 The devnet milestone is a bilateral channel vertical slice:
 
-1. Deploy three scripts:
+1. Deploy four scripts:
+   - `morph-state-lock`
    - `morph-state-type`
    - `morph-vault-lock`
    - `morph-sponsor-lock`
-2. Create one funding identity Cell, one State Cell, and optional vault Cells.
+2. Create one canonical State Cell, one VaultCell, and one SponsorCell.
 3. Produce an off-chain state package with a strictly higher state number.
 4. Publish the state package using sponsor capacity.
-5. Supersede a stale settling state before its relative `since` delay matures.
-6. Finalise the current settling state and materialise vault outputs.
+5. Finalise the current settling state and materialise vault outputs.
 
 ## Tooling Requirements
 
@@ -68,6 +68,7 @@ cargo run -p morph-cli -- devnet check
 cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
 cargo run -p morph-cli -- devnet deploy-contracts --json
+cargo run -p morph-cli -- devnet open-channel --json
 ```
 
 These checks exercise the same invariants that the scripts must enforce:
@@ -85,6 +86,7 @@ These checks exercise the same invariants that the scripts must enforce:
 `make build-contracts` currently produces these CKB RISC-V ELFs:
 
 ```text
+target/riscv64imac-unknown-none-elf/release/morph-state-lock
 target/riscv64imac-unknown-none-elf/release/morph-state-type
 target/riscv64imac-unknown-none-elf/release/morph-vault-lock
 target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
@@ -94,6 +96,8 @@ target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
 transactions for:
 
 - newer-state publication accepted by `morph-state-type`;
+- typed StateCell delegation accepted by `morph-state-lock`;
+- untyped StateCell input rejected by `morph-state-lock`;
 - equal state number rejected by `morph-state-type`;
 - invalid participant signature rejected by `morph-state-type`;
 - vault finalisation accepted when a current settling State Cell is consumed;
@@ -109,6 +113,7 @@ cargo run -p morph-cli -- devnet tip --json
 cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
 cargo run -p morph-cli -- devnet deploy-contracts
+cargo run -p morph-cli -- devnet open-channel
 ```
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
@@ -123,9 +128,10 @@ node has not exposed that module, the command fails with the returned RPC
 error. It does not fabricate block progress.
 
 `devnet deploy-contracts` builds and signs a real CKB transaction that deploys
-the three Morph RISC-V binaries as data-hash script cells:
+the four Morph RISC-V binaries as data-hash script cells:
 
 ```text
+morph-state-lock
 morph-state-type
 morph-vault-lock
 morph-sponsor-lock
@@ -136,6 +142,32 @@ genesis secp256k1 system cell as a dependency, broadcasts through
 `send_transaction`, optionally mines blocks, and reports the deployed outpoints
 and `data1` code hashes. The default key is the first generated private key in
 the local `dev` chain spec and is suitable only for isolated devnet testing.
+
+The minimal bilateral lifecycle is:
+
+```sh
+OPEN_JSON=$(cargo run -q -p morph-cli -- devnet open-channel --json)
+STATE_OUT_POINT="$(echo "$OPEN_JSON" | jq -r '.cells[] | select(.role=="state") | "\(.out_point.tx_hash):\(.out_point.index)"')"
+VAULT_OUT_POINT="$(echo "$OPEN_JSON" | jq -r '.cells[] | select(.role=="vault") | "\(.out_point.tx_hash):\(.out_point.index)"')"
+SPONSOR_OUT_POINT="$(echo "$OPEN_JSON" | jq -r '.cells[] | select(.role=="sponsor") | "\(.out_point.tx_hash):\(.out_point.index)"')"
+
+PUBLISH_JSON=$(cargo run -q -p morph-cli -- devnet publish-state \
+  --state-out-point "$STATE_OUT_POINT" \
+  --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --json)
+SETTLING_STATE_OUT_POINT="$(echo "$PUBLISH_JSON" | jq -r '"\(.state_out_point.tx_hash):\(.state_out_point.index)"')"
+
+cargo run -q -p morph-cli -- devnet finalise-channel \
+  --state-out-point "$SETTLING_STATE_OUT_POINT" \
+  --vault-out-point "$VAULT_OUT_POINT" \
+  --json
+```
+
+`publish-state` signs the new StateHeader with the default Alice and Bob devnet
+keys, consumes the SponsorCell, and returns sponsor change to the opener's
+wallet lock. `finalise-channel` consumes the settling StateCell and VaultCell,
+materialises the descriptor outputs, and returns the StateCell carrier capacity
+minus fee to the opener's wallet lock.
 
 ## Contract Milestone
 
@@ -154,7 +186,6 @@ rights-dependency proof predicate exists.
 
 ## Remaining Devnet Gap
 
-The local machine now has a CKB node binary and the repository has native
-read/mine/deploy JSON-RPC tooling. The next missing part is Morph-specific
-transaction construction and signing for funding a channel, publishing a state,
-superseding it, and finalising vault outputs against a live devnet node.
+The current vertical slice is CKB-only and bilateral. The next devnet work is
+to add xUDT vault cells, cycle reports, a stale-state supersession scenario
+with two competing settling states, and watchtower-grade state package storage.

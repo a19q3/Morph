@@ -3,7 +3,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use devnet::{DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions};
+use devnet::{
+    DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY, DEFAULT_DEVNET_PRIVATE_KEY,
+    DeployContractsOptions, FinaliseChannelOptions, OpenChannelOptions, PublishStateOptions,
+};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
@@ -73,7 +76,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Deploy the three Morph contract binaries to local devnet.
+    /// Deploy the Morph contract binaries to local devnet.
     DeployContracts {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -86,6 +89,129 @@ enum DevnetCommand {
         )]
         private_key: String,
         /// Absolute fee to reserve for the deployment transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Open a bilateral Morph channel on local devnet using deployed Morph scripts.
+    OpenChannel {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls a funded local-devnet cell.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the channel vault lock, in shannons.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        vault_capacity: u64,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee to reserve for the open-channel transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Publish a newer signed settling state, paid by a SponsorCell.
+    PublishState {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the sponsor change lock.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// SponsorCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        sponsor_out_point: String,
+        /// New state number. Defaults to old_state_number + 1.
+        #[arg(long)]
+        state_number: Option<u64>,
+        /// Absolute fee paid by the SponsorCell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Finalise a settling channel and release the vault according to the descriptor.
+    FinaliseChannel {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key receiving the state-carrier refund.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice settlement key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob settlement key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current settling StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// VaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        vault_out_point: String,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Raw relative-since value placed on the StateCell input.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Absolute fee paid from the state-carrier refund, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -232,6 +358,207 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         script.hash_type,
                         script.data_len,
                         script.capacity
+                    );
+                }
+            }
+        }
+        DevnetCommand::OpenChannel {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::open_channel(
+                &rpc,
+                OpenChannelOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("channel_id={}", report.channel_id);
+                println!("funding_anchor={}", report.funding_anchor);
+                println!("finalise_since={}", report.finalise_since);
+                println!("input_capacity={}", report.input_capacity);
+                println!("state_capacity={}", report.state_capacity);
+                println!("vault_capacity={}", report.vault_capacity);
+                println!("sponsor_capacity={}", report.sponsor_capacity);
+                println!("change_capacity={}", report.change_capacity);
+                println!("fee={}", report.fee);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for participant in report.participants {
+                    println!(
+                        "participant={} lock_hash={} pubkey_sec1={} capacity={}",
+                        participant.role,
+                        participant.lock_hash,
+                        participant.pubkey_sec1,
+                        participant.capacity
+                    );
+                }
+                for script in report.scripts {
+                    println!(
+                        "script={} out_point={}:{} data_hash={} hash_type={}",
+                        script.name,
+                        script.out_point.tx_hash,
+                        script.out_point.index,
+                        script.data_hash,
+                        script.hash_type
+                    );
+                }
+                for cell in report.cells {
+                    println!(
+                        "cell={} out_point={}:{} capacity={} lock_hash={} type_hash={} data_len={}",
+                        cell.role,
+                        cell.out_point.tx_hash,
+                        cell.out_point.index,
+                        cell.capacity,
+                        cell.lock_hash,
+                        cell.type_hash.as_deref().unwrap_or("none"),
+                        cell.data_len
+                    );
+                }
+            }
+        }
+        DevnetCommand::PublishState {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            state_out_point,
+            sponsor_out_point,
+            state_number,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::publish_state(
+                &rpc,
+                PublishStateOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    state_out_point,
+                    sponsor_out_point,
+                    state_number,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("channel_id={}", report.channel_id);
+                println!("funding_anchor={}", report.funding_anchor);
+                println!("old_state_number={}", report.old_state_number);
+                println!("new_state_number={}", report.new_state_number);
+                println!(
+                    "state_out_point={}:{}",
+                    report.state_out_point.tx_hash, report.state_out_point.index
+                );
+                println!("sponsor_change_capacity={}", report.sponsor_change_capacity);
+                println!("fee={}", report.fee);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FinaliseChannel {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            state_out_point,
+            vault_out_point,
+            alice_capacity,
+            bob_capacity,
+            finalise_since,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::finalise_channel(
+                &rpc,
+                FinaliseChannelOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    state_out_point,
+                    vault_out_point,
+                    alice_capacity,
+                    bob_capacity,
+                    finalise_since,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("channel_id={}", report.channel_id);
+                println!("funding_anchor={}", report.funding_anchor);
+                println!("state_number={}", report.state_number);
+                println!("alice_capacity={}", report.alice_capacity);
+                println!("bob_capacity={}", report.bob_capacity);
+                println!("state_refund_capacity={}", report.state_refund_capacity);
+                println!("fee={}", report.fee);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for output in report.outputs {
+                    println!(
+                        "output={} out_point={}:{} capacity={} lock_hash={}",
+                        output.role,
+                        output.out_point.tx_hash,
+                        output.out_point.index,
+                        output.capacity,
+                        output.lock_hash
                     );
                 }
             }

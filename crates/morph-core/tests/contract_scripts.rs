@@ -13,8 +13,8 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_SIGNATURE_COUNT_V1,
     BILATERAL_SIGNATURE_THRESHOLD_V1, BILATERAL_SIGNATURE_WITNESS_V1_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1,
-    participants_commitment_v1, settlement_descriptor_commitment_v1,
+    ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
+    StateHeaderV1, blake2b256, participants_commitment_v1, settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -83,7 +83,11 @@ fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
 }
 
 fn state_args(finalise_since: u64) -> Vec<u8> {
-    let mut args = FUNDING_ANCHOR.to_vec();
+    state_args_with_anchor(FUNDING_ANCHOR, finalise_since)
+}
+
+fn state_args_with_anchor(anchor: [u8; 32], finalise_since: u64) -> Vec<u8> {
+    let mut args = anchor.to_vec();
     args.extend_from_slice(&finalise_since.to_le_bytes());
     args
 }
@@ -107,12 +111,20 @@ fn signature(key: &SigningKey, digest: &[u8; 32]) -> [u8; ECDSA_SIGNATURE_LEN] {
 }
 
 fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V1_LEN] {
+    header_raw_with_anchor(state_number, phase, FUNDING_ANCHOR)
+}
+
+fn header_raw_with_anchor(
+    state_number: u64,
+    phase: u8,
+    funding_anchor: [u8; 32],
+) -> [u8; STATE_HEADER_V1_LEN] {
     let mut raw = [0u8; STATE_HEADER_V1_LEN];
     put_u16(&mut raw, 0, 1);
     raw[2..34].fill(2);
     put_u16(&mut raw, 34, 1);
     raw[36..68].fill(3);
-    raw[68..100].copy_from_slice(&FUNDING_ANCHOR);
+    raw[68..100].copy_from_slice(&funding_anchor);
     put_u64(&mut raw, 100, state_number);
     raw[108] = 1;
     raw[109] = phase;
@@ -124,6 +136,10 @@ fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V1_LEN] {
     raw[240..272].fill(9);
     put_u16(&mut raw, 272, 1);
     raw
+}
+
+fn derived_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
+    blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
 }
 
 fn header_with_descriptor(state_number: u64, phase: u8, descriptor_commitment: [u8; 32]) -> Bytes {
@@ -218,6 +234,167 @@ fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
     raw[80..112].fill(9);
     raw[112..144].copy_from_slice(change_lock_hash);
     raw.to_vec()
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_lock_accepts_input_with_expected_state_type() {
+    let mut context = Context::default();
+    let state_type = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let refund_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let state_lock = deploy_contract(
+        &mut context,
+        "morph-state-lock",
+        state_type.calc_script_hash().as_slice().to_vec(),
+    );
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock)
+            .type_(Some(state_type).pack())
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(refund_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("state lock should accept expected typed input");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_lock_rejects_untyped_input() {
+    let mut context = Context::default();
+    let state_type = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let refund_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let state_lock = deploy_contract(
+        &mut context,
+        "morph-state-lock",
+        state_type.calc_script_hash().as_slice().to_vec(),
+    );
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(refund_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_accepts_canonical_initial_state() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let initial_data =
+        Bytes::from(header_raw_with_anchor(0, PHASE_ACTIVE, funding_anchor).to_vec());
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(initial_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("canonical initial state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_initial_state_with_non_canonical_anchor() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let mut wrong_anchor = derived_funding_anchor(&input, 0);
+    wrong_anchor[0] ^= 1;
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(wrong_anchor, 0),
+    );
+    let initial_data = Bytes::from(header_raw_with_anchor(0, PHASE_ACTIVE, wrong_anchor).to_vec());
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(initial_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

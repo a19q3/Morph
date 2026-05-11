@@ -9,15 +9,15 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    load_cell_capacity, load_cell_data, load_cell_occupied_capacity, load_input, load_script,
-    load_witness_args,
+    QueryIter, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
+    load_cell_type_hash, load_input, load_script, load_script_hash, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_SETTLING, Result, ScriptError, StateHeaderV1,
-    read_u64, verify_bilateral_state_signatures,
+    BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
+    StateHeaderV1, blake2b256, read_u64, verify_bilateral_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -50,17 +50,68 @@ fn main() -> Result<()> {
         None
     };
 
-    let old_data = only_group_cell_data(Source::GroupInput)?;
-    let old_header = StateHeaderV1::parse(&old_data)?;
-    if old_header.funding_anchor() != expected_funding_anchor {
+    match (
+        zero_or_one_group_cell_data(Source::GroupInput)?,
+        zero_or_one_group_cell_data(Source::GroupOutput)?,
+    ) {
+        (None, Some(new_data)) => validate_create(&new_data, expected_funding_anchor)?,
+        (Some(old_data), Some(new_data)) => {
+            let old_header = StateHeaderV1::parse(&old_data)?;
+            if old_header.funding_anchor() != expected_funding_anchor {
+                return Err(ScriptError::FundingAnchorMismatch);
+            }
+            validate_supersede(&old_header, &new_data, expected_funding_anchor)?;
+        }
+        (Some(old_data), None) => {
+            let old_header = StateHeaderV1::parse(&old_data)?;
+            if old_header.funding_anchor() != expected_funding_anchor {
+                return Err(ScriptError::FundingAnchorMismatch);
+            }
+            validate_finalise(&old_header, finalise_since)?;
+        }
+        (None, None) => return Err(ScriptError::WrongGroupShape),
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_create(new_data: &[u8], expected_funding_anchor: &[u8]) -> Result<()> {
+    let new_header = StateHeaderV1::parse(new_data)?;
+
+    if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
     }
+    if new_header.state_number() != 0 {
+        return Err(ScriptError::NonMonotonicStateNumber);
+    }
+    if new_header.phase() != PHASE_ACTIVE {
+        return Err(ScriptError::NewStateNotSettling);
+    }
+    validate_anchor_derivation(expected_funding_anchor)?;
 
-    match zero_or_one_group_cell_data(Source::GroupOutput)? {
-        Some(new_data) => validate_supersede(&old_header, &new_data, expected_funding_anchor)?,
-        None => validate_finalise(&old_header, finalise_since)?,
+    let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    let occupied =
+        load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if cap < occupied {
+        return Err(ScriptError::OutputBelowOccupiedCapacity);
     }
 
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_anchor_derivation(expected_funding_anchor: &[u8]) -> Result<()> {
+    let script_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+    let output_index = QueryIter::new(load_cell_type_hash, Source::Output)
+        .position(|type_hash| type_hash == Some(script_hash))
+        .ok_or(ScriptError::FundingAnchorMismatch)? as u64;
+    let input = load_input(0, Source::Input).map_err(|_| ScriptError::Encoding)?;
+    let index = output_index.to_le_bytes();
+    let derived = blake2b256(&[input.as_slice(), &index]);
+    if derived.as_slice() != expected_funding_anchor {
+        return Err(ScriptError::FundingAnchorMismatch);
+    }
     Ok(())
 }
 
@@ -123,11 +174,6 @@ fn validate_finalise(old_header: &StateHeaderV1, finalise_since: Option<u64>) ->
     }
 
     Ok(())
-}
-
-#[cfg(target_arch = "riscv64")]
-fn only_group_cell_data(source: Source) -> Result<alloc::vec::Vec<u8>> {
-    zero_or_one_group_cell_data(source)?.ok_or(ScriptError::WrongGroupShape)
 }
 
 #[cfg(target_arch = "riscv64")]
