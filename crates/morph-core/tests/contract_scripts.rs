@@ -14,12 +14,13 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_SIGNATURE_COUNT_V1,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_V1_LEN,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_SIGNATURE_COUNT_V1,
     FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
     FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryStateHeaderV1,
     PHASE_ACTIVE, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1,
-    blake2b256, factory_participants_commitment_v1, participants_commitment_v1,
-    settlement_descriptor_commitment_v1,
+    blake2b256, factory_local_exit_digest_v1, factory_participants_commitment_v1,
+    participants_commitment_v1, settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -283,6 +284,81 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
         new.to_vec().into(),
         witness.to_vec().into(),
     )
+}
+
+fn signed_factory_pair_with_exit_digest(
+    old_number: u64,
+    new_number: u64,
+    exit_digest: [u8; 32],
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0), key0),
+        ([2u8; BYTE32_LEN], pubkey(&key1), key1),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let mut old = factory_header_raw(old_number);
+    old[108..140].copy_from_slice(&commitment);
+    let mut new = factory_header_raw(new_number);
+    new[108..140].copy_from_slice(&commitment);
+    new[76..108].fill(9);
+    new[140..172].fill(10);
+    new[172..204].copy_from_slice(&exit_digest);
+
+    let header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn factory_local_exit_witness(
+    factory_signature: &[u8],
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: [u8; 32],
+    vault_lock_hash: [u8; 32],
+    state_header: &[u8],
+    descriptor: &[u8],
+) -> Bytes {
+    let mut witness = vec![0u8; FACTORY_LOCAL_EXIT_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
+    witness[2..2 + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(factory_signature);
+    let offset = 2 + FACTORY_SIGNATURE_WITNESS_V1_LEN;
+    witness[offset..offset + 4].copy_from_slice(&state_output_index.to_le_bytes());
+    witness[offset + 4..offset + 8].copy_from_slice(&vault_output_index.to_le_bytes());
+    witness[offset + 8..offset + 8 + BYTE32_LEN].copy_from_slice(&state_type_hash);
+    witness[offset + 8 + BYTE32_LEN..offset + 8 + 2 * BYTE32_LEN].copy_from_slice(&vault_lock_hash);
+    witness[offset + 8 + 2 * BYTE32_LEN..offset + 8 + 2 * BYTE32_LEN + STATE_HEADER_V1_LEN]
+        .copy_from_slice(state_header);
+    witness[offset + 8 + 2 * BYTE32_LEN + STATE_HEADER_V1_LEN..].copy_from_slice(descriptor);
+    witness.into()
 }
 
 fn witness_with_input_type(input_type: Bytes) -> ckb_testtool::ckb_types::packed::Bytes {
@@ -683,6 +759,299 @@ fn factory_type_rejects_invalid_participant_signature() {
         .output(output)
         .output_data(new_data.pack())
         .witness(witness_with_input_type(sig_witness.into()))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_local_exit_materialisation() {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+
+    let descriptor = descriptor_bytes(
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+    );
+    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest(1, 2, [0u8; 32]);
+
+    let factory_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data,
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(factory_input_out_point)
+        .build();
+    let factory_vault_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(300_000_000_000u64)
+            .lock(factory_vault_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let reserve_input = CellInput::new_builder()
+        .previous_output(factory_vault_input_out_point)
+        .build();
+    let fee_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(reserve_lock_placeholder)
+            .build(),
+        Bytes::new(),
+    );
+
+    let state_output_index = 1u32;
+    let vault_output_index = 2u32;
+    let child_anchor = derived_funding_anchor(&factory_input, state_output_index as u64);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(child_anchor, 0),
+    );
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let mut vault_args = child_anchor.to_vec();
+    vault_args.extend_from_slice(&0u64.to_le_bytes());
+    let vault_lock = deploy_contract(&mut context, "morph-vault-lock", vault_args);
+    let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
+
+    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    child_state[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
+    child_pubkeys.sort();
+    child_state[110..142].copy_from_slice(&participants_commitment_v1(
+        2,
+        &[&child_pubkeys[0], &child_pubkeys[1]],
+    ));
+
+    let exit_digest = factory_local_exit_digest_v1(
+        state_output_index,
+        vault_output_index,
+        &state_type_hash,
+        &vault_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest(1, 2, exit_digest);
+    let exit_witness = factory_local_exit_witness(
+        &factory_sig,
+        state_output_index,
+        vault_output_index,
+        state_type_hash,
+        vault_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(factory_input.clone())
+        .input(reserve_input.clone())
+        .input(
+            CellInput::new_builder()
+                .previous_output(fee_input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock.clone())
+                .type_(Some(factory_type.clone()).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(deploy_always_success(&mut context))
+                .type_(Some(state_type.clone()).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY + BOB_CAPACITY)
+                .lock(vault_lock.clone())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(200_000_000_000u64)
+                .lock(factory_vault_lock.clone())
+                .build(),
+        )
+        .output_data(new_data.clone().pack())
+        .output_data(Bytes::from(child_state.to_vec()).pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(exit_witness.clone()))
+        .witness(witness_with_input_type(exit_witness.clone()))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory local exit should verify");
+
+    let split_fee_lock = deploy_always_success(&mut context);
+    let split_fee_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(split_fee_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let split_state_lock = deploy_always_success(&mut context);
+    let split_reserve_tx = TransactionBuilder::default()
+        .input(factory_input)
+        .input(reserve_input)
+        .input(
+            CellInput::new_builder()
+                .previous_output(split_fee_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(split_state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY + BOB_CAPACITY)
+                .lock(vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(100_000_000_000u64)
+                .lock(factory_vault_lock.clone())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(100_000_000_000u64)
+                .lock(factory_vault_lock)
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .output_data(Bytes::from(child_state.to_vec()).pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(exit_witness.clone()))
+        .witness(witness_with_input_type(exit_witness))
+        .witness(empty_witness())
+        .build();
+    let split_reserve_tx = context.complete_tx(split_reserve_tx);
+    assert!(context.verify_tx(&split_reserve_tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_local_exit_digest_mismatch() {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let descriptor = descriptor_bytes([1u8; 32], ALICE_CAPACITY, [2u8; 32], BOB_CAPACITY);
+    let state_output_index = 1u32;
+    let vault_output_index = 2u32;
+    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest(1, 2, [0u8; 32]);
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data,
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+    let child_anchor = derived_funding_anchor(&factory_input, state_output_index as u64);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(child_anchor, 0),
+    );
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
+    let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
+    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    child_state[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+
+    let correct_digest = factory_local_exit_digest_v1(
+        state_output_index,
+        vault_output_index,
+        &state_type_hash,
+        &vault_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+    let mut wrong_digest = correct_digest;
+    wrong_digest[0] ^= 1;
+    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest(1, 2, wrong_digest);
+    let exit_witness = factory_local_exit_witness(
+        &factory_sig,
+        state_output_index,
+        vault_output_index,
+        state_type_hash,
+        vault_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(factory_input)
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(deploy_always_success(&mut context))
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY + BOB_CAPACITY)
+                .lock(vault_lock)
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .output_data(Bytes::from(child_state.to_vec()).pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(exit_witness))
         .build();
     let tx = context.complete_tx(tx);
 

@@ -17,6 +17,14 @@ pub const BILATERAL_SIGNATURE_WITNESS_V1_LEN: usize =
     2 + 1 + 1 + (2 * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN));
 pub const FACTORY_SIGNATURE_WITNESS_V1_LEN: usize =
     2 + 1 + 1 + (2 * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN));
+pub const FACTORY_LOCAL_EXIT_WITNESS_V1_LEN: usize = 2
+    + FACTORY_SIGNATURE_WITNESS_V1_LEN
+    + 4
+    + 4
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + STATE_HEADER_V1_LEN
+    + BILATERAL_CKB_DESCRIPTOR_V1_LEN;
 
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
@@ -27,10 +35,12 @@ pub const BILATERAL_SIGNATURE_COUNT_V1: u8 = 2;
 pub const FACTORY_SIGNATURE_WITNESS_VERSION_V1: u16 = 1;
 pub const FACTORY_SIGNATURE_THRESHOLD_V1: u8 = 2;
 pub const FACTORY_SIGNATURE_COUNT_V1: u8 = 2;
+pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1: u16 = 1;
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
 pub const FACTORY_STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_STATE_V1";
 pub const FACTORY_PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_PARTICIPANTS_V1";
+pub const FACTORY_LOCAL_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_LOCAL_EXIT_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1: u16 = 2;
@@ -70,6 +80,8 @@ pub enum ScriptError {
     XudtConservationMismatch = 32,
     XudtTypeMismatch = 33,
     FactoryIdMismatch = 34,
+    FactoryLocalExitMismatch = 35,
+    FactoryReserveMismatch = 36,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -381,6 +393,90 @@ impl<'a> FactorySignatureWitnessV1<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactoryLocalExitWitnessV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactoryLocalExitWitnessV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != FACTORY_LOCAL_EXIT_WITNESS_V1_LEN {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1 {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        FactorySignatureWitnessV1::parse(witness.factory_signature_bytes())?;
+        StateHeaderV1::parse(witness.exit_state_header())?;
+        BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn factory_signature_bytes(&self) -> &'a [u8] {
+        field(self.raw, 2, FACTORY_SIGNATURE_WITNESS_V1_LEN)
+    }
+
+    pub fn factory_signature(&self) -> Result<FactorySignatureWitnessV1<'a>> {
+        FactorySignatureWitnessV1::parse(self.factory_signature_bytes())
+    }
+
+    pub fn state_output_index(&self) -> u32 {
+        read_u32(self.raw, 2 + FACTORY_SIGNATURE_WITNESS_V1_LEN)
+    }
+
+    pub fn vault_output_index(&self) -> u32 {
+        read_u32(self.raw, 2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 4)
+    }
+
+    pub fn state_type_hash(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8,
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn vault_lock_hash(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + BYTE32_LEN,
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn exit_state_header(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 2 * BYTE32_LEN,
+            STATE_HEADER_V1_LEN,
+        )
+    }
+
+    pub fn settlement_descriptor(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 2 * BYTE32_LEN + STATE_HEADER_V1_LEN,
+            BILATERAL_CKB_DESCRIPTOR_V1_LEN,
+        )
+    }
+
+    pub fn exit_digest(&self) -> [u8; 32] {
+        factory_local_exit_digest_v1(
+            self.state_output_index(),
+            self.vault_output_index(),
+            self.state_type_hash(),
+            self.vault_lock_hash(),
+            self.exit_state_header(),
+            self.settlement_descriptor(),
+        )
+    }
+}
+
 pub fn verify_factory_state_signatures(
     header: &FactoryStateHeaderV1,
     witness: &FactorySignatureWitnessV1,
@@ -535,6 +631,25 @@ pub fn settlement_descriptor_commitment_v1(raw: &[u8]) -> [u8; 32] {
     blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, raw])
 }
 
+pub fn factory_local_exit_digest_v1(
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8],
+    vault_lock_hash: &[u8],
+    exit_state_header: &[u8],
+    settlement_descriptor: &[u8],
+) -> [u8; 32] {
+    blake2b256(&[
+        FACTORY_LOCAL_EXIT_DOMAIN_V1,
+        &state_output_index.to_le_bytes(),
+        &vault_output_index.to_le_bytes(),
+        state_type_hash,
+        vault_lock_hash,
+        exit_state_header,
+        settlement_descriptor,
+    ])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SponsorPolicyV1<'a> {
     raw: &'a [u8],
@@ -595,6 +710,12 @@ pub fn read_u64(raw: &[u8], offset: usize) -> u64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&raw[offset..offset + 8]);
     u64::from_le_bytes(bytes)
+}
+
+pub fn read_u32(raw: &[u8], offset: usize) -> u32 {
+    let mut bytes = [0u8; 4];
+    bytes.copy_from_slice(&raw[offset..offset + 4]);
+    u32::from_le_bytes(bytes)
 }
 
 pub fn read_u128(raw: &[u8], offset: usize) -> u128 {

@@ -7,8 +7,9 @@ sponsored publication, and partition conservation.
 This repository is intentionally conservative. The first milestone is a
 devnet-testable bilateral channel path. Factory proof mode is represented in
 the data model, package validation, and a conservative full-participant factory
-type script, but reduced-signature factory exits remain behind an explicit
-proof-system gate.
+type script. Conservative factory-local exit materialisation is implemented on
+devnet; reduced-signature factory exits remain behind an explicit proof-system
+gate.
 
 ## Status
 
@@ -27,7 +28,10 @@ Current implementation stage:
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
   progression, funding-anchor binding, and monotonic settling publication.
 - `contracts/morph-factory-type`: no-std CKB type script for conservative
-  one-live-FactoryStateCell progression with full-participant signatures.
+  one-live-FactoryStateCell progression with full-participant signatures and
+  local-exit evidence checks.
+- `contracts/morph-factory-vault-lock`: no-std CKB lock script for factory
+  reserve conservation during child-channel materialisation.
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
   gated by a unique current settling State Cell and relative `since`.
 - `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
@@ -42,9 +46,11 @@ and the `morph-state-type` CKB script; conservative factory state signatures
 are verified by `morph-factory-type`. The current devnet path opens a channel,
 publishes a signed settling state using sponsor capacity, supersedes it with a
 higher signed state, and finalises the vault without modifying CKB consensus.
-It also includes a devnet CKB+xUDT smoke path that mints a local test asset
-into the vault and settles exact token balances through the same StateCell and
-VaultCell authority model.
+It also opens a conservative factory, advances its state, materialises a child
+bilateral channel from the factory reserve, and then publishes and finalises
+that child channel. The CKB+xUDT smoke path mints a local test asset into the
+vault and settles exact token balances through the same StateCell and VaultCell
+authority model.
 
 ## Repository Layout
 
@@ -84,9 +90,9 @@ scripts/devnet-smoke.sh
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
 include CKB `estimate_cycles` output and serialized transaction size for each
-deployment, open, publication, sponsor top-up, supersession, and finalisation
-transaction, including finalise-since, sponsor budget, competing-spend, and
-CKB+xUDT smoke paths.
+deployment, open, publication, sponsor top-up, supersession, factory local
+exit, and finalisation transaction, including finalise-since, sponsor budget,
+competing-spend, and CKB+xUDT smoke paths.
 `scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
 then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 `target/devnet-smoke/`. To rebuild the summary for a previous run:
@@ -115,7 +121,9 @@ cargo run -p morph-cli -- devnet watch-latest-package \
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package and its conservative all-participant signed
-state package:
+state package. The devnet CLI also includes `open-factory`,
+`update-factory`, and `factory-exit-channel` for the conservative on-chain
+path:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json

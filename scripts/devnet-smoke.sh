@@ -62,6 +62,7 @@ mkdir -p "$FACTORY_DIR"
 log "factory-open -> $FACTORY_DIR/open.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-factory --json >"$FACTORY_DIR/open.json"
 FACTORY_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
+FACTORY_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory-vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
 FACTORY_ID="$(jq -r '.factory_id' "$FACTORY_DIR/open.json")"
 
 log "factory-save-package -> $FACTORY_DIR/package.json"
@@ -82,6 +83,29 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" update-factory \
   --factory-out-point "$FACTORY_OUT_POINT" \
   --factory-state-package "$FACTORY_PACKAGE_PATH" \
   --json >"$FACTORY_DIR/update.json"
+FACTORY_OUT_POINT_AFTER_UPDATE="$(jq -r '.factory_out_point.tx_hash + ":" + (.factory_out_point.index | tostring)' "$FACTORY_DIR/update.json")"
+
+log "factory-exit-channel -> $FACTORY_DIR/exit-channel.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-exit-channel \
+  --factory-out-point "$FACTORY_OUT_POINT_AFTER_UPDATE" \
+  --factory-vault-out-point "$FACTORY_VAULT_OUT_POINT" \
+  --json >"$FACTORY_DIR/exit-channel.json"
+FACTORY_CHILD_STATE_OUT_POINT="$(jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
+FACTORY_CHILD_VAULT_OUT_POINT="$(jq -r '.vault_out_point.tx_hash + ":" + (.vault_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
+FACTORY_CHILD_SPONSOR_OUT_POINT="$(jq -r '.sponsor_out_point.tx_hash + ":" + (.sponsor_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
+
+log "factory-child-publish -> $FACTORY_DIR/child-publish.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" publish-state \
+  --state-out-point "$FACTORY_CHILD_STATE_OUT_POINT" \
+  --sponsor-out-point "$FACTORY_CHILD_SPONSOR_OUT_POINT" \
+  --json >"$FACTORY_DIR/child-publish.json"
+FACTORY_CHILD_PUBLISHED_STATE_OUT_POINT="$(jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' "$FACTORY_DIR/child-publish.json")"
+
+log "factory-child-finalise -> $FACTORY_DIR/child-finalise.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+  --state-out-point "$FACTORY_CHILD_PUBLISHED_STATE_OUT_POINT" \
+  --vault-out-point "$FACTORY_CHILD_VAULT_OUT_POINT" \
+  --json >"$FACTORY_DIR/child-finalise.json"
 
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"

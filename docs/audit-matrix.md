@@ -10,6 +10,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
 | Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
+| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_rejects_local_exit_digest_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
 | Vault outputs match the signed settlement descriptor | `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
@@ -32,6 +33,8 @@ Implemented devnet-level checks:
   sponsor top-up, and finalise;
 - CKB-VM factory type execution for canonical factory creation and signed
   monotonic factory updates;
+- CKB-VM factory local-exit execution with a FactoryVaultCell, committed
+  child-channel evidence, and reserve conservation;
 - finalise-since rejection and maturity-block finalisation through
   `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through
@@ -54,11 +57,14 @@ Implemented devnet-level checks:
   `devnet-smoke-report`;
 - durable signed state-package storage with signature validation and latest
   package selection;
-- confirmation-depth block scanning for older Morph StateCells.
+- confirmation-depth block scanning for older Morph StateCells;
+- conservative factory local exit on devnet through `factory-exit-channel`,
+  followed by ordinary child-channel publication and finalisation in
+  `scripts/devnet-smoke.sh`.
 
 Missing devnet-level checks:
 
-- factory non-interference proof predicates.
+- reduced-signature factory non-interference proof predicates.
 
 Implemented host-level factory checks:
 

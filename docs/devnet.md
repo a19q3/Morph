@@ -3,10 +3,11 @@
 The devnet milestone is a bilateral channel vertical slice plus a conservative
 factory-state script path:
 
-1. Deploy six scripts:
+1. Deploy seven scripts:
    - `morph-state-lock`
    - `morph-state-type`
    - `morph-factory-type`
+   - `morph-factory-vault-lock`
    - `morph-vault-lock`
    - `morph-sponsor-lock`
    - `morph-devnet-xudt`
@@ -197,12 +198,13 @@ node has not exposed that module, the command fails with the returned RPC
 error. It does not fabricate block progress.
 
 `devnet deploy-contracts` builds and signs a real CKB transaction that deploys
-the six Morph RISC-V binaries as data-hash script cells:
+the seven Morph RISC-V binaries as data-hash script cells:
 
 ```text
 morph-state-lock
 morph-state-type
 morph-factory-type
+morph-factory-vault-lock
 morph-vault-lock
 morph-sponsor-lock
 morph-devnet-xudt
@@ -540,6 +542,7 @@ StateHeaderV1
 FactoryStateHeaderV1
 BilateralSignatureWitnessV1
 FactorySignatureWitnessV1
+FactoryLocalExitWitnessV1
 SponsorPolicyV1
 BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
@@ -552,8 +555,9 @@ consensus or node requirement.
 
 The conservative factory path is now executable on devnet. It is deliberately
 small: one FactoryStateCell, two named participants, all-participant signatures,
-and monotonic update numbers. It does not claim reduced-signature factory exits
-yet.
+one FactoryVaultCell, and monotonic update numbers. It can materialise a
+bilateral child channel under full factory-participant consent, but it does not
+claim reduced-signature factory exits yet.
 
 Open a factory state cell:
 
@@ -563,6 +567,11 @@ cargo run -q -p morph-cli -- devnet open-factory --json \
 
 FACTORY_OUT_POINT="$(
   jq -r '.cells[] | select(.role == "factory") |
+    .out_point.tx_hash + ":" + (.out_point.index | tostring)' \
+    target/open-factory.json
+)"
+FACTORY_VAULT_OUT_POINT="$(
+  jq -r '.cells[] | select(.role == "factory-vault") |
     .out_point.tx_hash + ":" + (.out_point.index | tostring)' \
     target/open-factory.json
 )"
@@ -597,26 +606,82 @@ cargo run -q -p morph-cli -- devnet update-factory \
   --factory-out-point "$FACTORY_OUT_POINT" \
   --factory-state-package "$FACTORY_PACKAGE_PATH" \
   --json > target/update-factory.json
+
+FACTORY_OUT_POINT="$(
+  jq -r '.factory_out_point.tx_hash + ":" + (.factory_out_point.index | tostring)' \
+    target/update-factory.json
+)"
 ```
 
 The update transaction keeps the FactoryStateCell capacity unchanged. A normal
 owner-controlled cell pays the fee and receives change, so the state carrier is
 not silently drained by routine factory updates.
 
-The same path is available as a single smoke command:
+Materialise a bilateral child channel from the factory reserve:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-exit-channel \
+  --factory-out-point "$FACTORY_OUT_POINT" \
+  --factory-vault-out-point "$FACTORY_VAULT_OUT_POINT" \
+  --json > target/factory-exit-channel.json
+
+CHILD_STATE_OUT_POINT="$(
+  jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' \
+    target/factory-exit-channel.json
+)"
+CHILD_VAULT_OUT_POINT="$(
+  jq -r '.vault_out_point.tx_hash + ":" + (.vault_out_point.index | tostring)' \
+    target/factory-exit-channel.json
+)"
+CHILD_SPONSOR_OUT_POINT="$(
+  jq -r '.sponsor_out_point.tx_hash + ":" + (.sponsor_out_point.index | tostring)' \
+    target/factory-exit-channel.json
+)"
+```
+
+The exit transaction consumes the FactoryStateCell and FactoryVaultCell, creates
+a child StateCell/VaultCell/SponsorCell, and returns the remaining factory
+reserve to a new FactoryVaultCell. Its fee is paid by a normal owner cell, not
+by the factory reserve.
+
+The materialised child channel can then use the ordinary bilateral publication
+and finalisation path:
+
+```sh
+cargo run -q -p morph-cli -- devnet publish-state \
+  --state-out-point "$CHILD_STATE_OUT_POINT" \
+  --sponsor-out-point "$CHILD_SPONSOR_OUT_POINT" \
+  --json > target/factory-child-publish.json
+
+CHILD_PUBLISHED_STATE_OUT_POINT="$(
+  jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' \
+    target/factory-child-publish.json
+)"
+
+cargo run -q -p morph-cli -- devnet finalise-channel \
+  --state-out-point "$CHILD_PUBLISHED_STATE_OUT_POINT" \
+  --vault-out-point "$CHILD_VAULT_OUT_POINT" \
+  --json > target/factory-child-finalise.json
+```
+
+The open/package/update part is also available as a single smoke command:
 
 ```sh
 cargo run -q -p morph-cli -- devnet factory-smoke --json \
   > target/factory-smoke.json
 ```
 
+The repository-level `scripts/devnet-smoke.sh` includes the additional
+factory-local exit, child publication, and child finalisation steps.
+
 ## Remaining Devnet Gap
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
 vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
-script, and a devnet factory open/update CLI transaction path. The remaining
-devnet work is external watchtower notification integration and factory-local
-exit materialisation.
+script, a factory reserve lock, devnet factory open/update transactions, and
+conservative factory-local exit materialisation into a child bilateral channel.
+The remaining devnet work is external watchtower notification integration and a
+formal reduced-signature factory proof path.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -640,5 +705,7 @@ domain-separated factory-state digest.
 The `morph-factory-type` script is one step closer than the host package: it
 already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
 accepts a signed monotonic factory update, and rejects equal update numbers or
-invalid participant signatures. It does not yet verify a reduced-signature
-proof or materialise factory-local exits.
+invalid participant signatures. In the conservative local-exit path it verifies
+the child channel evidence committed by the factory header, while
+`morph-factory-vault-lock` enforces reserve conservation. It does not yet verify
+a reduced-signature proof.

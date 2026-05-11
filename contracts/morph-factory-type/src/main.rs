@@ -9,15 +9,17 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    QueryIter, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
-    load_cell_type_hash, load_input, load_script, load_script_hash, load_witness_args,
+    QueryIter, load_cell_capacity, load_cell_data, load_cell_lock_hash,
+    load_cell_occupied_capacity, load_cell_type_hash, load_input, load_script, load_script_hash,
+    load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, FactorySignatureWitnessV1, FactoryStateHeaderV1, Result, ScriptError, blake2b256,
-    verify_factory_state_signatures,
+    BYTE32_LEN, BilateralCkbSettlementDescriptorV1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FactoryLocalExitWitnessV1, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
+    Result, ScriptError, StateHeaderV1, blake2b256, verify_factory_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -107,8 +109,86 @@ fn validate_participant_authorisation(header: &FactoryStateHeaderV1) -> Result<(
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
     let raw = input_type.raw_data();
-    let witness = FactorySignatureWitnessV1::parse(raw.as_ref())?;
-    verify_factory_state_signatures(header, &witness)
+    if raw.len() == FACTORY_SIGNATURE_WITNESS_V1_LEN {
+        let witness = FactorySignatureWitnessV1::parse(raw.as_ref())?;
+        verify_factory_state_signatures(header, &witness)
+    } else {
+        let witness = FactoryLocalExitWitnessV1::parse(raw.as_ref())?;
+        let signatures = witness.factory_signature()?;
+        verify_factory_state_signatures(header, &signatures)?;
+        validate_local_exit(header, &witness)
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_local_exit(
+    header: &FactoryStateHeaderV1,
+    witness: &FactoryLocalExitWitnessV1,
+) -> Result<()> {
+    if header.non_interference_digest() != witness.exit_digest().as_slice() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+
+    let state_index = witness.state_output_index() as usize;
+    let vault_index = witness.vault_output_index() as usize;
+    if state_index == vault_index {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+
+    let state_data =
+        load_cell_data(state_index, Source::Output).map_err(|_| ScriptError::StateCellMissing)?;
+    if state_data.as_slice() != witness.exit_state_header() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let state_type_hash = load_cell_type_hash(state_index, Source::Output)
+        .map_err(|_| ScriptError::FactoryLocalExitMismatch)?
+        .ok_or(ScriptError::FactoryLocalExitMismatch)?;
+    if state_type_hash.as_slice() != witness.state_type_hash() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+
+    let exit_header = StateHeaderV1::parse(witness.exit_state_header())?;
+    if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let descriptor = BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+    if exit_header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+        return Err(ScriptError::SettlementDescriptorMismatch);
+    }
+
+    let input = load_input(0, Source::Input).map_err(|_| ScriptError::Encoding)?;
+    let state_index_bytes = (state_index as u64).to_le_bytes();
+    let expected_anchor = blake2b256(&[input.as_slice(), &state_index_bytes]);
+    if exit_header.funding_anchor() != expected_anchor.as_slice() {
+        return Err(ScriptError::FundingAnchorMismatch);
+    }
+
+    let vault_lock_hash =
+        load_cell_lock_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if vault_lock_hash.as_slice() != witness.vault_lock_hash() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let vault_data =
+        load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if !vault_data.is_empty() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let vault_type =
+        load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if vault_type.is_some() {
+        return Err(ScriptError::XudtTypeMismatch);
+    }
+    let expected_vault_capacity = descriptor
+        .capacity(0)
+        .checked_add(descriptor.capacity(1))
+        .ok_or(ScriptError::CapacityUnderflow)?;
+    let vault_capacity =
+        load_cell_capacity(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if vault_capacity != expected_vault_capacity {
+        return Err(ScriptError::SettlementOutputMismatch);
+    }
+
+    Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]

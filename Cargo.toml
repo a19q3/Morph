@@ -7,6 +7,7 @@ members = [
   "contracts/morph-state-lock",
   "contracts/morph-state-type",
   "contracts/morph-factory-type",
+  "contracts/morph-factory-vault-lock",
   "contracts/morph-vault-lock",
   "contracts/morph-sponsor-lock",
   "contracts/morph-devnet-xudt",

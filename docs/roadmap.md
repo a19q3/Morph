@@ -13,19 +13,22 @@ Status: implemented.
 
 ## M1: Devnet Bilateral Channel
 
-Status: implemented for the bilateral CKB-only path and the devnet CKB+xUDT
-settlement path. The six script ELFs build, offline CKB-VM tests cover
+Status: implemented for the bilateral CKB-only path, the devnet CKB+xUDT
+settlement path, and conservative factory-local exit materialisation. The seven
+script ELFs build, offline CKB-VM tests cover
 state-lock delegation, state publication, stale-state rejection, invalid state
 signatures, state-bound sponsor fees, descriptor-bound vault finalisation,
 descriptor-output mismatch rejection, devnet xUDT conservation, and
-conservative factory type progression. The CLI can check/mine a local CKB
-devnet, deploy the Morph contract binaries, open a channel, publish a signed
-settling state, top up sponsor capacity, publish a newer signed state over the
-old settling state, finalise the vault, and run a competing-spend smoke, a
+conservative factory type and factory vault progression. The CLI can check/mine
+a local CKB devnet, deploy the Morph contract binaries, open a channel, publish
+a signed settling state, top up sponsor capacity, publish a newer signed state
+over the old settling state, finalise the vault, materialise a child channel
+from a conservative factory reserve, and run a competing-spend smoke, a
 finalise-since negative smoke, a sponsor-budget negative smoke, a CKB+xUDT
 settlement smoke, a tampered-settlement xUDT negative smoke, and a conservative
-factory open/package/update smoke through native JSON-RPC. Each transaction
-report includes node-estimated cycles and serialized transaction size.
+factory open/package/update/exit smoke through native JSON-RPC. Each
+transaction report includes node-estimated cycles and serialized transaction
+size.
 SponsorCells can carry explicit state-number and fee-budget bounds. Smoke runs
 also produce Markdown and machine-readable benchmark summaries from the
 collected transaction reports.
@@ -37,6 +40,7 @@ Required deliverables:
 - `morph-state-lock` contract.
 - `morph-state-type` contract.
 - `morph-factory-type` contract.
+- `morph-factory-vault-lock` contract.
 - `morph-vault-lock` contract.
 - `morph-sponsor-lock` contract.
 - `morph-devnet-xudt` contract.
@@ -79,8 +83,9 @@ Acceptance criteria:
 - completed smoke directories can be summarised into `summary.md` and
   `summary.json`.
 - a conservative FactoryStateCell can be opened, signed as a reusable package,
-  selected as the latest package, and advanced on devnet without draining the
-  factory state carrier for fees.
+  selected as the latest package, advanced on devnet without draining the
+  factory state carrier for fees, and used with a FactoryVaultCell to
+  materialise a child bilateral channel.
 
 ## M2: Watchtower
 
@@ -105,9 +110,11 @@ integrations remain open.
 
 Status: host-level non-interference predicate implemented, conservative
 full-participant factory state packages implemented at the CLI layer, a
-conservative factory type script executes in CKB-VM tests, and the CLI can open
-a FactoryStateCell, save a reusable signed factory-state-cell package, select
-the latest package, and publish a signed monotonic update on devnet.
+conservative factory type script and factory vault lock execute in CKB-VM
+tests, and the CLI can open a FactoryStateCell plus FactoryVaultCell, save a
+reusable signed factory-state-cell package, select the latest package, publish a
+signed monotonic update on devnet, and materialise a bilateral child channel
+from the factory reserve.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -120,8 +127,8 @@ the latest package, and publish a signed monotonic update on devnet.
   digest and secp256k1 signature validation.
 - Conservative factory type script for one-live-FactoryStateCell monotonic
   updates under full-participant signatures.
-- Devnet `open-factory`, `save-factory-state-package`, `update-factory`, and
-  `factory-smoke` commands.
+- Devnet `open-factory`, `save-factory-state-package`, `update-factory`,
+  `factory-exit-channel`, and `factory-smoke` commands.
 
 ## M4: Reduced-Signature Factory Mode
 

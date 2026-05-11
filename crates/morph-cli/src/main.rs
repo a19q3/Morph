@@ -5,12 +5,13 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactorySmokeOptions,
-    FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions, FundSponsorOptions,
-    OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions, PublishStateOptions,
-    SaveFactoryStatePackageOptions, SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions,
-    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
-    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
+    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitChannelOptions,
+    FactorySmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
+    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
+    PublishStateOptions, SaveFactoryStatePackageOptions, SaveStatePackageOptions,
+    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
+    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
+    XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -227,6 +228,9 @@ enum DevnetCommand {
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
         factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
         /// Optional 32-byte state root for the initial factory state.
         #[arg(long)]
         state_root: Option<String>,
@@ -375,6 +379,9 @@ enum DevnetCommand {
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
         factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
@@ -384,6 +391,58 @@ enum DevnetCommand {
         /// Directory where signed factory state packages are stored.
         #[arg(long, default_value = "target/morph-factory-state-packages")]
         store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Materialise a bilateral child channel from a conservative factory reserve.
+    FactoryExitChannel {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the FactoryStateCell and fee input.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// Current FactoryVaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_vault_out_point: String,
+        /// New factory update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// Capacity released from the factory reserve into the child channel vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by a normal owner cell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1294,6 +1353,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             alice_private_key,
             bob_private_key,
             factory_capacity,
+            factory_vault_capacity,
             state_root,
             access_manifest_root,
             non_interference_digest,
@@ -1309,6 +1369,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     alice_private_key,
                     bob_private_key,
                     factory_capacity,
+                    factory_vault_capacity,
                     state_root,
                     access_manifest_root,
                     non_interference_digest,
@@ -1330,6 +1391,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("factory_id={}", report.factory_id);
                 println!("input_capacity={}", report.input_capacity);
                 println!("factory_capacity={}", report.factory_capacity);
+                println!("factory_vault_capacity={}", report.factory_vault_capacity);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
                 print_metrics(&report.metrics);
@@ -1523,6 +1585,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             alice_private_key,
             bob_private_key,
             factory_capacity,
+            factory_vault_capacity,
             fee,
             mine_blocks,
             store_dir,
@@ -1536,6 +1599,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     alice_private_key,
                     bob_private_key,
                     factory_capacity,
+                    factory_vault_capacity,
                     fee,
                     mine_blocks,
                     store_dir,
@@ -1559,6 +1623,107 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("update_status={}", report.update.status);
                 print_metrics(&report.open.metrics);
                 print_metrics(&report.update.metrics);
+            }
+        }
+        DevnetCommand::FactoryExitChannel {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            update_number,
+            vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::factory_exit_channel(
+                &rpc,
+                FactoryExitChannelOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    factory_vault_out_point,
+                    update_number,
+                    vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("factory_id={}", report.factory_id);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!("channel_id={}", report.channel_id);
+                println!("funding_anchor={}", report.funding_anchor);
+                println!("finalise_since={}", report.finalise_since);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.factory_out_point.tx_hash, report.factory_out_point.index
+                );
+                println!(
+                    "state_out_point={}:{}",
+                    report.state_out_point.tx_hash, report.state_out_point.index
+                );
+                println!(
+                    "vault_out_point={}:{}",
+                    report.vault_out_point.tx_hash, report.vault_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.factory_vault_out_point.tx_hash, report.factory_vault_out_point.index
+                );
+                println!(
+                    "sponsor_out_point={}:{}",
+                    report.sponsor_out_point.tx_hash, report.sponsor_out_point.index
+                );
+                println!("state_capacity={}", report.state_capacity);
+                println!("vault_capacity={}", report.vault_capacity);
+                println!(
+                    "factory_vault_input_capacity={}",
+                    report.factory_vault_input_capacity
+                );
+                println!(
+                    "factory_vault_change_capacity={}",
+                    report.factory_vault_change_capacity
+                );
+                println!("sponsor_capacity={}", report.sponsor_capacity);
+                println!("fee_change_capacity={}", report.fee_change_capacity);
+                println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for participant in report.participants {
+                    println!(
+                        "participant={} lock_hash={} pubkey_sec1={} capacity={}",
+                        participant.role,
+                        participant.lock_hash,
+                        participant.pubkey_sec1,
+                        participant.capacity
+                    );
+                }
             }
         }
         DevnetCommand::PublishState {

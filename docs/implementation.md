@@ -21,7 +21,11 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 - Factory type: consumes exactly one FactoryStateCell and recreates exactly one
   newer FactoryStateCell under the same factory id and participant context; the
   devnet V1 path is deliberately conservative and requires signatures from all
-  two factory participants.
+  two factory participants. For local exits, it also checks that the updated
+  factory header commits to the child-channel materialisation evidence.
+- Factory vault lock: holds factory reserve capacity and permits only a
+  conservative local exit that recreates the factory reserve while releasing
+  exactly the child-channel vault capacity committed by the same exit evidence.
 - Vault lock: permits vault spend only when a unique settling State Cell with
   the expected funding anchor is present, its relative `since` has matured, and
   the settlement outputs match the descriptor commitment in the signed state.
@@ -41,10 +45,10 @@ selection remain outside those state-signature domains.
 The draft Molecule schema in `schemas/morph.mol` now names every active
 fixed-width V1 object used by the devnet contracts: `StateHeaderV1`,
 `FactoryStateHeaderV1`, `BilateralSignatureWitnessV1`,
-`FactorySignatureWitnessV1`, CKB and CKB+xUDT settlement descriptors, and
-`SponsorPolicyV1`. The contracts still parse fixed-width bytes directly; the
-schema is treated as the public wire-boundary record until generated Molecule
-code is introduced.
+`FactorySignatureWitnessV1`, `FactoryLocalExitWitnessV1`, CKB and CKB+xUDT
+settlement descriptors, and `SponsorPolicyV1`. The contracts still parse
+fixed-width bytes directly; the schema is treated as the public wire-boundary
+record until generated Molecule code is introduced.
 
 The vault lock verifies the bilateral CKB settlement descriptor: two sorted
 recipient lock hashes and exact output capacities. It also supports the devnet
@@ -70,16 +74,16 @@ The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
 `non_interference_digest`; `validate-factory-package` checks canonical roots,
 canonical participant sets, digest consistency, and the host-side
-non-interference predicate. This is intentionally a data-layer milestone before
-any devnet factory script.
+non-interference predicate. This remains the data-layer predicate that a future
+reduced-signature proof bundle would need to satisfy.
 The next factory layer is a conservative all-participant state package:
 `print-factory-state-fixture` wraps the update package, computes a domain
 separated factory-state digest, and signs it with every participant key.
 `validate-factory-state-package` verifies the nested update package, the
 participant-id/public-key bindings, coverage of every participant mentioned by
 the update, the all-participant threshold, and every secp256k1 signature. This
-is still not reduced-signature factory exit logic, but it closes the authority
-model for full-consent factory updates.
+is still not reduced-signature factory logic, but it closes the authority model
+for full-consent factory updates and local exits.
 
 For chain publication, the CLI also supports a narrower factory-state-cell
 package. It stores the exact `FactoryStateHeaderV1` bytes and the
@@ -87,6 +91,22 @@ package. It stores the exact `FactoryStateHeaderV1` bytes and the
 state evidence can be reused while the transaction body, fee input, and owner
 change are rebuilt later. `update-factory --factory-state-package` keeps the
 FactoryStateCell capacity unchanged and pays fees from a normal owner cell.
+
+The conservative factory-local exit path now materialises a bilateral child
+channel on devnet without claiming reduced-signature proof mode. The transaction
+consumes the current FactoryStateCell, the FactoryVaultCell, and a normal owner
+fee input; it recreates the newer FactoryStateCell, returns the remaining
+factory reserve, and creates a child StateCell, VaultCell, and SponsorCell. The
+factory state header commits to the local-exit digest, the factory type checks
+the child StateCell and vault shape, and the factory vault lock enforces reserve
+conservation:
+
+```text
+factory reserve input = factory reserve change + child vault capacity
+```
+
+The child channel then uses the ordinary bilateral path: sponsor-paid state
+publication followed by relative-`since` vault finalisation.
 
 The watchtower scanner may also be bound by a small operator policy before it
 reads blocks or publishes a transaction. The policy is a JSON object generated
@@ -139,6 +159,9 @@ A devnet demonstration is acceptable only when it includes:
 - a conservative factory smoke path that opens a FactoryStateCell, saves a
   reusable factory-state-cell package, selects the latest package, and publishes
   a package-backed update without using the state carrier as a fee source;
+- a conservative factory-local exit path that releases reserve capacity into a
+  bilateral child channel, then publishes and finalises that child channel on
+  devnet;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
