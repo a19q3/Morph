@@ -529,6 +529,21 @@ cargo run -q -p morph-cli -- devnet watch-config-loop \
   --json
 ```
 
+For a supervisor-managed process, use the foreground service form. It keeps the
+same scanner semantics, writes a health file, backs off after errors, and stops
+cleanly when the stop file appears:
+
+```sh
+cargo run -q -p morph-cli -- devnet watch-config-service \
+  --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
+  --health-file target/watchtower-health.json \
+  --stop-file target/watchtower.stop \
+  --error-backoff-ms 5000 \
+  --max-consecutive-errors 5 \
+  --json
+```
+
 The config deliberately does not carry a private key; key material is supplied
 through `--private-key-file`, `MORPH_DEVNET_PRIVATE_KEY_FILE`,
 `--private-key`, or `MORPH_DEVNET_PRIVATE_KEY` at runtime. A key file should

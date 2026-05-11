@@ -161,10 +161,19 @@ cargo run -p morph-cli -- devnet watch-config-loop \
   --passes 10 \
   --sleep-ms 1000 \
   --json
+cargo run -p morph-cli -- devnet watch-config-service \
+  --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
+  --health-file target/watchtower-health.json \
+  --stop-file target/watchtower.stop \
+  --json
 ```
 
 The watchtower commands also accept `MORPH_DEVNET_PRIVATE_KEY_FILE`; this is
 preferred over placing the sponsor key in shell history or a process list.
+The service form runs in the foreground for process supervisors, updates a
+JSON health file, backs off after failed passes, and stops cleanly when the
+stop file appears.
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package, its conservative all-participant signed

@@ -118,6 +118,8 @@ local JSONL alerts, and policy-gated HTTP webhook alerts.
 - Bounded multi-pass watchtower runner that reuses persisted cursors.
 - Runtime watchtower key files so sponsor keys do not need to appear in the
   config, shell history, or process list.
+- Foreground service mode with health-file updates, stop-file shutdown, error
+  backoff, and consecutive-error limits.
 - JSONL and HTTP webhook alert sinks for older-state detection, publication
   submission, and idle scans.
 - Smoke summary assertions for the older-state and publication-submitted alert

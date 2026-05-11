@@ -205,6 +205,15 @@ cargo run -q -p morph-cli -- validate-watch-config \
   "$WATCH_DIR/watch-config.json" \
   --json >"$WATCH_DIR/watch-config-check.json"
 
+touch "$WATCH_DIR/service.stop"
+log "watch-auto-sponsor-service-stop -> $WATCH_DIR/service.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-service \
+  --config "$WATCH_DIR/watch-config.json" \
+  --private-key-file "$WATCH_KEY_FILE" \
+  --stop-file "$WATCH_DIR/service.stop" \
+  --health-file "$WATCH_DIR/service-health.json" \
+  --json >"$WATCH_DIR/service.json"
+
 log "watch-auto-sponsor-depth -> $WATCH_DIR/depth.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" mine \
   --blocks 3 \

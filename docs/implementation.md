@@ -133,6 +133,11 @@ and sponsor rules as `watch-latest-package`.
 Watchtower private keys are still local devnet keys, but the watchtower entry
 points can read them from a file supplied at runtime. The config file remains
 key-free, and a key file must contain exactly one hex-encoded private key.
+The foreground service runner is deliberately small: it repeats the existing
+config pass, writes a JSON health file, uses a configurable backoff after
+failed passes, and exits on a stop file, publication, maximum pass count, or
+too many consecutive errors. It is intended to be supervised by an external
+process manager rather than becoming its own process manager.
 
 ## Current Non-Goals
 
@@ -169,6 +174,8 @@ A devnet demonstration is acceptable only when it includes:
   passes;
 - watchtower key material supplied through runtime flags, environment
   variables, or a single-key file rather than the config;
+- a supervisor-friendly watchtower service mode with health-file output,
+  stop-file shutdown, error backoff, and consecutive-error limits;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   publication submission, and idle scans;
 - a conservative all-participant factory state package with verified nested

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ use crate::rpc::CkbRpcClient;
 const WATCH_CONFIG_SCHEMA: &str = "morph.watchtower_config.v1";
 const WATCH_CONFIG_RUN_SCHEMA: &str = "morph.watchtower_config_run.v1";
 const WATCH_CONFIG_LOOP_SCHEMA: &str = "morph.watchtower_config_loop.v1";
+const WATCH_CONFIG_SERVICE_SCHEMA: &str = "morph.watchtower_config_service.v1";
+const WATCH_CONFIG_HEALTH_SCHEMA: &str = "morph.watchtower_health.v1";
 const DEFAULT_STORE_DIR: &str = "target/morph-state-packages";
 const DEFAULT_DETECTION_DEPTH: u64 = 1;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -23,6 +25,7 @@ const DEFAULT_FEE: u64 = 100_000_000;
 const DEFAULT_MINE_BLOCKS: u64 = 4;
 const DEFAULT_AUTO_SPONSOR_CAPACITY: u64 = 50_000_000_000;
 const MAX_LOOP_PASSES: u64 = 10_000;
+const MAX_SERVICE_PASSES: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchtowerConfigV1 {
@@ -80,6 +83,17 @@ pub struct WatchtowerConfigLoopOptions {
     pub stop_after_publication: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct WatchtowerConfigServiceOptions {
+    pub max_passes: Option<u64>,
+    pub sleep_ms: u64,
+    pub error_backoff_ms: u64,
+    pub max_consecutive_errors: u64,
+    pub stop_after_publication: bool,
+    pub stop_file: Option<PathBuf>,
+    pub health_file: Option<PathBuf>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WatchtowerConfigRunReport {
     pub schema: String,
@@ -112,6 +126,36 @@ pub struct WatchtowerConfigLoopReport {
 pub struct WatchtowerConfigPassReport {
     pub pass_number: u64,
     pub report: WatchtowerConfigRunReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatchtowerConfigServiceReport {
+    pub schema: String,
+    pub config_path: String,
+    pub completed_passes: u64,
+    pub published_count: usize,
+    pub idle_count: usize,
+    pub error_count: u64,
+    pub consecutive_errors: u64,
+    pub stopped_reason: String,
+    pub last_error: Option<String>,
+    pub stop_file: Option<PathBuf>,
+    pub health_file: Option<PathBuf>,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchtowerConfigServiceHealth {
+    pub schema: String,
+    pub config_path: String,
+    pub updated_unix_ms: u64,
+    pub completed_passes: u64,
+    pub published_count: usize,
+    pub idle_count: usize,
+    pub error_count: u64,
+    pub consecutive_errors: u64,
+    pub status: String,
+    pub stopped_reason: Option<String>,
+    pub last_error: Option<String>,
 }
 
 impl WatchtowerConfigV1 {
@@ -329,6 +373,140 @@ pub fn run_watchtower_config_loop(
     })
 }
 
+pub fn run_watchtower_config_service(
+    rpc: &CkbRpcClient,
+    config_path: &Path,
+    config: &WatchtowerConfigV1,
+    runtime: WatchtowerRuntimeOptions,
+    options: WatchtowerConfigServiceOptions,
+) -> Result<WatchtowerConfigServiceReport> {
+    config.validate()?;
+    validate_service_options(&options)?;
+
+    let config_path_string = config_path.display().to_string();
+    let mut completed_passes = 0u64;
+    let mut published_count = 0usize;
+    let mut idle_count = 0usize;
+    let mut error_count = 0u64;
+    let mut consecutive_errors = 0u64;
+    let mut last_error = None;
+
+    write_service_health_if_requested(
+        &options.health_file,
+        service_health(
+            &config_path_string,
+            "starting",
+            None,
+            completed_passes,
+            published_count,
+            idle_count,
+            error_count,
+            consecutive_errors,
+            last_error.clone(),
+        )?,
+    )?;
+
+    let stopped_reason = loop {
+        if stop_file_exists(&options.stop_file) {
+            break "stop_file".to_string();
+        }
+        if options
+            .max_passes
+            .is_some_and(|max_passes| completed_passes >= max_passes)
+        {
+            break "max_passes".to_string();
+        }
+
+        match run_watchtower_config_once(rpc, config_path, config, runtime.clone()) {
+            Ok(report) => {
+                completed_passes = completed_passes.saturating_add(1);
+                published_count = published_count.saturating_add(report.published_count);
+                idle_count = idle_count.saturating_add(report.idle_count);
+                consecutive_errors = 0;
+                last_error = None;
+
+                write_service_health_if_requested(
+                    &options.health_file,
+                    service_health(
+                        &config_path_string,
+                        "running",
+                        None,
+                        completed_passes,
+                        published_count,
+                        idle_count,
+                        error_count,
+                        consecutive_errors,
+                        None,
+                    )?,
+                )?;
+
+                if options.stop_after_publication && report.published_count > 0 {
+                    break "publication".to_string();
+                }
+                if options
+                    .max_passes
+                    .is_some_and(|max_passes| completed_passes >= max_passes)
+                {
+                    break "max_passes".to_string();
+                }
+                std::thread::sleep(Duration::from_millis(options.sleep_ms));
+            }
+            Err(err) => {
+                error_count = error_count.saturating_add(1);
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                last_error = Some(format!("{err:#}"));
+                write_service_health_if_requested(
+                    &options.health_file,
+                    service_health(
+                        &config_path_string,
+                        "error",
+                        None,
+                        completed_passes,
+                        published_count,
+                        idle_count,
+                        error_count,
+                        consecutive_errors,
+                        last_error.clone(),
+                    )?,
+                )?;
+                if consecutive_errors >= options.max_consecutive_errors {
+                    break "max_consecutive_errors".to_string();
+                }
+                std::thread::sleep(Duration::from_millis(options.error_backoff_ms));
+            }
+        }
+    };
+
+    write_service_health_if_requested(
+        &options.health_file,
+        service_health(
+            &config_path_string,
+            "stopped",
+            Some(stopped_reason.clone()),
+            completed_passes,
+            published_count,
+            idle_count,
+            error_count,
+            consecutive_errors,
+            last_error.clone(),
+        )?,
+    )?;
+
+    Ok(WatchtowerConfigServiceReport {
+        schema: WATCH_CONFIG_SERVICE_SCHEMA.to_string(),
+        config_path: config_path_string,
+        completed_passes,
+        published_count,
+        idle_count,
+        error_count,
+        consecutive_errors,
+        stopped_reason,
+        last_error,
+        stop_file: options.stop_file,
+        health_file: options.health_file,
+    })
+}
+
 fn channel_options(
     base_dir: &Path,
     defaults: &WatchtowerConfigDefaults,
@@ -419,6 +597,99 @@ fn resolve_path(base_dir: &Path, path: PathBuf) -> PathBuf {
     } else {
         base_dir.join(path)
     }
+}
+
+fn validate_service_options(options: &WatchtowerConfigServiceOptions) -> Result<()> {
+    if let Some(max_passes) = options.max_passes {
+        ensure!(
+            max_passes > 0,
+            "watchtower service max_passes must be non-zero"
+        );
+        ensure!(
+            max_passes <= MAX_SERVICE_PASSES,
+            "watchtower service max_passes must not exceed {MAX_SERVICE_PASSES}"
+        );
+    }
+    ensure!(
+        options.sleep_ms > 0,
+        "watchtower service sleep_ms must be non-zero"
+    );
+    ensure!(
+        options.error_backoff_ms > 0,
+        "watchtower service error_backoff_ms must be non-zero"
+    );
+    ensure!(
+        options.max_consecutive_errors > 0,
+        "watchtower service max_consecutive_errors must be non-zero"
+    );
+    Ok(())
+}
+
+fn stop_file_exists(stop_file: &Option<PathBuf>) -> bool {
+    stop_file.as_ref().is_some_and(|path| path.exists())
+}
+
+fn write_service_health_if_requested(
+    path: &Option<PathBuf>,
+    health: WatchtowerConfigServiceHealth,
+) -> Result<()> {
+    if let Some(path) = path {
+        write_service_health(path, &health)?;
+    }
+    Ok(())
+}
+
+fn write_service_health(path: &Path, health: &WatchtowerConfigServiceHealth) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create health directory {}", parent.display()))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(health)?;
+    fs::write(&tmp, json)
+        .with_context(|| format!("failed to write temporary health file {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| {
+        format!(
+            "failed to atomically move health file {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn service_health(
+    config_path: &str,
+    status: &str,
+    stopped_reason: Option<String>,
+    completed_passes: u64,
+    published_count: usize,
+    idle_count: usize,
+    error_count: u64,
+    consecutive_errors: u64,
+    last_error: Option<String>,
+) -> Result<WatchtowerConfigServiceHealth> {
+    Ok(WatchtowerConfigServiceHealth {
+        schema: WATCH_CONFIG_HEALTH_SCHEMA.to_string(),
+        config_path: config_path.to_string(),
+        updated_unix_ms: now_unix_ms()?,
+        completed_passes,
+        published_count,
+        idle_count,
+        error_count,
+        consecutive_errors,
+        status: status.to_string(),
+        stopped_reason,
+        last_error,
+    })
+}
+
+fn now_unix_ms() -> Result<u64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before unix epoch")?;
+    Ok(elapsed.as_millis() as u64)
 }
 
 #[cfg(test)]
@@ -541,5 +812,73 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("must not exceed"));
+    }
+
+    #[test]
+    fn service_stops_before_rpc_when_stop_file_exists() {
+        let dir =
+            std::env::temp_dir().join(format!("morph-watch-service-{}-stop", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let stop_file = dir.join("stop");
+        let health_file = dir.join("health.json");
+        fs::write(&stop_file, b"stop").unwrap();
+        let config = WatchtowerConfigV1::fixture();
+        let runtime = WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: "key".to_string(),
+        };
+
+        let report = run_watchtower_config_service(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            &dir.join("watch.json"),
+            &config,
+            runtime,
+            WatchtowerConfigServiceOptions {
+                max_passes: None,
+                sleep_ms: 1_000,
+                error_backoff_ms: 1_000,
+                max_consecutive_errors: 3,
+                stop_after_publication: false,
+                stop_file: Some(stop_file),
+                health_file: Some(health_file.clone()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.stopped_reason, "stop_file");
+        assert_eq!(report.completed_passes, 0);
+        let health: WatchtowerConfigServiceHealth =
+            serde_json::from_slice(&fs::read(&health_file).unwrap()).unwrap();
+        assert_eq!(health.schema, WATCH_CONFIG_HEALTH_SCHEMA);
+        assert_eq!(health.status, "stopped");
+        assert_eq!(health.stopped_reason.as_deref(), Some("stop_file"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_service_options() {
+        let config = WatchtowerConfigV1::fixture();
+        let runtime = WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: "key".to_string(),
+        };
+        let err = run_watchtower_config_service(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            Path::new("watch.json"),
+            &config,
+            runtime,
+            WatchtowerConfigServiceOptions {
+                max_passes: Some(0),
+                sleep_ms: 1_000,
+                error_backoff_ms: 1_000,
+                max_consecutive_errors: 3,
+                stop_after_publication: false,
+                stop_file: None,
+                health_file: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("max_passes must be non-zero"));
     }
 }

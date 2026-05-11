@@ -870,6 +870,45 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run a supervised watchtower service with health output and error backoff.
+    WatchConfigService {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls sponsor funding and change.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
+        private_key: Option<String>,
+        /// File containing the sponsor private key. Prefer this for watchtower processes.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
+        private_key_file: Option<PathBuf>,
+        /// Watchtower config JSON path.
+        #[arg(long)]
+        config: std::path::PathBuf,
+        /// Maximum passes before returning. Omit to run until stopped or failed.
+        #[arg(long)]
+        max_passes: Option<u64>,
+        /// Milliseconds to sleep after a successful pass.
+        #[arg(long, default_value_t = 1_000)]
+        sleep_ms: u64,
+        /// Milliseconds to sleep after a failed pass.
+        #[arg(long, default_value_t = 5_000)]
+        error_backoff_ms: u64,
+        /// Stop after this many consecutive failed passes.
+        #[arg(long, default_value_t = 5)]
+        max_consecutive_errors: u64,
+        /// Return after the first pass that publishes any state.
+        #[arg(long)]
+        stop_after_publication: bool,
+        /// Stop gracefully when this file exists.
+        #[arg(long)]
+        stop_file: Option<PathBuf>,
+        /// JSON health file updated after start, pass, error, and stop events.
+        #[arg(long)]
+        health_file: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a fresh SponsorCell for an existing channel state.
     FundSponsor {
         /// Directory containing the built RISC-V contract binaries.
@@ -2688,6 +2727,60 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         pass.report.published_count,
                         pass.report.idle_count
                     );
+                }
+            }
+        }
+        DevnetCommand::WatchConfigService {
+            contracts_dir,
+            private_key,
+            private_key_file,
+            config,
+            max_passes,
+            sleep_ms,
+            error_backoff_ms,
+            max_consecutive_errors,
+            stop_after_publication,
+            stop_file,
+            health_file,
+            json,
+        } => {
+            let config_data = watch_config::read_watchtower_config(&config)?;
+            let report = watch_config::run_watchtower_config_service(
+                &rpc,
+                &config,
+                &config_data,
+                watch_config::WatchtowerRuntimeOptions {
+                    contracts_dir,
+                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
+                },
+                watch_config::WatchtowerConfigServiceOptions {
+                    max_passes,
+                    sleep_ms,
+                    error_backoff_ms,
+                    max_consecutive_errors,
+                    stop_after_publication,
+                    stop_file,
+                    health_file,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("config={}", report.config_path);
+                println!("completed_passes={}", report.completed_passes);
+                println!("published={}", report.published_count);
+                println!("idle={}", report.idle_count);
+                println!("errors={}", report.error_count);
+                println!("consecutive_errors={}", report.consecutive_errors);
+                println!("stopped_reason={}", report.stopped_reason);
+                if let Some(error) = &report.last_error {
+                    println!("last_error={error}");
+                }
+                if let Some(path) = &report.stop_file {
+                    println!("stop_file={}", path.display());
+                }
+                if let Some(path) = &report.health_file {
+                    println!("health_file={}", path.display());
                 }
             }
         }
