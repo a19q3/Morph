@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::packages::StoredFactoryLocalExitPackage;
+use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetSmokeSummary {
@@ -17,6 +18,7 @@ pub struct DevnetSmokeSummary {
     pub transactions: Vec<TransactionSummary>,
     pub script_failures: Vec<ScriptFailureSummary>,
     pub deployed_scripts: Vec<DeployedScriptSummary>,
+    pub watchtower_alerts: Vec<WatchtowerAlertSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
@@ -31,6 +33,8 @@ pub struct DevnetSmokeAssertionReport {
     pub expected_script_failures: usize,
     pub deployed_scripts: usize,
     pub deployed_script_hashes_verified: bool,
+    pub watchtower_alerts: usize,
+    pub watchtower_publication_alerts: usize,
     pub factory_local_exits: usize,
 }
 
@@ -64,6 +68,21 @@ pub struct DeployedScriptSummary {
     pub hash_type: String,
     pub data_len: usize,
     pub capacity: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WatchtowerAlertSummary {
+    pub check: String,
+    pub path: String,
+    pub channel_id: String,
+    pub severity: String,
+    pub event: String,
+    pub selected_state_number: u64,
+    pub observed_state_number: Option<u64>,
+    pub observed_out_point: Option<String>,
+    pub publication_tx_hash: Option<String>,
+    pub scanned_to_block: u64,
+    pub next_from_block: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,10 +141,13 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let manifest = read_manifest(dir)?;
     let mut json_paths = Vec::new();
     collect_json_files(dir, &mut json_paths)?;
+    let mut watch_alert_paths = Vec::new();
+    collect_watch_alert_files(dir, &mut watch_alert_paths)?;
 
     let mut transactions = Vec::new();
     let mut script_failures = Vec::new();
     let mut deployed_scripts = Vec::new();
+    let mut watchtower_alerts = Vec::new();
     let mut factory_local_exits = Vec::new();
     for path in &json_paths {
         let relative = path
@@ -149,6 +171,9 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         )
         .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
     }
+    for path in &watch_alert_paths {
+        collect_watchtower_alerts(dir, path, &mut watchtower_alerts)?;
+    }
 
     let totals = summarise_totals(&transactions);
     Ok(DevnetSmokeSummary {
@@ -158,6 +183,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         transactions,
         script_failures,
         deployed_scripts,
+        watchtower_alerts,
         factory_local_exits,
         totals,
     })
@@ -190,6 +216,12 @@ pub fn assert_default_devnet_smoke(
         expected_script_failures: EXPECTED_SCRIPT_FAILURES.len(),
         deployed_scripts: summary.deployed_scripts.len(),
         deployed_script_hashes_verified: contracts_dir.is_some(),
+        watchtower_alerts: summary.watchtower_alerts.len(),
+        watchtower_publication_alerts: summary
+            .watchtower_alerts
+            .iter()
+            .filter(|alert| alert.event == "publication_submitted")
+            .count(),
         factory_local_exits: summary.factory_local_exits.len(),
     })
 }
@@ -257,6 +289,8 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
         ));
     }
 
+    assert_watchtower_alert_coverage(summary)?;
+
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
         return Err(anyhow!(
             "unexpected factory local-exit evidence count: got {}, expected {}",
@@ -293,6 +327,65 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
             EXPECTED_FACTORY_CKB_EXITS,
             EXPECTED_FACTORY_XUDT_EXITS
         ));
+    }
+    Ok(())
+}
+
+fn assert_watchtower_alert_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    if summary.watchtower_alerts.len() != EXPECTED_WATCHTOWER_ALERTS {
+        return Err(anyhow!(
+            "unexpected watchtower alert count: got {}, expected {}",
+            summary.watchtower_alerts.len(),
+            EXPECTED_WATCHTOWER_ALERTS
+        ));
+    }
+    for expected in EXPECTED_WATCHTOWER_EVENTS {
+        if !summary
+            .watchtower_alerts
+            .iter()
+            .any(|alert| alert.event == *expected)
+        {
+            return Err(anyhow!(
+                "missing expected watchtower alert event: {expected}"
+            ));
+        }
+    }
+    for alert in &summary.watchtower_alerts {
+        if alert.severity != "warning" {
+            return Err(anyhow!(
+                "watchtower alert {} must be warning severity",
+                alert.event
+            ));
+        }
+        if alert.next_from_block <= alert.scanned_to_block {
+            return Err(anyhow!(
+                "watchtower alert {} did not advance the scan cursor",
+                alert.event
+            ));
+        }
+        let Some(observed_state_number) = alert.observed_state_number else {
+            return Err(anyhow!(
+                "watchtower alert {} must include observed state number",
+                alert.event
+            ));
+        };
+        if alert.observed_out_point.is_none() {
+            return Err(anyhow!(
+                "watchtower alert {} must include observed out point",
+                alert.event
+            ));
+        }
+        if alert.selected_state_number <= observed_state_number {
+            return Err(anyhow!(
+                "watchtower alert {} did not select a newer state",
+                alert.event
+            ));
+        }
+        if alert.event == "publication_submitted" && alert.publication_tx_hash.is_none() {
+            return Err(anyhow!(
+                "watchtower publication alert must include publication transaction hash"
+            ));
+        }
     }
     Ok(())
 }
@@ -485,6 +578,37 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Watchtower Alerts\n\n");
+    if summary.watchtower_alerts.is_empty() {
+        out.push_str("No watchtower alerts were recorded.\n");
+    } else {
+        out.push_str(
+            "| Check | Event | Severity | Selected | Observed | Publication tx | Cursor |\n",
+        );
+        out.push_str("| --- | --- | --- | ---: | ---: | --- | --- |\n");
+        for alert in &summary.watchtower_alerts {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} -> {} |\n",
+                table_cell(&alert.check),
+                table_cell(&alert.event),
+                table_cell(&alert.severity),
+                alert.selected_state_number,
+                alert
+                    .observed_state_number
+                    .map(|number| number.to_string())
+                    .unwrap_or_default(),
+                alert
+                    .publication_tx_hash
+                    .as_deref()
+                    .map(|hash| format!("`{hash}`"))
+                    .unwrap_or_default(),
+                alert.scanned_to_block,
+                alert.next_from_block
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Local Exits\n\n");
     if summary.factory_local_exits.is_empty() {
         out.push_str("No factory local-exit evidence packages were recorded.\n");
@@ -619,6 +743,8 @@ const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
 const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
 const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
 const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
+const EXPECTED_WATCHTOWER_ALERTS: usize = 2;
+const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &["older_state_detected", "publication_submitted"];
 
 fn ensure_directory(dir: &Path) -> Result<()> {
     let metadata = fs::metadata(dir)
@@ -668,6 +794,92 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn collect_watch_alert_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries = fs::read_dir(dir)
+        .with_context(|| format!("failed to list directory {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to list directory {}", dir.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_watch_alert_files(&path, out)?;
+            continue;
+        }
+        if path.extension().and_then(|extension| extension.to_str()) == Some("jsonl") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn collect_watchtower_alerts(
+    smoke_dir: &Path,
+    path: &Path,
+    watchtower_alerts: &mut Vec<WatchtowerAlertSummary>,
+) -> Result<()> {
+    let relative = path
+        .strip_prefix(smoke_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let check = relative.trim_end_matches(".jsonl").to_string();
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("failed to read watchtower alerts {}", path.display()))?;
+    for (line_index, line) in raw.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(line).with_context(|| {
+            format!(
+                "failed to parse watchtower alert JSONL {} line {}",
+                path.display(),
+                line_index + 1
+            )
+        })?;
+        if value.get("schema").and_then(Value::as_str) != Some("morph.watchtower_alert.v1") {
+            continue;
+        }
+        let alert: WatchtowerAlert = serde_json::from_value(value).with_context(|| {
+            format!(
+                "failed to decode watchtower alert {} line {}",
+                path.display(),
+                line_index + 1
+            )
+        })?;
+        watchtower_alerts.push(WatchtowerAlertSummary {
+            check: check.clone(),
+            path: format!("line {}", line_index + 1),
+            channel_id: alert.channel_id,
+            severity: watch_alert_severity_name(&alert.severity).to_string(),
+            event: watch_alert_event_name(&alert.event).to_string(),
+            selected_state_number: alert.selected_state_number,
+            observed_state_number: alert.observed_state_number,
+            observed_out_point: alert.observed_out_point,
+            publication_tx_hash: alert.publication_tx_hash,
+            scanned_to_block: alert.scanned_to_block,
+            next_from_block: alert.next_from_block,
+        });
+    }
+    Ok(())
+}
+
+fn watch_alert_severity_name(severity: &WatchAlertSeverity) -> &'static str {
+    match severity {
+        WatchAlertSeverity::Info => "info",
+        WatchAlertSeverity::Warning => "warning",
+    }
+}
+
+fn watch_alert_event_name(event: &WatchAlertEvent) -> &'static str {
+    match event {
+        WatchAlertEvent::OlderStateDetected => "older_state_detected",
+        WatchAlertEvent::PublicationSubmitted => "publication_submitted",
+        WatchAlertEvent::ScanIdle => "scan_idle",
+    }
 }
 
 fn collect_from_value(
@@ -933,6 +1145,16 @@ mod tests {
             }"#,
         )
         .unwrap();
+        fs::write(
+            dir.join("watch-alerts.jsonl"),
+            concat!(
+                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":1,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"older_state_detected","message":"old state","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":null,"scanned_to_block":10,"next_from_block":11}"#,
+                "\n",
+                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":2,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"publication_submitted","message":"published","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":"0xdef","scanned_to_block":10,"next_from_block":11}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
@@ -946,6 +1168,8 @@ mod tests {
             summary.factory_local_exits[0].path,
             "$.exit.local_exit_package"
         );
+        assert_eq!(summary.watchtower_alerts.len(), 2);
+        assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
         assert_eq!(summary.totals.total_estimated_cycles, 44);
         assert_eq!(summary.totals.total_tx_size_bytes, 66);
 
@@ -953,6 +1177,7 @@ mod tests {
         assert!(markdown.contains("StateSinceNotMature"));
         assert!(markdown.contains("0xabc"));
         assert!(markdown.contains("Deployed Scripts"));
+        assert!(markdown.contains("Watchtower Alerts"));
         assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
@@ -989,6 +1214,19 @@ mod tests {
         summary.deployed_scripts.pop();
         let err = assert_devnet_smoke_summary(&summary).unwrap_err();
         assert!(err.to_string().contains("unexpected deployed script count"));
+    }
+
+    #[test]
+    fn rejects_missing_watchtower_alert_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary
+            .watchtower_alerts
+            .retain(|alert| alert.event != "publication_submitted");
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unexpected watchtower alert count")
+        );
     }
 
     #[test]
@@ -1058,6 +1296,7 @@ mod tests {
                 ),
                 failure("xudt-negative-smoke", "SettlementOutputMismatch", 28),
             ],
+            watchtower_alerts: watchtower_alerts(),
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
                 factory_exit("factory/local-exit-package", 1),
@@ -1120,6 +1359,37 @@ mod tests {
                 capacity: 1,
             })
             .collect()
+    }
+
+    fn watchtower_alerts() -> Vec<WatchtowerAlertSummary> {
+        vec![
+            WatchtowerAlertSummary {
+                check: "watch-auto-sponsor/watch-alerts".to_string(),
+                path: "line 1".to_string(),
+                channel_id: "0x11".to_string(),
+                severity: "warning".to_string(),
+                event: "older_state_detected".to_string(),
+                selected_state_number: 2,
+                observed_state_number: Some(0),
+                observed_out_point: Some("0xabc:0".to_string()),
+                publication_tx_hash: None,
+                scanned_to_block: 10,
+                next_from_block: 11,
+            },
+            WatchtowerAlertSummary {
+                check: "watch-auto-sponsor/watch-alerts".to_string(),
+                path: "line 2".to_string(),
+                channel_id: "0x11".to_string(),
+                severity: "warning".to_string(),
+                event: "publication_submitted".to_string(),
+                selected_state_number: 2,
+                observed_state_number: Some(0),
+                observed_out_point: Some("0xabc:0".to_string()),
+                publication_tx_hash: Some("0xdef".to_string()),
+                scanned_to_block: 10,
+                next_from_block: 11,
+            },
+        ]
     }
 
     fn write_metric_json(dir: &Path, file_name: &str, tx_hash: &str, cycles: u64, bytes: usize) {

@@ -104,9 +104,11 @@ summary.json
 These summaries are generated from the smoke JSON files and include every
 transaction's node-estimated cycles, transaction size, status, block number,
 expected script failure, deployed script outpoint, and deployed script data
-hash. During a full smoke run, the script also asserts that the expected
-negative-path failures, deployed scripts, local contract binary hashes, and
-factory local-exit evidence packages are present and writes
+hash. They also read watchtower JSONL alert files and summarise the older-state
+detection and publication-submitted events. During a full smoke run, the script
+also asserts that the expected negative-path failures, deployed scripts, local
+contract binary hashes, watchtower alert events, and factory local-exit
+evidence packages are present and writes
 `summary-check.json`. They can be regenerated or rechecked for an existing run:
 
 ```sh
@@ -726,7 +728,9 @@ factory-local exit, child publication, child finalisation, and factory xUDT
 child-channel steps, including the factory xUDT negative path.
 `devnet-smoke-report` validates any embedded
 `local_exit_package` while building the summary, so a malformed package fails
-the report rather than being silently displayed.
+the report rather than being silently displayed. It also parses watchtower
+JSONL alerts, and `devnet-smoke-assert` requires the default smoke run to show
+both an `older_state_detected` alert and a `publication_submitted` alert.
 
 ## Remaining Devnet Gap
 

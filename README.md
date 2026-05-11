@@ -103,9 +103,10 @@ then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 `target/devnet-smoke/latest` to point at the completed run, unless that path is
 a real directory or file. Summary generation also validates any factory
 local-exit evidence package embedded in the smoke JSON, extracts deployed
-script outpoints and data hashes, and the script asserts that the expected
-negative-path failures, deployed scripts, local contract binary hashes, and
-factory exit evidence are present. To rebuild or assert a previous run:
+script outpoints and data hashes, and records watchtower JSONL alerts. The
+script asserts that the expected negative-path failures, deployed scripts,
+local contract binary hashes, watchtower alert events, and factory exit
+evidence are present. To rebuild or assert a previous run:
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>

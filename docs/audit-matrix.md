@@ -23,6 +23,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
+| Smoke evidence contains watchtower detection and publication alerts | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
@@ -59,6 +60,8 @@ Implemented devnet-level checks:
   automatic sponsor capacity before confirmed-block scanning starts;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   submitted publication, and idle scans;
+- smoke assertions that require older-state detection and publication-submitted
+  watchtower alert evidence in the default smoke run;
 - node-reported cycle measurement and transaction size reporting, summarised by
   `devnet-smoke-report`;
 - semantic smoke coverage assertions for the expected negative-path script

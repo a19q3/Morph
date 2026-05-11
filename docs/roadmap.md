@@ -85,7 +85,8 @@ Acceptance criteria:
 - JSON devnet reports expose `estimated_cycles` and `tx_size_bytes` for every
   lifecycle transaction.
 - completed smoke directories can be summarised into `summary.md` and
-  `summary.json`.
+  `summary.json`, including deployed script records, watchtower alerts, and
+  factory local-exit evidence.
 - a conservative FactoryStateCell can be opened, signed as a reusable package,
   selected as the latest package, advanced on devnet without draining the
   factory state carrier for fees, and used with a FactoryVaultCell to
@@ -109,6 +110,8 @@ JSON operator policy, local JSONL alerts, and policy-gated HTTP webhook alerts.
   capacity.
 - JSONL and HTTP webhook alert sinks for older-state detection, publication
   submission, and idle scans.
+- Smoke summary assertions for the older-state and publication-submitted alert
+  path.
 
 ## M3: Conservative Factory Mode
 

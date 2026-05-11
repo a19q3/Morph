@@ -1322,6 +1322,11 @@ fn main() -> Result<()> {
                     "deployed_script_hashes_verified={}",
                     report.deployed_script_hashes_verified
                 );
+                println!("watchtower_alerts={}", report.watchtower_alerts);
+                println!(
+                    "watchtower_publication_alerts={}",
+                    report.watchtower_publication_alerts
+                );
                 println!("factory_local_exits={}", report.factory_local_exits);
             }
             Ok(())
