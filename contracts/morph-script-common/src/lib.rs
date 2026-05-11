@@ -673,6 +673,33 @@ mod tests {
     }
 
     #[test]
+    fn molecule_schema_names_all_active_fixed_width_v1_objects() {
+        let schema = include_str!("../../../schemas/morph.mol");
+        for expected in [
+            "StateHeaderV1: 274 bytes",
+            "BilateralSignatureWitnessV1: 198 bytes",
+            "BilateralCkbSettlementDescriptorV1: 84 bytes",
+            "BilateralCkbXudtSettlementDescriptorV1: 148 bytes",
+            "SponsorPolicyV1: 144 bytes",
+            "struct StateHeaderV1",
+            "struct BilateralSignatureWitnessV1",
+            "struct BilateralCkbSettlementDescriptorV1",
+            "struct BilateralCkbXudtSettlementDescriptorV1",
+            "struct SponsorPolicyV1",
+            "xudt_type_hash: Byte32",
+            "xudt_amount: uint128",
+            "max_fee_per_tx: uint64",
+            "allowed_sponsor_source: Byte32",
+            "change_lock_hash: Byte32",
+        ] {
+            assert!(
+                schema.contains(expected),
+                "schema is missing expected fragment: {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn verifies_real_bilateral_state_signatures() {
         let key0 = signing_key(1);
         let key1 = signing_key(2);

@@ -4,6 +4,15 @@
 // Rust structs for executable invariant tests. This schema records the intended
 // on-chain wire boundary and should be generated once moleculec is available
 // in the devnet build environment.
+//
+// The devnet V1 scripts intentionally use fixed-width encodings. These lengths
+// are part of the audited transaction shape:
+//
+// - StateHeaderV1: 274 bytes
+// - BilateralSignatureWitnessV1: 198 bytes
+// - BilateralCkbSettlementDescriptorV1: 84 bytes
+// - BilateralCkbXudtSettlementDescriptorV1: 148 bytes
+// - SponsorPolicyV1: 144 bytes
 
 array Byte32 [byte; 32];
 array Secp256k1CompressedPubkey [byte; 33];
@@ -59,4 +68,31 @@ struct BilateralCkbSettlementDescriptorV1 {
     reserved: byte,
     output_0: BilateralCkbSettlementOutputV1,
     output_1: BilateralCkbSettlementOutputV1,
+}
+
+struct BilateralCkbXudtSettlementOutputV1 {
+    lock_hash: Byte32,
+    capacity: uint64,
+    xudt_amount: uint128,
+}
+
+struct BilateralCkbXudtSettlementDescriptorV1 {
+    version: uint16,
+    output_count: byte,
+    asset_count: byte,
+    xudt_type_hash: Byte32,
+    output_0: BilateralCkbXudtSettlementOutputV1,
+    output_1: BilateralCkbXudtSettlementOutputV1,
+}
+
+struct SponsorPolicyV1 {
+    channel_id: Byte32,
+    min_state_number: uint64,
+    max_state_number: uint64,
+    max_fee_per_tx: uint64,
+    max_total_fee: uint64,
+    already_spent: uint64,
+    expiry: uint64,
+    allowed_sponsor_source: Byte32,
+    change_lock_hash: Byte32,
 }

@@ -496,10 +496,16 @@ format. It deliberately does not start from a generic VM-like descriptor:
 
 ```text
 StateHeaderV1
-PlainBilateralPayloadV1
+BilateralSignatureWitnessV1
 SponsorPolicyV1
-SettlementDescriptorV1
+BilateralCkbSettlementDescriptorV1
+BilateralCkbXudtSettlementDescriptorV1
 ```
+
+The draft Molecule schema in `schemas/morph.mol` records these active wire
+objects and their fixed byte lengths. The devnet contracts still parse the
+bytes directly; generated Molecule code is a later hardening step, not a
+consensus or node requirement.
 
 Factory proof mode should not be enabled on devnet until a concrete
 rights-dependency proof predicate exists.

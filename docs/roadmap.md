@@ -32,6 +32,7 @@ reports.
 Required deliverables:
 
 - Fixed-width V1 wire types, later replaced or generated from Molecule.
+- Draft Molecule schema covering all active devnet V1 wire objects.
 - `morph-state-lock` contract.
 - `morph-state-type` contract.
 - `morph-vault-lock` contract.

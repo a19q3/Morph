@@ -31,6 +31,13 @@ compressed secp256k1 public keys, two ECDSA signatures over the canonical state
 header digest, and a participant commitment that must match the signed header.
 Sponsor inputs and fee selection remain outside that state-signature domain.
 
+The draft Molecule schema in `schemas/morph.mol` now names every active
+fixed-width V1 object used by the devnet contracts: `StateHeaderV1`,
+`BilateralSignatureWitnessV1`, CKB and CKB+xUDT settlement descriptors, and
+`SponsorPolicyV1`. The contracts still parse fixed-width bytes directly; the
+schema is treated as the public wire-boundary record until generated Molecule
+code is introduced.
+
 The vault lock verifies the bilateral CKB settlement descriptor: two sorted
 recipient lock hashes and exact output capacities. It also supports the devnet
 CKB+xUDT descriptor, which binds the canonical xUDT type hash and exact token
