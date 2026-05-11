@@ -43,6 +43,8 @@ Implemented devnet-level checks:
   `devnet xudt-smoke`;
 - CKB+xUDT factory child-channel materialisation and finalisation on devnet
   through `devnet factory-xudt-smoke`;
+- factory CKB+xUDT child-vault amount rejection on devnet through
+  `devnet factory-xudt-negative-smoke`;
 - CKB+xUDT tampered settlement rejection on devnet through
   `devnet xudt-negative-smoke`;
 - competing StateCell publication rejection from the node's tx-pool-aware

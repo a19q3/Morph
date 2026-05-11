@@ -87,6 +87,7 @@ cargo run -p morph-cli -- devnet sponsor-budget-negative-smoke
 cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
+cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 scripts/devnet-smoke.sh
 ```
 
@@ -94,7 +95,7 @@ The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
 include CKB `estimate_cycles` output and serialized transaction size for each
 deployment, open, publication, sponsor top-up, supersession, factory local
 exit, and finalisation transaction, including finalise-since, sponsor budget,
-competing-spend, and CKB+xUDT smoke paths.
+competing-spend, CKB+xUDT, and factory CKB+xUDT negative smoke paths.
 `scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
 then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 `target/devnet-smoke/`. Summary generation also validates any factory
@@ -129,7 +130,9 @@ host-side non-interference package, its conservative all-participant signed
 state package, and a host-side authorised-participant reduced package. The
 devnet CLI also includes `open-factory`,
 `update-factory`, `factory-exit-channel`, and `factory-xudt-smoke` for the
-conservative on-chain path:
+conservative on-chain path. `factory-xudt-negative-smoke` proves that a child
+xUDT vault amount must match the committed local-exit descriptor even when
+overall xUDT supply is conserved:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json

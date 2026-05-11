@@ -28,7 +28,7 @@ a typed factory reserve, and run a competing-spend smoke, a
 finalise-since negative smoke, a sponsor-budget negative smoke, a CKB+xUDT
 settlement smoke, a tampered-settlement xUDT negative smoke, a conservative
 factory open/package/update/exit smoke, and a factory xUDT child-channel smoke
-through native JSON-RPC. Each
+plus a factory xUDT child-vault negative smoke through native JSON-RPC. Each
 transaction report includes node-estimated cycles and serialized transaction
 size.
 SponsorCells can carry explicit state-number and fee-budget bounds. Smoke runs
@@ -77,6 +77,8 @@ Acceptance criteria:
   conservation;
 - a devnet CKB+xUDT channel rejects a tampered recipient-level token
   distribution even when total token supply is unchanged.
+- a devnet factory CKB+xUDT local exit rejects a tampered child vault token
+  amount even when total token supply is conserved by factory-vault change.
 - a competing publication against an already pending StateCell spend is
   rejected by the node's tx-pool-aware live-cell view, then the newer state can
   be rebuilt against the confirmed live StateCell.

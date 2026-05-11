@@ -126,6 +126,19 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
   "$FACTORY_XUDT_DIR/local-exit-package.json" \
   --json >"$FACTORY_XUDT_DIR/local-exit-package-check.json"
 
+FACTORY_XUDT_NEGATIVE_DIR="$OUT_DIR/factory-xudt-negative"
+mkdir -p "$FACTORY_XUDT_NEGATIVE_DIR"
+log "factory-xudt-negative-smoke -> $FACTORY_XUDT_NEGATIVE_DIR/smoke.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-negative-smoke \
+  --store-dir "$FACTORY_XUDT_NEGATIVE_DIR/packages" \
+  --json >"$FACTORY_XUDT_NEGATIVE_DIR/smoke.json"
+log "factory-xudt-negative-local-exit-package -> $FACTORY_XUDT_NEGATIVE_DIR/local-exit-package.json"
+jq '.exit.local_exit_package' "$FACTORY_XUDT_NEGATIVE_DIR/smoke.json" >"$FACTORY_XUDT_NEGATIVE_DIR/local-exit-package.json"
+log "factory-xudt-negative-local-exit-package-check -> $FACTORY_XUDT_NEGATIVE_DIR/local-exit-package-check.json"
+cargo run -q -p morph-cli -- validate-factory-local-exit-package \
+  "$FACTORY_XUDT_NEGATIVE_DIR/local-exit-package.json" \
+  --json >"$FACTORY_XUDT_NEGATIVE_DIR/local-exit-package-check.json"
+
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"

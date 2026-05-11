@@ -681,6 +681,17 @@ cargo run -q -p morph-cli -- devnet factory-xudt-smoke --json \
   > target/factory-xudt-smoke.json
 ```
 
+The corresponding negative smoke first attempts a factory-local exit where the
+child xUDT vault amount is one unit lower than the committed descriptor, while
+the factory-vault change output keeps total xUDT supply conserved. The expected
+rejection is `SettlementOutputMismatch`; the command then performs the valid
+exit, publication, and finalisation path:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-xudt-negative-smoke --json \
+  > target/factory-xudt-negative-smoke.json
+```
+
 Each `factory-exit-channel` and `factory-xudt-smoke` report includes
 `local_exit_package`. To validate that package independently:
 
@@ -694,7 +705,8 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 
 The repository-level `scripts/devnet-smoke.sh` includes the additional
 factory-local exit, child publication, child finalisation, and factory xUDT
-child-channel steps. `devnet-smoke-report` validates any embedded
+child-channel steps, including the factory xUDT negative path.
+`devnet-smoke-report` validates any embedded
 `local_exit_package` while building the summary, so a malformed package fails
 the report rather than being silently displayed.
 
