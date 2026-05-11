@@ -78,10 +78,11 @@ scripts/devnet-smoke.sh
 ```
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
-check, contract deployment, supersession smoke, and sponsor-policy negative
-smoke. It expects the node to already be running and writes logs plus JSON
-reports under `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`,
-`OUT_DIR`, or `MINE_BLOCKS` when needed.
+check, contract deployment, supersession smoke, sponsor-policy negative smoke,
+and the watchtower auto-sponsor path. It expects the node and `jq` to be
+available, and writes logs plus JSON reports under
+`target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
+`MINE_BLOCKS` when needed.
 
 Devnet transaction reports include two measurement fields:
 
