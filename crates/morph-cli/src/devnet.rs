@@ -28,8 +28,9 @@ use morph_script_common::{
 use serde::Serialize;
 
 use crate::packages::{
-    PackageOutPoint, StatePackageRecord, StoredStatePackage, canonical_hex32, latest_package,
-    read_package, write_package,
+    PackageOutPoint, StatePackageRecord, StoredStatePackage, WatchCursor, canonical_hex32,
+    default_watch_cursor_path, latest_package, read_package, read_watch_cursor, write_package,
+    write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
 
@@ -118,6 +119,8 @@ pub struct WatchLatestStatePackageOptions {
     pub store_dir: PathBuf,
     pub channel_id: String,
     pub from_block: u64,
+    pub cursor_file: Option<PathBuf>,
+    pub ignore_cursor: bool,
     pub detection_depth: u64,
     pub timeout_secs: u64,
     pub poll_ms: u64,
@@ -337,8 +340,14 @@ pub struct ObservedStateCellReport {
 pub struct WatchLatestStatePackageReport {
     pub channel_id: String,
     pub from_block: u64,
+    pub effective_from_block: u64,
     pub scanned_to_block: u64,
+    pub next_from_block: u64,
     pub detection_depth: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loaded_cursor: Option<WatchCursor>,
     pub selected_package: StatePackageRecord,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed: Option<ObservedStateCellReport>,
@@ -992,11 +1001,37 @@ pub fn watch_latest_state_package(
     let channel_id = canonical_hex32(&options.channel_id)?;
     let selected_package = latest_package(&options.store_dir, &channel_id)?;
     let selected_state_number = selected_package.package.state_number;
+    let cursor_file = options
+        .cursor_file
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(|| default_watch_cursor_path(&options.store_dir, &channel_id))?;
+    let loaded_cursor = if options.ignore_cursor {
+        None
+    } else {
+        match read_watch_cursor(&cursor_file)? {
+            Some(cursor) => {
+                ensure!(
+                    cursor.channel_id == channel_id,
+                    "watch cursor {} belongs to channel {}, not {}",
+                    cursor_file.display(),
+                    cursor.channel_id,
+                    channel_id
+                );
+                Some(cursor)
+            }
+            None => None,
+        }
+    };
+    let effective_from_block = loaded_cursor
+        .as_ref()
+        .map(|cursor| options.from_block.max(cursor.next_block))
+        .unwrap_or(options.from_block);
     let started = Instant::now();
     let timeout = Duration::from_secs(options.timeout_secs);
     let poll_interval = Duration::from_millis(options.poll_ms);
-    let mut next_block = options.from_block;
-    let mut scanned_to_block = options.from_block.saturating_sub(1);
+    let mut next_block = effective_from_block;
+    let mut scanned_to_block = effective_from_block.saturating_sub(1);
     let mut last_observed = None;
 
     loop {
@@ -1004,8 +1039,9 @@ pub fn watch_latest_state_package(
         if tip_number.saturating_add(1) >= options.detection_depth {
             let mature_tip = tip_number + 1 - options.detection_depth;
             while next_block <= mature_tip {
+                let current_block = next_block;
                 if let Some(block) = rpc.block_by_number(next_block)? {
-                    scanned_to_block = next_block;
+                    scanned_to_block = current_block;
                     for observed in observed_state_cells(&block, &channel_id, tip_number)? {
                         if observed.state_number < selected_state_number {
                             let publication = publish_state(
@@ -1023,11 +1059,20 @@ pub fn watch_latest_state_package(
                                     mine_blocks: options.mine_blocks,
                                 },
                             )?;
+                            let next_from_block = current_block.saturating_add(1);
+                            write_watch_cursor(
+                                &cursor_file,
+                                &WatchCursor::new(&channel_id, next_from_block, scanned_to_block)?,
+                            )?;
                             return Ok(WatchLatestStatePackageReport {
                                 channel_id,
                                 from_block: options.from_block,
+                                effective_from_block,
                                 scanned_to_block,
+                                next_from_block,
                                 detection_depth: options.detection_depth,
+                                cursor_file: Some(cursor_file),
+                                loaded_cursor,
                                 selected_package,
                                 observed: Some(observed),
                                 publication: Some(publication),
@@ -1036,16 +1081,28 @@ pub fn watch_latest_state_package(
                         last_observed = Some(observed);
                     }
                 }
-                next_block = next_block.saturating_add(1);
+                next_block = current_block.saturating_add(1);
+                write_watch_cursor(
+                    &cursor_file,
+                    &WatchCursor::new(&channel_id, next_block, scanned_to_block)?,
+                )?;
             }
         }
 
         if started.elapsed() >= timeout {
+            write_watch_cursor(
+                &cursor_file,
+                &WatchCursor::new(&channel_id, next_block, scanned_to_block)?,
+            )?;
             return Ok(WatchLatestStatePackageReport {
                 channel_id,
                 from_block: options.from_block,
+                effective_from_block,
                 scanned_to_block,
+                next_from_block: next_block,
                 detection_depth: options.detection_depth,
+                cursor_file: Some(cursor_file),
+                loaded_cursor,
                 selected_package,
                 observed: last_observed,
                 publication: None,

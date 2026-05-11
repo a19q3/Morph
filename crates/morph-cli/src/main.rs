@@ -299,6 +299,12 @@ enum DevnetCommand {
         /// First block number to scan.
         #[arg(long, default_value_t = 0)]
         from_block: u64,
+        /// Cursor JSON path. Defaults to the state-package store for this channel.
+        #[arg(long)]
+        cursor_file: Option<std::path::PathBuf>,
+        /// Start from --from-block even when a saved cursor exists.
+        #[arg(long)]
+        ignore_cursor: bool,
         /// Required confirmation depth before a StateCell is actionable.
         #[arg(long, default_value_t = 1)]
         detection_depth: u64,
@@ -904,6 +910,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             store_dir,
             channel_id,
             from_block,
+            cursor_file,
+            ignore_cursor,
             detection_depth,
             timeout_secs,
             poll_ms,
@@ -920,6 +928,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     store_dir,
                     channel_id,
                     from_block,
+                    cursor_file,
+                    ignore_cursor,
                     detection_depth,
                     timeout_secs,
                     poll_ms,
@@ -932,8 +942,16 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             } else {
                 println!("channel_id={}", report.channel_id);
                 println!("from_block={}", report.from_block);
+                println!("effective_from_block={}", report.effective_from_block);
                 println!("scanned_to_block={}", report.scanned_to_block);
+                println!("next_from_block={}", report.next_from_block);
                 println!("detection_depth={}", report.detection_depth);
+                if let Some(path) = &report.cursor_file {
+                    println!("cursor_file={}", path.display());
+                }
+                if let Some(cursor) = &report.loaded_cursor {
+                    println!("loaded_cursor_next_block={}", cursor.next_block);
+                }
                 println!("package={}", report.selected_package.path.display());
                 println!(
                     "package_state_number={}",

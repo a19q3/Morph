@@ -338,6 +338,18 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --json
 ```
 
+The watcher persists its next scan height in the package store:
+
+```text
+target/morph-state-packages/watch-cursor-<channel-id>.json
+```
+
+On the next run it resumes from the saved cursor, unless `--ignore-cursor` is
+passed. Use `--cursor-file <path>` when a deployment keeps watchtower runtime
+state somewhere other than the package directory. The report includes
+`effective_from_block`, `scanned_to_block`, and `next_from_block` so an operator
+can audit what was actually covered.
+
 This scanner is intentionally confirmation-based. It does not assume mempool
 replacement behaviour, and it does not scan with an indexer. It reads canonical
 blocks through CKB JSON-RPC, recognises Morph `StateHeader` outputs for the

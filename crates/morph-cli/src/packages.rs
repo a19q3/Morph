@@ -12,6 +12,7 @@ use morph_script_common::{
 use serde::{Deserialize, Serialize};
 
 const PACKAGE_SCHEMA: &str = "morph.state_package.v1";
+const WATCH_CURSOR_SCHEMA: &str = "morph.watch_cursor.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageOutPoint {
@@ -37,6 +38,15 @@ pub struct StoredStatePackage {
 pub struct StatePackageRecord {
     pub path: PathBuf,
     pub package: StoredStatePackage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchCursor {
+    pub schema: String,
+    pub channel_id: String,
+    pub next_block: u64,
+    pub scanned_to_block: u64,
+    pub updated_unix_ms: u64,
 }
 
 impl StoredStatePackage {
@@ -139,6 +149,40 @@ impl StoredStatePackage {
     }
 }
 
+impl WatchCursor {
+    pub fn new(channel_id: &str, next_block: u64, scanned_to_block: u64) -> Result<Self> {
+        let cursor = Self {
+            schema: WATCH_CURSOR_SCHEMA.to_string(),
+            channel_id: canonical_hex32(channel_id)?,
+            next_block,
+            scanned_to_block,
+            updated_unix_ms: now_unix_ms()?,
+        };
+        cursor.validate()?;
+        Ok(cursor)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == WATCH_CURSOR_SCHEMA,
+            "unsupported watch cursor schema {}",
+            self.schema
+        );
+        let canonical_channel_id = canonical_hex32(&self.channel_id)?;
+        ensure!(
+            self.channel_id == canonical_channel_id,
+            "watch cursor channel_id must be canonical"
+        );
+        ensure!(
+            self.scanned_to_block < self.next_block
+                || self.scanned_to_block == 0
+                || self.next_block == 0,
+            "watch cursor next_block must advance past scanned_to_block"
+        );
+        Ok(())
+    }
+}
+
 pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf> {
     package.validate()?;
     fs::create_dir_all(dir)
@@ -156,6 +200,48 @@ pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf
         )
     })?;
     Ok(path)
+}
+
+pub fn default_watch_cursor_path(dir: &Path, channel_id: &str) -> Result<PathBuf> {
+    let channel = canonical_hex32(channel_id)?;
+    Ok(dir.join(format!(
+        "watch-cursor-{}.json",
+        channel.trim_start_matches("0x")
+    )))
+}
+
+pub fn read_watch_cursor(path: &Path) -> Result<Option<WatchCursor>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read watch cursor {}", path.display()))?;
+    let cursor: WatchCursor = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse watch cursor {}", path.display()))?;
+    cursor
+        .validate()
+        .with_context(|| format!("invalid watch cursor {}", path.display()))?;
+    Ok(Some(cursor))
+}
+
+pub fn write_watch_cursor(path: &Path, cursor: &WatchCursor) -> Result<()> {
+    cursor.validate()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create cursor directory {}", parent.display()))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(cursor)?;
+    fs::write(&tmp, json)
+        .with_context(|| format!("failed to write temporary watch cursor {}", tmp.display()))?;
+    fs::rename(&tmp, path).with_context(|| {
+        format!(
+            "failed to atomically move watch cursor {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(())
 }
 
 pub fn read_package(path: &Path) -> Result<StoredStatePackage> {
@@ -341,6 +427,24 @@ mod tests {
 
         let err = StoredStatePackage::from_signed_state(&header, &witness, None).unwrap_err();
         assert!(err.to_string().contains("signatures are invalid"));
+    }
+
+    #[test]
+    fn writes_and_reads_watch_cursor() {
+        let dir = temp_dir("cursor");
+        let channel_id = format!("0x{}", "11".repeat(BYTE32_LEN));
+        let path = default_watch_cursor_path(&dir, &channel_id).unwrap();
+        let cursor = WatchCursor::new(&channel_id, 43, 42).unwrap();
+
+        assert!(read_watch_cursor(&path).unwrap().is_none());
+        write_watch_cursor(&path, &cursor).unwrap();
+
+        let loaded = read_watch_cursor(&path).unwrap().unwrap();
+        assert_eq!(loaded.channel_id, channel_id);
+        assert_eq!(loaded.next_block, 43);
+        assert_eq!(loaded.scanned_to_block, 42);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     fn signed_package(state_number: u64) -> StoredStatePackage {
