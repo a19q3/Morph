@@ -40,11 +40,21 @@ enum Command {
     PrintFixture,
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
+    /// Print a conservative all-participant signed factory state package fixture.
+    PrintFactoryStateFixture,
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
     /// Validate a host-side factory non-interference package.
     ValidateFactoryPackage {
         /// Path to the factory update package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a conservative all-participant signed factory state package.
+    ValidateFactoryStatePackage {
+        /// Path to the factory state package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -784,6 +794,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintFactoryStateFixture => {
+            let package = factory_packages::fixture_state_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintWatchPolicyFixture => {
             let policy = watch_policy::fixture_policy();
             println!("{}", serde_json::to_string_pretty(&policy)?);
@@ -811,6 +826,29 @@ fn main() -> Result<()> {
                     "non_interference_digest={}",
                     summary.non_interference_digest
                 );
+            }
+            Ok(())
+        }
+        Command::ValidateFactoryStatePackage { path, json } => {
+            let package = factory_packages::read_factory_state_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory state package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("state_root_before={}", summary.state_root_before);
+                println!("state_root_after={}", summary.state_root_after);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+                println!("signature_mode={}", summary.signature_mode);
+                println!("signature_threshold={}", summary.signature_threshold);
+                println!("participants={}", summary.participants);
+                println!("signatures={}", summary.signatures);
+                println!("factory_state_digest={}", summary.factory_state_digest);
             }
             Ok(())
         }

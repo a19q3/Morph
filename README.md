@@ -110,9 +110,12 @@ cargo run -p morph-cli -- devnet watch-latest-package \
 ```
 
 For the factory research track, the CLI can also print and validate a
-host-side non-interference package:
+host-side non-interference package and its conservative all-participant signed
+state package:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json
 cargo run -p morph-cli -- validate-factory-package target/factory-update.json --json
+cargo run -p morph-cli -- print-factory-state-fixture > target/factory-state.json
+cargo run -p morph-cli -- validate-factory-state-package target/factory-state.json --json
 ```

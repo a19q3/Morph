@@ -4,6 +4,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
+use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
+use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use morph_core::{
     Amount, Bytes32, FactoryRight, FactoryRightId, FactoryRightKind, FactoryUpdate, blake2b256,
     bytes32, validate_factory_non_interference,
@@ -14,6 +16,9 @@ use crate::packages::canonical_hex32;
 
 const FACTORY_PACKAGE_SCHEMA: &str = "morph.factory_update_package.v1";
 const FACTORY_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE_V1";
+const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package.v1";
+const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1";
+const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredFactoryRight {
@@ -40,6 +45,36 @@ pub struct StoredFactoryUpdatePackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryParticipantKey {
+    pub participant: String,
+    pub pubkey_sec1: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactorySignature {
+    pub participant: String,
+    pub pubkey_sec1: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryStatePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub signature_mode: String,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub non_interference_digest: String,
+    pub participant_keys: Vec<StoredFactoryParticipantKey>,
+    pub signature_threshold: u8,
+    pub signatures: Vec<StoredFactorySignature>,
+    pub update_package: StoredFactoryUpdatePackage,
+    pub factory_state_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryPackageSummary {
     pub factory_id: String,
     pub update_number: u64,
@@ -50,6 +85,20 @@ pub struct FactoryPackageSummary {
     pub rights_before: usize,
     pub rights_after: usize,
     pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryStatePackageSummary {
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub non_interference_digest: String,
+    pub signature_mode: String,
+    pub signature_threshold: u8,
+    pub participants: usize,
+    pub signatures: usize,
+    pub factory_state_digest: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,6 +113,20 @@ struct DigestPayload {
     authorised_participants: Vec<String>,
     rights_before: Vec<StoredFactoryRight>,
     rights_after: Vec<StoredFactoryRight>,
+}
+
+#[derive(Debug, Serialize)]
+struct FactoryStateDigestPayload {
+    domain: &'static str,
+    schema: &'static str,
+    signature_mode: &'static str,
+    factory_id: String,
+    update_number: u64,
+    state_root_before: String,
+    state_root_after: String,
+    non_interference_digest: String,
+    signature_threshold: u8,
+    participant_keys: Vec<StoredFactoryParticipantKey>,
 }
 
 impl StoredFactoryUpdatePackage {
@@ -205,6 +268,206 @@ impl StoredFactoryUpdatePackage {
     }
 }
 
+impl StoredFactoryStatePackage {
+    pub fn from_update_package(
+        update_package: StoredFactoryUpdatePackage,
+        signing_keys: &[(Bytes32, SigningKey)],
+    ) -> Result<Self> {
+        let update_summary = update_package.summary()?;
+        ensure!(
+            !signing_keys.is_empty(),
+            "factory state package requires at least one participant key"
+        );
+        ensure!(
+            signing_keys.len() <= u8::MAX as usize,
+            "factory state package supports at most 255 participant keys"
+        );
+
+        let mut entries = signing_keys
+            .iter()
+            .map(|(participant, key)| (hex_prefixed(participant), pubkey_hex(key), key))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        ensure!(
+            entries.windows(2).all(|window| window[0].0 != window[1].0),
+            "factory participant ids must be unique"
+        );
+        ensure!(
+            unique_pubkeys(entries.iter().map(|(_, pubkey, _)| pubkey.as_str())),
+            "factory participant pubkeys must be unique"
+        );
+
+        let participant_keys = entries
+            .iter()
+            .map(|(participant, pubkey, _)| StoredFactoryParticipantKey {
+                participant: participant.clone(),
+                pubkey_sec1: pubkey.clone(),
+            })
+            .collect::<Vec<_>>();
+        let mut package = Self {
+            schema: FACTORY_STATE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            signature_mode: FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1.to_string(),
+            factory_id: update_summary.factory_id,
+            update_number: update_summary.update_number,
+            state_root_before: update_summary.state_root_before,
+            state_root_after: update_summary.state_root_after,
+            non_interference_digest: update_summary.non_interference_digest,
+            participant_keys,
+            signature_threshold: signing_keys.len() as u8,
+            signatures: Vec::new(),
+            update_package,
+            factory_state_digest: String::new(),
+        };
+        package.factory_state_digest = package.compute_digest()?;
+        let digest = hex32_bytes(&package.factory_state_digest)?;
+        package.signatures = entries
+            .iter()
+            .map(|(participant, pubkey, key)| {
+                sign_factory_digest(participant, pubkey, key, &digest)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == FACTORY_STATE_PACKAGE_SCHEMA,
+            "unsupported factory state package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.signature_mode == FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+            "unsupported factory signature mode {}",
+            self.signature_mode
+        );
+
+        let update_summary = self.update_package.summary()?;
+        ensure!(
+            self.factory_id == update_summary.factory_id,
+            "factory state package factory_id does not match update package"
+        );
+        ensure!(
+            self.update_number == update_summary.update_number,
+            "factory state package update_number does not match update package"
+        );
+        ensure!(
+            self.state_root_before == update_summary.state_root_before,
+            "factory state package state_root_before does not match update package"
+        );
+        ensure!(
+            self.state_root_after == update_summary.state_root_after,
+            "factory state package state_root_after does not match update package"
+        );
+        ensure!(
+            self.non_interference_digest == update_summary.non_interference_digest,
+            "factory state package non_interference_digest does not match update package"
+        );
+
+        let canonical_participant_keys = canonical_participant_keys(&self.participant_keys)?;
+        ensure!(
+            canonical_participant_keys == self.participant_keys,
+            "participant_keys must contain sorted unique canonical participant ids and pubkeys"
+        );
+        ensure!(
+            !self.participant_keys.is_empty(),
+            "factory state package requires at least one participant"
+        );
+        let expected_participants = update_participants(&self.update_package)?;
+        let signed_participants = self
+            .participant_keys
+            .iter()
+            .map(|key| canonical_hex32(&key.participant))
+            .collect::<Result<BTreeSet<_>>>()?;
+        ensure!(
+            signed_participants == expected_participants,
+            "factory participant keys must cover every participant in the update package"
+        );
+        ensure!(
+            self.signature_threshold as usize == self.participant_keys.len(),
+            "all-participant factory mode requires threshold equal to participant count"
+        );
+        let canonical_signatures = canonical_factory_signatures(&self.signatures)?;
+        ensure!(
+            canonical_signatures == self.signatures,
+            "factory signatures must contain sorted unique canonical pubkeys and signatures"
+        );
+        ensure!(
+            self.signatures.len() == self.participant_keys.len(),
+            "factory state package must include one signature per participant"
+        );
+        let signature_keys = self
+            .signatures
+            .iter()
+            .map(|signature| StoredFactoryParticipantKey {
+                participant: signature.participant.clone(),
+                pubkey_sec1: signature.pubkey_sec1.clone(),
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            signature_keys == self.participant_keys,
+            "factory signatures do not match participant key set"
+        );
+        ensure!(
+            self.factory_state_digest == self.compute_digest()?,
+            "factory state package digest mismatch"
+        );
+        self.verify_signatures()?;
+        Ok(())
+    }
+
+    pub fn summary(&self) -> Result<FactoryStatePackageSummary> {
+        self.validate()?;
+        Ok(FactoryStatePackageSummary {
+            factory_id: self.factory_id.clone(),
+            update_number: self.update_number,
+            state_root_before: self.state_root_before.clone(),
+            state_root_after: self.state_root_after.clone(),
+            non_interference_digest: self.non_interference_digest.clone(),
+            signature_mode: self.signature_mode.clone(),
+            signature_threshold: self.signature_threshold,
+            participants: self.participant_keys.len(),
+            signatures: self.signatures.len(),
+            factory_state_digest: self.factory_state_digest.clone(),
+        })
+    }
+
+    fn compute_digest(&self) -> Result<String> {
+        let payload = FactoryStateDigestPayload {
+            domain: FACTORY_STATE_DIGEST_DOMAIN_V1,
+            schema: FACTORY_STATE_PACKAGE_SCHEMA,
+            signature_mode: FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+            factory_id: canonical_hex32(&self.factory_id)?,
+            update_number: self.update_number,
+            state_root_before: canonical_hex32(&self.state_root_before)?,
+            state_root_after: canonical_hex32(&self.state_root_after)?,
+            non_interference_digest: canonical_hex32(&self.non_interference_digest)?,
+            signature_threshold: self.signature_threshold,
+            participant_keys: canonical_participant_keys(&self.participant_keys)?,
+        };
+        let encoded = serde_json::to_vec(&payload)?;
+        Ok(hex_prefixed(&blake2b256(&encoded)))
+    }
+
+    fn verify_signatures(&self) -> Result<()> {
+        let digest = hex32_bytes(&self.factory_state_digest)?;
+        for signature in &self.signatures {
+            let _participant = hex32_bytes(&signature.participant)?;
+            let pubkey_bytes = decode_hex_exact(&signature.pubkey_sec1, 33, "pubkey_sec1")?;
+            let signature_bytes = decode_hex_exact(&signature.signature, 64, "signature")?;
+            let verifying_key = VerifyingKey::from_sec1_bytes(&pubkey_bytes)
+                .map_err(|err| anyhow::anyhow!("factory participant pubkey is invalid: {err:?}"))?;
+            let signature = Signature::try_from(signature_bytes.as_slice())
+                .map_err(|err| anyhow::anyhow!("factory signature encoding is invalid: {err:?}"))?;
+            verifying_key
+                .verify_prehash(&digest, &signature)
+                .map_err(|err| anyhow::anyhow!("factory signature is invalid: {err:?}"))?;
+        }
+        Ok(())
+    }
+}
+
 impl StoredFactoryRight {
     fn from_right(right: &FactoryRight) -> Self {
         Self {
@@ -261,6 +524,17 @@ pub fn read_factory_update_package(path: &Path) -> Result<StoredFactoryUpdatePac
     Ok(package)
 }
 
+pub fn read_factory_state_package(path: &Path) -> Result<StoredFactoryStatePackage> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read factory state package {}", path.display()))?;
+    let package: StoredFactoryStatePackage = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse factory state package {}", path.display()))?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory state package {}", path.display()))?;
+    Ok(package)
+}
+
 pub fn fixture_package() -> Result<StoredFactoryUpdatePackage> {
     let before = vec![
         right(1, 10, FactoryRightKind::Balance, None, 100),
@@ -286,6 +560,16 @@ pub fn fixture_package() -> Result<StoredFactoryUpdatePackage> {
     StoredFactoryUpdatePackage::from_update(bytes32(90), 1, bytes32(91), bytes32(92), update)
 }
 
+pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
+    let update_package = fixture_package()?;
+    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    StoredFactoryStatePackage::from_update_package(
+        update_package,
+        &[(bytes32(1), alice), (bytes32(2), bob)],
+    )
+}
+
 fn right(
     participant: u8,
     subchannel: u8,
@@ -305,9 +589,13 @@ fn right(
 }
 
 fn canonical_hex32_vec(values: &[String]) -> Result<Vec<String>> {
+    canonical_hex_vec(values, 32)
+}
+
+fn canonical_hex_vec(values: &[String], byte_len: usize) -> Result<Vec<String>> {
     let mut out = values
         .iter()
-        .map(|value| canonical_hex32(value))
+        .map(|value| canonical_hex_exact(value, byte_len))
         .collect::<Result<Vec<_>>>()?;
     out.sort();
     out.dedup();
@@ -330,6 +618,75 @@ fn ensure_sorted_unique_hex32(values: &[String], field: &str) -> Result<()> {
         "{field} must contain sorted unique canonical hex32 values"
     );
     Ok(())
+}
+
+fn canonical_participant_keys(
+    keys: &[StoredFactoryParticipantKey],
+) -> Result<Vec<StoredFactoryParticipantKey>> {
+    let mut out = keys
+        .iter()
+        .map(|key| {
+            Ok(StoredFactoryParticipantKey {
+                participant: canonical_hex32(&key.participant)?,
+                pubkey_sec1: canonical_hex_exact(&key.pubkey_sec1, 33)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    out.sort_by(|left, right| left.participant.cmp(&right.participant));
+    out.dedup_by(|left, right| left.participant == right.participant);
+    ensure!(
+        unique_pubkeys(out.iter().map(|key| key.pubkey_sec1.as_str())),
+        "factory participant pubkeys must be unique"
+    );
+    Ok(out)
+}
+
+fn canonical_factory_signatures(
+    signatures: &[StoredFactorySignature],
+) -> Result<Vec<StoredFactorySignature>> {
+    let mut out = signatures
+        .iter()
+        .map(|signature| {
+            Ok(StoredFactorySignature {
+                participant: canonical_hex32(&signature.participant)?,
+                pubkey_sec1: canonical_hex_exact(&signature.pubkey_sec1, 33)?,
+                signature: canonical_hex_exact(&signature.signature, 64)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    out.sort_by(|left, right| left.participant.cmp(&right.participant));
+    out.dedup_by(|left, right| left.participant == right.participant);
+    ensure!(
+        unique_pubkeys(out.iter().map(|signature| signature.pubkey_sec1.as_str())),
+        "factory signature pubkeys must be unique"
+    );
+    Ok(out)
+}
+
+fn update_participants(package: &StoredFactoryUpdatePackage) -> Result<BTreeSet<String>> {
+    let mut participants = BTreeSet::new();
+    for participant in package
+        .touched_participants
+        .iter()
+        .chain(package.authorised_participants.iter())
+    {
+        participants.insert(canonical_hex32(participant)?);
+    }
+    for right in package
+        .rights_before
+        .iter()
+        .chain(package.rights_after.iter())
+    {
+        participants.insert(canonical_hex32(&right.participant)?);
+    }
+    Ok(participants)
+}
+
+fn unique_pubkeys<'a>(values: impl Iterator<Item = &'a str>) -> bool {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .all(|value| seen.insert(value.to_string()))
 }
 
 fn right_sort_key(right: &StoredFactoryRight) -> (String, String, u8, String, Amount) {
@@ -360,8 +717,48 @@ fn hex32_bytes(value: &str) -> Result<Bytes32> {
     Ok(out)
 }
 
+fn canonical_hex_exact(value: &str, byte_len: usize) -> Result<String> {
+    let without_prefix = value.strip_prefix("0x").unwrap_or(value);
+    ensure!(
+        without_prefix.len() == byte_len * 2,
+        "hex value must be {byte_len} bytes"
+    );
+    let bytes = hex::decode(without_prefix)?;
+    ensure!(
+        bytes.len() == byte_len,
+        "hex value must be {byte_len} bytes"
+    );
+    Ok(hex_prefixed(&bytes))
+}
+
+fn decode_hex_exact(value: &str, byte_len: usize, field: &str) -> Result<Vec<u8>> {
+    let canonical = canonical_hex_exact(value, byte_len)
+        .with_context(|| format!("{field} must be canonical {byte_len}-byte hex"))?;
+    Ok(hex::decode(canonical.trim_start_matches("0x"))?)
+}
+
 fn hex_prefixed(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
+}
+
+fn pubkey_hex(key: &SigningKey) -> String {
+    hex_prefixed(key.verifying_key().to_encoded_point(true).as_bytes())
+}
+
+fn sign_factory_digest(
+    participant: &str,
+    pubkey_sec1: &str,
+    key: &SigningKey,
+    digest: &Bytes32,
+) -> Result<StoredFactorySignature> {
+    let signature: Signature = key
+        .sign_prehash(digest)
+        .map_err(|err| anyhow::anyhow!("failed to sign factory state digest: {err:?}"))?;
+    Ok(StoredFactorySignature {
+        participant: participant.to_string(),
+        pubkey_sec1: pubkey_sec1.to_string(),
+        signature: hex_prefixed(signature.to_bytes().as_slice()),
+    })
 }
 
 fn now_unix_ms() -> Result<u64> {
@@ -406,5 +803,61 @@ mod tests {
 
         let err = package.validate().unwrap_err();
         assert!(err.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn validates_factory_state_package() {
+        let package = fixture_state_package().unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.signature_mode, "all_participants_v1");
+        assert_eq!(summary.signature_threshold, 2);
+        assert_eq!(summary.participants, 2);
+        assert_eq!(summary.signatures, 2);
+    }
+
+    #[test]
+    fn rejects_missing_factory_state_signature() {
+        let mut package = fixture_state_package().unwrap();
+        package.signatures.pop();
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("one signature per participant"));
+    }
+
+    #[test]
+    fn rejects_factory_state_missing_participant_key() {
+        let mut package = fixture_state_package().unwrap();
+        package.participant_keys.pop();
+        package.signature_threshold = package.participant_keys.len() as u8;
+        package.factory_state_digest = package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("cover every participant"));
+    }
+
+    #[test]
+    fn rejects_invalid_factory_state_signature() {
+        let mut package = fixture_state_package().unwrap();
+        let mut bytes =
+            decode_hex_exact(&package.signatures[0].signature, 64, "signature").unwrap();
+        bytes[0] ^= 1;
+        package.signatures[0].signature = hex_prefixed(&bytes);
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("signature is invalid"));
+    }
+
+    #[test]
+    fn rejects_non_all_participant_factory_threshold() {
+        let mut package = fixture_state_package().unwrap();
+        package.signature_threshold = 1;
+        package.factory_state_digest = package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("threshold equal to participant count")
+        );
     }
 }

@@ -22,6 +22,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Watchtower alerts are structured and append-only | `appends_jsonl_alerts` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
+| Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
 
 Implemented devnet-level checks:
 
@@ -67,3 +68,7 @@ Implemented host-level factory checks:
 - serialisable factory update package with canonical roots, canonical
   participant sets, non-interference digest checking, and CLI validation through
   `print-factory-fixture` / `validate-factory-package`.
+- conservative all-participant factory state package with nested
+  non-interference digest checking, participant-id/public-key bindings,
+  domain-separated factory-state digest, and secp256k1 signature validation
+  through `print-factory-state-fixture` / `validate-factory-state-package`.

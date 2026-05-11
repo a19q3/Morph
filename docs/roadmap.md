@@ -99,7 +99,8 @@ integrations remain open.
 ## M3: Conservative Factory Mode
 
 Status: host-level non-interference predicate implemented; no devnet factory
-script yet.
+script yet. Conservative full-participant factory state packages are
+implemented at the CLI layer.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -108,6 +109,8 @@ script yet.
   sponsor budget claims.
 - Serialisable factory update package with non-interference digest and CLI
   validation.
+- Conservative all-participant factory state package with a domain-separated
+  digest and secp256k1 signature validation.
 
 ## M4: Reduced-Signature Factory Mode
 

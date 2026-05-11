@@ -64,6 +64,14 @@ package. `print-factory-fixture` emits a sample package with a
 canonical participant sets, digest consistency, and the host-side
 non-interference predicate. This is intentionally a data-layer milestone before
 any devnet factory script.
+The next factory layer is a conservative all-participant state package:
+`print-factory-state-fixture` wraps the update package, computes a domain
+separated factory-state digest, and signs it with every participant key.
+`validate-factory-state-package` verifies the nested update package, the
+participant-id/public-key bindings, coverage of every participant mentioned by
+the update, the all-participant threshold, and every secp256k1 signature. This
+is still not reduced-signature factory exit logic, but it closes the authority
+model for full-consent factory updates.
 
 The watchtower scanner may also be bound by a small operator policy before it
 reads blocks or publishes a transaction. The policy is a JSON object generated
@@ -108,6 +116,8 @@ A devnet demonstration is acceptable only when it includes:
   mode, and automatic sponsor capacity before publication;
 - watchtower JSONL alerts for older-state detection, publication submission,
   and idle scans;
+- a conservative all-participant factory state package with verified nested
+  non-interference digest and signatures;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
