@@ -88,6 +88,9 @@ then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
+cargo run -p morph-cli -- devnet-smoke-compare \
+  --baseline target/devnet-smoke/<old-run> \
+  --candidate target/devnet-smoke/<new-run>
 ```
 
 For the factory research track, the CLI can also print and validate a

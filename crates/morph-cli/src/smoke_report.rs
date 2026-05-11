@@ -47,6 +47,31 @@ pub struct MetricTotals {
     pub max_tx_size_bytes: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DevnetSmokeComparison {
+    pub baseline_directory: String,
+    pub candidate_directory: String,
+    pub compared_transactions: usize,
+    pub missing_from_candidate: Vec<String>,
+    pub added_in_candidate: Vec<String>,
+    pub total_estimated_cycles_delta: i64,
+    pub total_tx_size_bytes_delta: i64,
+    pub transaction_deltas: Vec<TransactionMetricDelta>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransactionMetricDelta {
+    pub key: String,
+    pub baseline_status: Option<String>,
+    pub candidate_status: Option<String>,
+    pub baseline_estimated_cycles: u64,
+    pub candidate_estimated_cycles: u64,
+    pub estimated_cycles_delta: i64,
+    pub baseline_tx_size_bytes: usize,
+    pub candidate_tx_size_bytes: usize,
+    pub tx_size_bytes_delta: i64,
+}
+
 pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     ensure_directory(dir)?;
     let manifest = read_manifest(dir)?;
@@ -78,6 +103,74 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         script_failures,
         totals,
     })
+}
+
+pub fn compare_devnet_smoke(
+    baseline_dir: &Path,
+    candidate_dir: &Path,
+) -> Result<DevnetSmokeComparison> {
+    let baseline = summarize_devnet_smoke(baseline_dir)?;
+    let candidate = summarize_devnet_smoke(candidate_dir)?;
+    Ok(compare_summaries(&baseline, &candidate))
+}
+
+pub fn compare_summaries(
+    baseline: &DevnetSmokeSummary,
+    candidate: &DevnetSmokeSummary,
+) -> DevnetSmokeComparison {
+    let baseline_map = transaction_map(&baseline.transactions);
+    let candidate_map = transaction_map(&candidate.transactions);
+
+    let mut transaction_deltas = Vec::new();
+    let mut missing_from_candidate = Vec::new();
+    for (key, baseline_tx) in &baseline_map {
+        let Some(candidate_tx) = candidate_map.get(key) else {
+            missing_from_candidate.push(key.clone());
+            continue;
+        };
+        transaction_deltas.push(TransactionMetricDelta {
+            key: key.clone(),
+            baseline_status: baseline_tx.status.clone(),
+            candidate_status: candidate_tx.status.clone(),
+            baseline_estimated_cycles: baseline_tx.estimated_cycles,
+            candidate_estimated_cycles: candidate_tx.estimated_cycles,
+            estimated_cycles_delta: signed_delta_u64(
+                baseline_tx.estimated_cycles,
+                candidate_tx.estimated_cycles,
+            ),
+            baseline_tx_size_bytes: baseline_tx.tx_size_bytes,
+            candidate_tx_size_bytes: candidate_tx.tx_size_bytes,
+            tx_size_bytes_delta: signed_delta_usize(
+                baseline_tx.tx_size_bytes,
+                candidate_tx.tx_size_bytes,
+            ),
+        });
+    }
+    transaction_deltas.sort_by(|left, right| left.key.cmp(&right.key));
+
+    let mut added_in_candidate = Vec::new();
+    for key in candidate_map.keys() {
+        if !baseline_map.contains_key(key) {
+            added_in_candidate.push(key.clone());
+        }
+    }
+
+    DevnetSmokeComparison {
+        baseline_directory: baseline.directory.clone(),
+        candidate_directory: candidate.directory.clone(),
+        compared_transactions: transaction_deltas.len(),
+        missing_from_candidate,
+        added_in_candidate,
+        total_estimated_cycles_delta: signed_delta_u64(
+            baseline.totals.total_estimated_cycles,
+            candidate.totals.total_estimated_cycles,
+        ),
+        total_tx_size_bytes_delta: signed_delta_usize(
+            baseline.totals.total_tx_size_bytes,
+            candidate.totals.total_tx_size_bytes,
+        ),
+        transaction_deltas,
+    }
 }
 
 pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
@@ -151,6 +244,70 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
                     .unwrap_or_default(),
                 table_cell(failure.source.as_deref().unwrap_or(""))
             ));
+        }
+    }
+
+    out
+}
+
+pub fn render_comparison_markdown(comparison: &DevnetSmokeComparison) -> String {
+    let mut out = String::new();
+    out.push_str("# Devnet Smoke Comparison\n\n");
+    out.push_str(&format!(
+        "Baseline: `{}`\n\nCandidate: `{}`\n\n",
+        comparison.baseline_directory, comparison.candidate_directory
+    ));
+
+    out.push_str("## Totals\n\n");
+    out.push_str("| Compared txs | Cycle delta | Byte delta | Missing | Added |\n");
+    out.push_str("| ---: | ---: | ---: | ---: | ---: |\n");
+    out.push_str(&format!(
+        "| {} | {} | {} | {} | {} |\n\n",
+        comparison.compared_transactions,
+        comparison.total_estimated_cycles_delta,
+        comparison.total_tx_size_bytes_delta,
+        comparison.missing_from_candidate.len(),
+        comparison.added_in_candidate.len()
+    ));
+
+    out.push_str("## Transaction Deltas\n\n");
+    out.push_str("| Transaction | Status | Cycle delta | Byte delta | Baseline cycles | Candidate cycles | Baseline bytes | Candidate bytes |\n");
+    out.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    for delta in &comparison.transaction_deltas {
+        let status = match (&delta.baseline_status, &delta.candidate_status) {
+            (Some(left), Some(right)) if left == right => left.clone(),
+            (left, right) => format!(
+                "{} -> {}",
+                left.as_deref().unwrap_or(""),
+                right.as_deref().unwrap_or("")
+            ),
+        };
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            table_cell(&delta.key),
+            table_cell(&status),
+            delta.estimated_cycles_delta,
+            delta.tx_size_bytes_delta,
+            delta.baseline_estimated_cycles,
+            delta.candidate_estimated_cycles,
+            delta.baseline_tx_size_bytes,
+            delta.candidate_tx_size_bytes
+        ));
+    }
+    out.push('\n');
+
+    if !comparison.missing_from_candidate.is_empty() {
+        out.push_str("## Missing From Candidate\n\n");
+        for key in &comparison.missing_from_candidate {
+            out.push_str(&format!("- `{}`\n", key));
+        }
+        out.push('\n');
+    }
+
+    if !comparison.added_in_candidate.is_empty() {
+        out.push_str("## Added In Candidate\n\n");
+        for key in &comparison.added_in_candidate {
+            out.push_str(&format!("- `{}`\n", key));
         }
     }
 
@@ -303,6 +460,21 @@ fn table_cell(value: &str) -> String {
     value.replace('|', "\\|").replace('\n', " ")
 }
 
+fn transaction_map(transactions: &[TransactionSummary]) -> BTreeMap<String, &TransactionSummary> {
+    transactions
+        .iter()
+        .map(|tx| (format!("{} {}", tx.check, tx.path), tx))
+        .collect()
+}
+
+fn signed_delta_u64(baseline: u64, candidate: u64) -> i64 {
+    candidate.saturating_sub(baseline) as i64 - baseline.saturating_sub(candidate) as i64
+}
+
+fn signed_delta_usize(baseline: usize, candidate: usize) -> i64 {
+    candidate.saturating_sub(baseline) as i64 - baseline.saturating_sub(candidate) as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +536,48 @@ mod tests {
         assert!(markdown.contains("0xabc"));
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn compares_smoke_summary_metrics() {
+        let baseline_dir = temp_report_dir();
+        let candidate_dir = temp_report_dir();
+        fs::create_dir_all(&baseline_dir).unwrap();
+        fs::create_dir_all(&candidate_dir).unwrap();
+        write_metric_json(&baseline_dir, "open.json", "0xaaa", 10, 20);
+        write_metric_json(&candidate_dir, "open.json", "0xbbb", 13, 18);
+        write_metric_json(&candidate_dir, "extra.json", "0xccc", 1, 2);
+
+        let comparison = compare_devnet_smoke(&baseline_dir, &candidate_dir).unwrap();
+        assert_eq!(comparison.compared_transactions, 1);
+        assert_eq!(comparison.total_estimated_cycles_delta, 4);
+        assert_eq!(comparison.total_tx_size_bytes_delta, 0);
+        assert_eq!(comparison.added_in_candidate, vec!["extra $".to_string()]);
+        assert!(comparison.missing_from_candidate.is_empty());
+        assert_eq!(comparison.transaction_deltas[0].estimated_cycles_delta, 3);
+        assert_eq!(comparison.transaction_deltas[0].tx_size_bytes_delta, -2);
+        assert!(render_comparison_markdown(&comparison).contains("Devnet Smoke Comparison"));
+
+        fs::remove_dir_all(&baseline_dir).ok();
+        fs::remove_dir_all(&candidate_dir).ok();
+    }
+
+    fn write_metric_json(dir: &Path, file_name: &str, tx_hash: &str, cycles: u64, bytes: usize) {
+        fs::write(
+            dir.join(file_name),
+            format!(
+                r#"{{
+                  "tx_hash": "{tx_hash}",
+                  "status": "Committed",
+                  "block_number": 1,
+                  "metrics": {{
+                    "estimated_cycles": {cycles},
+                    "tx_size_bytes": {bytes}
+                  }}
+                }}"#
+            ),
+        )
+        .unwrap();
     }
 
     fn temp_report_dir() -> PathBuf {

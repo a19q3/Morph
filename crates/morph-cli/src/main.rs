@@ -55,6 +55,18 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Compare two completed devnet smoke output directories.
+    DevnetSmokeCompare {
+        /// Baseline directory produced by scripts/devnet-smoke.sh.
+        #[arg(long)]
+        baseline: std::path::PathBuf,
+        /// Candidate directory produced by scripts/devnet-smoke.sh.
+        #[arg(long)]
+        candidate: std::path::PathBuf,
+        /// Emit machine-readable JSON instead of Markdown.
+        #[arg(long)]
+        json: bool,
+    },
     /// Talk to a local CKB devnet node without relying on ckb-cli.
     Devnet {
         /// CKB JSON-RPC endpoint.
@@ -793,6 +805,19 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {
                 print!("{}", smoke_report::render_markdown(&summary));
+            }
+            Ok(())
+        }
+        Command::DevnetSmokeCompare {
+            baseline,
+            candidate,
+            json,
+        } => {
+            let comparison = smoke_report::compare_devnet_smoke(&baseline, &candidate)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&comparison)?);
+            } else {
+                print!("{}", smoke_report::render_comparison_markdown(&comparison));
             }
             Ok(())
         }

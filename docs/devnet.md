@@ -103,6 +103,18 @@ cargo run -q -p morph-cli -- devnet-smoke-report \
   --dir target/devnet-smoke/<timestamp>
 ```
 
+Two completed runs can be compared without replaying devnet:
+
+```sh
+cargo run -q -p morph-cli -- devnet-smoke-compare \
+  --baseline target/devnet-smoke/<old-timestamp> \
+  --candidate target/devnet-smoke/<new-timestamp>
+```
+
+The comparison is keyed by smoke file and JSON path, so it reports transaction
+shape changes such as `$.publish` or `$.finalise` becoming larger or more
+expensive.
+
 Devnet transaction reports include two measurement fields:
 
 ```text

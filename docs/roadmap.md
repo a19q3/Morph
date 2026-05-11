@@ -45,6 +45,8 @@ Required deliverables:
 - Per-transaction cycle and size reporting from the devnet node.
 - Devnet smoke summary report for cycle, size, status, and expected script
   failure review.
+- Devnet smoke comparison report for cycle and transaction-size deltas between
+  runs.
 - Configurable SponsorCell state-number and fee-budget policy.
 
 Acceptance criteria:
