@@ -2,11 +2,12 @@
 
 The devnet milestone is a bilateral channel vertical slice:
 
-1. Deploy four scripts:
+1. Deploy five scripts:
    - `morph-state-lock`
    - `morph-state-type`
    - `morph-vault-lock`
    - `morph-sponsor-lock`
+   - `morph-devnet-xudt`
 2. Create one canonical State Cell, one VaultCell, and one SponsorCell.
 3. Produce an off-chain state package with a strictly higher state number.
 4. Publish the state package using sponsor capacity.
@@ -79,8 +80,8 @@ scripts/devnet-smoke.sh
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-and the watchtower auto-sponsor path. It expects the node and `jq` to be
-available, and writes logs plus JSON reports under
+CKB+xUDT settlement smoke, and the watchtower auto-sponsor path. It expects the
+node and `jq` to be available, and writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
@@ -116,6 +117,7 @@ target/riscv64imac-unknown-none-elf/release/morph-state-lock
 target/riscv64imac-unknown-none-elf/release/morph-state-type
 target/riscv64imac-unknown-none-elf/release/morph-vault-lock
 target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
+target/riscv64imac-unknown-none-elf/release/morph-devnet-xudt
 ```
 
 `make contract-tests` builds those ELFs and runs offline `ckb-testtool`
@@ -132,6 +134,8 @@ transactions for:
 - sponsor fee payment rejected when no matching settling StateHeader is produced.
 - sponsor fee payment rejected when the fee exceeds the per-transaction policy.
 - sponsor fee payment rejected when the state number is outside the policy range.
+- devnet xUDT mint, conservation, and vault finalisation accepted when the
+  descriptor commits to the canonical xUDT type hash and exact token amounts.
 
 The CLI speaks directly to CKB JSON-RPC and does not require `ckb-cli`:
 
@@ -156,13 +160,14 @@ node has not exposed that module, the command fails with the returned RPC
 error. It does not fabricate block progress.
 
 `devnet deploy-contracts` builds and signs a real CKB transaction that deploys
-the four Morph RISC-V binaries as data-hash script cells:
+the five Morph RISC-V binaries as data-hash script cells:
 
 ```text
 morph-state-lock
 morph-state-type
 morph-vault-lock
 morph-sponsor-lock
+morph-devnet-xudt
 ```
 
 It scans the local chain for a live cell controlled by the devnet key, uses the
@@ -196,6 +201,21 @@ keys, consumes the SponsorCell, and returns sponsor change to the opener's
 wallet lock. `finalise-channel` consumes the settling StateCell and VaultCell,
 materialises the descriptor outputs, and returns the StateCell carrier capacity
 minus fee to the opener's wallet lock.
+
+The CKB+xUDT smoke path exercises the same open, publish, and finalise shape,
+but the vault carries a devnet-only xUDT type script. The xUDT script allows
+minting only when the first input is controlled by the mint-authority lock, and
+then enforces ordinary amount conservation on transfers. The vault descriptor
+commits to both settlement capacities and token amounts:
+
+```sh
+cargo run -q -p morph-cli -- devnet xudt-smoke --json
+```
+
+The command deploys no shortcuts: it opens a real channel with an xUDT vault,
+publishes a signed settling state through sponsor capacity, finalises through
+the vault lock after the relative `since`, and produces Alice/Bob xUDT
+settlement cells.
 
 ## Sponsor Policy
 
@@ -412,6 +432,7 @@ rights-dependency proof predicate exists.
 
 ## Remaining Devnet Gap
 
-The current vertical slice is CKB-only and bilateral. The next devnet work is
-to add xUDT vault cells, a mempool-level competing-spend case, detection-depth
-watchtower automation, and emergency sponsor-budget rotation.
+The current vertical slice is bilateral and covers both CKB-only vaults and a
+devnet CKB+xUDT vault. The remaining devnet work is a mempool-level
+competing-spend case, richer watchtower operator policy, and emergency
+sponsor-budget rotation.

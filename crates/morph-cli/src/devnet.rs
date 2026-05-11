@@ -18,12 +18,13 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1, BILATERAL_CKB_DESCRIPTOR_V1_LEN,
-    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_SIGNATURE_COUNT_V1,
-    BILATERAL_SIGNATURE_THRESHOLD_V1, BILATERAL_SIGNATURE_WITNESS_V1_LEN,
-    BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
-    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, ScriptError, StateHeaderV1,
-    blake2b256 as script_blake2b256, participants_commitment_v1,
+    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+    BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
+    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
+    ScriptError, StateHeaderV1, blake2b256 as script_blake2b256, participants_commitment_v1,
     settlement_descriptor_commitment_v1,
 };
 use serde::Serialize;
@@ -185,6 +186,23 @@ pub struct SponsorPolicyNegativeSmokeOptions {
     pub vault_capacity: u64,
     pub alice_capacity: Option<u64>,
     pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct XudtSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
     pub sponsor_capacity: u64,
     pub fee: u64,
     pub finalise_since: u64,
@@ -394,6 +412,34 @@ pub struct FinaliseChannelReport {
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub outputs: Vec<ChannelCellReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct XudtFinaliseReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub channel_id: String,
+    pub funding_anchor: String,
+    pub state_number: u64,
+    pub xudt_type_hash: String,
+    pub alice_capacity: u64,
+    pub bob_capacity: u64,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub state_refund_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+    pub outputs: Vec<ChannelCellReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct XudtSmokeReport {
+    pub open: OpenChannelReport,
+    pub publish: PublishStateReport,
+    pub finalise: XudtFinaliseReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -651,6 +697,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         funding_anchor,
         participants_commitment,
         settlement_descriptor_commitment: descriptor_commitment,
+        descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
         challenge_policy_commitment,
     });
 
@@ -786,6 +833,278 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         cells: vec![
             cell("state", 0, &state_output, state_header.len()),
             cell("vault", 1, &vault_output, 0),
+            cell("sponsor", 2, &sponsor_output, 0),
+            cell("change", 3, &change_output, 0),
+        ],
+    })
+}
+
+fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<OpenChannelReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    ensure!(
+        options.vault_capacity > 0,
+        "vault capacity must be non-zero"
+    );
+    ensure!(
+        options.sponsor_capacity > 0,
+        "sponsor capacity must be non-zero"
+    );
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+    ensure!(total_xudt_amount > 0, "xUDT amount must be non-zero");
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for devnet xUDT channel opener")?;
+    let alice_key = parse_privkey(&options.alice_private_key)
+        .with_context(|| "invalid Alice channel private key")?;
+    let bob_key = parse_privkey(&options.bob_private_key)
+        .with_context(|| "invalid Bob channel private key")?;
+
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let alice_lock = secp256k1_lock(&alice_key)?;
+    let bob_lock = secp256k1_lock(&bob_key)?;
+    let tip = rpc.tip_header()?;
+    let tip_number = tip.number_value()?;
+    let genesis = rpc
+        .block_by_number(0)?
+        .ok_or_else(|| anyhow!("genesis block is not available from CKB RPC"))?;
+    let chain_id = genesis.header.hash.0;
+    let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
+    let state_contract = contract_by_name(&contracts, "morph-state-type")?;
+    let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
+    let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
+
+    let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
+    let funding_anchor = derive_funding_anchor(&channel_input, 0);
+    let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+
+    let mut script_args = funding_anchor.to_vec();
+    script_args.extend_from_slice(&options.finalise_since.to_le_bytes());
+    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(script_args));
+    let state_lock = data1_script(
+        state_lock_contract.data_hash.clone(),
+        Bytes::copy_from_slice(state_type.calc_script_hash().as_slice()),
+    );
+
+    let mut vault_args = funding_anchor.to_vec();
+    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
+    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+
+    let owner_lock_hash = owner_lock.calc_script_hash();
+    let xudt_type = data1_script(
+        xudt_contract.data_hash.clone(),
+        Bytes::copy_from_slice(owner_lock_hash.as_slice()),
+    );
+    let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
+
+    let sponsor_policy_settings =
+        sponsor_policy_settings(options.sponsor_capacity, 0, u64::MAX, None, None)?;
+    let sponsor_policy = sponsor_policy_bytes(
+        &channel_id,
+        sponsor_policy_settings,
+        owner_lock_hash.as_slice().try_into().unwrap(),
+    );
+    let sponsor_lock = data1_script(
+        sponsor_contract.data_hash.clone(),
+        Bytes::copy_from_slice(&sponsor_policy),
+    );
+
+    let alice_lock_hash: [u8; 32] = alice_lock.calc_script_hash().unpack();
+    let bob_lock_hash: [u8; 32] = bob_lock.calc_script_hash().unpack();
+    let (alice_capacity, bob_capacity) = settlement_split(
+        options.vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+    )?;
+    ensure_output_capacity(
+        "alice xUDT settlement",
+        &CellOutput::new_builder()
+            .capacity(alice_capacity)
+            .lock(alice_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        16,
+    )?;
+    ensure_output_capacity(
+        "bob xUDT settlement",
+        &CellOutput::new_builder()
+            .capacity(bob_capacity)
+            .lock(bob_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        16,
+    )?;
+    let descriptor = bilateral_ckb_xudt_descriptor(
+        xudt_type_hash,
+        alice_lock_hash,
+        alice_capacity,
+        options.alice_xudt_amount,
+        bob_lock_hash,
+        bob_capacity,
+        options.bob_xudt_amount,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+
+    let alice_pubkey = compressed_pubkey(&alice_key)?;
+    let bob_pubkey = compressed_pubkey(&bob_key)?;
+    let mut participant_pubkeys = [alice_pubkey, bob_pubkey];
+    participant_pubkeys.sort();
+    let participants_commitment =
+        participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
+    let challenge_policy_commitment = script_blake2b256(&[
+        b"CKB_MORPH_CHALLENGE_POLICY_V1",
+        &options.finalise_since.to_le_bytes(),
+    ]);
+    let state_header = initial_state_header(InitialStateHeader {
+        chain_id,
+        channel_id,
+        funding_anchor,
+        participants_commitment,
+        settlement_descriptor_commitment: descriptor_commitment,
+        descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+        challenge_policy_commitment,
+    });
+
+    let state_output_for_capacity = CellOutput::new_builder()
+        .lock(state_lock.clone())
+        .type_(Some(state_type.clone()).pack())
+        .build();
+    let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
+    let state_output = CellOutput::new_builder()
+        .capacity(state_capacity)
+        .lock(state_lock.clone())
+        .type_(Some(state_type.clone()).pack())
+        .build();
+
+    let vault_output = CellOutput::new_builder()
+        .capacity(options.vault_capacity)
+        .lock(vault_lock)
+        .type_(Some(xudt_type).pack())
+        .build();
+    ensure_output_capacity("xUDT vault", &vault_output, 16)?;
+
+    let sponsor_output = CellOutput::new_builder()
+        .capacity(options.sponsor_capacity)
+        .lock(sponsor_lock)
+        .build();
+    ensure_output_capacity("sponsor", &sponsor_output, 0)?;
+
+    let fixed_output_capacity = state_capacity
+        .checked_add(options.vault_capacity)
+        .and_then(|value| value.checked_add(options.sponsor_capacity))
+        .ok_or_else(|| anyhow!("channel output capacity overflow"))?;
+    let change_capacity = funding_cell
+        .capacity
+        .checked_sub(fixed_output_capacity)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "funding cell capacity {} cannot cover state {}, vault {}, sponsor {}, and fee {}",
+                funding_cell.capacity,
+                state_capacity,
+                options.vault_capacity,
+                options.sponsor_capacity,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, change_capacity)?;
+
+    let change_output = CellOutput::new_builder()
+        .capacity(change_capacity)
+        .lock(owner_lock.clone())
+        .build();
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(state_lock_contract.cell_dep.clone())
+        .cell_dep(state_contract.cell_dep.clone())
+        .cell_dep(vault_contract.cell_dep.clone())
+        .cell_dep(sponsor_contract.cell_dep.clone())
+        .cell_dep(xudt_contract.cell_dep.clone())
+        .input(channel_input)
+        .output(state_output.clone())
+        .output(vault_output.clone())
+        .output(sponsor_output.clone())
+        .output(change_output.clone())
+        .output_data(Bytes::copy_from_slice(&state_header).pack())
+        .output_data(xudt_amount_bytes(total_xudt_amount).pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+
+    let tx_hash_string = sent.tx_hash.clone();
+    let cell =
+        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
+            ChannelCellReport {
+                role: role.to_string(),
+                out_point: PrintableOutPoint {
+                    tx_hash: tx_hash_string.clone(),
+                    index,
+                },
+                capacity: output.capacity().unpack(),
+                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+                type_hash: output
+                    .type_()
+                    .to_opt()
+                    .map(|script| hex32(script.calc_script_hash().as_slice())),
+                data_len,
+            }
+        };
+
+    Ok(OpenChannelReport {
+        tx_hash: tx_hash_string.clone(),
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        channel_id: hex32(&channel_id),
+        funding_anchor: hex32(&funding_anchor),
+        finalise_since: options.finalise_since,
+        input_capacity: funding_cell.capacity,
+        state_capacity,
+        vault_capacity: options.vault_capacity,
+        sponsor_capacity: options.sponsor_capacity,
+        sponsor_policy: sponsor_policy_report(
+            &channel_id,
+            sponsor_policy_settings,
+            owner_lock_hash.as_slice().try_into().unwrap(),
+        ),
+        change_capacity,
+        fee: options.fee,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+        participants: vec![
+            ParticipantReport {
+                role: "alice".to_string(),
+                lock_hash: hex32(&alice_lock_hash),
+                pubkey_sec1: hex_prefixed(&alice_pubkey),
+                capacity: alice_capacity,
+            },
+            ParticipantReport {
+                role: "bob".to_string(),
+                lock_hash: hex32(&bob_lock_hash),
+                pubkey_sec1: hex_prefixed(&bob_pubkey),
+                capacity: bob_capacity,
+            },
+        ],
+        scripts: contracts
+            .into_iter()
+            .map(|contract| ResolvedScriptReport {
+                name: contract.name,
+                out_point: printable_out_point(&contract.out_point),
+                data_hash: format!("{:#x}", contract.data_hash),
+                hash_type: "data1".to_string(),
+            })
+            .collect(),
+        cells: vec![
+            cell("state", 0, &state_output, state_header.len()),
+            cell("xudt-vault", 1, &vault_output, 16),
             cell("sponsor", 2, &sponsor_output, 0),
             cell("change", 3, &change_output, 0),
         ],
@@ -1423,6 +1742,212 @@ pub fn finalise_channel(
                 state_refund_capacity,
             ),
         ],
+    })
+}
+
+fn finalise_xudt_channel(
+    rpc: &CkbRpcClient,
+    options: &XudtSmokeOptions,
+    state_out_point: String,
+    vault_out_point: String,
+) -> Result<XudtFinaliseReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for state refund")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let alice_key = parse_privkey(&options.alice_private_key)
+        .with_context(|| "invalid Alice channel private key")?;
+    let bob_key = parse_privkey(&options.bob_private_key)
+        .with_context(|| "invalid Bob channel private key")?;
+    let alice_lock = secp256k1_lock(&alice_key)?;
+    let bob_lock = secp256k1_lock(&bob_key)?;
+    let alice_lock_hash: [u8; 32] = alice_lock.calc_script_hash().unpack();
+    let bob_lock_hash: [u8; 32] = bob_lock.calc_script_hash().unpack();
+
+    let state_out_point = parse_out_point(&state_out_point)?;
+    let vault_out_point = parse_out_point(&vault_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
+    let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
+    let header = StateHeaderV1::parse(state_cell.data.as_ref())
+        .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+    ensure!(
+        header.phase() == PHASE_SETTLING,
+        "only a settling state can be finalised"
+    );
+    ensure!(
+        header.descriptor_version() == BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+        "state descriptor version is not xUDT-capable"
+    );
+    ensure!(
+        xudt_amount_from_data(&vault_cell.data)? == total_xudt_amount,
+        "vault xUDT amount does not match requested split"
+    );
+    let xudt_type = vault_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("xUDT vault cell has no type script"))?;
+    let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
+
+    let (alice_capacity, bob_capacity) = settlement_split(
+        vault_cell.capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+    )?;
+    ensure_output_capacity(
+        "alice xUDT settlement",
+        &CellOutput::new_builder()
+            .capacity(alice_capacity)
+            .lock(alice_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        16,
+    )?;
+    ensure_output_capacity(
+        "bob xUDT settlement",
+        &CellOutput::new_builder()
+            .capacity(bob_capacity)
+            .lock(bob_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        16,
+    )?;
+    let descriptor = bilateral_ckb_xudt_descriptor(
+        xudt_type_hash,
+        alice_lock_hash,
+        alice_capacity,
+        options.alice_xudt_amount,
+        bob_lock_hash,
+        bob_capacity,
+        options.bob_xudt_amount,
+    );
+    ensure!(
+        settlement_descriptor_commitment_v1(&descriptor).as_slice()
+            == header.settlement_descriptor_commitment(),
+        "reconstructed xUDT settlement descriptor does not match the state commitment"
+    );
+
+    let state_refund_capacity = state_cell
+        .capacity
+        .checked_sub(options.fee)
+        .ok_or_else(|| anyhow!("state carrier capacity cannot cover fee {}", options.fee))?;
+    ensure_change_capacity(&owner_lock, state_refund_capacity)?;
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
+    let state_contract = contract_by_name(&contracts, "morph-state-type")?;
+    let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
+
+    let alice_output = CellOutput::new_builder()
+        .capacity(alice_capacity)
+        .lock(alice_lock)
+        .type_(Some(xudt_type.clone()).pack())
+        .build();
+    let bob_output = CellOutput::new_builder()
+        .capacity(bob_capacity)
+        .lock(bob_lock)
+        .type_(Some(xudt_type).pack())
+        .build();
+    let refund_output = CellOutput::new_builder()
+        .capacity(state_refund_capacity)
+        .lock(owner_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .cell_dep(state_lock_contract.cell_dep)
+        .cell_dep(state_contract.cell_dep)
+        .cell_dep(vault_contract.cell_dep)
+        .cell_dep(xudt_contract.cell_dep)
+        .input(CellInput::new(state_out_point, options.finalise_since))
+        .input(CellInput::new(vault_out_point, 0))
+        .output(alice_output.clone())
+        .output(bob_output.clone())
+        .output(refund_output.clone())
+        .output_data(xudt_amount_bytes(options.alice_xudt_amount).pack())
+        .output_data(xudt_amount_bytes(options.bob_xudt_amount).pack())
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(Bytes::copy_from_slice(&descriptor)))
+        .build();
+    let sent_hash = send_and_mine(rpc, tx, options.mine_blocks)?;
+    let tx_hash = sent_hash.tx_hash.clone();
+
+    let output_report =
+        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
+            ChannelCellReport {
+                role: role.to_string(),
+                out_point: PrintableOutPoint {
+                    tx_hash: tx_hash.clone(),
+                    index,
+                },
+                capacity: output.capacity().unpack(),
+                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+                type_hash: output
+                    .type_()
+                    .to_opt()
+                    .map(|script| hex32(script.calc_script_hash().as_slice())),
+                data_len,
+            }
+        };
+
+    Ok(XudtFinaliseReport {
+        tx_hash: sent_hash.tx_hash,
+        status: sent_hash.status,
+        block_number: sent_hash.block_number,
+        block_hash: sent_hash.block_hash,
+        channel_id: hex32(header.channel_id()),
+        funding_anchor: hex32(header.funding_anchor()),
+        state_number: header.state_number(),
+        xudt_type_hash: hex32(&xudt_type_hash),
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        state_refund_capacity,
+        fee: options.fee,
+        metrics: sent_hash.metrics,
+        mined_blocks: sent_hash.mined_blocks,
+        outputs: vec![
+            output_report("alice", 0, &alice_output, 16),
+            output_report("bob", 1, &bob_output, 16),
+            output_report("state-refund", 2, &refund_output, 0),
+        ],
+    })
+}
+
+pub fn xudt_smoke(rpc: &CkbRpcClient, options: XudtSmokeOptions) -> Result<XudtSmokeReport> {
+    let open = open_xudt_channel(rpc, &options)?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "xudt-vault")?;
+    let sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point,
+            sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let settling_state_out_point = printable_out_point_string(&publish.state_out_point);
+    let finalise = finalise_xudt_channel(rpc, &options, settling_state_out_point, vault_out_point)?;
+
+    Ok(XudtSmokeReport {
+        open,
+        publish,
+        finalise,
     })
 }
 
@@ -2243,6 +2768,46 @@ fn bilateral_ckb_descriptor(
     raw
 }
 
+fn bilateral_ckb_xudt_descriptor(
+    xudt_type_hash: [u8; 32],
+    left_lock_hash: [u8; 32],
+    left_capacity: u64,
+    left_amount: u128,
+    right_lock_hash: [u8; 32],
+    right_capacity: u64,
+    right_amount: u128,
+) -> [u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN] {
+    let mut entries = [
+        (left_lock_hash, left_capacity, left_amount),
+        (right_lock_hash, right_capacity, right_amount),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut raw = [0u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1);
+    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+    raw[3] = BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1;
+    raw[4..36].copy_from_slice(&xudt_type_hash);
+    for (index, (lock_hash, capacity, amount)) in entries.iter().enumerate() {
+        let offset = 36 + index * (BYTE32_LEN + 8 + 16);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+        put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+        put_u128(&mut raw, offset + BYTE32_LEN + 8, *amount);
+    }
+    raw
+}
+
+fn xudt_amount_bytes(amount: u128) -> Bytes {
+    Bytes::copy_from_slice(&amount.to_le_bytes())
+}
+
+fn xudt_amount_from_data(data: &Bytes) -> Result<u128> {
+    ensure!(data.len() == 16, "xUDT cell data must be exactly 16 bytes");
+    let mut raw = [0u8; 16];
+    raw.copy_from_slice(data.as_ref());
+    Ok(u128::from_le_bytes(raw))
+}
+
 fn settlement_split(
     vault_capacity: u64,
     alice_capacity: Option<u64>,
@@ -2275,6 +2840,7 @@ struct InitialStateHeader {
     funding_anchor: [u8; 32],
     participants_commitment: [u8; 32],
     settlement_descriptor_commitment: [u8; 32],
+    descriptor_version: u16,
     challenge_policy_commitment: [u8; 32],
 }
 
@@ -2291,7 +2857,7 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V1_LEN] 
     raw[110..142].copy_from_slice(&input.participants_commitment);
     raw[142..174].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V1"]));
     raw[174..206].copy_from_slice(&input.settlement_descriptor_commitment);
-    put_u16(&mut raw, 206, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    put_u16(&mut raw, 206, input.descriptor_version);
     raw[208..240].copy_from_slice(&script_blake2b256(&[
         b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD_V1",
     ]));
@@ -2324,6 +2890,10 @@ fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
 
 fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
     raw[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u128(raw: &mut [u8], offset: usize, value: u128) {
+    raw[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
 }
 
 fn printable_out_point(out_point: &OutPoint) -> PrintableOutPoint {

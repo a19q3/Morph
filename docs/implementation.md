@@ -32,10 +32,12 @@ header digest, and a participant commitment that must match the signed header.
 Sponsor inputs and fee selection remain outside that state-signature domain.
 
 The vault lock verifies the bilateral CKB settlement descriptor: two sorted
-recipient lock hashes and exact output capacities. The descriptor hash is bound
-inside `settlement_descriptor_commitment`, so a finalisation transaction cannot
-change the settlement recipients or amounts without invalidating the signed
-state.
+recipient lock hashes and exact output capacities. It also supports the devnet
+CKB+xUDT descriptor, which binds the canonical xUDT type hash and exact token
+amount for each recipient. The descriptor hash is bound inside
+`settlement_descriptor_commitment`, so a finalisation transaction cannot change
+the settlement recipients, capacities, asset type, or token amounts without
+invalidating the signed state.
 
 The sponsor lock is not a general wallet lock. It will pay only transactions
 that produce a settling Morph State Cell for the policy's channel and authorised
@@ -56,6 +58,8 @@ A devnet demonstration is acceptable only when it includes:
 - negative transactions for stale state, wrong funding anchor, sponsor drain,
   channel-paid fee leakage, and xUDT type mismatch;
 - cycle and transaction-size measurements for each lifecycle transaction;
+- a CKB+xUDT vault smoke that mints only under the devnet issuer lock and then
+  settles by ordinary xUDT conservation;
 - reusable signed state packages that can be published without channel signing
   keys;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

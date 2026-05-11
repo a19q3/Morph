@@ -23,6 +23,8 @@ Implemented devnet-level checks:
 
 - real CKB transaction construction for deploy, open, publish, supersede,
   sponsor top-up, and finalise;
+- CKB+xUDT vault publication and settlement on devnet through
+  `devnet xudt-smoke`;
 - node-reported cycle measurement and transaction size reporting;
 - durable signed state-package storage with signature validation and latest
   package selection;
@@ -30,6 +32,5 @@ Implemented devnet-level checks:
 
 Missing devnet-level checks:
 
-- xUDT vault-cell publication and settlement;
 - explicit mempool competing-spend behaviour against a live devnet node;
 - factory non-interference proof predicates.

@@ -28,6 +28,8 @@ Current implementation stage:
   gated by a unique current settling State Cell and relative `since`.
 - `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
   fee spending, state-number policy checks, and clean sponsor change.
+- `contracts/morph-devnet-xudt`: no-std devnet xUDT script used to test
+  token-bearing vault settlement without depending on an external issuer.
 
 This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable
@@ -35,6 +37,9 @@ checks. Participant state signatures are verified in both host-side invariants
 and the `morph-state-type` CKB script; the current devnet path opens a channel,
 publishes a signed settling state using sponsor capacity, supersedes it with a
 higher signed state, and finalises the vault without modifying CKB consensus.
+It also includes a devnet CKB+xUDT smoke path that mints a local test asset
+into the vault and settles exact token balances through the same StateCell and
+VaultCell authority model.
 
 ## Repository Layout
 
@@ -64,11 +69,13 @@ cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
 cargo run -p morph-cli -- devnet supersede-smoke
+cargo run -p morph-cli -- devnet xudt-smoke
 scripts/devnet-smoke.sh
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
 include CKB `estimate_cycles` output and serialized transaction size for each
 deployment, open, publication, sponsor top-up, supersession, and finalisation
-transaction. `scripts/devnet-smoke.sh` runs the real local checks and devnet
-smoke paths, then writes the JSON and log artefacts under `target/devnet-smoke/`.
+transaction, including the CKB+xUDT smoke path. `scripts/devnet-smoke.sh` runs
+the real local checks and devnet smoke paths, then writes the JSON and log
+artefacts under `target/devnet-smoke/`.

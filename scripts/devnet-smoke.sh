@@ -51,6 +51,7 @@ run_json devnet-mine devnet --rpc-url "$RPC_URL" mine --blocks "$MINE_BLOCKS"
 run_json deploy-contracts devnet --rpc-url "$RPC_URL" deploy-contracts
 run_json supersede-smoke devnet --rpc-url "$RPC_URL" supersede-smoke
 run_json sponsor-policy-negative-smoke devnet --rpc-url "$RPC_URL" sponsor-policy-negative-smoke
+run_json xudt-smoke devnet --rpc-url "$RPC_URL" xudt-smoke
 
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
