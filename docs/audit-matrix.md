@@ -24,10 +24,11 @@ Implemented devnet-level checks:
   sponsor top-up, and finalise;
 - node-reported cycle measurement and transaction size reporting;
 - durable signed state-package storage with signature validation and latest
-  package selection.
+  package selection;
+- confirmation-depth block scanning for older Morph StateCells.
 
 Missing devnet-level checks:
 
 - xUDT vault-cell publication and settlement;
-- mempool/rebuild behaviour against a live devnet node;
+- explicit mempool competing-spend behaviour against a live devnet node;
 - factory non-interference proof predicates.

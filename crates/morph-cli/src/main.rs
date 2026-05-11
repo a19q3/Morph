@@ -7,7 +7,7 @@ use devnet::{
     DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY, DEFAULT_DEVNET_PRIVATE_KEY,
     DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions, OpenChannelOptions,
     PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
-    SupersedeSmokeOptions,
+    SupersedeSmokeOptions, WatchLatestStatePackageOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -253,6 +253,49 @@ enum DevnetCommand {
         /// Channel id to select.
         #[arg(long)]
         channel_id: String,
+        /// Absolute fee paid by the SponsorCell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Scan confirmed blocks and publish the latest saved package when an older StateCell is seen.
+    WatchLatestPackage {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the sponsor change lock.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// SponsorCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        sponsor_out_point: String,
+        /// Directory where signed state packages are stored.
+        #[arg(long, default_value = "target/morph-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Channel id to watch.
+        #[arg(long)]
+        channel_id: String,
+        /// First block number to scan.
+        #[arg(long, default_value_t = 0)]
+        from_block: u64,
+        /// Required confirmation depth before a StateCell is actionable.
+        #[arg(long, default_value_t = 1)]
+        detection_depth: u64,
+        /// Maximum time to poll before returning without publication.
+        #[arg(long, default_value_t = 60)]
+        timeout_secs: u64,
+        /// Poll interval in milliseconds.
+        #[arg(long, default_value_t = 1_000)]
+        poll_ms: u64,
         /// Absolute fee paid by the SponsorCell, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
@@ -776,6 +819,63 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
                 println!("fee={}", report.publication.fee);
                 print_metrics(&report.publication.metrics);
+            }
+        }
+        DevnetCommand::WatchLatestPackage {
+            contracts_dir,
+            private_key,
+            sponsor_out_point,
+            store_dir,
+            channel_id,
+            from_block,
+            detection_depth,
+            timeout_secs,
+            poll_ms,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::watch_latest_state_package(
+                &rpc,
+                WatchLatestStatePackageOptions {
+                    contracts_dir,
+                    private_key,
+                    sponsor_out_point,
+                    store_dir,
+                    channel_id,
+                    from_block,
+                    detection_depth,
+                    timeout_secs,
+                    poll_ms,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("channel_id={}", report.channel_id);
+                println!("from_block={}", report.from_block);
+                println!("scanned_to_block={}", report.scanned_to_block);
+                println!("detection_depth={}", report.detection_depth);
+                println!("package={}", report.selected_package.path.display());
+                println!(
+                    "package_state_number={}",
+                    report.selected_package.package.state_number
+                );
+                if let Some(observed) = &report.observed {
+                    println!("observed_out_point={}", observed.out_point);
+                    println!("observed_state_number={}", observed.state_number);
+                    println!("observed_confirmations={}", observed.confirmations);
+                }
+                if let Some(publication) = &report.publication {
+                    println!("published=true");
+                    println!("tx_hash={}", publication.tx_hash);
+                    println!("status={}", publication.status);
+                    print_metrics(&publication.metrics);
+                } else {
+                    println!("published=false");
+                }
             }
         }
         DevnetCommand::FundSponsor {

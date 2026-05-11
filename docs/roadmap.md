@@ -53,8 +53,8 @@ Acceptance criteria:
 ## M2: Watchtower
 
 Status: partially implemented for durable state package persistence, latest
-package selection, and publish-from-latest-package rebuilding. Detection
-polling and fee-policy automation remain open.
+package selection, publish-from-latest-package rebuilding, and confirmation
+depth block polling. Fee-policy automation remains open.
 
 - State package persistence.
 - Detection-depth polling.

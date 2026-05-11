@@ -278,6 +278,25 @@ cargo run -q -p morph-cli -- devnet publish-latest-package \
   --json
 ```
 
+For a watchtower-style path, the CLI can scan confirmed blocks from a chosen
+height, wait for a confirmation depth, and publish only if the observed
+StateCell is older than the latest saved package:
+
+```sh
+cargo run -q -p morph-cli -- devnet watch-latest-package \
+  --channel-id "$CHANNEL_ID" \
+  --from-block "$OPEN_BLOCK_NUMBER" \
+  --detection-depth 3 \
+  --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --json
+```
+
+This scanner is intentionally confirmation-based. It does not assume mempool
+replacement behaviour, and it does not scan with an indexer. It reads canonical
+blocks through CKB JSON-RPC, recognises Morph `StateHeader` outputs for the
+channel, and rebuilds a fresh publication transaction once an older confirmed
+StateCell is actionable.
+
 When `--state-package` is used, the publication transaction is rebuilt against
 the currently live StateCell and SponsorCell. Alice and Bob do not need to sign
 again, and their private keys are not needed by the publisher. The publisher

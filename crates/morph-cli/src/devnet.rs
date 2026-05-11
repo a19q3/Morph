@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use ckb_crypto::secp::Privkey;
@@ -28,8 +28,8 @@ use morph_script_common::{
 use serde::Serialize;
 
 use crate::packages::{
-    PackageOutPoint, StatePackageRecord, StoredStatePackage, latest_package, read_package,
-    write_package,
+    PackageOutPoint, StatePackageRecord, StoredStatePackage, canonical_hex32, latest_package,
+    read_package, write_package,
 };
 use crate::rpc::CkbRpcClient;
 
@@ -102,6 +102,21 @@ pub struct PublishLatestStatePackageOptions {
     pub sponsor_out_point: String,
     pub store_dir: PathBuf,
     pub channel_id: String,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WatchLatestStatePackageOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub sponsor_out_point: String,
+    pub store_dir: PathBuf,
+    pub channel_id: String,
+    pub from_block: u64,
+    pub detection_depth: u64,
+    pub timeout_secs: u64,
+    pub poll_ms: u64,
     pub fee: u64,
     pub mine_blocks: u64,
 }
@@ -260,6 +275,31 @@ pub struct SaveStatePackageReport {
 pub struct PublishLatestStatePackageReport {
     pub selected_package: StatePackageRecord,
     pub publication: PublishStateReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ObservedStateCellReport {
+    pub block_number: u64,
+    pub block_hash: String,
+    pub tx_hash: String,
+    pub output_index: u32,
+    pub out_point: String,
+    pub state_number: u64,
+    pub phase: String,
+    pub confirmations: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatchLatestStatePackageReport {
+    pub channel_id: String,
+    pub from_block: u64,
+    pub scanned_to_block: u64,
+    pub detection_depth: u64,
+    pub selected_package: StatePackageRecord,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed: Option<ObservedStateCellReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication: Option<PublishStateReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -876,6 +916,80 @@ pub fn publish_latest_state_package(
     })
 }
 
+pub fn watch_latest_state_package(
+    rpc: &CkbRpcClient,
+    options: WatchLatestStatePackageOptions,
+) -> Result<WatchLatestStatePackageReport> {
+    ensure!(
+        options.detection_depth > 0,
+        "detection depth must be at least one block"
+    );
+    let channel_id = canonical_hex32(&options.channel_id)?;
+    let selected_package = latest_package(&options.store_dir, &channel_id)?;
+    let selected_state_number = selected_package.package.state_number;
+    let started = Instant::now();
+    let timeout = Duration::from_secs(options.timeout_secs);
+    let poll_interval = Duration::from_millis(options.poll_ms);
+    let mut next_block = options.from_block;
+    let mut scanned_to_block = options.from_block.saturating_sub(1);
+    let mut last_observed = None;
+
+    loop {
+        let tip_number = rpc.tip_header()?.number_value()?;
+        if tip_number.saturating_add(1) >= options.detection_depth {
+            let mature_tip = tip_number + 1 - options.detection_depth;
+            while next_block <= mature_tip {
+                if let Some(block) = rpc.block_by_number(next_block)? {
+                    scanned_to_block = next_block;
+                    for observed in observed_state_cells(&block, &channel_id, tip_number)? {
+                        if observed.state_number < selected_state_number {
+                            let publication = publish_state(
+                                rpc,
+                                PublishStateOptions {
+                                    contracts_dir: options.contracts_dir.clone(),
+                                    private_key: options.private_key.clone(),
+                                    alice_private_key: DEFAULT_ALICE_PRIVATE_KEY.to_string(),
+                                    bob_private_key: DEFAULT_BOB_PRIVATE_KEY.to_string(),
+                                    state_out_point: observed.out_point.clone(),
+                                    sponsor_out_point: options.sponsor_out_point.clone(),
+                                    state_number: None,
+                                    state_package: Some(selected_package.path.clone()),
+                                    fee: options.fee,
+                                    mine_blocks: options.mine_blocks,
+                                },
+                            )?;
+                            return Ok(WatchLatestStatePackageReport {
+                                channel_id,
+                                from_block: options.from_block,
+                                scanned_to_block,
+                                detection_depth: options.detection_depth,
+                                selected_package,
+                                observed: Some(observed),
+                                publication: Some(publication),
+                            });
+                        }
+                        last_observed = Some(observed);
+                    }
+                }
+                next_block = next_block.saturating_add(1);
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            return Ok(WatchLatestStatePackageReport {
+                channel_id,
+                from_block: options.from_block,
+                scanned_to_block,
+                detection_depth: options.detection_depth,
+                selected_package,
+                observed: last_observed,
+                publication: None,
+            });
+        }
+        std::thread::sleep(poll_interval);
+    }
+}
+
 pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<FundSponsorReport> {
     ensure!(options.fee > 0, "fee must be non-zero");
     ensure!(
@@ -1303,6 +1417,47 @@ fn transaction_metrics(
         estimated_cycles: estimate.cycles.value(),
         tx_size_bytes: tx.data().as_slice().len(),
     })
+}
+
+fn observed_state_cells(
+    block: &ckb_jsonrpc_types::BlockView,
+    channel_id: &str,
+    tip_number: u64,
+) -> Result<Vec<ObservedStateCellReport>> {
+    let block_number = block.header.inner.number.value();
+    let block_hash = format!("{:#x}", block.header.hash);
+    let confirmations = tip_number.saturating_sub(block_number).saturating_add(1);
+    let mut observed = Vec::new();
+    for tx in &block.transactions {
+        for (index, data) in tx.inner.outputs_data.iter().enumerate() {
+            let Ok(header) = StateHeaderV1::parse(data.as_bytes()) else {
+                continue;
+            };
+            if hex32(header.channel_id()) != channel_id {
+                continue;
+            }
+            let tx_hash = format!("{:#x}", tx.hash);
+            observed.push(ObservedStateCellReport {
+                block_number,
+                block_hash: block_hash.clone(),
+                tx_hash: tx_hash.clone(),
+                output_index: index as u32,
+                out_point: format!("{tx_hash}:{index}"),
+                state_number: header.state_number(),
+                phase: phase_label(header.phase()).to_string(),
+                confirmations,
+            });
+        }
+    }
+    Ok(observed)
+}
+
+fn phase_label(phase: u8) -> &'static str {
+    match phase {
+        PHASE_ACTIVE => "active",
+        PHASE_SETTLING => "settling",
+        _ => "unknown",
+    }
 }
 
 fn sighash_all_message(
