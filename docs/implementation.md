@@ -18,6 +18,10 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 - State type: consumes exactly one State Cell and recreates exactly one newer
   settling State Cell under the same funding anchor and channel context; it can
   also close the state track after the configured relative `since` has matured.
+- Factory type: consumes exactly one FactoryStateCell and recreates exactly one
+  newer FactoryStateCell under the same factory id and participant context; the
+  devnet V1 path is deliberately conservative and requires signatures from all
+  two factory participants.
 - Vault lock: permits vault spend only when a unique settling State Cell with
   the expected funding anchor is present, its relative `since` has matured, and
   the settlement outputs match the descriptor commitment in the signed state.
@@ -29,11 +33,15 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 The state type script verifies the bilateral V1 participant witness: two sorted
 compressed secp256k1 public keys, two ECDSA signatures over the canonical state
 header digest, and a participant commitment that must match the signed header.
-Sponsor inputs and fee selection remain outside that state-signature domain.
+The factory type script verifies a related but stricter V1 witness: two sorted
+participant ids, their compressed secp256k1 public keys, and one signature per
+participant over the canonical factory-state digest. Sponsor inputs and fee
+selection remain outside those state-signature domains.
 
 The draft Molecule schema in `schemas/morph.mol` now names every active
 fixed-width V1 object used by the devnet contracts: `StateHeaderV1`,
-`BilateralSignatureWitnessV1`, CKB and CKB+xUDT settlement descriptors, and
+`FactoryStateHeaderV1`, `BilateralSignatureWitnessV1`,
+`FactorySignatureWitnessV1`, CKB and CKB+xUDT settlement descriptors, and
 `SponsorPolicyV1`. The contracts still parse fixed-width bytes directly; the
 schema is treated as the public wire-boundary record until generated Molecule
 code is introduced.
@@ -118,6 +126,9 @@ A devnet demonstration is acceptable only when it includes:
   and idle scans;
 - a conservative all-participant factory state package with verified nested
   non-interference digest and signatures;
+- a conservative factory type script that accepts canonical factory creation,
+  signed monotonic updates, and rejects equal-number or invalid-signature
+  updates in CKB-VM tests;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

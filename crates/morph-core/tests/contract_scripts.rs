@@ -14,9 +14,12 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING,
-    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1, blake2b256,
-    participants_commitment_v1, settlement_descriptor_commitment_v1,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryStateHeaderV1,
+    PHASE_ACTIVE, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1,
+    blake2b256, factory_participants_commitment_v1, participants_commitment_v1,
+    settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -26,6 +29,7 @@ const CELL_CAPACITY: u64 = 100_000_000_000;
 const ALICE_CAPACITY: u64 = 60_000_000_000;
 const BOB_CAPACITY: u64 = 40_000_000_000;
 const FUNDING_ANCHOR: [u8; 32] = [4u8; 32];
+const FACTORY_ID: [u8; 32] = [7u8; 32];
 const ALICE_XUDT_AMOUNT: u128 = 70;
 const BOB_XUDT_AMOUNT: u128 = 30;
 
@@ -146,7 +150,34 @@ fn header_raw_with_anchor(
     raw
 }
 
+fn factory_header_raw(update_number: u64) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
+    factory_header_raw_with_id(update_number, FACTORY_ID)
+}
+
+fn factory_header_raw_with_id(
+    update_number: u64,
+    factory_id: [u8; 32],
+) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
+    let mut raw = [0u8; FACTORY_STATE_HEADER_V1_LEN];
+    put_u16(&mut raw, 0, 1);
+    raw[2..34].fill(2);
+    put_u16(&mut raw, 34, 1);
+    raw[36..68].copy_from_slice(&factory_id);
+    put_u64(&mut raw, 68, update_number);
+    raw[76..108].fill(4);
+    raw[108..140].fill(5);
+    raw[140..172].fill(6);
+    raw[172..204].fill(7);
+    raw[204..236].fill(8);
+    put_u16(&mut raw, 236, 1);
+    raw
+}
+
 fn derived_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
+    blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
+}
+
+fn derived_factory_id(input: &CellInput, output_index: u64) -> [u8; 32] {
     blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
 }
 
@@ -196,6 +227,54 @@ fn signed_state_pair(
         witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
         witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
             ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0), key0),
+        ([2u8; BYTE32_LEN], pubkey(&key1), key1),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let mut old = factory_header_raw(old_number);
+    old[108..140].copy_from_slice(&commitment);
+    let mut new = factory_header_raw(new_number);
+    new[108..140].copy_from_slice(&commitment);
+    new[76..108].fill(9);
+    new[140..172].fill(10);
+    new[172..204].fill(11);
+
+    let header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
             .copy_from_slice(&signature(key, &digest));
     }
 
@@ -454,6 +533,156 @@ fn state_type_rejects_initial_state_with_non_canonical_anchor() {
         .input(input)
         .output(output)
         .output_data(initial_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_canonical_initial_factory_state() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let factory_id = derived_factory_id(&input, 0);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", factory_id.to_vec());
+    let initial_data = Bytes::from(factory_header_raw_with_id(0, factory_id).to_vec());
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(initial_data.pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("canonical initial factory state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_signed_factory_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, sig_witness) = signed_factory_pair(1, 2);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_equal_update_number() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, sig_witness) = signed_factory_pair(2, 2);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_invalid_participant_signature() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, sig_witness) = signed_factory_pair(1, 2);
+    let mut sig_witness = sig_witness.to_vec();
+    let last = sig_witness.len() - 1;
+    sig_witness[last] ^= 1;
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness.into()))
         .build();
     let tx = context.complete_tx(tx);
 

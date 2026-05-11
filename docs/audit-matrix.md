@@ -8,6 +8,8 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Funding anchor identity is canonical | `rejects_wrong_funding_anchor_reference`, `rejects_changed_header_context` |
 | State numbers are strictly monotonic | `rejects_stale_or_equal_state_number` |
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
+| Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
+| Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
 | Vault outputs match the signed settlement descriptor | `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
@@ -28,6 +30,8 @@ Implemented devnet-level checks:
 
 - real CKB transaction construction for deploy, open, publish, supersede,
   sponsor top-up, and finalise;
+- CKB-VM factory type execution for canonical factory creation and signed
+  monotonic factory updates;
 - finalise-since rejection and maturity-block finalisation through
   `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through

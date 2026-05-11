@@ -6,6 +6,7 @@ use k256::ecdsa::{Signature, VerifyingKey};
 
 pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_V1_LEN: usize = 274;
+pub const FACTORY_STATE_HEADER_V1_LEN: usize = 238;
 pub const SPONSOR_POLICY_V1_LEN: usize = 144;
 pub const BILATERAL_CKB_DESCRIPTOR_V1_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN: usize =
@@ -14,6 +15,8 @@ pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
 pub const ECDSA_SIGNATURE_LEN: usize = 64;
 pub const BILATERAL_SIGNATURE_WITNESS_V1_LEN: usize =
     2 + 1 + 1 + (2 * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN));
+pub const FACTORY_SIGNATURE_WITNESS_V1_LEN: usize =
+    2 + 1 + 1 + (2 * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN));
 
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
@@ -21,8 +24,13 @@ pub const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1: u16 = 1;
 pub const BILATERAL_SIGNATURE_WITNESS_VERSION_V1: u16 = 1;
 pub const BILATERAL_SIGNATURE_THRESHOLD_V1: u8 = 2;
 pub const BILATERAL_SIGNATURE_COUNT_V1: u8 = 2;
+pub const FACTORY_SIGNATURE_WITNESS_VERSION_V1: u16 = 1;
+pub const FACTORY_SIGNATURE_THRESHOLD_V1: u8 = 2;
+pub const FACTORY_SIGNATURE_COUNT_V1: u8 = 2;
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
+pub const FACTORY_STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_STATE_V1";
+pub const FACTORY_PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_PARTICIPANTS_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1: u16 = 2;
@@ -61,6 +69,7 @@ pub enum ScriptError {
     XudtMintUnauthorised = 31,
     XudtConservationMismatch = 32,
     XudtTypeMismatch = 33,
+    FactoryIdMismatch = 34,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -159,6 +168,78 @@ impl<'a> StateHeaderV1<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactoryStateHeaderV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactoryStateHeaderV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != FACTORY_STATE_HEADER_V1_LEN {
+            return Err(ScriptError::Encoding);
+        }
+        Ok(Self { raw })
+    }
+
+    pub fn protocol_version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn chain_id(&self) -> &'a [u8] {
+        field(self.raw, 2, 32)
+    }
+
+    pub fn signature_scheme_id(&self) -> u16 {
+        read_u16(self.raw, 34)
+    }
+
+    pub fn factory_id(&self) -> &'a [u8] {
+        field(self.raw, 36, 32)
+    }
+
+    pub fn update_number(&self) -> u64 {
+        read_u64(self.raw, 68)
+    }
+
+    pub fn state_root(&self) -> &'a [u8] {
+        field(self.raw, 76, 32)
+    }
+
+    pub fn participants_commitment(&self) -> &'a [u8] {
+        field(self.raw, 108, 32)
+    }
+
+    pub fn access_manifest_root(&self) -> &'a [u8] {
+        field(self.raw, 140, 32)
+    }
+
+    pub fn non_interference_digest(&self) -> &'a [u8] {
+        field(self.raw, 172, 32)
+    }
+
+    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
+        field(self.raw, 204, 32)
+    }
+
+    pub fn state_layout_version(&self) -> u16 {
+        read_u16(self.raw, 236)
+    }
+
+    pub fn signing_digest(&self) -> [u8; 32] {
+        blake2b256(&[FACTORY_STATE_DOMAIN_V1, self.raw])
+    }
+
+    pub fn same_context_except_progress(&self, next: &Self) -> bool {
+        self.protocol_version() == next.protocol_version()
+            && self.chain_id() == next.chain_id()
+            && self.signature_scheme_id() == next.signature_scheme_id()
+            && self.factory_id() == next.factory_id()
+            && self.participants_commitment() == next.participants_commitment()
+            && self.challenge_policy_commitment() == next.challenge_policy_commitment()
+            && self.state_layout_version() == next.state_layout_version()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BilateralSignatureWitnessV1<'a> {
     raw: &'a [u8],
 }
@@ -221,6 +302,98 @@ pub fn verify_bilateral_state_signatures(
 
     let digest = header.signing_digest();
     for index in 0..BILATERAL_SIGNATURE_COUNT_V1 as usize {
+        let verifying_key = VerifyingKey::from_sec1_bytes(witness.pubkey(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        let signature = Signature::try_from(witness.signature(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| ScriptError::InvalidParticipantSignature)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactorySignatureWitnessV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactorySignatureWitnessV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != FACTORY_SIGNATURE_WITNESS_V1_LEN {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != FACTORY_SIGNATURE_WITNESS_VERSION_V1
+            || witness.threshold() != FACTORY_SIGNATURE_THRESHOLD_V1
+            || witness.count() != FACTORY_SIGNATURE_COUNT_V1
+        {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        if witness.participant(0) >= witness.participant(1)
+            || witness.pubkey(0) == witness.pubkey(1)
+        {
+            return Err(ScriptError::ParticipantWitnessEncoding);
+        }
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn threshold(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn participant(&self, index: usize) -> &'a [u8] {
+        field(self.raw, factory_participant_offset(index), BYTE32_LEN)
+    }
+
+    pub fn pubkey(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_participant_offset(index) + BYTE32_LEN,
+            COMPRESSED_SECP256K1_PUBKEY_LEN,
+        )
+    }
+
+    pub fn signature(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_participant_offset(index) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN,
+            ECDSA_SIGNATURE_LEN,
+        )
+    }
+
+    pub fn participants_commitment(&self) -> [u8; 32] {
+        factory_participants_commitment_v1(
+            self.threshold(),
+            &[
+                (self.participant(0), self.pubkey(0)),
+                (self.participant(1), self.pubkey(1)),
+            ],
+        )
+    }
+}
+
+pub fn verify_factory_state_signatures(
+    header: &FactoryStateHeaderV1,
+    witness: &FactorySignatureWitnessV1,
+) -> Result<()> {
+    if header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1 {
+        return Err(ScriptError::ParticipantWitnessEncoding);
+    }
+    if header.participants_commitment() != witness.participants_commitment().as_slice() {
+        return Err(ScriptError::ParticipantCommitmentMismatch);
+    }
+
+    let digest = header.signing_digest();
+    for index in 0..FACTORY_SIGNATURE_COUNT_V1 as usize {
         let verifying_key = VerifyingKey::from_sec1_bytes(witness.pubkey(index))
             .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
         let signature = Signature::try_from(witness.signature(index))
@@ -459,8 +632,28 @@ pub fn participants_commitment_v1(threshold: u8, pubkeys: &[&[u8]]) -> [u8; 32] 
     out
 }
 
+pub fn factory_participants_commitment_v1(threshold: u8, entries: &[(&[u8], &[u8])]) -> [u8; 32] {
+    let count = [entries.len() as u8];
+    let threshold = [threshold];
+    let mut hasher = new_blake2b();
+    hasher.update(FACTORY_PARTICIPANTS_DOMAIN_V1);
+    hasher.update(&threshold);
+    hasher.update(&count);
+    for (participant, pubkey) in entries {
+        hasher.update(participant);
+        hasher.update(pubkey);
+    }
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
+
 fn participant_offset(index: usize) -> usize {
     4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN)
+}
+
+fn factory_participant_offset(index: usize) -> usize {
+    4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN)
 }
 
 fn descriptor_output_offset(index: usize) -> usize {
@@ -515,6 +708,35 @@ mod tests {
             raw[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
             raw[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
                 ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(sig);
+        }
+        raw
+    }
+
+    fn signed_factory_witness(
+        participant0: [u8; BYTE32_LEN],
+        key0: &SigningKey,
+        participant1: [u8; BYTE32_LEN],
+        key1: &SigningKey,
+        digest: &[u8; 32],
+    ) -> [u8; FACTORY_SIGNATURE_WITNESS_V1_LEN] {
+        let mut entries = [
+            (participant0, pubkey(key0), signature(key0, digest)),
+            (participant1, pubkey(key1), signature(key1, digest)),
+        ];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+        put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+        raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+        raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+        for (index, (participant, pubkey, sig)) in entries.iter().enumerate() {
+            let offset = factory_participant_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(pubkey);
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+                ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
                 .copy_from_slice(sig);
         }
         raw
@@ -602,6 +824,22 @@ mod tests {
         raw
     }
 
+    fn factory_header_bytes(update_number: u64) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
+        let mut raw = [0u8; FACTORY_STATE_HEADER_V1_LEN];
+        put_u16(&mut raw, 0, 1);
+        raw[2..34].fill(2);
+        put_u16(&mut raw, 34, 1);
+        raw[36..68].fill(3);
+        put_u64(&mut raw, 68, update_number);
+        raw[76..108].fill(4);
+        raw[108..140].fill(5);
+        raw[140..172].fill(6);
+        raw[172..204].fill(7);
+        raw[204..236].fill(8);
+        put_u16(&mut raw, 236, 1);
+        raw
+    }
+
     #[test]
     fn state_header_parser_rejects_wrong_length() {
         assert_eq!(
@@ -648,6 +886,41 @@ mod tests {
     }
 
     #[test]
+    fn factory_state_header_fields_are_fixed_width() {
+        let raw = factory_header_bytes(42);
+        let header = FactoryStateHeaderV1::parse(&raw).unwrap();
+
+        assert_eq!(header.protocol_version(), 1);
+        assert_eq!(header.chain_id(), &[2u8; 32]);
+        assert_eq!(header.signature_scheme_id(), 1);
+        assert_eq!(header.factory_id(), &[3u8; 32]);
+        assert_eq!(header.update_number(), 42);
+        assert_eq!(header.state_root(), &[4u8; 32]);
+        assert_eq!(header.participants_commitment(), &[5u8; 32]);
+        assert_eq!(header.access_manifest_root(), &[6u8; 32]);
+        assert_eq!(header.non_interference_digest(), &[7u8; 32]);
+        assert_eq!(header.challenge_policy_commitment(), &[8u8; 32]);
+        assert_eq!(header.state_layout_version(), 1);
+    }
+
+    #[test]
+    fn factory_context_allows_progress_but_rejects_identity_change() {
+        let old_raw = factory_header_bytes(1);
+        let mut new_raw = factory_header_bytes(9);
+        new_raw[76..108].fill(10);
+        new_raw[140..172].fill(11);
+        new_raw[172..204].fill(12);
+
+        let old = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        assert!(old.same_context_except_progress(&new));
+
+        new_raw[36] = 99;
+        let changed_factory = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        assert!(!old.same_context_except_progress(&changed_factory));
+    }
+
+    #[test]
     fn sponsor_policy_fields_are_fixed_width() {
         let mut raw = [0u8; SPONSOR_POLICY_V1_LEN];
         raw[0..32].fill(1);
@@ -681,8 +954,12 @@ mod tests {
             "BilateralCkbSettlementDescriptorV1: 84 bytes",
             "BilateralCkbXudtSettlementDescriptorV1: 148 bytes",
             "SponsorPolicyV1: 144 bytes",
+            "FactoryStateHeaderV1: 238 bytes",
+            "FactorySignatureWitnessV1: 262 bytes",
             "struct StateHeaderV1",
+            "struct FactoryStateHeaderV1",
             "struct BilateralSignatureWitnessV1",
+            "struct FactorySignatureWitnessV1",
             "struct BilateralCkbSettlementDescriptorV1",
             "struct BilateralCkbXudtSettlementDescriptorV1",
             "struct SponsorPolicyV1",
@@ -691,6 +968,8 @@ mod tests {
             "max_fee_per_tx: uint64",
             "allowed_sponsor_source: Byte32",
             "change_lock_hash: Byte32",
+            "participant_0_id: Byte32",
+            "non_interference_digest: Byte32",
         ] {
             assert!(
                 schema.contains(expected),
@@ -735,6 +1014,58 @@ mod tests {
 
         assert_eq!(
             verify_bilateral_state_signatures(&header, &witness).unwrap_err(),
+            ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn verifies_real_factory_state_signatures() {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = factory_header_bytes(7);
+        let commitment = factory_participants_commitment_v1(
+            2,
+            &[
+                (entries[0].0.as_slice(), entries[0].1.as_slice()),
+                (entries[1].0.as_slice(), entries[1].1.as_slice()),
+            ],
+        );
+        raw[108..140].copy_from_slice(&commitment);
+        let header = FactoryStateHeaderV1::parse(&raw).unwrap();
+        let witness_raw =
+            signed_factory_witness([1u8; 32], &key0, [2u8; 32], &key1, &header.signing_digest());
+        let witness = FactorySignatureWitnessV1::parse(&witness_raw).unwrap();
+
+        verify_factory_state_signatures(&header, &witness).unwrap();
+    }
+
+    #[test]
+    fn rejects_bad_factory_state_signature() {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = factory_header_bytes(7);
+        let commitment = factory_participants_commitment_v1(
+            2,
+            &[
+                (entries[0].0.as_slice(), entries[0].1.as_slice()),
+                (entries[1].0.as_slice(), entries[1].1.as_slice()),
+            ],
+        );
+        raw[108..140].copy_from_slice(&commitment);
+        let header = FactoryStateHeaderV1::parse(&raw).unwrap();
+        let mut witness_raw =
+            signed_factory_witness([1u8; 32], &key0, [2u8; 32], &key1, &header.signing_digest());
+        witness_raw[FACTORY_SIGNATURE_WITNESS_V1_LEN - 1] ^= 1;
+        let witness = FactorySignatureWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_state_signatures(&header, &witness).unwrap_err(),
             ScriptError::InvalidParticipantSignature
         );
     }

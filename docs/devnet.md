@@ -1,10 +1,12 @@
 # Devnet Plan
 
-The devnet milestone is a bilateral channel vertical slice:
+The devnet milestone is a bilateral channel vertical slice plus a conservative
+factory-state script path:
 
-1. Deploy five scripts:
+1. Deploy six scripts:
    - `morph-state-lock`
    - `morph-state-type`
+   - `morph-factory-type`
    - `morph-vault-lock`
    - `morph-sponsor-lock`
    - `morph-devnet-xudt`
@@ -145,6 +147,7 @@ These checks exercise the same invariants that the scripts must enforce:
 ```text
 target/riscv64imac-unknown-none-elf/release/morph-state-lock
 target/riscv64imac-unknown-none-elf/release/morph-state-type
+target/riscv64imac-unknown-none-elf/release/morph-factory-type
 target/riscv64imac-unknown-none-elf/release/morph-vault-lock
 target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
 target/riscv64imac-unknown-none-elf/release/morph-devnet-xudt
@@ -154,10 +157,14 @@ target/riscv64imac-unknown-none-elf/release/morph-devnet-xudt
 transactions for:
 
 - newer-state publication accepted by `morph-state-type`;
+- conservative factory creation and signed monotonic update accepted by
+  `morph-factory-type`;
 - typed StateCell delegation accepted by `morph-state-lock`;
 - untyped StateCell input rejected by `morph-state-lock`;
 - equal state number rejected by `morph-state-type`;
 - invalid participant signature rejected by `morph-state-type`;
+- equal update number and invalid participant signature rejected by
+  `morph-factory-type`;
 - vault finalisation accepted when a current settling State Cell is consumed;
 - descriptor output mismatch rejected by `morph-vault-lock`;
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
@@ -190,11 +197,12 @@ node has not exposed that module, the command fails with the returned RPC
 error. It does not fabricate block progress.
 
 `devnet deploy-contracts` builds and signs a real CKB transaction that deploys
-the five Morph RISC-V binaries as data-hash script cells:
+the six Morph RISC-V binaries as data-hash script cells:
 
 ```text
 morph-state-lock
 morph-state-type
+morph-factory-type
 morph-vault-lock
 morph-sponsor-lock
 morph-devnet-xudt
@@ -529,7 +537,9 @@ format. It deliberately does not start from a generic VM-like descriptor:
 
 ```text
 StateHeaderV1
+FactoryStateHeaderV1
 BilateralSignatureWitnessV1
+FactorySignatureWitnessV1
 SponsorPolicyV1
 BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
@@ -546,9 +556,10 @@ transaction shape.
 
 ## Remaining Devnet Gap
 
-The current vertical slice is bilateral and covers both CKB-only vaults and a
-devnet CKB+xUDT vault. The remaining devnet work is external watchtower
-notification integration and a factory proof transaction path.
+The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
+vault, watchtower policy/alerts, and a CKB-VM-tested conservative factory type
+script. The remaining devnet work is external watchtower notification
+integration and a factory open/update CLI transaction path.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -569,3 +580,9 @@ That command checks canonical roots, canonical participant sets,
 participant-id/public-key bindings with all-participant signatures over a
 domain-separated factory-state digest. It is not yet a devnet factory
 transaction.
+
+The `morph-factory-type` script is one step closer than the host package: it
+already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
+accepts a signed monotonic factory update, and rejects equal update numbers or
+invalid participant signatures. It does not yet verify a reduced-signature
+proof or materialise factory-local exits.

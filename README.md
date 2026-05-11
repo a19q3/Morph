@@ -6,8 +6,9 @@ sponsored publication, and partition conservation.
 
 This repository is intentionally conservative. The first milestone is a
 devnet-testable bilateral channel path. Factory proof mode is represented in
-the data model and negative tests, but reduced-signature factory exits remain
-behind an explicit proof-system gate.
+the data model, package validation, and a conservative full-participant factory
+type script, but reduced-signature factory exits remain behind an explicit
+proof-system gate.
 
 ## Status
 
@@ -25,6 +26,8 @@ Current implementation stage:
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
   progression, funding-anchor binding, and monotonic settling publication.
+- `contracts/morph-factory-type`: no-std CKB type script for conservative
+  one-live-FactoryStateCell progression with full-participant signatures.
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
   gated by a unique current settling State Cell and relative `since`.
 - `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
@@ -35,7 +38,8 @@ Current implementation stage:
 This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable
 checks. Participant state signatures are verified in both host-side invariants
-and the `morph-state-type` CKB script; the current devnet path opens a channel,
+and the `morph-state-type` CKB script; conservative factory state signatures
+are verified by `morph-factory-type`. The current devnet path opens a channel,
 publishes a signed settling state using sponsor capacity, supersedes it with a
 higher signed state, and finalises the vault without modifying CKB consensus.
 It also includes a devnet CKB+xUDT smoke path that mints a local test asset

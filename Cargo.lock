@@ -1680,6 +1680,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "morph-factory-type"
+version = "0.1.0"
+dependencies = [
+ "ckb-std",
+ "morph-script-common",
+]
+
+[[package]]
 name = "morph-script-common"
 version = "0.1.0"
 dependencies = [

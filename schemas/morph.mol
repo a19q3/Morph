@@ -9,7 +9,9 @@
 // are part of the audited transaction shape:
 //
 // - StateHeaderV1: 274 bytes
+// - FactoryStateHeaderV1: 238 bytes
 // - BilateralSignatureWitnessV1: 198 bytes
+// - FactorySignatureWitnessV1: 262 bytes
 // - BilateralCkbSettlementDescriptorV1: 84 bytes
 // - BilateralCkbXudtSettlementDescriptorV1: 148 bytes
 // - SponsorPolicyV1: 144 bytes
@@ -47,12 +49,38 @@ struct StateHeaderV1 {
     state_layout_version: uint16,
 }
 
+struct FactoryStateHeaderV1 {
+    protocol_version: uint16,
+    chain_id: Byte32,
+    signature_scheme_id: uint16,
+    factory_id: Byte32,
+    update_number: uint64,
+    state_root: Byte32,
+    participants_commitment: Byte32,
+    access_manifest_root: Byte32,
+    non_interference_digest: Byte32,
+    challenge_policy_commitment: Byte32,
+    state_layout_version: uint16,
+}
+
 struct BilateralSignatureWitnessV1 {
     version: uint16,
     threshold: byte,
     count: byte,
     participant_0_pubkey: Secp256k1CompressedPubkey,
     participant_0_signature: EcdsaSignature,
+    participant_1_pubkey: Secp256k1CompressedPubkey,
+    participant_1_signature: EcdsaSignature,
+}
+
+struct FactorySignatureWitnessV1 {
+    version: uint16,
+    threshold: byte,
+    count: byte,
+    participant_0_id: Byte32,
+    participant_0_pubkey: Secp256k1CompressedPubkey,
+    participant_0_signature: EcdsaSignature,
+    participant_1_id: Byte32,
     participant_1_pubkey: Secp256k1CompressedPubkey,
     participant_1_signature: EcdsaSignature,
 }

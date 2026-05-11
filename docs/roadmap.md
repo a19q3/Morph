@@ -14,20 +14,20 @@ Status: implemented.
 ## M1: Devnet Bilateral Channel
 
 Status: implemented for the bilateral CKB-only path and the devnet CKB+xUDT
-settlement path. The five script ELFs build, offline CKB-VM tests cover
+settlement path. The six script ELFs build, offline CKB-VM tests cover
 state-lock delegation, state publication, stale-state rejection, invalid state
 signatures, state-bound sponsor fees, descriptor-bound vault finalisation,
-descriptor-output mismatch rejection, and devnet xUDT conservation. The CLI can
-check/mine a local CKB devnet, deploy the Morph contract binaries, open a
-channel, publish a signed settling state, top up sponsor capacity, publish a
-newer signed state over the old settling state, finalise the vault, and run a
-competing-spend smoke, a finalise-since negative smoke, a sponsor-budget
-negative smoke, a CKB+xUDT settlement smoke, and a tampered-settlement xUDT
-negative smoke through native JSON-RPC. Each transaction report includes
-node-estimated cycles and serialized transaction size. SponsorCells can carry
-explicit state-number and fee-budget bounds. Smoke runs also produce Markdown
-and machine-readable benchmark summaries from the collected transaction
-reports.
+descriptor-output mismatch rejection, devnet xUDT conservation, and
+conservative factory type progression. The CLI can check/mine a local CKB
+devnet, deploy the Morph contract binaries, open a channel, publish a signed
+settling state, top up sponsor capacity, publish a newer signed state over the
+old settling state, finalise the vault, and run a competing-spend smoke, a
+finalise-since negative smoke, a sponsor-budget negative smoke, a CKB+xUDT
+settlement smoke, and a tampered-settlement xUDT negative smoke through native
+JSON-RPC. Each transaction report includes node-estimated cycles and serialized
+transaction size. SponsorCells can carry explicit state-number and fee-budget
+bounds. Smoke runs also produce Markdown and machine-readable benchmark
+summaries from the collected transaction reports.
 
 Required deliverables:
 
@@ -35,6 +35,7 @@ Required deliverables:
 - Draft Molecule schema covering all active devnet V1 wire objects.
 - `morph-state-lock` contract.
 - `morph-state-type` contract.
+- `morph-factory-type` contract.
 - `morph-vault-lock` contract.
 - `morph-sponsor-lock` contract.
 - `morph-devnet-xudt` contract.
@@ -98,9 +99,10 @@ integrations remain open.
 
 ## M3: Conservative Factory Mode
 
-Status: host-level non-interference predicate implemented; no devnet factory
-script yet. Conservative full-participant factory state packages are
-implemented at the CLI layer.
+Status: host-level non-interference predicate implemented, conservative
+full-participant factory state packages implemented at the CLI layer, and a
+conservative factory type script now executes in CKB-VM tests. A full devnet
+factory open/update CLI path remains open.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -111,6 +113,8 @@ implemented at the CLI layer.
   validation.
 - Conservative all-participant factory state package with a domain-separated
   digest and secp256k1 signature validation.
+- Conservative factory type script for one-live-FactoryStateCell monotonic
+  updates under full-participant signatures.
 
 ## M4: Reduced-Signature Factory Mode
 
