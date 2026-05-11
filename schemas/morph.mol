@@ -1,0 +1,38 @@
+// Draft Molecule schema for Morph Channel.
+//
+// The Rust implementation in crates/morph-core currently uses fixed-width
+// Rust structs for executable invariant tests. This schema records the intended
+// on-chain wire boundary and should be generated once moleculec is available
+// in the devnet build environment.
+
+array Byte32 [byte; 32];
+
+struct OutPointRef {
+    tx_hash: Byte32,
+    index: uint32,
+}
+
+struct ChallengePolicyV1 {
+    since_value: uint64,
+    detection_depth: uint32,
+    min_emergency_rebuilds: uint32,
+}
+
+struct StateHeaderV1 {
+    protocol_version: uint16,
+    chain_id: Byte32,
+    signature_scheme_id: uint16,
+    channel_id: Byte32,
+    funding_anchor: Byte32,
+    state_number: uint64,
+    mode: byte,
+    phase: byte,
+    participants_commitment: Byte32,
+    asset_registry_commitment: Byte32,
+    settlement_descriptor_commitment: Byte32,
+    descriptor_version: uint16,
+    payload_commitment: Byte32,
+    challenge_policy_commitment: Byte32,
+    state_layout_version: uint16,
+}
+
