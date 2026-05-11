@@ -33,6 +33,9 @@ jobs:
       - name: Check formatting
         run: make fmt-check
 
+      - name: Run clippy
+        run: make lint
+
       - name: Run workspace tests
         run: make test
 

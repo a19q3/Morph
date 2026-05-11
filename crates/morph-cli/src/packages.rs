@@ -1077,6 +1077,7 @@ fn signed_factory_witness(
     Ok(raw)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn factory_local_exit_witness_bytes(
     factory_signature: &[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN],
     state_output_index: u32,
@@ -1124,12 +1125,12 @@ fn phase_label(phase: u8) -> &'static str {
 }
 
 fn now_unix_ms() -> Result<u64> {
-    Ok(SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system time is before unix epoch")?
         .as_millis()
         .try_into()
-        .context("unix time does not fit in u64 milliseconds")?)
+        .context("unix time does not fit in u64 milliseconds")
 }
 
 fn put_u16(out: &mut [u8], offset: usize, value: u16) {

@@ -38,6 +38,7 @@ struct Cli {
     command: Command,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Validate the built-in bilateral-channel fixture.
@@ -1574,56 +1575,6 @@ fn canonical_private_key(value: &str, source: &str) -> Result<String> {
     SigningKey::from_slice(&decoded)
         .map_err(|err| anyhow::anyhow!("{source} is not a valid secp256k1 private key: {err:?}"))?;
     Ok(format!("0x{}", raw.to_ascii_lowercase()))
-}
-
-#[cfg(test)]
-mod cli_secret_tests {
-    use super::*;
-
-    #[test]
-    fn resolves_private_key_from_file() {
-        let path = std::env::temp_dir().join(format!(
-            "morph-private-key-{}-{}.txt",
-            std::process::id(),
-            "file"
-        ));
-        fs::write(&path, format!("{}\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
-        let resolved = resolve_watchtower_private_key(None, Some(path.clone())).unwrap();
-        fs::remove_file(path).unwrap();
-        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
-    }
-
-    #[test]
-    fn rejects_ambiguous_private_key_sources() {
-        let err = resolve_watchtower_private_key(
-            Some(DEFAULT_DEVNET_PRIVATE_KEY.to_string()),
-            Some(PathBuf::from("key.txt")),
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("either --private-key or --private-key-file")
-        );
-    }
-
-    #[test]
-    fn rejects_multi_token_private_key_file() {
-        let path = std::env::temp_dir().join(format!(
-            "morph-private-key-{}-{}.txt",
-            std::process::id(),
-            "multi"
-        ));
-        fs::write(&path, format!("{} extra\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
-        let err = resolve_watchtower_private_key(None, Some(path.clone())).unwrap_err();
-        fs::remove_file(path).unwrap();
-        assert!(err.to_string().contains("exactly one hex private key"));
-    }
-
-    #[test]
-    fn falls_back_to_devnet_key_for_local_watchers() {
-        let resolved = resolve_watchtower_private_key(None, None).unwrap();
-        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
-    }
 }
 
 fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
@@ -3502,5 +3453,55 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         payload_commitment: bytes32(7),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 1,
+    }
+}
+
+#[cfg(test)]
+mod cli_secret_tests {
+    use super::*;
+
+    #[test]
+    fn resolves_private_key_from_file() {
+        let path = std::env::temp_dir().join(format!(
+            "morph-private-key-{}-{}.txt",
+            std::process::id(),
+            "file"
+        ));
+        fs::write(&path, format!("{}\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        let resolved = resolve_watchtower_private_key(None, Some(path.clone())).unwrap();
+        fs::remove_file(path).unwrap();
+        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
+    }
+
+    #[test]
+    fn rejects_ambiguous_private_key_sources() {
+        let err = resolve_watchtower_private_key(
+            Some(DEFAULT_DEVNET_PRIVATE_KEY.to_string()),
+            Some(PathBuf::from("key.txt")),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("either --private-key or --private-key-file")
+        );
+    }
+
+    #[test]
+    fn rejects_multi_token_private_key_file() {
+        let path = std::env::temp_dir().join(format!(
+            "morph-private-key-{}-{}.txt",
+            std::process::id(),
+            "multi"
+        ));
+        fs::write(&path, format!("{} extra\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        let err = resolve_watchtower_private_key(None, Some(path.clone())).unwrap_err();
+        fs::remove_file(path).unwrap();
+        assert!(err.to_string().contains("exactly one hex private key"));
+    }
+
+    #[test]
+    fn falls_back_to_devnet_key_for_local_watchers() {
+        let resolved = resolve_watchtower_private_key(None, None).unwrap();
+        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
     }
 }

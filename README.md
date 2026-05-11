@@ -72,6 +72,7 @@ docs/                  Devnet and implementation notes.
 ```sh
 make ci
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p morph-cli -- validate-fixture
 make fixture-checks
 make build-contracts

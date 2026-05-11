@@ -1,9 +1,12 @@
-.PHONY: ci test fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke smoke-report smoke-assert
+.PHONY: ci test lint fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke smoke-report smoke-assert
 
-ci: fmt-check test fixture-checks contract-tests
+ci: fmt-check lint test fixture-checks contract-tests
 
 test:
 	cargo test --workspace
+
+lint:
+	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
 	cargo fmt --all

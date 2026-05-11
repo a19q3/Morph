@@ -338,6 +338,7 @@ fn signed_factory_pair_with_exit_digest(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn factory_local_exit_witness(
     factory_signature: &[u8],
     state_output_index: u32,

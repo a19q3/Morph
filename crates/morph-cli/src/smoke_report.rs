@@ -177,28 +177,28 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut watchtower_alerts = Vec::new();
     let mut watchtower_services = Vec::new();
     let mut factory_local_exits = Vec::new();
-    for path in &json_paths {
-        let relative = path
-            .strip_prefix(dir)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let check = relative.trim_end_matches(".json").to_string();
-        let raw = fs::read(path)
-            .with_context(|| format!("failed to read smoke JSON {}", path.display()))?;
-        let value: Value = serde_json::from_slice(&raw)
-            .with_context(|| format!("failed to parse smoke JSON {}", path.display()))?;
-        collect_from_value(
-            &check,
-            "$",
-            &value,
-            &mut transactions,
-            &mut script_failures,
-            &mut deployed_scripts,
-            &mut watchtower_services,
-            &mut factory_local_exits,
-        )
-        .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
+    {
+        let mut collections = SmokeCollections {
+            transactions: &mut transactions,
+            script_failures: &mut script_failures,
+            deployed_scripts: &mut deployed_scripts,
+            watchtower_services: &mut watchtower_services,
+            factory_local_exits: &mut factory_local_exits,
+        };
+        for path in &json_paths {
+            let relative = path
+                .strip_prefix(dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let check = relative.trim_end_matches(".json").to_string();
+            let raw = fs::read(path)
+                .with_context(|| format!("failed to read smoke JSON {}", path.display()))?;
+            let value: Value = serde_json::from_slice(&raw)
+                .with_context(|| format!("failed to parse smoke JSON {}", path.display()))?;
+            collect_from_value(&check, "$", &value, &mut collections)
+                .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
+        }
     }
     for path in &watch_alert_paths {
         collect_watchtower_alerts(dir, path, &mut watchtower_alerts)?;
@@ -583,19 +583,18 @@ pub fn assert_comparison_limits(
         }
     }
 
-    if limits.fail_on_status_change {
-        if let Some(delta) = comparison
+    if limits.fail_on_status_change
+        && let Some(delta) = comparison
             .transaction_deltas
             .iter()
             .find(|delta| delta.baseline_status != delta.candidate_status)
-        {
-            return Err(anyhow!(
-                "transaction {} status changed from {} to {}",
-                delta.key,
-                delta.baseline_status.as_deref().unwrap_or(""),
-                delta.candidate_status.as_deref().unwrap_or("")
-            ));
-        }
+    {
+        return Err(anyhow!(
+            "transaction {} status changed from {} to {}",
+            delta.key,
+            delta.baseline_status.as_deref().unwrap_or(""),
+            delta.candidate_status.as_deref().unwrap_or("")
+        ));
     }
 
     if let Some(limit) = limits.max_abs_total_cycle_delta {
@@ -610,33 +609,31 @@ pub fn assert_comparison_limits(
             return Err(anyhow!("total byte delta {actual} exceeds limit {limit}"));
         }
     }
-    if let Some(limit) = limits.max_abs_tx_cycle_delta {
-        if let Some(delta) = comparison
+    if let Some(limit) = limits.max_abs_tx_cycle_delta
+        && let Some(delta) = comparison
             .transaction_deltas
             .iter()
             .find(|delta| abs_i64(delta.estimated_cycles_delta) > limit)
-        {
-            return Err(anyhow!(
-                "transaction {} cycle delta {} exceeds limit {}",
-                delta.key,
-                abs_i64(delta.estimated_cycles_delta),
-                limit
-            ));
-        }
+    {
+        return Err(anyhow!(
+            "transaction {} cycle delta {} exceeds limit {}",
+            delta.key,
+            abs_i64(delta.estimated_cycles_delta),
+            limit
+        ));
     }
-    if let Some(limit) = limits.max_abs_tx_byte_delta {
-        if let Some(delta) = comparison
+    if let Some(limit) = limits.max_abs_tx_byte_delta
+        && let Some(delta) = comparison
             .transaction_deltas
             .iter()
             .find(|delta| abs_i64(delta.tx_size_bytes_delta) > limit)
-        {
-            return Err(anyhow!(
-                "transaction {} byte delta {} exceeds limit {}",
-                delta.key,
-                abs_i64(delta.tx_size_bytes_delta),
-                limit
-            ));
-        }
+    {
+        return Err(anyhow!(
+            "transaction {} byte delta {} exceeds limit {}",
+            delta.key,
+            abs_i64(delta.tx_size_bytes_delta),
+            limit
+        ));
     }
     Ok(())
 }
@@ -1064,26 +1061,30 @@ fn watch_alert_event_name(event: &WatchAlertEvent) -> &'static str {
     }
 }
 
+struct SmokeCollections<'a> {
+    transactions: &'a mut Vec<TransactionSummary>,
+    script_failures: &'a mut Vec<ScriptFailureSummary>,
+    deployed_scripts: &'a mut Vec<DeployedScriptSummary>,
+    watchtower_services: &'a mut Vec<WatchtowerServiceSummary>,
+    factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
+}
+
 fn collect_from_value(
     check: &str,
     path: &str,
     value: &Value,
-    transactions: &mut Vec<TransactionSummary>,
-    script_failures: &mut Vec<ScriptFailureSummary>,
-    deployed_scripts: &mut Vec<DeployedScriptSummary>,
-    watchtower_services: &mut Vec<WatchtowerServiceSummary>,
-    factory_local_exits: &mut Vec<FactoryLocalExitEvidenceSummary>,
+    collections: &mut SmokeCollections<'_>,
 ) -> Result<()> {
     let Value::Object(object) = value else {
         return Ok(());
     };
 
     if let Some(tx) = transaction_from_object(check, path, object) {
-        transactions.push(tx);
+        collections.transactions.push(tx);
     }
 
     if let Some(Value::Object(failure)) = object.get("script_failure") {
-        script_failures.push(ScriptFailureSummary {
+        collections.script_failures.push(ScriptFailureSummary {
             check: check.to_string(),
             path: append_path(path, "script_failure"),
             source: string_field(failure, "source"),
@@ -1102,7 +1103,7 @@ fn collect_from_value(
                 &append_index_path(path, "scripts", index),
                 script,
             ) {
-                deployed_scripts.push(deployed_script);
+                collections.deployed_scripts.push(deployed_script);
             }
         }
     }
@@ -1115,36 +1116,29 @@ fn collect_from_value(
         let summary = package
             .summary()
             .with_context(|| format!("invalid factory local-exit package at {path}"))?;
-        factory_local_exits.push(FactoryLocalExitEvidenceSummary {
-            check: check.to_string(),
-            path: path.to_string(),
-            factory_id: summary.factory_id,
-            update_number: summary.update_number,
-            exit_digest: summary.exit_digest,
-            child_channel_id: summary.child_channel_id,
-            child_state_number: summary.child_state_number,
-            child_phase: summary.child_phase,
-            descriptor_version: summary.descriptor_version,
-            state_output_index: summary.state_output_index,
-            vault_output_index: summary.vault_output_index,
-        });
+        collections
+            .factory_local_exits
+            .push(FactoryLocalExitEvidenceSummary {
+                check: check.to_string(),
+                path: path.to_string(),
+                factory_id: summary.factory_id,
+                update_number: summary.update_number,
+                exit_digest: summary.exit_digest,
+                child_channel_id: summary.child_channel_id,
+                child_state_number: summary.child_state_number,
+                child_phase: summary.child_phase,
+                descriptor_version: summary.descriptor_version,
+                state_output_index: summary.state_output_index,
+                vault_output_index: summary.vault_output_index,
+            });
     }
 
     if let Some(service) = watchtower_service_from_object(check, path, object) {
-        watchtower_services.push(service);
+        collections.watchtower_services.push(service);
     }
 
     for (key, child) in object {
-        collect_from_value(
-            check,
-            &append_path(path, key),
-            child,
-            transactions,
-            script_failures,
-            deployed_scripts,
-            watchtower_services,
-            factory_local_exits,
-        )?;
+        collect_from_value(check, &append_path(path, key), child, collections)?;
     }
     Ok(())
 }

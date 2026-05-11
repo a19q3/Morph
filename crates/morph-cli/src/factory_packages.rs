@@ -653,7 +653,7 @@ fn canonical_rights(values: &[StoredFactoryRight]) -> Result<Vec<StoredFactoryRi
         .iter()
         .map(StoredFactoryRight::canonical)
         .collect::<Result<Vec<_>>>()?;
-    out.sort_by(|left, right| right_sort_key(left).cmp(&right_sort_key(right)));
+    out.sort_by_key(right_sort_key);
     Ok(out)
 }
 
@@ -808,12 +808,12 @@ fn sign_factory_digest(
 }
 
 fn now_unix_ms() -> Result<u64> {
-    Ok(SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system time is before unix epoch")?
         .as_millis()
         .try_into()
-        .context("unix time does not fit in u64 milliseconds")?)
+        .context("unix time does not fit in u64 milliseconds")
 }
 
 #[cfg(test)]
