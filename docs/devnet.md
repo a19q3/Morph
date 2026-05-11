@@ -700,6 +700,52 @@ The update transaction keeps the FactoryStateCell capacity unchanged. A normal
 owner-controlled cell pays the fee and receives change, so the state carrier is
 not silently drained by routine factory updates.
 
+The bounded reduced-rights path can be exercised with the same
+`update-factory --factory-state-package` entry point. The current proof shape
+uses a fixed rights set, so the factory must be opened with the matching old
+rights roots:
+
+```sh
+cargo run -q -p morph-cli -- print-factory-reduced-rights-fixture \
+  > target/factory-reduced-rights-fixture.json
+
+REDUCED_OLD_STATE_ROOT="$(
+  jq -r '.old_state_root' target/factory-reduced-rights-fixture.json
+)"
+REDUCED_OLD_ACCESS_ROOT="$(
+  jq -r '.old_access_manifest_root' target/factory-reduced-rights-fixture.json
+)"
+
+cargo run -q -p morph-cli -- devnet open-factory \
+  --state-root "$REDUCED_OLD_STATE_ROOT" \
+  --access-manifest-root "$REDUCED_OLD_ACCESS_ROOT" \
+  --json > target/open-reduced-factory.json
+
+REDUCED_FACTORY_OUT_POINT="$(
+  jq -r '.cells[] | select(.role == "factory") |
+    .out_point.tx_hash + ":" + (.out_point.index | tostring)' \
+    target/open-reduced-factory.json
+)"
+
+cargo run -q -p morph-cli -- devnet save-factory-reduced-rights-package \
+  --factory-out-point "$REDUCED_FACTORY_OUT_POINT" \
+  --touched-after-balance 90 \
+  --json > target/factory-reduced-rights-package.json
+
+REDUCED_PACKAGE_PATH="$(
+  jq -r '.path' target/factory-reduced-rights-package.json
+)"
+
+cargo run -q -p morph-cli -- devnet update-factory \
+  --factory-out-point "$REDUCED_FACTORY_OUT_POINT" \
+  --factory-state-package "$REDUCED_PACKAGE_PATH" \
+  --json > target/update-reduced-factory.json
+```
+
+This proves the narrow reduced case on chain: Alice signs a claim-reducing
+update, Bob's rights remain unchanged, and the script rejects inflation or root
+mismatch. It is still not a reduced-signature factory exit.
+
 Materialise a bilateral child channel from the factory reserve:
 
 ```sh
@@ -816,6 +862,11 @@ cargo run -q -p morph-cli -- validate-factory-package \
 cargo run -q -p morph-cli -- print-factory-state-fixture > target/factory-state.json
 cargo run -q -p morph-cli -- validate-factory-state-package \
   target/factory-state.json \
+  --json
+cargo run -q -p morph-cli -- print-factory-reduced-rights-fixture \
+  > target/factory-reduced-rights.json
+cargo run -q -p morph-cli -- validate-factory-reduced-rights-package \
+  target/factory-reduced-rights.json \
   --json
 cargo run -q -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json

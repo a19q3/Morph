@@ -36,9 +36,11 @@ use serde::Serialize;
 
 use crate::packages::{
     FactoryStateCellPackageRecord, PackageOutPoint, StatePackageRecord,
-    StoredFactoryLocalExitPackage, StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor,
-    canonical_hex32, default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
-    read_factory_state_cell_package, read_package, read_watch_cursor,
+    StoredFactoryLocalExitPackage, StoredFactoryReducedRightsPackage,
+    StoredFactoryStateCellPackage, StoredStatePackage, WatchCursor, canonical_hex32,
+    default_watch_cursor_path, latest_factory_state_cell_package, latest_package,
+    read_factory_state_cell_update_package, read_package, read_watch_cursor,
+    reduced_rights_package_from_factory_header, write_factory_reduced_rights_package,
     write_factory_state_cell_package, write_package, write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
@@ -134,6 +136,16 @@ pub struct SaveFactoryStatePackageOptions {
     pub state_root: Option<String>,
     pub access_manifest_root: Option<String>,
     pub non_interference_digest: Option<String>,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveFactoryReducedRightsPackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_out_point: String,
+    pub update_number: Option<u64>,
+    pub touched_after_balance: u128,
     pub store_dir: PathBuf,
 }
 
@@ -574,6 +586,12 @@ pub struct UpdateFactoryReport {
 pub struct SaveFactoryStatePackageReport {
     pub path: String,
     pub package: StoredFactoryStateCellPackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveFactoryReducedRightsPackageReport {
+    pub path: String,
+    pub package: StoredFactoryReducedRightsPackage,
 }
 
 #[derive(Debug, Serialize)]
@@ -1486,11 +1504,18 @@ pub fn update_factory(
                 && options.non_interference_digest.is_none(),
             "factory_state_package cannot be combined with update_number or root overrides"
         );
-        let package = read_factory_state_cell_package(path)?;
-        let header_bytes = package.header_bytes()?;
+        let package = read_factory_state_cell_update_package(path)?;
+        package.validate_against_current_header(&old_header)?;
+        let header_bytes = package.new_header_bytes()?;
         let witness_bytes = package.witness_bytes()?;
         let package_header = FactoryStateHeaderV1::parse(&header_bytes)
             .map_err(|err| anyhow!("factory state package header is invalid: {err:?}"))?;
+        ensure!(
+            package.factory_id() == hex32(old_header.factory_id()),
+            "factory state package is for factory {}, not {}",
+            package.factory_id(),
+            hex32(old_header.factory_id())
+        );
         ensure!(
             old_header.same_context_except_progress(&package_header),
             "factory state package does not match the current factory context"
@@ -1502,16 +1527,32 @@ pub fn update_factory(
             old_update_number
         );
         let package_update_number = package_header.update_number();
+        ensure!(
+            package.update_number() == package_update_number,
+            "factory state package update number metadata does not match header"
+        );
         let package_state_root =
             bytes32_from_slice("factory package state root", package_header.state_root())?;
+        ensure!(
+            package.state_root() == hex32(&package_state_root),
+            "factory state package state root metadata does not match header"
+        );
         let package_access_manifest_root = bytes32_from_slice(
             "factory package access manifest root",
             package_header.access_manifest_root(),
         )?;
+        ensure!(
+            package.access_manifest_root() == hex32(&package_access_manifest_root),
+            "factory state package access manifest metadata does not match header"
+        );
         let package_non_interference_digest = bytes32_from_slice(
             "factory package non-interference digest",
             package_header.non_interference_digest(),
         )?;
+        ensure!(
+            package.non_interference_digest() == hex32(&package_non_interference_digest),
+            "factory state package non-interference metadata does not match header"
+        );
         (
             header_bytes,
             witness_bytes,
@@ -1721,6 +1762,50 @@ pub fn save_factory_state_package(
     let path = write_factory_state_cell_package(&options.store_dir, &package)?;
 
     Ok(SaveFactoryStatePackageReport {
+        path: path.display().to_string(),
+        package,
+    })
+}
+
+pub fn save_factory_reduced_rights_package(
+    rpc: &CkbRpcClient,
+    options: SaveFactoryReducedRightsPackageOptions,
+) -> Result<SaveFactoryReducedRightsPackageReport> {
+    ensure!(
+        options.touched_after_balance < 100,
+        "touched_after_balance must decrease the fixture balance below 100"
+    );
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    let printable = printable_out_point(&factory_out_point);
+    let package = reduced_rights_package_from_factory_header(
+        factory_cell.data.as_ref(),
+        &alice_key,
+        &bob_key,
+        options.update_number,
+        options.touched_after_balance,
+        Some(PackageOutPoint {
+            tx_hash: printable.tx_hash,
+            index: printable.index,
+        }),
+    )
+    .with_context(|| {
+        format!(
+            "factory {} at update {} is not compatible with the reduced-rights proof shape",
+            hex32(old_header.factory_id()),
+            old_header.update_number()
+        )
+    })?;
+    let path = write_factory_reduced_rights_package(&options.store_dir, &package)?;
+
+    Ok(SaveFactoryReducedRightsPackageReport {
         path: path.display().to_string(),
         package,
     })

@@ -157,6 +157,8 @@ finalisation path.
   updates under full-participant signatures.
 - Bounded reduced-rights witness for one-signer, claim-reducing factory updates
   with script-level root and non-interference checks.
+- CLI package generation and `update-factory --factory-state-package`
+  publication support for the bounded reduced-rights witness.
 - Devnet `open-factory`, `save-factory-state-package`, `update-factory`,
   `factory-exit-channel`, and `factory-smoke` commands.
 
@@ -179,4 +181,4 @@ Still open:
 - reduced-signature value-releasing factory exits;
 - general Merkle proof bundles for larger factories;
 - benchmarked cycle limits for larger proof shapes;
-- devnet CLI publication for reduced-rights packages.
+- devnet smoke coverage for reduced-rights package publication.

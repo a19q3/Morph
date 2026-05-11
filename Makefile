@@ -27,6 +27,8 @@ fixture-checks:
 	cargo run -q -p morph-cli -- validate-factory-state-package target/fixture-checks/factory-state.json --json > target/fixture-checks/factory-state-summary.json
 	cargo run -q -p morph-cli -- print-reduced-factory-state-fixture > target/fixture-checks/factory-state-reduced.json
 	cargo run -q -p morph-cli -- validate-factory-state-package target/fixture-checks/factory-state-reduced.json --json > target/fixture-checks/factory-state-reduced-summary.json
+	cargo run -q -p morph-cli -- print-factory-reduced-rights-fixture > target/fixture-checks/factory-reduced-rights.json
+	cargo run -q -p morph-cli -- validate-factory-reduced-rights-package target/fixture-checks/factory-reduced-rights.json --json > target/fixture-checks/factory-reduced-rights-summary.json
 	cargo run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
 	cargo run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
 	cargo run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json

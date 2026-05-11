@@ -84,8 +84,9 @@ Implemented devnet-level checks:
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
-  state packages, reduced host-side factory packages, local-exit evidence,
-  watchtower policy JSON, and multi-channel watchtower config JSON;
+  state packages, reduced host-side factory packages, reduced-rights factory
+  packages, local-exit evidence, watchtower policy JSON, and multi-channel
+  watchtower config JSON;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells;

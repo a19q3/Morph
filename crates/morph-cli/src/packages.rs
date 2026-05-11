@@ -9,20 +9,25 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
     BilateralSignatureWitnessV1, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
-    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1,
     FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
     FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryLocalExitWitnessV1,
-    FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
-    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN, StateHeaderV1,
-    blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
+    FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
+    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN,
+    StateHeaderV1, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
     factory_participants_commitment_v1, participants_commitment_v1,
     settlement_descriptor_commitment_v1, verify_bilateral_state_signatures,
-    verify_factory_state_signatures,
+    verify_factory_state_signatures, verify_reduced_factory_rights_update,
 };
 use serde::{Deserialize, Serialize};
 
 const PACKAGE_SCHEMA: &str = "morph.state_package.v1";
 const FACTORY_STATE_CELL_PACKAGE_SCHEMA: &str = "morph.factory_state_cell_package.v1";
+const FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA: &str = "morph.factory_reduced_rights_package.v1";
 const FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_local_exit_package.v1";
 const WATCH_CURSOR_SCHEMA: &str = "morph.watch_cursor.v1";
 
@@ -71,6 +76,106 @@ pub struct StoredFactoryStateCellPackage {
 pub struct FactoryStateCellPackageRecord {
     pub path: PathBuf,
     pub package: StoredFactoryStateCellPackage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryReducedRightsPackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub old_header_hex: String,
+    pub new_header_hex: String,
+    pub witness_hex: String,
+    pub source_factory_out_point: Option<PackageOutPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedRightsPackageSummary {
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FactoryStateCellUpdatePackage {
+    Full(StoredFactoryStateCellPackage),
+    ReducedRights(StoredFactoryReducedRightsPackage),
+}
+
+impl FactoryStateCellUpdatePackage {
+    pub fn new_header_bytes(&self) -> Result<Vec<u8>> {
+        match self {
+            Self::Full(package) => package.header_bytes(),
+            Self::ReducedRights(package) => package.new_header_bytes(),
+        }
+    }
+
+    pub fn witness_bytes(&self) -> Result<Vec<u8>> {
+        match self {
+            Self::Full(package) => package.witness_bytes(),
+            Self::ReducedRights(package) => package.witness_bytes(),
+        }
+    }
+
+    pub fn factory_id(&self) -> &str {
+        match self {
+            Self::Full(package) => &package.factory_id,
+            Self::ReducedRights(package) => &package.factory_id,
+        }
+    }
+
+    pub fn update_number(&self) -> u64 {
+        match self {
+            Self::Full(package) => package.update_number,
+            Self::ReducedRights(package) => package.new_update_number,
+        }
+    }
+
+    pub fn state_root(&self) -> &str {
+        match self {
+            Self::Full(package) => &package.state_root,
+            Self::ReducedRights(package) => &package.new_state_root,
+        }
+    }
+
+    pub fn access_manifest_root(&self) -> &str {
+        match self {
+            Self::Full(package) => &package.access_manifest_root,
+            Self::ReducedRights(package) => &package.new_access_manifest_root,
+        }
+    }
+
+    pub fn non_interference_digest(&self) -> &str {
+        match self {
+            Self::Full(package) => &package.non_interference_digest,
+            Self::ReducedRights(package) => &package.non_interference_digest,
+        }
+    }
+
+    pub fn validate_against_current_header(
+        &self,
+        current_header: &FactoryStateHeaderV1<'_>,
+    ) -> Result<()> {
+        match self {
+            Self::Full(_) => Ok(()),
+            Self::ReducedRights(package) => package.validate_against_current_header(current_header),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -350,6 +455,157 @@ impl StoredFactoryStateCellPackage {
     }
 }
 
+impl StoredFactoryReducedRightsPackage {
+    pub fn from_reduced_rights_update(
+        old_header_bytes: &[u8],
+        new_header_bytes: &[u8],
+        witness_bytes: &[u8],
+        source_factory_out_point: Option<PackageOutPoint>,
+    ) -> Result<Self> {
+        let old_header = parse_factory_header(old_header_bytes)?;
+        let new_header = parse_factory_header(new_header_bytes)?;
+        let witness = parse_factory_reduced_rights_witness(witness_bytes)?;
+        validate_reduced_rights_pair(&old_header, &new_header, &witness)?;
+
+        let package = Self {
+            schema: FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(new_header.factory_id()),
+            old_update_number: old_header.update_number(),
+            new_update_number: new_header.update_number(),
+            signing_digest: hex_prefixed(&new_header.signing_digest()),
+            old_state_root: hex_prefixed(old_header.state_root()),
+            new_state_root: hex_prefixed(new_header.state_root()),
+            old_access_manifest_root: hex_prefixed(old_header.access_manifest_root()),
+            new_access_manifest_root: hex_prefixed(new_header.access_manifest_root()),
+            non_interference_digest: hex_prefixed(new_header.non_interference_digest()),
+            old_header_hex: hex_prefixed(old_header_bytes),
+            new_header_hex: hex_prefixed(new_header_bytes),
+            witness_hex: hex_prefixed(witness_bytes),
+            source_factory_out_point,
+        };
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA,
+            "unsupported factory reduced-rights package schema {}",
+            self.schema
+        );
+
+        let old_header_bytes = self.old_header_bytes()?;
+        let new_header_bytes = self.new_header_bytes()?;
+        let witness_bytes = self.witness_bytes()?;
+        let old_header = parse_factory_header(&old_header_bytes)?;
+        let new_header = parse_factory_header(&new_header_bytes)?;
+        let witness = parse_factory_reduced_rights_witness(&witness_bytes)?;
+        validate_reduced_rights_pair(&old_header, &new_header, &witness)?;
+
+        ensure!(
+            self.factory_id == hex_prefixed(new_header.factory_id()),
+            "factory reduced-rights package factory_id does not match new header"
+        );
+        ensure!(
+            self.old_update_number == old_header.update_number(),
+            "factory reduced-rights package old_update_number does not match old header"
+        );
+        ensure!(
+            self.new_update_number == new_header.update_number(),
+            "factory reduced-rights package new_update_number does not match new header"
+        );
+        ensure!(
+            self.signing_digest == hex_prefixed(&new_header.signing_digest()),
+            "factory reduced-rights package signing_digest does not match new header"
+        );
+        ensure!(
+            self.old_state_root == hex_prefixed(old_header.state_root()),
+            "factory reduced-rights package old_state_root does not match old header"
+        );
+        ensure!(
+            self.new_state_root == hex_prefixed(new_header.state_root()),
+            "factory reduced-rights package new_state_root does not match new header"
+        );
+        ensure!(
+            self.old_access_manifest_root == hex_prefixed(old_header.access_manifest_root()),
+            "factory reduced-rights package old_access_manifest_root does not match old header"
+        );
+        ensure!(
+            self.new_access_manifest_root == hex_prefixed(new_header.access_manifest_root()),
+            "factory reduced-rights package new_access_manifest_root does not match new header"
+        );
+        ensure!(
+            self.non_interference_digest == hex_prefixed(new_header.non_interference_digest()),
+            "factory reduced-rights package non_interference_digest does not match new header"
+        );
+        Ok(())
+    }
+
+    pub fn validate_against_current_header(
+        &self,
+        current_header: &FactoryStateHeaderV1<'_>,
+    ) -> Result<()> {
+        self.validate()?;
+        let old_header_bytes = self.old_header_bytes()?;
+        let old_header = parse_factory_header(&old_header_bytes)?;
+        ensure!(
+            factory_headers_equal(&old_header, current_header),
+            "factory reduced-rights package old header does not match the current FactoryStateCell"
+        );
+        Ok(())
+    }
+
+    pub fn summary(&self) -> Result<FactoryReducedRightsPackageSummary> {
+        self.validate()?;
+        Ok(FactoryReducedRightsPackageSummary {
+            factory_id: self.factory_id.clone(),
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            signing_digest: self.signing_digest.clone(),
+            old_state_root: self.old_state_root.clone(),
+            new_state_root: self.new_state_root.clone(),
+            old_access_manifest_root: self.old_access_manifest_root.clone(),
+            new_access_manifest_root: self.new_access_manifest_root.clone(),
+            non_interference_digest: self.non_interference_digest.clone(),
+        })
+    }
+
+    pub fn old_header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.old_header_hex,
+            FACTORY_STATE_HEADER_V1_LEN,
+            "old_header_hex",
+        )
+    }
+
+    pub fn new_header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.new_header_hex,
+            FACTORY_STATE_HEADER_V1_LEN,
+            "new_header_hex",
+        )
+    }
+
+    pub fn witness_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.witness_hex,
+            FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
+            "witness_hex",
+        )
+    }
+
+    pub fn file_name(&self) -> String {
+        let factory = self.factory_id.trim_start_matches("0x");
+        let digest = self.signing_digest.trim_start_matches("0x");
+        format!(
+            "factory-reduced-rights-{factory}-{:020}-{}.json",
+            self.new_update_number,
+            &digest[0..16]
+        )
+    }
+}
+
 impl StoredFactoryLocalExitPackage {
     pub fn from_factory_local_exit(
         factory_header_bytes: &[u8],
@@ -533,6 +789,32 @@ pub fn write_factory_state_cell_package(
     Ok(path)
 }
 
+pub fn write_factory_reduced_rights_package(
+    dir: &Path,
+    package: &StoredFactoryReducedRightsPackage,
+) -> Result<PathBuf> {
+    package.validate()?;
+    fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create package directory {}", dir.display()))?;
+    let path = dir.join(package.file_name());
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json).with_context(|| {
+        format!(
+            "failed to write temporary reduced-rights package {}",
+            tmp.display()
+        )
+    })?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move reduced-rights package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
 pub fn default_watch_cursor_path(dir: &Path, channel_id: &str) -> Result<PathBuf> {
     let channel = canonical_hex32(channel_id)?;
     Ok(dir.join(format!(
@@ -597,6 +879,73 @@ pub fn read_factory_state_cell_package(path: &Path) -> Result<StoredFactoryState
     Ok(package)
 }
 
+pub fn read_factory_reduced_rights_package(
+    path: &Path,
+) -> Result<StoredFactoryReducedRightsPackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read factory reduced-rights package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryReducedRightsPackage =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "failed to parse factory reduced-rights package {}",
+                path.display()
+            )
+        })?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory reduced-rights package {}", path.display()))?;
+    Ok(package)
+}
+
+pub fn read_factory_state_cell_update_package(
+    path: &Path,
+) -> Result<FactoryStateCellUpdatePackage> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read factory update package {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse factory update package {}", path.display()))?;
+    let schema = value
+        .get("schema")
+        .and_then(|schema| schema.as_str())
+        .ok_or_else(|| anyhow!("factory update package {} has no schema", path.display()))?;
+    match schema {
+        FACTORY_STATE_CELL_PACKAGE_SCHEMA => {
+            let package: StoredFactoryStateCellPackage = serde_json::from_value(value)
+                .with_context(|| {
+                    format!(
+                        "failed to parse factory state-cell package {}",
+                        path.display()
+                    )
+                })?;
+            package.validate().with_context(|| {
+                format!("invalid factory state-cell package {}", path.display())
+            })?;
+            Ok(FactoryStateCellUpdatePackage::Full(package))
+        }
+        FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA => {
+            let package: StoredFactoryReducedRightsPackage = serde_json::from_value(value)
+                .with_context(|| {
+                    format!(
+                        "failed to parse factory reduced-rights package {}",
+                        path.display()
+                    )
+                })?;
+            package.validate().with_context(|| {
+                format!("invalid factory reduced-rights package {}", path.display())
+            })?;
+            Ok(FactoryStateCellUpdatePackage::ReducedRights(package))
+        }
+        other => Err(anyhow!(
+            "unsupported factory update package schema {other} in {}",
+            path.display()
+        )),
+    }
+}
+
 pub fn read_factory_local_exit_package(path: &Path) -> Result<StoredFactoryLocalExitPackage> {
     let bytes = fs::read(path).with_context(|| {
         format!(
@@ -615,6 +964,153 @@ pub fn read_factory_local_exit_package(path: &Path) -> Result<StoredFactoryLocal
         .validate()
         .with_context(|| format!("invalid factory local-exit package {}", path.display()))?;
     Ok(package)
+}
+
+pub fn reduced_rights_package_from_factory_header(
+    old_header_bytes: &[u8],
+    alice: &k256::ecdsa::SigningKey,
+    bob: &k256::ecdsa::SigningKey,
+    new_update_number: Option<u64>,
+    touched_after_balance: u128,
+    source_factory_out_point: Option<PackageOutPoint>,
+) -> Result<StoredFactoryReducedRightsPackage> {
+    let old_header = parse_factory_header(old_header_bytes)?;
+    let mut witness = reduced_rights_witness_bytes(touched_after_balance, alice, bob)?;
+    let parsed_witness = parse_factory_reduced_rights_witness(&witness)?;
+    let participant_entries = reduced_participant_entries(alice, bob);
+    let participants_commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (
+                participant_entries[0].0.as_slice(),
+                participant_entries[0].1.as_slice(),
+            ),
+            (
+                participant_entries[1].0.as_slice(),
+                participant_entries[1].1.as_slice(),
+            ),
+        ],
+    );
+    ensure!(
+        old_header.participants_commitment() == participants_commitment.as_slice(),
+        "live factory participant commitment does not match supplied Alice/Bob keys"
+    );
+    let before_root = parsed_witness
+        .rights_root(false)
+        .map_err(|err| anyhow!("failed to compute reduced-rights old root: {err:?}"))?;
+    ensure!(
+        old_header.state_root() == before_root.as_slice(),
+        "live factory state_root does not match reduced-rights old root"
+    );
+    let before_access_root = parsed_witness
+        .access_manifest_root(false)
+        .map_err(|err| anyhow!("failed to compute reduced-rights old access root: {err:?}"))?;
+    ensure!(
+        old_header.access_manifest_root() == before_access_root.as_slice(),
+        "live factory access_manifest_root does not match reduced-rights old access root"
+    );
+    let update_number = new_update_number.unwrap_or_else(|| old_header.update_number() + 1);
+    ensure!(
+        update_number > old_header.update_number(),
+        "new update number must be greater than old update number {}",
+        old_header.update_number()
+    );
+
+    let mut new_header = old_header_bytes.to_vec();
+    put_u64(&mut new_header, 68, update_number);
+    new_header[76..108].copy_from_slice(
+        &parsed_witness
+            .rights_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new root: {err:?}"))?,
+    );
+    new_header[140..172].copy_from_slice(
+        &parsed_witness
+            .access_manifest_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new access root: {err:?}"))?,
+    );
+    let preliminary_new = parse_factory_header(&new_header)?;
+    let non_interference_digest = parsed_witness
+        .non_interference_digest(&old_header, &preliminary_new)
+        .map_err(|err| anyhow!("failed to compute reduced-rights digest: {err:?}"))?;
+    new_header[172..204].copy_from_slice(&non_interference_digest);
+    let new_header_parsed = parse_factory_header(&new_header)?;
+    sign_reduced_rights_witness(
+        &mut witness,
+        [1u8; BYTE32_LEN],
+        alice,
+        &new_header_parsed.signing_digest(),
+    )?;
+
+    StoredFactoryReducedRightsPackage::from_reduced_rights_update(
+        old_header_bytes,
+        &new_header,
+        &witness,
+        source_factory_out_point,
+    )
+}
+
+pub fn fixture_factory_reduced_rights_package() -> Result<StoredFactoryReducedRightsPackage> {
+    let alice = k256::ecdsa::SigningKey::from_slice(&[1u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Alice key: {err:?}"))?;
+    let bob = k256::ecdsa::SigningKey::from_slice(&[2u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Bob key: {err:?}"))?;
+    let mut witness = reduced_rights_witness_bytes(90, &alice, &bob)?;
+    let parsed_witness = parse_factory_reduced_rights_witness(&witness)?;
+
+    let entries = reduced_participant_entries(&alice, &bob);
+    let participants_commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+
+    let mut old_header = factory_header_fixture(1, [8u8; BYTE32_LEN]);
+    old_header[76..108].copy_from_slice(
+        &parsed_witness
+            .rights_root(false)
+            .map_err(|err| anyhow!("failed to compute reduced-rights old root: {err:?}"))?,
+    );
+    old_header[108..140].copy_from_slice(&participants_commitment);
+    old_header[140..172].copy_from_slice(
+        &parsed_witness
+            .access_manifest_root(false)
+            .map_err(|err| anyhow!("failed to compute reduced-rights old access root: {err:?}"))?,
+    );
+    let old_parsed = parse_factory_header(&old_header)?;
+
+    let mut new_header = factory_header_fixture(2, [8u8; BYTE32_LEN]);
+    new_header[76..108].copy_from_slice(
+        &parsed_witness
+            .rights_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new root: {err:?}"))?,
+    );
+    new_header[108..140].copy_from_slice(&participants_commitment);
+    new_header[140..172].copy_from_slice(
+        &parsed_witness
+            .access_manifest_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new access root: {err:?}"))?,
+    );
+    let preliminary_new = parse_factory_header(&new_header)?;
+    let non_interference_digest = parsed_witness
+        .non_interference_digest(&old_parsed, &preliminary_new)
+        .map_err(|err| anyhow!("failed to compute reduced-rights digest: {err:?}"))?;
+    new_header[172..204].copy_from_slice(&non_interference_digest);
+    let new_parsed = parse_factory_header(&new_header)?;
+    sign_reduced_rights_witness(
+        &mut witness,
+        [1u8; BYTE32_LEN],
+        &alice,
+        &new_parsed.signing_digest(),
+    )?;
+
+    StoredFactoryReducedRightsPackage::from_reduced_rights_update(
+        &old_header,
+        &new_header,
+        &witness,
+        None,
+    )
 }
 
 pub fn fixture_factory_local_exit_package() -> Result<StoredFactoryLocalExitPackage> {
@@ -914,9 +1410,54 @@ fn parse_factory_witness(raw: &[u8]) -> Result<FactorySignatureWitnessV1<'_>> {
     Ok(witness)
 }
 
+fn parse_factory_reduced_rights_witness(raw: &[u8]) -> Result<FactoryReducedRightsWitnessV1<'_>> {
+    FactoryReducedRightsWitnessV1::parse(raw)
+        .map_err(|err| anyhow!("invalid factory reduced-rights witness: {err:?}"))
+}
+
 fn parse_factory_local_exit_witness(raw: &[u8]) -> Result<FactoryLocalExitWitnessV1<'_>> {
     FactoryLocalExitWitnessV1::parse(raw)
         .map_err(|err| anyhow!("invalid factory local-exit witness: {err:?}"))
+}
+
+fn validate_reduced_rights_pair(
+    old_header: &FactoryStateHeaderV1<'_>,
+    new_header: &FactoryStateHeaderV1<'_>,
+    witness: &FactoryReducedRightsWitnessV1<'_>,
+) -> Result<()> {
+    ensure!(
+        new_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        "unsupported factory signature scheme {}",
+        new_header.signature_scheme_id()
+    );
+    ensure!(
+        old_header.same_context_except_progress(new_header),
+        "factory reduced-rights package changes immutable factory context"
+    );
+    ensure!(
+        new_header.update_number() > old_header.update_number(),
+        "factory reduced-rights package must advance the update number"
+    );
+    verify_reduced_factory_rights_update(old_header, new_header, witness)
+        .map_err(|err| anyhow!("factory reduced-rights proof is invalid: {err:?}"))?;
+    Ok(())
+}
+
+fn factory_headers_equal(
+    left: &FactoryStateHeaderV1<'_>,
+    right: &FactoryStateHeaderV1<'_>,
+) -> bool {
+    left.protocol_version() == right.protocol_version()
+        && left.chain_id() == right.chain_id()
+        && left.signature_scheme_id() == right.signature_scheme_id()
+        && left.factory_id() == right.factory_id()
+        && left.update_number() == right.update_number()
+        && left.state_root() == right.state_root()
+        && left.participants_commitment() == right.participants_commitment()
+        && left.access_manifest_root() == right.access_manifest_root()
+        && left.non_interference_digest() == right.non_interference_digest()
+        && left.challenge_policy_commitment() == right.challenge_policy_commitment()
+        && left.state_layout_version() == right.state_layout_version()
 }
 
 fn validate_factory_local_exit_pair(
@@ -1040,6 +1581,147 @@ fn bilateral_ckb_descriptor(
     raw
 }
 
+fn factory_header_fixture(update_number: u64, factory_id: [u8; BYTE32_LEN]) -> Vec<u8> {
+    let mut header = vec![0u8; FACTORY_STATE_HEADER_V1_LEN];
+    put_u16(&mut header, 0, 1);
+    header[2..34].copy_from_slice(&[7u8; BYTE32_LEN]);
+    put_u16(&mut header, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1);
+    header[36..68].copy_from_slice(&factory_id);
+    put_u64(&mut header, 68, update_number);
+    header[204..236].copy_from_slice(&[12u8; BYTE32_LEN]);
+    put_u16(&mut header, 236, 1);
+    header
+}
+
+fn reduced_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_right_offset(after: bool, index: usize) -> usize {
+    let before_offset = reduced_touched_offset() + BYTE32_LEN;
+    if after {
+        before_offset
+            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
+            + index * FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_V1_LEN
+    }
+}
+
+fn factory_right_bytes(
+    participant: u8,
+    subchannel: u8,
+    kind: u8,
+    quantity: u128,
+) -> [u8; FACTORY_RIGHT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+    raw[0..BYTE32_LEN].fill(participant);
+    raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
+    raw[2 * BYTE32_LEN] = kind;
+    raw[2 * BYTE32_LEN + 1] = 0;
+    put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
+    raw
+}
+
+fn reduced_rights_pair(
+    touched_after_balance: u128,
+) -> (
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+) {
+    let before = [
+        factory_right_bytes(1, 10, 0, 100),
+        factory_right_bytes(1, 10, 1, 50),
+        factory_right_bytes(1, 10, 2, 1),
+        factory_right_bytes(1, 10, 3, 1),
+        factory_right_bytes(1, 10, 4, 20),
+        factory_right_bytes(2, 10, 0, 100),
+        factory_right_bytes(2, 10, 1, 50),
+        factory_right_bytes(2, 10, 2, 1),
+        factory_right_bytes(2, 10, 3, 1),
+        factory_right_bytes(2, 10, 4, 20),
+    ];
+    let mut after = before;
+    after[0] = factory_right_bytes(1, 10, 0, touched_after_balance);
+    (before, after)
+}
+
+fn reduced_participant_entries(
+    alice: &k256::ecdsa::SigningKey,
+    bob: &k256::ecdsa::SigningKey,
+) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
+    let mut entries = [
+        ([1u8; BYTE32_LEN], compressed_pubkey(alice)),
+        ([2u8; BYTE32_LEN], compressed_pubkey(bob)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
+fn reduced_rights_witness_bytes(
+    touched_after_balance: u128,
+    alice: &k256::ecdsa::SigningKey,
+    bob: &k256::ecdsa::SigningKey,
+) -> Result<[u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN]> {
+    let entries = reduced_participant_entries(alice, bob);
+    let (before, after) = reduced_rights_pair(touched_after_balance);
+
+    let mut raw = [0u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+        let offset = reduced_participant_offset(index);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(participant == &[1u8; BYTE32_LEN]);
+    }
+    raw[reduced_touched_offset()..reduced_touched_offset() + BYTE32_LEN]
+        .copy_from_slice(&[1u8; BYTE32_LEN]);
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+        let before_offset = reduced_right_offset(false, index);
+        raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&before[index]);
+        let after_offset = reduced_right_offset(true, index);
+        raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+    }
+    parse_factory_reduced_rights_witness(&raw)?;
+    Ok(raw)
+}
+
+fn sign_reduced_rights_witness(
+    witness: &mut [u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN],
+    participant: [u8; BYTE32_LEN],
+    key: &k256::ecdsa::SigningKey,
+    digest: &[u8; BYTE32_LEN],
+) -> Result<()> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    let sig: k256::ecdsa::Signature = key
+        .sign_prehash(digest)
+        .map_err(|err| anyhow!("failed to sign reduced factory rights witness: {err:?}"))?;
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+        let offset = reduced_participant_offset(index);
+        if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(sig.to_bytes().as_slice());
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "participant not present in reduced factory rights witness"
+    ))
+}
+
 fn signed_factory_witness(
     factory_header: &[u8],
     entries: &[(
@@ -1145,6 +1827,10 @@ fn put_u64(out: &mut [u8], offset: usize, value: u64) {
     out[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
+fn put_u128(out: &mut [u8], offset: usize, value: u128) {
+    out[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1221,6 +1907,40 @@ mod tests {
         let err = StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None)
             .unwrap_err();
         assert!(err.to_string().contains("signatures are invalid"));
+    }
+
+    #[test]
+    fn writes_reads_and_validates_factory_reduced_rights_package() {
+        let dir = temp_dir("factory-reduced-rights");
+        let package = fixture_factory_reduced_rights_package().unwrap();
+        let path = write_factory_reduced_rights_package(&dir, &package).unwrap();
+
+        let loaded = read_factory_reduced_rights_package(&path).unwrap();
+        let summary = loaded.summary().unwrap();
+        assert_eq!(summary.old_update_number, 1);
+        assert_eq!(summary.new_update_number, 2);
+
+        let update_package = read_factory_state_cell_update_package(&path).unwrap();
+        assert_eq!(update_package.update_number(), 2);
+        assert_eq!(update_package.factory_id(), package.factory_id);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_tampered_factory_reduced_rights_signature() {
+        let mut package = fixture_factory_reduced_rights_package().unwrap();
+        let mut witness = package.witness_bytes().unwrap();
+        let signature_offset =
+            reduced_participant_offset(0) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+        witness[signature_offset + ECDSA_SIGNATURE_LEN - 1] ^= 1;
+        package.witness_hex = hex_prefixed(&witness);
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("factory reduced-rights proof is invalid")
+        );
     }
 
     #[test]

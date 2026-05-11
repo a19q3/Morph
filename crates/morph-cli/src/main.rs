@@ -11,10 +11,10 @@ use devnet::{
     FactoryExitChannelTamper, FactorySmokeOptions, FactoryXudtNegativeSmokeOptions,
     FactoryXudtSmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
     FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
-    PublishStateOptions, SaveFactoryStatePackageOptions, SaveStatePackageOptions,
-    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
-    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
-    XudtSmokeOptions,
+    PublishStateOptions, SaveFactoryReducedRightsPackageOptions, SaveFactoryStatePackageOptions,
+    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
+    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
+    XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -51,6 +51,8 @@ enum Command {
     PrintFactoryStateFixture,
     /// Print a host-side authorised-participant signed factory state package fixture.
     PrintReducedFactoryStateFixture,
+    /// Print an on-chain reduced-rights factory update package fixture.
+    PrintFactoryReducedRightsFixture,
     /// Print a valid factory local-exit evidence package fixture.
     PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
@@ -84,6 +86,14 @@ enum Command {
     /// Validate a conservative all-participant signed factory state package.
     ValidateFactoryStatePackage {
         /// Path to the factory state package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate an on-chain reduced-rights factory update package.
+    ValidateFactoryReducedRightsPackage {
+        /// Path to the factory reduced-rights package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -399,6 +409,30 @@ enum DevnetCommand {
         #[arg(long)]
         non_interference_digest: Option<String>,
         /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a reduced-rights factory update package without broadcasting it.
+    SaveFactoryReducedRightsPackage {
+        /// Devnet Alice factory signing key. Alice is the touched participant in the bounded V1 proof.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced update.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// New update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// New Alice balance quantity in the bounded rights fixture. Must be lower than 100.
+        #[arg(long, default_value_t = 90)]
+        touched_after_balance: u128,
+        /// Directory where reduced-rights factory packages are stored.
         #[arg(long, default_value = "target/morph-factory-state-packages")]
         store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
@@ -1328,6 +1362,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintFactoryReducedRightsFixture => {
+            let package = packages::fixture_factory_reduced_rights_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintFactoryLocalExitFixture => {
             let package = packages::fixture_factory_local_exit_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -1430,6 +1469,34 @@ fn main() -> Result<()> {
                 println!("participants={}", summary.participants);
                 println!("signatures={}", summary.signatures);
                 println!("factory_state_digest={}", summary.factory_state_digest);
+            }
+            Ok(())
+        }
+        Command::ValidateFactoryReducedRightsPackage { path, json } => {
+            let package = packages::read_factory_reduced_rights_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory reduced-rights package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("old_update_number={}", summary.old_update_number);
+                println!("new_update_number={}", summary.new_update_number);
+                println!("signing_digest={}", summary.signing_digest);
+                println!("old_state_root={}", summary.old_state_root);
+                println!("new_state_root={}", summary.new_state_root);
+                println!(
+                    "old_access_manifest_root={}",
+                    summary.old_access_manifest_root
+                );
+                println!(
+                    "new_access_manifest_root={}",
+                    summary.new_access_manifest_root
+                );
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
             }
             Ok(())
         }
@@ -1994,6 +2061,50 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!(
                     "access_manifest_root={}",
                     report.package.access_manifest_root
+                );
+                println!(
+                    "non_interference_digest={}",
+                    report.package.non_interference_digest
+                );
+            }
+        }
+        DevnetCommand::SaveFactoryReducedRightsPackage {
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            update_number,
+            touched_after_balance,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_factory_reduced_rights_package(
+                &rpc,
+                SaveFactoryReducedRightsPackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    update_number,
+                    touched_after_balance,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("factory_id={}", report.package.factory_id);
+                println!("old_update_number={}", report.package.old_update_number);
+                println!("new_update_number={}", report.package.new_update_number);
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("old_state_root={}", report.package.old_state_root);
+                println!("new_state_root={}", report.package.new_state_root);
+                println!(
+                    "old_access_manifest_root={}",
+                    report.package.old_access_manifest_root
+                );
+                println!(
+                    "new_access_manifest_root={}",
+                    report.package.new_access_manifest_root
                 );
                 println!(
                     "non_interference_digest={}",

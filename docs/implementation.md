@@ -105,8 +105,13 @@ For chain publication, the CLI also supports a narrower factory-state-cell
 package. It stores the exact `FactoryStateHeaderV1` bytes and the
 `FactorySignatureWitnessV1` bytes expected by `morph-factory-type`, so the
 state evidence can be reused while the transaction body, fee input, and owner
-change are rebuilt later. `update-factory --factory-state-package` keeps the
-FactoryStateCell capacity unchanged and pays fees from a normal owner cell.
+change are rebuilt later. The same `update-factory --factory-state-package`
+entry point now also recognises `FactoryReducedRightsPackage` JSON, which
+stores old header, new header, and the reduced-rights witness. For reduced
+packages the CLI checks that the package's old header matches the currently
+live FactoryStateCell before rebuilding the transaction. In both modes, the
+FactoryStateCell capacity stays unchanged and fees are paid from a normal owner
+cell.
 
 The conservative factory-local exit path now materialises a bilateral child
 channel on devnet without claiming reduced-signature proof mode. The transaction

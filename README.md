@@ -199,6 +199,10 @@ cargo run -p morph-cli -- print-reduced-factory-state-fixture \
   > target/factory-state-reduced.json
 cargo run -p morph-cli -- validate-factory-state-package \
   target/factory-state-reduced.json --json
+cargo run -p morph-cli -- print-factory-reduced-rights-fixture \
+  > target/factory-reduced-rights.json
+cargo run -p morph-cli -- validate-factory-reduced-rights-package \
+  target/factory-reduced-rights.json --json
 cargo run -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json
 cargo run -p morph-cli -- validate-factory-local-exit-package \
