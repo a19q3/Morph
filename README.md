@@ -16,13 +16,17 @@ Current implementation stage:
 - `morph-core`: protocol objects and validation invariants for state
   supersession, sponsor policy, vault settlement, and partition conservation.
 - `morph-cli`: local smoke tooling for fixture generation and invariant checks.
-- `contracts/`: CKB script entrypoint plan and error-code boundary. The first
-  real devnet contract milestone is to port the fixed-width validation subset
-  from `morph-core` into no-std scripts.
+- `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
+  progression, funding-anchor binding, and monotonic settling publication.
+- `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
+  gated by a unique current settling State Cell and relative `since`.
+- `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
+  fee spending and clean sponsor change.
 
 This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable
-checks.
+checks. Participant signature verification and devnet broadcast tooling are the
+next milestone; this repository does not use an always-success placeholder.
 
 ## Repository Layout
 
@@ -39,7 +43,7 @@ docs/                  Devnet and implementation notes.
 ```sh
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
+make build-contracts
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md).
-

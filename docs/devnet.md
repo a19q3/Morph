@@ -33,6 +33,7 @@ rustup target list --installed | grep riscv64imac-unknown-none-elf
 ```sh
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
+make build-contracts
 ```
 
 These checks exercise the same invariants that the scripts must enforce:
@@ -46,11 +47,18 @@ These checks exercise the same invariants that the scripts must enforce:
 - bounded sponsor policy;
 - vault settlement gated by current settling state and `since`.
 
-## First Contract Milestone
+`make build-contracts` currently produces these CKB RISC-V ELFs:
 
-The contract implementation should not start from a generic VM-like descriptor.
-The first devnet contract should use fixed-width headers and a narrow witness
-format:
+```text
+target/riscv64imac-unknown-none-elf/release/morph-state-type
+target/riscv64imac-unknown-none-elf/release/morph-vault-lock
+target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
+```
+
+## Contract Milestone
+
+The contract implementation uses fixed-width headers and a narrow witness
+format. It deliberately does not start from a generic VM-like descriptor:
 
 ```text
 StateHeaderV1
@@ -62,3 +70,9 @@ SettlementDescriptorV1
 Factory proof mode should not be enabled on devnet until a concrete
 rights-dependency proof predicate exists.
 
+## Remaining Devnet Gap
+
+The local machine still needs `ckb` and `ckb-cli` on PATH before the scripts can
+be deployed and exercised against a live devnet node. Until then, the repository
+can build the script ELFs and run host-side invariant tests, but it cannot
+broadcast funding, publication, supersession, or finalisation transactions.

@@ -1,10 +1,9 @@
 # CKB Contracts
 
-This directory records the planned script boundary for devnet contracts.
+This directory contains the CKB script boundary for the devnet prototype.
 
-The repository currently implements the protocol semantics in `morph-core`.
-The first contract milestone is to port the fixed-width V1 validation subset
-into no-std CKB scripts:
+The repository implements host-side protocol semantics in `morph-core` and the
+fixed-width V1 validation subset in no-std CKB scripts:
 
 - `morph-state-type`: owns State Cell progression and state-number monotonicity.
 - `morph-vault-lock`: owns vault settlement and current-state authorisation.
@@ -13,3 +12,11 @@ into no-std CKB scripts:
 Do not deploy an always-success placeholder as Morph Channel. A devnet release
 must include negative transaction tests for the audit matrix.
 
+Build the current scripts with:
+
+```sh
+make build-contracts
+```
+
+The output ELFs are under
+`target/riscv64imac-unknown-none-elf/release/`.
