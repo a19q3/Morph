@@ -127,6 +127,18 @@ enum Command {
         /// Skip checking deployed script hashes against local contract binaries.
         #[arg(long)]
         skip_contract_hash_check: bool,
+        /// Maximum allowed total estimated cycles across all recorded transactions.
+        #[arg(long)]
+        max_total_cycles: Option<u64>,
+        /// Maximum allowed estimated cycles for any single recorded transaction.
+        #[arg(long)]
+        max_tx_cycles: Option<u64>,
+        /// Maximum allowed total serialized bytes across all recorded transactions.
+        #[arg(long)]
+        max_total_bytes: Option<usize>,
+        /// Maximum allowed serialized bytes for any single recorded transaction.
+        #[arg(long)]
+        max_tx_bytes: Option<usize>,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1573,10 +1585,28 @@ fn main() -> Result<()> {
             dir,
             contracts_dir,
             skip_contract_hash_check,
+            max_total_cycles,
+            max_tx_cycles,
+            max_total_bytes,
+            max_tx_bytes,
             json,
         } => {
             let contracts_dir = (!skip_contract_hash_check).then_some(contracts_dir.as_path());
-            let report = smoke_report::assert_default_devnet_smoke(&dir, contracts_dir)?;
+            let budget_limits = smoke_report::DevnetSmokeBudgetLimits {
+                max_total_cycles,
+                max_tx_cycles,
+                max_total_bytes,
+                max_tx_bytes,
+            };
+            let report = if budget_limits.has_any_limit() {
+                smoke_report::assert_default_devnet_smoke_with_budget(
+                    &dir,
+                    contracts_dir,
+                    Some(&budget_limits),
+                )?
+            } else {
+                smoke_report::assert_default_devnet_smoke(&dir, contracts_dir)?
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -1608,7 +1638,17 @@ fn main() -> Result<()> {
                     "watchtower_service_records={}",
                     report.watchtower_service_records
                 );
+                println!(
+                    "factory_reduced_rights_updates={}",
+                    report.factory_reduced_rights_updates
+                );
                 println!("factory_local_exits={}", report.factory_local_exits);
+                if let Some(budget) = &report.budget {
+                    println!("budget_total_cycles={}", budget.total_estimated_cycles);
+                    println!("budget_max_tx_cycles={}", budget.max_estimated_cycles);
+                    println!("budget_total_bytes={}", budget.total_tx_size_bytes);
+                    println!("budget_max_tx_bytes={}", budget.max_tx_size_bytes);
+                }
             }
             Ok(())
         }

@@ -85,6 +85,8 @@ Implemented devnet-level checks:
   local-exit evidence through `devnet-smoke-assert`;
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
+- absolute smoke budget gates for total and per-transaction cycle/byte ceilings
+  through `devnet-smoke-assert`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
   state packages, reduced host-side factory packages, reduced-rights factory
   packages, local-exit evidence, watchtower policy JSON, and multi-channel

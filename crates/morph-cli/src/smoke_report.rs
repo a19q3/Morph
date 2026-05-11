@@ -40,6 +40,8 @@ pub struct DevnetSmokeAssertionReport {
     pub watchtower_service_records: usize,
     pub factory_reduced_rights_updates: usize,
     pub factory_local_exits: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<DevnetSmokeBudgetReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -157,6 +159,35 @@ pub struct DevnetSmokeComparison {
     pub transaction_deltas: Vec<TransactionMetricDelta>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DevnetSmokeBudgetLimits {
+    pub max_total_cycles: Option<u64>,
+    pub max_tx_cycles: Option<u64>,
+    pub max_total_bytes: Option<usize>,
+    pub max_tx_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DevnetSmokeBudgetReport {
+    pub total_estimated_cycles: u64,
+    pub max_estimated_cycles: u64,
+    pub total_tx_size_bytes: usize,
+    pub max_tx_size_bytes: usize,
+    pub max_total_cycles: Option<u64>,
+    pub max_tx_cycles: Option<u64>,
+    pub max_total_bytes: Option<usize>,
+    pub max_tx_bytes: Option<usize>,
+}
+
+impl DevnetSmokeBudgetLimits {
+    pub fn has_any_limit(&self) -> bool {
+        self.max_total_cycles.is_some()
+            || self.max_tx_cycles.is_some()
+            || self.max_total_bytes.is_some()
+            || self.max_tx_bytes.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DevnetSmokeComparisonLimits {
     pub fail_on_transaction_set_change: bool,
@@ -252,11 +283,23 @@ pub fn assert_default_devnet_smoke(
     dir: &Path,
     contracts_dir: Option<&Path>,
 ) -> Result<DevnetSmokeAssertionReport> {
+    assert_default_devnet_smoke_with_budget(dir, contracts_dir, None)
+}
+
+pub fn assert_default_devnet_smoke_with_budget(
+    dir: &Path,
+    contracts_dir: Option<&Path>,
+    budget_limits: Option<&DevnetSmokeBudgetLimits>,
+) -> Result<DevnetSmokeAssertionReport> {
     let summary = summarize_devnet_smoke(dir)?;
     assert_devnet_smoke_summary(&summary)?;
     if let Some(contracts_dir) = contracts_dir {
         assert_deployed_script_hashes(&summary, contracts_dir)?;
     }
+    let budget = budget_limits
+        .filter(|limits| limits.has_any_limit())
+        .map(|limits| assert_smoke_budget(&summary, limits))
+        .transpose()?;
     Ok(DevnetSmokeAssertionReport {
         git_commit: summary.manifest.get("git_commit").cloned(),
         git_dirty: summary.manifest.get("git_dirty").cloned(),
@@ -275,6 +318,7 @@ pub fn assert_default_devnet_smoke(
         watchtower_service_records: summary.watchtower_services.len(),
         factory_reduced_rights_updates: summary.factory_reduced_rights_updates.len(),
         factory_local_exits: summary.factory_local_exits.len(),
+        budget,
     })
 }
 
@@ -688,6 +732,55 @@ pub fn assert_comparison_limits(
         ));
     }
     Ok(())
+}
+
+pub fn assert_smoke_budget(
+    summary: &DevnetSmokeSummary,
+    limits: &DevnetSmokeBudgetLimits,
+) -> Result<DevnetSmokeBudgetReport> {
+    if let Some(limit) = limits.max_total_cycles {
+        let actual = summary.totals.total_estimated_cycles;
+        if actual > limit {
+            return Err(anyhow!(
+                "total estimated cycles {actual} exceeds budget {limit}"
+            ));
+        }
+    }
+    if let Some(limit) = limits.max_tx_cycles {
+        let actual = summary.totals.max_estimated_cycles;
+        if actual > limit {
+            return Err(anyhow!(
+                "max transaction estimated cycles {actual} exceeds budget {limit}"
+            ));
+        }
+    }
+    if let Some(limit) = limits.max_total_bytes {
+        let actual = summary.totals.total_tx_size_bytes;
+        if actual > limit {
+            return Err(anyhow!(
+                "total transaction bytes {actual} exceeds budget {limit}"
+            ));
+        }
+    }
+    if let Some(limit) = limits.max_tx_bytes {
+        let actual = summary.totals.max_tx_size_bytes;
+        if actual > limit {
+            return Err(anyhow!(
+                "max transaction bytes {actual} exceeds budget {limit}"
+            ));
+        }
+    }
+
+    Ok(DevnetSmokeBudgetReport {
+        total_estimated_cycles: summary.totals.total_estimated_cycles,
+        max_estimated_cycles: summary.totals.max_estimated_cycles,
+        total_tx_size_bytes: summary.totals.total_tx_size_bytes,
+        max_tx_size_bytes: summary.totals.max_tx_size_bytes,
+        max_total_cycles: limits.max_total_cycles,
+        max_tx_cycles: limits.max_tx_cycles,
+        max_total_bytes: limits.max_total_bytes,
+        max_tx_bytes: limits.max_tx_bytes,
+    })
 }
 
 pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
@@ -1625,6 +1718,44 @@ mod tests {
             err.to_string()
                 .contains("watchtower health report must show stopped by stop_file")
         );
+    }
+
+    #[test]
+    fn smoke_budget_accepts_within_limits() {
+        let mut summary = passing_assertion_summary();
+        summary.totals.total_estimated_cycles = 100;
+        summary.totals.max_estimated_cycles = 80;
+        summary.totals.total_tx_size_bytes = 200;
+        summary.totals.max_tx_size_bytes = 120;
+
+        let report = assert_smoke_budget(
+            &summary,
+            &DevnetSmokeBudgetLimits {
+                max_total_cycles: Some(100),
+                max_tx_cycles: Some(80),
+                max_total_bytes: Some(200),
+                max_tx_bytes: Some(120),
+            },
+        )
+        .unwrap();
+        assert_eq!(report.total_estimated_cycles, 100);
+        assert_eq!(report.max_estimated_cycles, 80);
+    }
+
+    #[test]
+    fn smoke_budget_rejects_excess_transaction_cycles() {
+        let mut summary = passing_assertion_summary();
+        summary.totals.max_estimated_cycles = 81;
+
+        let err = assert_smoke_budget(
+            &summary,
+            &DevnetSmokeBudgetLimits {
+                max_tx_cycles: Some(80),
+                ..DevnetSmokeBudgetLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("max transaction estimated cycles"));
     }
 
     #[test]

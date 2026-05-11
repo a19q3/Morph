@@ -89,6 +89,8 @@ Acceptance criteria:
   factory local-exit evidence.
 - completed smoke directories can be compared with optional regression gates
   for transaction set, status, cycles, and byte size.
+- completed smoke directories can be checked against absolute cycle and byte
+  budgets in the same assertion command used for semantic smoke coverage.
 - CI validates generated bilateral fixtures, factory packages, factory
   local-exit evidence, reduced host-side factory packages, and watchtower
   policies.
@@ -175,6 +177,7 @@ Implemented:
 - non-interference digest binding;
 - one authorised signature over the new FactoryStateHeader;
 - devnet smoke coverage for reduced-rights package publication;
+- absolute smoke budget gates for cycle and transaction-size ceilings;
 - rejection of touched-right inflation and unrelated participant mutation in
   CKB-VM tests.
 
@@ -182,4 +185,4 @@ Still open:
 
 - reduced-signature value-releasing factory exits;
 - general Merkle proof bundles for larger factories;
-- benchmarked cycle limits for larger proof shapes.
+- empirical budget profiles for larger proof shapes.

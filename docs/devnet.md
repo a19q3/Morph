@@ -133,7 +133,19 @@ make smoke-assert
 RISC-V binaries in `target/riscv64imac-unknown-none-elf/release` by default.
 Use `--contracts-dir` for another build directory, or
 `--skip-contract-hash-check` only when reviewing archived smoke output without
-the matching binaries.
+the matching binaries. The same command can enforce absolute smoke budgets:
+
+```sh
+cargo run -q -p morph-cli -- devnet-smoke-assert \
+  --dir target/devnet-smoke/<timestamp> \
+  --max-total-cycles 50000000 \
+  --max-tx-cycles 10000000 \
+  --max-total-bytes 1000000 \
+  --max-tx-bytes 10000
+```
+
+These are absolute ceilings for a completed smoke run. They complement
+`devnet-smoke-compare`, which is a relative gate between two runs.
 
 Two completed runs can be compared without replaying devnet:
 
