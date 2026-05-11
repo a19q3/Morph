@@ -32,6 +32,16 @@ The local machine currently has a usable CKB node binary at
 for manual inspection; the implementation should use Morph-specific RPC tooling
 for deploy, publish, supersede, and finalise transactions.
 
+To start an isolated local dev node:
+
+```sh
+scripts/devnet-node.sh
+```
+
+By default this initialises `target/devnet/node`, listens on RPC port `18114`,
+and uses the local CKB debug binary. Override with `CKB_BIN`, `CKB_DIR`,
+`RPC_PORT`, or `P2P_PORT` when needed.
+
 ## Current Smoke Checks
 
 ```sh
