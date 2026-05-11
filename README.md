@@ -83,4 +83,9 @@ deployment, open, publication, sponsor top-up, supersession, and finalisation
 transaction, including finalise-since, sponsor budget, competing-spend, and
 CKB+xUDT smoke paths.
 `scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
-then writes the JSON and log artefacts under `target/devnet-smoke/`.
+then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
+`target/devnet-smoke/`. To rebuild the summary for a previous run:
+
+```sh
+cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
+```

@@ -70,6 +70,8 @@ A devnet demonstration is acceptable only when it includes:
   on-chain and can be resolved by rotating to a fresh SponsorCell;
 - reusable signed state packages that can be published without channel signing
   keys;
+- a smoke summary report that preserves cycle, size, status, and expected
+  script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

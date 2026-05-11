@@ -19,6 +19,7 @@ use rpc::{CkbRpcClient, HeaderView};
 mod devnet;
 mod packages;
 mod rpc;
+mod smoke_report;
 
 #[derive(Debug, Parser)]
 #[command(name = "morph")]
@@ -34,6 +35,15 @@ enum Command {
     ValidateFixture,
     /// Print a JSON state header fixture and signing digest.
     PrintFixture,
+    /// Summarise a completed scripts/devnet-smoke.sh output directory.
+    DevnetSmokeReport {
+        /// Directory produced by scripts/devnet-smoke.sh.
+        #[arg(long, default_value = "target/devnet-smoke/latest")]
+        dir: std::path::PathBuf,
+        /// Emit machine-readable JSON instead of Markdown.
+        #[arg(long)]
+        json: bool,
+    },
     /// Talk to a local CKB devnet node without relying on ckb-cli.
     Devnet {
         /// CKB JSON-RPC endpoint.
@@ -736,6 +746,15 @@ fn main() -> Result<()> {
     match cli.command {
         Command::ValidateFixture => validate_fixture(),
         Command::PrintFixture => print_fixture(),
+        Command::DevnetSmokeReport { dir, json } => {
+            let summary = smoke_report::summarize_devnet_smoke(&dir)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print!("{}", smoke_report::render_markdown(&summary));
+            }
+            Ok(())
+        }
         Command::Devnet { rpc_url, command } => run_devnet(&rpc_url, command),
     }
 }

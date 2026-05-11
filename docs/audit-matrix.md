@@ -37,7 +37,8 @@ Implemented devnet-level checks:
   `devnet sponsor-budget-negative-smoke`;
 - sponsor state-number range rejection through
   `devnet sponsor-policy-negative-smoke`;
-- node-reported cycle measurement and transaction size reporting;
+- node-reported cycle measurement and transaction size reporting, summarised by
+  `devnet-smoke-report`;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells.

@@ -87,6 +87,22 @@ writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
+At the end of a successful run, the script also writes:
+
+```text
+summary.md
+summary.json
+```
+
+These summaries are generated from the smoke JSON files and include every
+transaction's node-estimated cycles, transaction size, status, block number, and
+expected script failure. They can be regenerated for an existing run:
+
+```sh
+cargo run -q -p morph-cli -- devnet-smoke-report \
+  --dir target/devnet-smoke/<timestamp>
+```
+
 Devnet transaction reports include two measurement fields:
 
 ```text

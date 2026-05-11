@@ -24,9 +24,10 @@ newer signed state over the old settling state, finalise the vault, and run a
 competing-spend smoke, a finalise-since negative smoke, a sponsor-budget
 negative smoke, a CKB+xUDT settlement smoke, and a tampered-settlement xUDT
 negative smoke through native JSON-RPC. Each transaction report includes
-node-estimated cycles and serialized
-transaction size. SponsorCells can carry explicit state-number and fee-budget
-bounds.
+node-estimated cycles and serialized transaction size. SponsorCells can carry
+explicit state-number and fee-budget bounds. Smoke runs also produce Markdown
+and machine-readable benchmark summaries from the collected transaction
+reports.
 
 Required deliverables:
 
@@ -41,6 +42,8 @@ Required deliverables:
 - RPC transaction builder.
 - Publish, supersede, and finalise devnet path.
 - Per-transaction cycle and size reporting from the devnet node.
+- Devnet smoke summary report for cycle, size, status, and expected script
+  failure review.
 - Configurable SponsorCell state-number and fee-budget policy.
 
 Acceptance criteria:
@@ -68,6 +71,8 @@ Acceptance criteria:
   be rebuilt against the confirmed live StateCell.
 - JSON devnet reports expose `estimated_cycles` and `tx_size_bytes` for every
   lifecycle transaction.
+- completed smoke directories can be summarised into `summary.md` and
+  `summary.json`.
 
 ## M2: Watchtower
 

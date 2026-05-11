@@ -95,4 +95,9 @@ finished_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 status=passed
 EOF
 
+log "summary -> $OUT_DIR/summary.md"
+cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" >"$OUT_DIR/summary.md"
+log "summary-json -> $OUT_DIR/summary.json"
+cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" --json >"$OUT_DIR/summary.json"
+
 log "passed; artefacts are in $OUT_DIR"
