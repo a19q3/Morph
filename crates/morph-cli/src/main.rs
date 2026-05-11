@@ -1496,6 +1496,10 @@ fn main() -> Result<()> {
                     "watchtower_publication_alerts={}",
                     report.watchtower_publication_alerts
                 );
+                println!(
+                    "watchtower_service_records={}",
+                    report.watchtower_service_records
+                );
                 println!("factory_local_exits={}", report.factory_local_exits);
             }
             Ok(())

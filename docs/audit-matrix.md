@@ -24,9 +24,9 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
 | Watchtower runtime key material stays outside the config | `resolves_private_key_from_file`, `rejects_ambiguous_private_key_sources`, `rejects_multi_token_private_key_file`, `falls_back_to_devnet_key_for_local_watchers` |
-| Watchtower service has bounded operational control | `service_stops_before_rpc_when_stop_file_exists`, `rejects_invalid_service_options` |
+| Watchtower service has bounded operational control | `service_stops_before_rpc_when_stop_file_exists`, `rejects_invalid_service_options`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
-| Smoke evidence contains watchtower detection and publication alerts | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage` |
+| Smoke evidence contains watchtower detection, publication, service, and health records | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
 | Smoke comparison can be used as a regression gate | `comparison_limits_reject_metric_regressions`, `comparison_limits_reject_set_and_status_changes` |
 | Generated host-side fixtures are CI-validated | `make fixture-checks` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
@@ -71,6 +71,8 @@ Implemented devnet-level checks:
   submitted publication, and idle scans;
 - smoke assertions that require older-state detection and publication-submitted
   watchtower alert evidence in the default smoke run;
+- smoke assertions that require watchtower service and health-file evidence for
+  the bounded stop-file path in the default smoke run;
 - node-reported cycle measurement and transaction size reporting, summarised by
   `devnet-smoke-report`;
 - semantic smoke coverage assertions for the expected negative-path script

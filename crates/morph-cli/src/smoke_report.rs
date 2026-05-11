@@ -19,6 +19,7 @@ pub struct DevnetSmokeSummary {
     pub script_failures: Vec<ScriptFailureSummary>,
     pub deployed_scripts: Vec<DeployedScriptSummary>,
     pub watchtower_alerts: Vec<WatchtowerAlertSummary>,
+    pub watchtower_services: Vec<WatchtowerServiceSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
@@ -35,6 +36,7 @@ pub struct DevnetSmokeAssertionReport {
     pub deployed_script_hashes_verified: bool,
     pub watchtower_alerts: usize,
     pub watchtower_publication_alerts: usize,
+    pub watchtower_service_records: usize,
     pub factory_local_exits: usize,
 }
 
@@ -83,6 +85,21 @@ pub struct WatchtowerAlertSummary {
     pub publication_tx_hash: Option<String>,
     pub scanned_to_block: u64,
     pub next_from_block: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WatchtowerServiceSummary {
+    pub check: String,
+    pub path: String,
+    pub schema: String,
+    pub status: Option<String>,
+    pub stopped_reason: Option<String>,
+    pub completed_passes: u64,
+    pub published_count: usize,
+    pub idle_count: usize,
+    pub error_count: u64,
+    pub consecutive_errors: u64,
+    pub health_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -158,6 +175,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut script_failures = Vec::new();
     let mut deployed_scripts = Vec::new();
     let mut watchtower_alerts = Vec::new();
+    let mut watchtower_services = Vec::new();
     let mut factory_local_exits = Vec::new();
     for path in &json_paths {
         let relative = path
@@ -177,6 +195,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             &mut transactions,
             &mut script_failures,
             &mut deployed_scripts,
+            &mut watchtower_services,
             &mut factory_local_exits,
         )
         .with_context(|| format!("failed to inspect smoke JSON {}", path.display()))?;
@@ -194,6 +213,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         script_failures,
         deployed_scripts,
         watchtower_alerts,
+        watchtower_services,
         factory_local_exits,
         totals,
     })
@@ -232,6 +252,7 @@ pub fn assert_default_devnet_smoke(
             .iter()
             .filter(|alert| alert.event == "publication_submitted")
             .count(),
+        watchtower_service_records: summary.watchtower_services.len(),
         factory_local_exits: summary.factory_local_exits.len(),
     })
 }
@@ -300,6 +321,7 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
     }
 
     assert_watchtower_alert_coverage(summary)?;
+    assert_watchtower_service_coverage(summary)?;
 
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
         return Err(anyhow!(
@@ -336,6 +358,55 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
             xudt_descriptors,
             EXPECTED_FACTORY_CKB_EXITS,
             EXPECTED_FACTORY_XUDT_EXITS
+        ));
+    }
+    Ok(())
+}
+
+fn assert_watchtower_service_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    if summary.watchtower_services.len() != EXPECTED_WATCHTOWER_SERVICE_RECORDS {
+        return Err(anyhow!(
+            "unexpected watchtower service record count: got {}, expected {}",
+            summary.watchtower_services.len(),
+            EXPECTED_WATCHTOWER_SERVICE_RECORDS
+        ));
+    }
+    let service = summary
+        .watchtower_services
+        .iter()
+        .find(|record| record.schema == "morph.watchtower_config_service.v1")
+        .ok_or_else(|| anyhow!("missing watchtower service report"))?;
+    if service.stopped_reason.as_deref() != Some("stop_file") {
+        return Err(anyhow!(
+            "watchtower service report must stop through stop_file"
+        ));
+    }
+    if service.completed_passes != 0 || service.error_count != 0 {
+        return Err(anyhow!(
+            "watchtower service stop-file smoke must stop before passes or errors"
+        ));
+    }
+    if service.health_file.is_none() {
+        return Err(anyhow!(
+            "watchtower service report must include health_file"
+        ));
+    }
+
+    let health = summary
+        .watchtower_services
+        .iter()
+        .find(|record| record.schema == "morph.watchtower_health.v1")
+        .ok_or_else(|| anyhow!("missing watchtower health report"))?;
+    if health.status.as_deref() != Some("stopped")
+        || health.stopped_reason.as_deref() != Some("stop_file")
+    {
+        return Err(anyhow!(
+            "watchtower health report must show stopped by stop_file"
+        ));
+    }
+    if health.completed_passes != 0 || health.error_count != 0 {
+        return Err(anyhow!(
+            "watchtower health stop-file smoke must stop before passes or errors"
         ));
     }
     Ok(())
@@ -696,6 +767,29 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Watchtower Service\n\n");
+    if summary.watchtower_services.is_empty() {
+        out.push_str("No watchtower service records were found.\n");
+    } else {
+        out.push_str("| Check | Schema | Status | Stop reason | Passes | Published | Idle | Errors | Health file |\n");
+        out.push_str("| --- | --- | --- | --- | ---: | ---: | ---: | ---: | --- |\n");
+        for service in &summary.watchtower_services {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+                table_cell(&service.check),
+                table_cell(&service.schema),
+                table_cell(service.status.as_deref().unwrap_or("")),
+                table_cell(service.stopped_reason.as_deref().unwrap_or("")),
+                service.completed_passes,
+                service.published_count,
+                service.idle_count,
+                service.error_count,
+                table_cell(service.health_file.as_deref().unwrap_or(""))
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Local Exits\n\n");
     if summary.factory_local_exits.is_empty() {
         out.push_str("No factory local-exit evidence packages were recorded.\n");
@@ -832,6 +926,7 @@ const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
 const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
 const EXPECTED_WATCHTOWER_ALERTS: usize = 2;
 const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &["older_state_detected", "publication_submitted"];
+const EXPECTED_WATCHTOWER_SERVICE_RECORDS: usize = 2;
 
 fn ensure_directory(dir: &Path) -> Result<()> {
     let metadata = fs::metadata(dir)
@@ -976,6 +1071,7 @@ fn collect_from_value(
     transactions: &mut Vec<TransactionSummary>,
     script_failures: &mut Vec<ScriptFailureSummary>,
     deployed_scripts: &mut Vec<DeployedScriptSummary>,
+    watchtower_services: &mut Vec<WatchtowerServiceSummary>,
     factory_local_exits: &mut Vec<FactoryLocalExitEvidenceSummary>,
 ) -> Result<()> {
     let Value::Object(object) = value else {
@@ -1034,6 +1130,10 @@ fn collect_from_value(
         });
     }
 
+    if let Some(service) = watchtower_service_from_object(check, path, object) {
+        watchtower_services.push(service);
+    }
+
     for (key, child) in object {
         collect_from_value(
             check,
@@ -1042,10 +1142,41 @@ fn collect_from_value(
             transactions,
             script_failures,
             deployed_scripts,
+            watchtower_services,
             factory_local_exits,
         )?;
     }
     Ok(())
+}
+
+fn watchtower_service_from_object(
+    check: &str,
+    path: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Option<WatchtowerServiceSummary> {
+    let schema = string_field(object, "schema")?;
+    if schema != "morph.watchtower_config_service.v1" && schema != "morph.watchtower_health.v1" {
+        return None;
+    }
+    Some(WatchtowerServiceSummary {
+        check: check.to_string(),
+        path: path.to_string(),
+        schema,
+        status: string_field(object, "status"),
+        stopped_reason: string_field(object, "stopped_reason"),
+        completed_passes: object.get("completed_passes")?.as_u64()?,
+        published_count: object
+            .get("published_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        idle_count: object
+            .get("idle_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize,
+        error_count: object.get("error_count")?.as_u64()?,
+        consecutive_errors: object.get("consecutive_errors")?.as_u64()?,
+        health_file: string_field(object, "health_file"),
+    })
 }
 
 fn transaction_from_object(
@@ -1246,10 +1377,44 @@ mod tests {
             ),
         )
         .unwrap();
+        fs::write(
+            dir.join("service.json"),
+            r#"{
+              "schema": "morph.watchtower_config_service.v1",
+              "config_path": "watch-config.json",
+              "completed_passes": 0,
+              "published_count": 0,
+              "idle_count": 0,
+              "error_count": 0,
+              "consecutive_errors": 0,
+              "stopped_reason": "stop_file",
+              "last_error": null,
+              "stop_file": "service.stop",
+              "health_file": "service-health.json"
+            }"#,
+        )
+        .unwrap();
+        fs::write(
+            dir.join("service-health.json"),
+            r#"{
+              "schema": "morph.watchtower_health.v1",
+              "config_path": "watch-config.json",
+              "updated_unix_ms": 1,
+              "completed_passes": 0,
+              "published_count": 0,
+              "idle_count": 0,
+              "error_count": 0,
+              "consecutive_errors": 0,
+              "status": "stopped",
+              "stopped_reason": "stop_file",
+              "last_error": null
+            }"#,
+        )
+        .unwrap();
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 4);
+        assert_eq!(summary.json_files, 6);
         assert_eq!(summary.transactions.len(), 2);
         assert_eq!(summary.script_failures.len(), 1);
         assert_eq!(summary.deployed_scripts.len(), 1);
@@ -1261,6 +1426,19 @@ mod tests {
         );
         assert_eq!(summary.watchtower_alerts.len(), 2);
         assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
+        assert_eq!(summary.watchtower_services.len(), 2);
+        assert!(
+            summary
+                .watchtower_services
+                .iter()
+                .any(|service| service.schema == "morph.watchtower_config_service.v1")
+        );
+        assert!(
+            summary
+                .watchtower_services
+                .iter()
+                .any(|service| service.schema == "morph.watchtower_health.v1")
+        );
         assert_eq!(summary.totals.total_estimated_cycles, 44);
         assert_eq!(summary.totals.total_tx_size_bytes, 66);
 
@@ -1269,6 +1447,7 @@ mod tests {
         assert!(markdown.contains("0xabc"));
         assert!(markdown.contains("Deployed Scripts"));
         assert!(markdown.contains("Watchtower Alerts"));
+        assert!(markdown.contains("Watchtower Service"));
         assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
@@ -1317,6 +1496,28 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("unexpected watchtower alert count")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_watchtower_service_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary.watchtower_services.pop();
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unexpected watchtower service record count")
+        );
+    }
+
+    #[test]
+    fn rejects_unhealthy_watchtower_service_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary.watchtower_services[1].status = Some("running".to_string());
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("watchtower health report must show stopped by stop_file")
         );
     }
 
@@ -1415,6 +1616,7 @@ mod tests {
             script_failures: Vec::new(),
             deployed_scripts: Vec::new(),
             watchtower_alerts: Vec::new(),
+            watchtower_services: Vec::new(),
             factory_local_exits: Vec::new(),
             totals: MetricTotals::default(),
         };
@@ -1475,6 +1677,7 @@ mod tests {
                 failure("xudt-negative-smoke", "SettlementOutputMismatch", 28),
             ],
             watchtower_alerts: watchtower_alerts(),
+            watchtower_services: watchtower_services(),
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
                 factory_exit("factory/local-exit-package", 1),
@@ -1566,6 +1769,39 @@ mod tests {
                 publication_tx_hash: Some("0xdef".to_string()),
                 scanned_to_block: 10,
                 next_from_block: 11,
+            },
+        ]
+    }
+
+    fn watchtower_services() -> Vec<WatchtowerServiceSummary> {
+        vec![
+            WatchtowerServiceSummary {
+                check: "watch-auto-sponsor/service".to_string(),
+                path: "$".to_string(),
+                schema: "morph.watchtower_config_service.v1".to_string(),
+                status: None,
+                stopped_reason: Some("stop_file".to_string()),
+                completed_passes: 0,
+                published_count: 0,
+                idle_count: 0,
+                error_count: 0,
+                consecutive_errors: 0,
+                health_file: Some(
+                    "target/devnet-smoke/test/watch-auto-sponsor/service-health.json".to_string(),
+                ),
+            },
+            WatchtowerServiceSummary {
+                check: "watch-auto-sponsor/service-health".to_string(),
+                path: "$".to_string(),
+                schema: "morph.watchtower_health.v1".to_string(),
+                status: Some("stopped".to_string()),
+                stopped_reason: Some("stop_file".to_string()),
+                completed_passes: 0,
+                published_count: 0,
+                idle_count: 0,
+                error_count: 0,
+                consecutive_errors: 0,
+                health_file: None,
             },
         ]
     }
