@@ -21,10 +21,11 @@ descriptor-output mismatch rejection, and devnet xUDT conservation. The CLI can
 check/mine a local CKB devnet, deploy the Morph contract binaries, open a
 channel, publish a signed settling state, top up sponsor capacity, publish a
 newer signed state over the old settling state, finalise the vault, and run a
-competing-spend smoke, a CKB+xUDT settlement smoke, and a tampered-settlement
-xUDT negative smoke through native JSON-RPC. Each transaction report includes
-node-estimated cycles and serialized transaction size. SponsorCells can carry
-explicit state-number and fee-budget bounds.
+competing-spend smoke, a sponsor-budget negative smoke, a CKB+xUDT settlement
+smoke, and a tampered-settlement xUDT negative smoke through native JSON-RPC.
+Each transaction report includes node-estimated cycles and serialized
+transaction size. SponsorCells can carry explicit state-number and fee-budget
+bounds.
 
 Required deliverables:
 
@@ -52,6 +53,8 @@ Acceptance criteria:
 - channel reserve cannot pay publication fees;
 - sponsor policy cannot spend outside its budget;
 - sponsor policy rejects publication outside its state-number range;
+- a devnet SponsorCell with a too-low fee cap is rejected, then a fresh
+  SponsorCell can publish the same state with a sufficient cap;
 - xUDT type mismatch is rejected in host-side invariants;
 - a devnet CKB+xUDT channel can open, publish, and finalise with exact token
   conservation;

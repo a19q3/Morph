@@ -64,6 +64,8 @@ A devnet demonstration is acceptable only when it includes:
   the vault lock must reject a tampered recipient-level token distribution;
 - a competing-spend smoke proving that a newer state may need to be rebuilt
   against the currently live StateCell after an older publication confirms;
+- a sponsor-budget negative smoke proving that a too-low fee cap is rejected
+  on-chain and can be resolved by rotating to a fresh SponsorCell;
 - reusable signed state packages that can be published without channel signing
   keys;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

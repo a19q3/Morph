@@ -193,6 +193,21 @@ pub struct SponsorPolicyNegativeSmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct SponsorBudgetNegativeSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct CompetingSpendSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -500,6 +515,18 @@ pub struct SponsorPolicyNegativeSmokeReport {
     pub rejected_state_number: u64,
     pub rejection: String,
     pub script_failure: ScriptFailureReport,
+    pub allowed_publish: PublishStateReport,
+    pub finalise: FinaliseChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SponsorBudgetNegativeSmokeReport {
+    pub open: OpenChannelReport,
+    pub rejected_fee: u64,
+    pub sponsor_max_fee_per_tx: u64,
+    pub rejection: String,
+    pub script_failure: ScriptFailureReport,
+    pub replacement_sponsor: FundSponsorReport,
     pub allowed_publish: PublishStateReport,
     pub finalise: FinaliseChannelReport,
 }
@@ -2383,6 +2410,143 @@ pub fn sponsor_policy_negative_smoke(
         rejected_state_number: 2,
         rejection,
         script_failure,
+        allowed_publish,
+        finalise,
+    })
+}
+
+pub fn sponsor_budget_negative_smoke(
+    rpc: &CkbRpcClient,
+    options: SponsorBudgetNegativeSmokeOptions,
+) -> Result<SponsorBudgetNegativeSmokeReport> {
+    ensure!(
+        options.fee > 1,
+        "sponsor-budget negative smoke needs a fee greater than one shannon"
+    );
+    let rejected_max_fee = options.fee - 1;
+    let replacement_policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building replacement sponsor policy"))?;
+    ensure!(
+        replacement_policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the replacement sponsor policy budget"
+    );
+
+    let open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(rejected_max_fee),
+            sponsor_max_total_fee: Some(rejected_max_fee),
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "vault")?;
+    let underfunded_sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+
+    let rejection = match publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            sponsor_out_point: underfunded_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: 0,
+        },
+    ) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "sponsor budget unexpectedly accepted fee {} in tx {}",
+                options.fee,
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::SponsorFeeTooHigh as i16),
+        "expected SponsorFeeTooHigh from sponsor lock, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
+
+    let replacement_sponsor = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(replacement_policy_fee),
+            sponsor_max_total_fee: Some(replacement_policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let replacement_sponsor_out_point =
+        printable_out_point_string(&replacement_sponsor.sponsor_out_point);
+    let allowed_publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point,
+            sponsor_out_point: replacement_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let settling_state_out_point = printable_out_point_string(&allowed_publish.state_out_point);
+
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: settling_state_out_point,
+            vault_out_point,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(SponsorBudgetNegativeSmokeReport {
+        open,
+        rejected_fee: options.fee,
+        sponsor_max_fee_per_tx: rejected_max_fee,
+        rejection,
+        script_failure,
+        replacement_sponsor,
         allowed_publish,
         finalise,
     })

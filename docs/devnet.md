@@ -80,9 +80,10 @@ scripts/devnet-smoke.sh
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-competing-spend smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement
-smoke, and the watchtower auto-sponsor path. It expects the node and `jq` to be
-available, and writes logs plus JSON reports under
+sponsor-budget negative smoke, competing-spend smoke, CKB+xUDT settlement
+smoke, CKB+xUDT negative settlement smoke, and the watchtower auto-sponsor
+path. It expects the node and `jq` to be available, and writes logs plus JSON
+reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
@@ -336,6 +337,20 @@ finalises the channel. This catches drift between the CLI's reported
 SponsorPolicy and the actual script behaviour. The smoke also parses the CKB
 script failure and requires Morph error `SponsorStateOutOfRange`, so an
 unrelated transaction-construction failure does not count as a pass.
+
+The sponsor-budget negative smoke checks fee bounds and rotation:
+
+```sh
+cargo run -q -p morph-cli -- devnet sponsor-budget-negative-smoke --json
+```
+
+It opens a channel whose initial SponsorCell is allowed to pay state `1`, but
+with `max_fee_per_tx` one shannon below the attempted publication fee. The
+expected rejection is Morph error `SponsorFeeTooHigh`. The smoke then funds a
+fresh SponsorCell for the same state number with a sufficient fee cap, publishes
+the same state, and finalises. This is deliberately a single-use SponsorCell
+model: budget rotation means replacing the sponsor cell, not mutating a wallet
+balance inside the old one.
 
 ## Signed State Packages
 

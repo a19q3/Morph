@@ -31,6 +31,10 @@ Implemented devnet-level checks:
   live-cell view, followed by rebuilt publication against the confirmed
   live StateCell, through
   `devnet competing-spend-smoke`;
+- sponsor fee-cap rejection and fresh SponsorCell rotation through
+  `devnet sponsor-budget-negative-smoke`;
+- sponsor state-number range rejection through
+  `devnet sponsor-policy-negative-smoke`;
 - node-reported cycle measurement and transaction size reporting;
 - durable signed state-package storage with signature validation and latest
   package selection;
