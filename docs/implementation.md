@@ -178,6 +178,8 @@ A devnet demonstration is acceptable only when it includes:
 - a smoke summary report that preserves cycle, size, status, deployed script
   hashes, deployed script outpoints, and expected script-error evidence for
   review;
+- smoke assertions that compare deployed script hashes with the local RISC-V
+  contract binaries before accepting a run as current evidence;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

@@ -89,6 +89,12 @@ enum Command {
         /// Directory produced by scripts/devnet-smoke.sh.
         #[arg(long, default_value = "target/devnet-smoke/latest")]
         dir: std::path::PathBuf,
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Skip checking deployed script hashes against local contract binaries.
+        #[arg(long)]
+        skip_contract_hash_check: bool,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1286,8 +1292,14 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::DevnetSmokeAssert { dir, json } => {
-            let report = smoke_report::assert_default_devnet_smoke(&dir)?;
+        Command::DevnetSmokeAssert {
+            dir,
+            contracts_dir,
+            skip_contract_hash_check,
+            json,
+        } => {
+            let contracts_dir = (!skip_contract_hash_check).then_some(contracts_dir.as_path());
+            let report = smoke_report::assert_default_devnet_smoke(&dir, contracts_dir)?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -1306,6 +1318,10 @@ fn main() -> Result<()> {
                     report.expected_script_failures
                 );
                 println!("deployed_scripts={}", report.deployed_scripts);
+                println!(
+                    "deployed_script_hashes_verified={}",
+                    report.deployed_script_hashes_verified
+                );
                 println!("factory_local_exits={}", report.factory_local_exits);
             }
             Ok(())

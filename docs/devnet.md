@@ -105,9 +105,9 @@ These summaries are generated from the smoke JSON files and include every
 transaction's node-estimated cycles, transaction size, status, block number,
 expected script failure, deployed script outpoint, and deployed script data
 hash. During a full smoke run, the script also asserts that the expected
-negative-path failures, deployed scripts, and factory local-exit evidence
-packages are present and writes `summary-check.json`. They can be regenerated
-or rechecked for an existing run:
+negative-path failures, deployed scripts, local contract binary hashes, and
+factory local-exit evidence packages are present and writes
+`summary-check.json`. They can be regenerated or rechecked for an existing run:
 
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-report \
@@ -117,6 +117,12 @@ cargo run -q -p morph-cli -- devnet-smoke-assert \
 make smoke-report
 make smoke-assert
 ```
+
+`devnet-smoke-assert` compares deployed script data hashes with the local
+RISC-V binaries in `target/riscv64imac-unknown-none-elf/release` by default.
+Use `--contracts-dir` for another build directory, or
+`--skip-contract-hash-check` only when reviewing archived smoke output without
+the matching binaries.
 
 Two completed runs can be compared without replaying devnet:
 

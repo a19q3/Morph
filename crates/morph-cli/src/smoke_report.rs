@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
+use ckb_hash::blake2b_256;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -29,6 +30,7 @@ pub struct DevnetSmokeAssertionReport {
     pub committed_count: usize,
     pub expected_script_failures: usize,
     pub deployed_scripts: usize,
+    pub deployed_script_hashes_verified: bool,
     pub factory_local_exits: usize,
 }
 
@@ -170,9 +172,15 @@ pub fn compare_devnet_smoke(
     Ok(compare_summaries(&baseline, &candidate))
 }
 
-pub fn assert_default_devnet_smoke(dir: &Path) -> Result<DevnetSmokeAssertionReport> {
+pub fn assert_default_devnet_smoke(
+    dir: &Path,
+    contracts_dir: Option<&Path>,
+) -> Result<DevnetSmokeAssertionReport> {
     let summary = summarize_devnet_smoke(dir)?;
     assert_devnet_smoke_summary(&summary)?;
+    if let Some(contracts_dir) = contracts_dir {
+        assert_deployed_script_hashes(&summary, contracts_dir)?;
+    }
     Ok(DevnetSmokeAssertionReport {
         git_commit: summary.manifest.get("git_commit").cloned(),
         git_dirty: summary.manifest.get("git_dirty").cloned(),
@@ -181,6 +189,7 @@ pub fn assert_default_devnet_smoke(dir: &Path) -> Result<DevnetSmokeAssertionRep
         committed_count: summary.totals.committed_count,
         expected_script_failures: EXPECTED_SCRIPT_FAILURES.len(),
         deployed_scripts: summary.deployed_scripts.len(),
+        deployed_script_hashes_verified: contracts_dir.is_some(),
         factory_local_exits: summary.factory_local_exits.len(),
     })
 }
@@ -284,6 +293,40 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
             EXPECTED_FACTORY_CKB_EXITS,
             EXPECTED_FACTORY_XUDT_EXITS
         ));
+    }
+    Ok(())
+}
+
+pub fn assert_deployed_script_hashes(
+    summary: &DevnetSmokeSummary,
+    contracts_dir: &Path,
+) -> Result<()> {
+    for expected in EXPECTED_DEPLOYED_SCRIPT_NAMES {
+        let script = summary
+            .deployed_scripts
+            .iter()
+            .find(|script| script.name == *expected)
+            .ok_or_else(|| anyhow!("missing deployed script record for {expected}"))?;
+        let path = contracts_dir.join(expected);
+        let data = fs::read(&path)
+            .with_context(|| format!("failed to read contract binary {}", path.display()))?;
+        let expected_hash = format!("0x{}", hex::encode(blake2b_256(&data)));
+        if script.data_hash != expected_hash {
+            return Err(anyhow!(
+                "deployed script {} hash mismatch: summary {}, local {}",
+                expected,
+                script.data_hash,
+                expected_hash
+            ));
+        }
+        if script.data_len != data.len() {
+            return Err(anyhow!(
+                "deployed script {} length mismatch: summary {}, local {}",
+                expected,
+                script.data_len,
+                data.len()
+            ));
+        }
     }
     Ok(())
 }
@@ -946,6 +989,26 @@ mod tests {
         summary.deployed_scripts.pop();
         let err = assert_devnet_smoke_summary(&summary).unwrap_err();
         assert!(err.to_string().contains("unexpected deployed script count"));
+    }
+
+    #[test]
+    fn verifies_deployed_script_hashes_against_local_binaries() {
+        let dir = temp_report_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let mut summary = passing_assertion_summary();
+        for (index, script) in summary.deployed_scripts.iter_mut().enumerate() {
+            let data = vec![index as u8; index + 1];
+            fs::write(dir.join(&script.name), &data).unwrap();
+            script.data_hash = format!("0x{}", hex::encode(blake2b_256(&data)));
+            script.data_len = data.len();
+        }
+
+        assert_deployed_script_hashes(&summary, &dir).unwrap();
+        summary.deployed_scripts[0].data_hash = "0x00".to_string();
+        let err = assert_deployed_script_hashes(&summary, &dir).unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"));
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
