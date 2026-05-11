@@ -1,7 +1,7 @@
 use ckb_testtool::builtin::ALWAYS_SUCCESS;
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
-    core::{ScriptHashType, TransactionBuilder},
+    core::{ScriptHashType, TransactionBuilder, TransactionView},
     packed::{CellInput, CellOutput, WitnessArgs},
     prelude::*,
 };
@@ -435,6 +435,13 @@ fn ckb_xudt_descriptor_bytes(
 
 fn xudt_amount_data(amount: u128) -> Bytes {
     Bytes::copy_from_slice(&amount.to_le_bytes())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FactoryXudtExitTamper {
+    None,
+    ChildAmountMinusOneWithConservedSupply,
+    ChildTypeMismatchWithAuthorisedMint,
 }
 
 fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
@@ -985,6 +992,30 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
+    let (context, tx) = factory_xudt_local_exit_tx(FactoryXudtExitTamper::None);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory xUDT local exit should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_local_exit_xudt_amount_mismatch() {
+    let (context, tx) =
+        factory_xudt_local_exit_tx(FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_local_exit_xudt_type_mismatch() {
+    let (context, tx) =
+        factory_xudt_local_exit_tx(FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let reserve_lock_placeholder = deploy_always_success(&mut context);
@@ -1004,6 +1035,11 @@ fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
         xudt_owner_lock.calc_script_hash().as_slice().to_vec(),
     );
     let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
+    let wrong_xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        factory_lock.calc_script_hash().as_slice().to_vec(),
+    );
 
     let descriptor = ckb_xudt_descriptor_bytes(
         xudt_type_hash,
@@ -1099,6 +1135,29 @@ fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
         &descriptor,
     );
 
+    let child_vault_type = match tamper {
+        FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => wrong_xudt_type,
+        _ => xudt_type.clone(),
+    };
+    let child_vault_amount = match tamper {
+        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply => {
+            ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT - 1
+        }
+        _ => ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT,
+    };
+    let factory_vault_change_type = match tamper {
+        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply
+        | FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => Some(xudt_type),
+        FactoryXudtExitTamper::None => None,
+    };
+    let factory_vault_change_data = match tamper {
+        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply => xudt_amount_data(1),
+        FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => {
+            xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT)
+        }
+        FactoryXudtExitTamper::None => Bytes::new(),
+    };
+
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -1125,28 +1184,26 @@ fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
             CellOutput::new_builder()
                 .capacity(ALICE_CAPACITY + BOB_CAPACITY)
                 .lock(vault_lock)
-                .type_(Some(xudt_type).pack())
+                .type_(Some(child_vault_type).pack())
                 .build(),
         )
         .output(
             CellOutput::new_builder()
                 .capacity(200_000_000_000u64)
                 .lock(factory_vault_lock)
+                .type_(factory_vault_change_type.pack())
                 .build(),
         )
         .output_data(new_data.pack())
         .output_data(Bytes::from(child_state.to_vec()).pack())
-        .output_data(xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT).pack())
-        .output_data(Bytes::new().pack())
+        .output_data(xudt_amount_data(child_vault_amount).pack())
+        .output_data(factory_vault_change_data.pack())
         .witness(witness_with_input_type(exit_witness.clone()))
         .witness(witness_with_input_type(exit_witness))
         .witness(empty_witness())
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("factory xUDT local exit should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
