@@ -64,6 +64,7 @@ transactions for:
 - equal state number rejected by `morph-state-type`;
 - invalid participant signature rejected by `morph-state-type`;
 - vault finalisation accepted when a current settling State Cell is consumed;
+- descriptor output mismatch rejected by `morph-vault-lock`;
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
 
 ## Contract Milestone

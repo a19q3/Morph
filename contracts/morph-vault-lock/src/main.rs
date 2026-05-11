@@ -4,16 +4,20 @@
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
 #[cfg(target_arch = "riscv64")]
-use ckb_std::ckb_types::prelude::Unpack;
+use ckb_std::ckb_types::prelude::*;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
-use ckb_std::high_level::{load_cell_data, load_input, load_script};
+use ckb_std::high_level::{
+    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_input, load_script,
+    load_witness_args,
+};
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, PHASE_SETTLING, Result, ScriptError, StateHeaderV1, read_u64,
+    BYTE32_LEN, BilateralCkbSettlementDescriptorV1, PHASE_SETTLING, Result, ScriptError,
+    StateHeaderV1, read_u64,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -54,7 +58,79 @@ fn main() -> Result<()> {
         return Err(ScriptError::StateSinceNotMature);
     }
 
+    let descriptor = load_settlement_descriptor()?;
+    if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+        return Err(ScriptError::SettlementDescriptorMismatch);
+    }
+    let vault_capacity = sum_group_capacity(Source::GroupInput)?;
+    if descriptor.total_capacity() != vault_capacity {
+        return Err(ScriptError::SettlementOutputMismatch);
+    }
+    verify_descriptor_outputs(&descriptor)?;
+
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn load_settlement_descriptor() -> Result<BilateralCkbSettlementDescriptorV1<'static>> {
+    let witness_args = load_witness_args(0, Source::GroupInput)
+        .map_err(|_| ScriptError::SettlementWitnessMissing)?;
+    let input_type = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(ScriptError::SettlementWitnessMissing)?;
+    let raw = input_type.raw_data();
+    let leaked = alloc::boxed::Box::leak(raw.as_ref().to_vec().into_boxed_slice());
+    BilateralCkbSettlementDescriptorV1::parse(leaked)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_group_capacity(source: Source) -> Result<u64> {
+    let mut sum = 0u64;
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, source) {
+            Ok(capacity) => {
+                sum = sum.saturating_add(capacity);
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn verify_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptorV1) -> Result<()> {
+    for entry in 0..2 {
+        let actual = sum_outputs_by_lock_hash(descriptor.lock_hash(entry))?;
+        if actual != descriptor.capacity(entry) {
+            return Err(ScriptError::SettlementOutputMismatch);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_outputs_by_lock_hash(expected: &[u8]) -> Result<u64> {
+    let mut sum = 0u64;
+    let mut index = 0;
+    loop {
+        match load_cell_lock_hash(index, Source::Output) {
+            Ok(lock_hash) => {
+                if lock_hash.as_slice() == expected {
+                    let capacity = load_cell_capacity(index, Source::Output)
+                        .map_err(|_| ScriptError::Encoding)?;
+                    sum = sum.saturating_add(capacity);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
 }
 
 #[cfg(target_arch = "riscv64")]

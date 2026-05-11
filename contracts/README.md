@@ -7,7 +7,8 @@ fixed-width V1 validation subset in no-std CKB scripts:
 
 - `morph-state-type`: owns State Cell progression, state-number monotonicity,
   and bilateral participant signature verification.
-- `morph-vault-lock`: owns vault settlement and current-state authorisation.
+- `morph-vault-lock`: owns vault settlement, current-state authorisation, and
+  descriptor-bound settlement output checks.
 - `morph-sponsor-lock`: owns bounded sponsor budget spending.
 
 Build the current scripts with:

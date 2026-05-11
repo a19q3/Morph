@@ -7,6 +7,7 @@ use k256::ecdsa::{Signature, VerifyingKey};
 pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_V1_LEN: usize = 274;
 pub const SPONSOR_POLICY_V1_LEN: usize = 144;
+pub const BILATERAL_CKB_DESCRIPTOR_V1_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
 pub const ECDSA_SIGNATURE_LEN: usize = 64;
 pub const BILATERAL_SIGNATURE_WITNESS_V1_LEN: usize =
@@ -19,6 +20,9 @@ pub const BILATERAL_SIGNATURE_THRESHOLD_V1: u8 = 2;
 pub const BILATERAL_SIGNATURE_COUNT_V1: u8 = 2;
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
+pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
+pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
+pub const BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1: u8 = 2;
 
 #[repr(i8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +47,10 @@ pub enum ScriptError {
     ParticipantWitnessEncoding = 22,
     ParticipantCommitmentMismatch = 23,
     InvalidParticipantSignature = 24,
+    SettlementWitnessMissing = 25,
+    SettlementDescriptorEncoding = 26,
+    SettlementDescriptorMismatch = 27,
+    SettlementOutputMismatch = 28,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -215,6 +223,62 @@ pub fn verify_bilateral_state_signatures(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilateralCkbSettlementDescriptorV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BilateralCkbSettlementDescriptorV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != BILATERAL_CKB_DESCRIPTOR_V1_LEN {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        let descriptor = Self { raw };
+        if descriptor.version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1
+            || descriptor.output_count() != BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1
+            || descriptor.reserved() != 0
+        {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        if descriptor.lock_hash(0) >= descriptor.lock_hash(1) {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        Ok(descriptor)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn output_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn reserved(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn lock_hash(&self, index: usize) -> &'a [u8] {
+        field(self.raw, descriptor_output_offset(index), BYTE32_LEN)
+    }
+
+    pub fn capacity(&self, index: usize) -> u64 {
+        read_u64(self.raw, descriptor_output_offset(index) + BYTE32_LEN)
+    }
+
+    pub fn total_capacity(&self) -> u64 {
+        self.capacity(0).saturating_add(self.capacity(1))
+    }
+
+    pub fn commitment(&self) -> [u8; 32] {
+        settlement_descriptor_commitment_v1(self.raw)
+    }
+}
+
+pub fn settlement_descriptor_commitment_v1(raw: &[u8]) -> [u8; 32] {
+    blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, raw])
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SponsorPolicyV1<'a> {
     raw: &'a [u8],
 }
@@ -309,6 +373,10 @@ fn participant_offset(index: usize) -> usize {
     4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN)
 }
 
+fn descriptor_output_offset(index: usize) -> usize {
+    4 + index * (BYTE32_LEN + 8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +422,30 @@ mod tests {
             raw[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
                 ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
                 .copy_from_slice(sig);
+        }
+        raw
+    }
+
+    fn descriptor_bytes(
+        left_lock_hash: [u8; 32],
+        left_capacity: u64,
+        right_lock_hash: [u8; 32],
+        right_capacity: u64,
+    ) -> [u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN] {
+        let mut entries = [
+            (left_lock_hash, left_capacity),
+            (right_lock_hash, right_capacity),
+        ];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN];
+        put_u16(&mut raw, 0, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+        raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+        raw[3] = 0;
+        for (index, (lock_hash, capacity)) in entries.iter().enumerate() {
+            let offset = descriptor_output_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+            put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
         }
         raw
     }
@@ -493,6 +585,23 @@ mod tests {
         assert_eq!(
             verify_bilateral_state_signatures(&header, &witness).unwrap_err(),
             ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn parses_and_commits_bilateral_ckb_descriptor() {
+        let raw = descriptor_bytes([1u8; 32], 100, [2u8; 32], 200);
+        let descriptor = BilateralCkbSettlementDescriptorV1::parse(&raw).unwrap();
+
+        assert_eq!(descriptor.version(), 1);
+        assert_eq!(descriptor.output_count(), 2);
+        assert_eq!(descriptor.lock_hash(0), &[1u8; 32]);
+        assert_eq!(descriptor.capacity(0), 100);
+        assert_eq!(descriptor.lock_hash(1), &[2u8; 32]);
+        assert_eq!(descriptor.capacity(1), 200);
+        assert_eq!(
+            descriptor.commitment(),
+            settlement_descriptor_commitment_v1(&raw)
         );
     }
 }

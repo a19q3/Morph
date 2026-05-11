@@ -9,16 +9,20 @@ use ckb_testtool::context::Context;
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_script_common::{
-    BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
-    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN,
-    STATE_HEADER_V1_LEN, StateHeaderV1, participants_commitment_v1,
+    BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1, BILATERAL_CKB_DESCRIPTOR_V1_LEN,
+    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_SIGNATURE_COUNT_V1,
+    BILATERAL_SIGNATURE_THRESHOLD_V1, BILATERAL_SIGNATURE_WITNESS_V1_LEN,
+    BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
+    ECDSA_SIGNATURE_LEN, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1,
+    participants_commitment_v1, settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
 
 const MAX_CYCLES: u64 = 50_000_000;
 const CELL_CAPACITY: u64 = 100_000_000_000;
+const ALICE_CAPACITY: u64 = 60_000_000_000;
+const BOB_CAPACITY: u64 = 40_000_000_000;
 const FUNDING_ANCHOR: [u8; 32] = [4u8; 32];
 
 fn repo_root() -> PathBuf {
@@ -46,9 +50,16 @@ fn contract_bin(name: &str) -> Bytes {
 }
 
 fn deploy_always_success(context: &mut Context) -> ckb_testtool::ckb_types::packed::Script {
+    deploy_always_success_with_args(context, Bytes::new())
+}
+
+fn deploy_always_success_with_args(
+    context: &mut Context,
+    args: Bytes,
+) -> ckb_testtool::ckb_types::packed::Script {
     let out_point = context.deploy_cell(ALWAYS_SUCCESS.clone());
     context
-        .build_script_with_hash_type(&out_point, ScriptHashType::Data1, Bytes::new())
+        .build_script_with_hash_type(&out_point, ScriptHashType::Data1, args)
         .expect("always-success script")
 }
 
@@ -115,6 +126,12 @@ fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V1_LEN] {
     raw
 }
 
+fn header_with_descriptor(state_number: u64, phase: u8, descriptor_commitment: [u8; 32]) -> Bytes {
+    let mut raw = header_raw(state_number, phase);
+    raw[174..206].copy_from_slice(&descriptor_commitment);
+    raw.to_vec().into()
+}
+
 fn signed_state_pair(
     old_number: u64,
     old_phase: u8,
@@ -153,16 +170,40 @@ fn signed_state_pair(
     )
 }
 
-fn header_bytes(state_number: u64, phase: u8) -> Bytes {
-    header_raw(state_number, phase).to_vec().into()
-}
-
 fn witness_with_input_type(input_type: Bytes) -> ckb_testtool::ckb_types::packed::Bytes {
     WitnessArgs::new_builder()
         .input_type(Some(input_type).pack())
         .build()
         .as_bytes()
         .pack()
+}
+
+fn empty_witness() -> ckb_testtool::ckb_types::packed::Bytes {
+    WitnessArgs::default().as_bytes().pack()
+}
+
+fn descriptor_bytes(
+    left_lock_hash: [u8; 32],
+    left_capacity: u64,
+    right_lock_hash: [u8; 32],
+    right_capacity: u64,
+) -> Bytes {
+    let mut entries = [
+        (left_lock_hash, left_capacity),
+        (right_lock_hash, right_capacity),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut raw = [0u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+    raw[3] = 0;
+    for (index, (lock_hash, capacity)) in entries.iter().enumerate() {
+        let offset = 4 + index * (BYTE32_LEN + 8);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+        put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+    }
+    raw.to_vec().into()
 }
 
 fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
@@ -294,7 +335,16 @@ fn state_type_rejects_invalid_participant_signature() {
 #[test]
 fn vault_lock_accepts_finalise_with_current_state() {
     let mut context = Context::default();
-    let settlement_lock = deploy_always_success(&mut context);
+    let state_refund_lock = deploy_always_success(&mut context);
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let descriptor = descriptor_bytes(
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
     let mut vault_args = FUNDING_ANCHOR.to_vec();
     vault_args.extend_from_slice(&0u64.to_le_bytes());
@@ -303,10 +353,10 @@ fn vault_lock_accepts_finalise_with_current_state() {
     let state_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(settlement_lock.clone())
+            .lock(state_refund_lock)
             .type_(Some(state_type).pack())
             .build(),
-        header_bytes(3, PHASE_SETTLING),
+        header_with_descriptor(3, PHASE_SETTLING, descriptor_commitment),
     );
     let vault_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -329,17 +379,94 @@ fn vault_lock_accepts_finalise_with_current_state() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY * 2)
-                .lock(settlement_lock)
+                .capacity(ALICE_CAPACITY)
+                .lock(alice_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(bob_lock)
                 .build(),
         )
         .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(descriptor))
         .build();
     let tx = context.complete_tx(tx);
 
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("vault finalise should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_descriptor_output_mismatch() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let descriptor = descriptor_bytes(
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let mut vault_args = FUNDING_ANCHOR.to_vec();
+    vault_args.extend_from_slice(&0u64.to_le_bytes());
+    let vault_lock = deploy_contract(&mut context, "morph-vault-lock", vault_args);
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock)
+            .type_(Some(state_type).pack())
+            .build(),
+        header_with_descriptor(3, PHASE_SETTLING, descriptor_commitment),
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY - 1)
+                .lock(alice_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(bob_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(descriptor))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

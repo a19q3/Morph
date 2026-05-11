@@ -13,9 +13,14 @@ Status: implemented.
 
 ## M1: Devnet Bilateral Channel
 
+Status: in progress. The three script ELFs build and offline CKB-VM tests cover
+state publication, stale-state rejection, invalid state signatures, bounded
+sponsor fees, descriptor-bound vault finalisation, and descriptor-output
+mismatch rejection.
+
 Required deliverables:
 
-- Fixed-width Molecule-generated Rust types.
+- Fixed-width V1 wire types, later replaced or generated from Molecule.
 - `morph-state-type` contract.
 - `morph-vault-lock` contract.
 - `morph-sponsor-lock` contract.
@@ -47,4 +52,3 @@ Acceptance criteria:
 ## M4: Reduced-Signature Factory Mode
 
 This remains blocked until a formal rights-dependency proof predicate exists.
-

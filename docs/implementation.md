@@ -19,7 +19,8 @@ The contract crates now implement the fixed-width V1 subset for devnet:
   settling State Cell under the same funding anchor and channel context; it can
   also close the state track after the configured relative `since` has matured.
 - Vault lock: permits vault spend only when a unique settling State Cell with
-  the expected funding anchor is present and its relative `since` has matured.
+  the expected funding anchor is present, its relative `since` has matured, and
+  the settlement outputs match the descriptor commitment in the signed state.
 - Sponsor lock: permits fee payment only within an explicit sponsor policy and
   counts only outputs returning to the authorised change lock as sponsor change.
 
@@ -27,6 +28,12 @@ The state type script verifies the bilateral V1 participant witness: two sorted
 compressed secp256k1 public keys, two ECDSA signatures over the canonical state
 header digest, and a participant commitment that must match the signed header.
 Sponsor inputs and fee selection remain outside that state-signature domain.
+
+The vault lock verifies the bilateral CKB settlement descriptor: two sorted
+recipient lock hashes and exact output capacities. The descriptor hash is bound
+inside `settlement_descriptor_commitment`, so a finalisation transaction cannot
+change the settlement recipients or amounts without invalidating the signed
+state.
 
 ## Current Non-Goals
 

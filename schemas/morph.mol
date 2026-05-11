@@ -6,6 +6,8 @@
 // in the devnet build environment.
 
 array Byte32 [byte; 32];
+array Secp256k1CompressedPubkey [byte; 33];
+array EcdsaSignature [byte; 64];
 
 struct OutPointRef {
     tx_hash: Byte32,
@@ -36,3 +38,25 @@ struct StateHeaderV1 {
     state_layout_version: uint16,
 }
 
+struct BilateralSignatureWitnessV1 {
+    version: uint16,
+    threshold: byte,
+    count: byte,
+    participant_0_pubkey: Secp256k1CompressedPubkey,
+    participant_0_signature: EcdsaSignature,
+    participant_1_pubkey: Secp256k1CompressedPubkey,
+    participant_1_signature: EcdsaSignature,
+}
+
+struct BilateralCkbSettlementOutputV1 {
+    lock_hash: Byte32,
+    capacity: uint64,
+}
+
+struct BilateralCkbSettlementDescriptorV1 {
+    version: uint16,
+    output_count: byte,
+    reserved: byte,
+    output_0: BilateralCkbSettlementOutputV1,
+    output_1: BilateralCkbSettlementOutputV1,
+}
