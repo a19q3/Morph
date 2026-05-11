@@ -138,6 +138,16 @@ the matching binaries. The same command can enforce absolute smoke budgets:
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-assert \
   --dir target/devnet-smoke/<timestamp> \
+  --budget-profile docs/devnet-smoke-budget.example.json
+```
+
+The profile can set global ceilings and per-transaction ceilings keyed by the
+summary `check` and JSON `path`. For quick local experiments, the same limits
+can be supplied directly:
+
+```sh
+cargo run -q -p morph-cli -- devnet-smoke-assert \
+  --dir target/devnet-smoke/<timestamp> \
   --max-total-cycles 50000000 \
   --max-tx-cycles 10000000 \
   --max-total-bytes 1000000 \

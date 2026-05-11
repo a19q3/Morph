@@ -127,6 +127,9 @@ enum Command {
         /// Skip checking deployed script hashes against local contract binaries.
         #[arg(long)]
         skip_contract_hash_check: bool,
+        /// JSON file with absolute smoke budgets for totals and named transactions.
+        #[arg(long)]
+        budget_profile: Option<std::path::PathBuf>,
         /// Maximum allowed total estimated cycles across all recorded transactions.
         #[arg(long)]
         max_total_cycles: Option<u64>,
@@ -1585,6 +1588,7 @@ fn main() -> Result<()> {
             dir,
             contracts_dir,
             skip_contract_hash_check,
+            budget_profile,
             max_total_cycles,
             max_tx_cycles,
             max_total_bytes,
@@ -1592,12 +1596,23 @@ fn main() -> Result<()> {
             json,
         } => {
             let contracts_dir = (!skip_contract_hash_check).then_some(contracts_dir.as_path());
-            let budget_limits = smoke_report::DevnetSmokeBudgetLimits {
-                max_total_cycles,
-                max_tx_cycles,
-                max_total_bytes,
-                max_tx_bytes,
+            let mut budget_limits = if let Some(path) = budget_profile {
+                smoke_report::read_smoke_budget_profile(&path)?
+            } else {
+                smoke_report::DevnetSmokeBudgetLimits::default()
             };
+            if max_total_cycles.is_some() {
+                budget_limits.max_total_cycles = max_total_cycles;
+            }
+            if max_tx_cycles.is_some() {
+                budget_limits.max_tx_cycles = max_tx_cycles;
+            }
+            if max_total_bytes.is_some() {
+                budget_limits.max_total_bytes = max_total_bytes;
+            }
+            if max_tx_bytes.is_some() {
+                budget_limits.max_tx_bytes = max_tx_bytes;
+            }
             let report = if budget_limits.has_any_limit() {
                 smoke_report::assert_default_devnet_smoke_with_budget(
                     &dir,
@@ -1648,6 +1663,15 @@ fn main() -> Result<()> {
                     println!("budget_max_tx_cycles={}", budget.max_estimated_cycles);
                     println!("budget_total_bytes={}", budget.total_tx_size_bytes);
                     println!("budget_max_tx_bytes={}", budget.max_tx_size_bytes);
+                    for transaction in &budget.transactions {
+                        println!(
+                            "budget_tx={} {} cycles={} bytes={}",
+                            transaction.check,
+                            transaction.path,
+                            transaction.estimated_cycles,
+                            transaction.tx_size_bytes
+                        );
+                    }
                 }
             }
             Ok(())

@@ -178,6 +178,8 @@ Implemented:
 - one authorised signature over the new FactoryStateHeader;
 - devnet smoke coverage for reduced-rights package publication;
 - absolute smoke budget gates for cycle and transaction-size ceilings;
+- per-transaction smoke budget profiles for critical proof paths, including
+  bounded reduced-rights publication;
 - rejection of touched-right inflation and unrelated participant mutation in
   CKB-VM tests.
 

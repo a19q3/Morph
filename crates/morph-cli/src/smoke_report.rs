@@ -4,11 +4,13 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use ckb_hash::blake2b_256;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::packages::{StoredFactoryLocalExitPackage, StoredFactoryReducedRightsPackage};
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
+
+const DEVNET_SMOKE_BUDGET_SCHEMA: &str = "morph.devnet_smoke_budget.v1";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetSmokeSummary {
@@ -165,6 +167,7 @@ pub struct DevnetSmokeBudgetLimits {
     pub max_tx_cycles: Option<u64>,
     pub max_total_bytes: Option<usize>,
     pub max_tx_bytes: Option<usize>,
+    pub transactions: Vec<DevnetSmokeTransactionBudgetLimit>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +180,36 @@ pub struct DevnetSmokeBudgetReport {
     pub max_tx_cycles: Option<u64>,
     pub max_total_bytes: Option<usize>,
     pub max_tx_bytes: Option<usize>,
+    pub transactions: Vec<DevnetSmokeTransactionBudgetReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevnetSmokeTransactionBudgetLimit {
+    pub check: String,
+    pub path: String,
+    pub max_cycles: Option<u64>,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DevnetSmokeTransactionBudgetReport {
+    pub check: String,
+    pub path: String,
+    pub estimated_cycles: u64,
+    pub tx_size_bytes: usize,
+    pub max_cycles: Option<u64>,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct DevnetSmokeBudgetProfile {
+    schema: String,
+    max_total_cycles: Option<u64>,
+    max_tx_cycles: Option<u64>,
+    max_total_bytes: Option<usize>,
+    max_tx_bytes: Option<usize>,
+    #[serde(default)]
+    transactions: Vec<DevnetSmokeTransactionBudgetLimit>,
 }
 
 impl DevnetSmokeBudgetLimits {
@@ -185,6 +218,7 @@ impl DevnetSmokeBudgetLimits {
             || self.max_tx_cycles.is_some()
             || self.max_total_bytes.is_some()
             || self.max_tx_bytes.is_some()
+            || !self.transactions.is_empty()
     }
 }
 
@@ -277,6 +311,26 @@ pub fn compare_devnet_smoke(
     let baseline = summarize_devnet_smoke(baseline_dir)?;
     let candidate = summarize_devnet_smoke(candidate_dir)?;
     Ok(compare_summaries(&baseline, &candidate))
+}
+
+pub fn read_smoke_budget_profile(path: &Path) -> Result<DevnetSmokeBudgetLimits> {
+    let raw = fs::read(path)
+        .with_context(|| format!("failed to read smoke budget profile {}", path.display()))?;
+    let profile: DevnetSmokeBudgetProfile = serde_json::from_slice(&raw)
+        .with_context(|| format!("failed to parse smoke budget profile {}", path.display()))?;
+    if profile.schema != DEVNET_SMOKE_BUDGET_SCHEMA {
+        return Err(anyhow!(
+            "unsupported smoke budget profile schema {}",
+            profile.schema
+        ));
+    }
+    Ok(DevnetSmokeBudgetLimits {
+        max_total_cycles: profile.max_total_cycles,
+        max_tx_cycles: profile.max_tx_cycles,
+        max_total_bytes: profile.max_total_bytes,
+        max_tx_bytes: profile.max_tx_bytes,
+        transactions: profile.transactions,
+    })
 }
 
 pub fn assert_default_devnet_smoke(
@@ -771,6 +825,51 @@ pub fn assert_smoke_budget(
         }
     }
 
+    let mut transaction_reports = Vec::new();
+    for limit in &limits.transactions {
+        let transaction = summary
+            .transactions
+            .iter()
+            .find(|tx| tx.check == limit.check && tx.path == limit.path)
+            .ok_or_else(|| {
+                anyhow!(
+                    "budgeted transaction {} {} is missing from smoke summary",
+                    limit.check,
+                    limit.path
+                )
+            })?;
+        if let Some(max_cycles) = limit.max_cycles
+            && transaction.estimated_cycles > max_cycles
+        {
+            return Err(anyhow!(
+                "transaction {} {} estimated cycles {} exceeds budget {}",
+                limit.check,
+                limit.path,
+                transaction.estimated_cycles,
+                max_cycles
+            ));
+        }
+        if let Some(max_bytes) = limit.max_bytes
+            && transaction.tx_size_bytes > max_bytes
+        {
+            return Err(anyhow!(
+                "transaction {} {} bytes {} exceeds budget {}",
+                limit.check,
+                limit.path,
+                transaction.tx_size_bytes,
+                max_bytes
+            ));
+        }
+        transaction_reports.push(DevnetSmokeTransactionBudgetReport {
+            check: limit.check.clone(),
+            path: limit.path.clone(),
+            estimated_cycles: transaction.estimated_cycles,
+            tx_size_bytes: transaction.tx_size_bytes,
+            max_cycles: limit.max_cycles,
+            max_bytes: limit.max_bytes,
+        });
+    }
+
     Ok(DevnetSmokeBudgetReport {
         total_estimated_cycles: summary.totals.total_estimated_cycles,
         max_estimated_cycles: summary.totals.max_estimated_cycles,
@@ -780,6 +879,7 @@ pub fn assert_smoke_budget(
         max_tx_cycles: limits.max_tx_cycles,
         max_total_bytes: limits.max_total_bytes,
         max_tx_bytes: limits.max_tx_bytes,
+        transactions: transaction_reports,
     })
 }
 
@@ -1735,11 +1835,18 @@ mod tests {
                 max_tx_cycles: Some(80),
                 max_total_bytes: Some(200),
                 max_tx_bytes: Some(120),
+                transactions: vec![DevnetSmokeTransactionBudgetLimit {
+                    check: "factory-reduced-rights-smoke".to_string(),
+                    path: "$.update".to_string(),
+                    max_cycles: Some(1),
+                    max_bytes: Some(1),
+                }],
             },
         )
         .unwrap();
         assert_eq!(report.total_estimated_cycles, 100);
         assert_eq!(report.max_estimated_cycles, 80);
+        assert_eq!(report.transactions.len(), 1);
     }
 
     #[test]
@@ -1756,6 +1863,57 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("max transaction estimated cycles"));
+    }
+
+    #[test]
+    fn smoke_budget_rejects_named_transaction_budget() {
+        let summary = passing_assertion_summary();
+
+        let err = assert_smoke_budget(
+            &summary,
+            &DevnetSmokeBudgetLimits {
+                transactions: vec![DevnetSmokeTransactionBudgetLimit {
+                    check: "factory-reduced-rights-smoke".to_string(),
+                    path: "$.update".to_string(),
+                    max_cycles: Some(0),
+                    max_bytes: None,
+                }],
+                ..DevnetSmokeBudgetLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("factory-reduced-rights-smoke"));
+    }
+
+    #[test]
+    fn reads_smoke_budget_profile() {
+        let dir = temp_report_dir();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("budget.json");
+        fs::write(
+            &path,
+            r#"{
+              "schema": "morph.devnet_smoke_budget.v1",
+              "max_total_cycles": 100,
+              "max_tx_cycles": 80,
+              "max_total_bytes": 200,
+              "max_tx_bytes": 120,
+              "transactions": [{
+                "check": "factory-reduced-rights-smoke",
+                "path": "$.update",
+                "max_cycles": 1,
+                "max_bytes": 1
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        let profile = read_smoke_budget_profile(&path).unwrap();
+        assert_eq!(profile.max_total_cycles, Some(100));
+        assert_eq!(profile.transactions.len(), 1);
+        assert_eq!(profile.transactions[0].path, "$.update");
+
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

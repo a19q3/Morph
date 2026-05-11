@@ -119,8 +119,9 @@ script outpoints and data hashes, and records watchtower JSONL alerts. The
 script asserts that the expected negative-path failures, deployed scripts,
 local contract binary hashes, watchtower alert events, and factory exit
 evidence are present. `devnet-smoke-assert` can also enforce absolute
-cycle/byte budgets for completed smoke runs. To rebuild or assert a previous
-run:
+cycle/byte budgets for completed smoke runs, including per-transaction budgets
+from [docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
+To rebuild or assert a previous run:
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>

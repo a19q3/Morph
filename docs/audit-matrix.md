@@ -87,6 +87,8 @@ Implemented devnet-level checks:
   byte-size regressions through `devnet-smoke-compare`;
 - absolute smoke budget gates for total and per-transaction cycle/byte ceilings
   through `devnet-smoke-assert`;
+- JSON smoke budget profiles for named critical transactions, such as
+  `factory-reduced-rights-smoke $.update`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
   state packages, reduced host-side factory packages, reduced-rights factory
   packages, local-exit evidence, watchtower policy JSON, and multi-channel
