@@ -23,11 +23,12 @@ devnet, deploy the Morph contract binaries, open a channel, publish a signed
 settling state, top up sponsor capacity, publish a newer signed state over the
 old settling state, finalise the vault, and run a competing-spend smoke, a
 finalise-since negative smoke, a sponsor-budget negative smoke, a CKB+xUDT
-settlement smoke, and a tampered-settlement xUDT negative smoke through native
-JSON-RPC. Each transaction report includes node-estimated cycles and serialized
-transaction size. SponsorCells can carry explicit state-number and fee-budget
-bounds. Smoke runs also produce Markdown and machine-readable benchmark
-summaries from the collected transaction reports.
+settlement smoke, a tampered-settlement xUDT negative smoke, and a conservative
+factory open/package/update smoke through native JSON-RPC. Each transaction
+report includes node-estimated cycles and serialized transaction size.
+SponsorCells can carry explicit state-number and fee-budget bounds. Smoke runs
+also produce Markdown and machine-readable benchmark summaries from the
+collected transaction reports.
 
 Required deliverables:
 
@@ -77,6 +78,9 @@ Acceptance criteria:
   lifecycle transaction.
 - completed smoke directories can be summarised into `summary.md` and
   `summary.json`.
+- a conservative FactoryStateCell can be opened, signed as a reusable package,
+  selected as the latest package, and advanced on devnet without draining the
+  factory state carrier for fees.
 
 ## M2: Watchtower
 
@@ -100,9 +104,10 @@ integrations remain open.
 ## M3: Conservative Factory Mode
 
 Status: host-level non-interference predicate implemented, conservative
-full-participant factory state packages implemented at the CLI layer, and a
-conservative factory type script now executes in CKB-VM tests. A full devnet
-factory open/update CLI path remains open.
+full-participant factory state packages implemented at the CLI layer, a
+conservative factory type script executes in CKB-VM tests, and the CLI can open
+a FactoryStateCell, save a reusable signed factory-state-cell package, select
+the latest package, and publish a signed monotonic update on devnet.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -115,6 +120,8 @@ factory open/update CLI path remains open.
   digest and secp256k1 signature validation.
 - Conservative factory type script for one-live-FactoryStateCell monotonic
   updates under full-participant signatures.
+- Devnet `open-factory`, `save-factory-state-package`, `update-factory`, and
+  `factory-smoke` commands.
 
 ## M4: Reduced-Signature Factory Mode
 

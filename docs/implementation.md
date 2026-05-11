@@ -58,13 +58,13 @@ The sponsor lock is not a general wallet lock. It will pay only transactions
 that produce a settling Morph State Cell for the policy's channel and authorised
 state-number interval. This keeps sponsor capacity out of arbitrary transfers.
 
-Factory mode is still host-side only, but the core crate now has a concrete
-non-interference predicate. A factory-local update is described as changes to a
-set of participant rights: balance, reserve claim, membership, exit path, and
-sponsor budget claim. Any right outside the declared touched participant set
-must be byte-for-byte unchanged, and every touched participant must appear in
-the authorisation set. This is not yet an on-chain proof system; it is the
-executable rule that a future proof bundle must satisfy.
+Factory mode now has both a host-side predicate and a conservative devnet state
+track. A factory-local update is described as changes to a set of participant
+rights: balance, reserve claim, membership, exit path, and sponsor budget
+claim. Any right outside the declared touched participant set must be
+byte-for-byte unchanged, and every touched participant must appear in the
+authorisation set. This is not yet an on-chain reduced-signature proof system;
+it is the executable rule that a future proof bundle must satisfy.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -80,6 +80,13 @@ participant-id/public-key bindings, coverage of every participant mentioned by
 the update, the all-participant threshold, and every secp256k1 signature. This
 is still not reduced-signature factory exit logic, but it closes the authority
 model for full-consent factory updates.
+
+For chain publication, the CLI also supports a narrower factory-state-cell
+package. It stores the exact `FactoryStateHeaderV1` bytes and the
+`FactorySignatureWitnessV1` bytes expected by `morph-factory-type`, so the
+state evidence can be reused while the transaction body, fee input, and owner
+change are rebuilt later. `update-factory --factory-state-package` keeps the
+FactoryStateCell capacity unchanged and pays fees from a normal owner cell.
 
 The watchtower scanner may also be bound by a small operator policy before it
 reads blocks or publishes a transaction. The policy is a JSON object generated
@@ -129,6 +136,9 @@ A devnet demonstration is acceptable only when it includes:
 - a conservative factory type script that accepts canonical factory creation,
   signed monotonic updates, and rejects equal-number or invalid-signature
   updates in CKB-VM tests;
+- a conservative factory smoke path that opens a FactoryStateCell, saves a
+  reusable factory-state-cell package, selects the latest package, and publishes
+  a package-backed update without using the state carrier as a fee source;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
