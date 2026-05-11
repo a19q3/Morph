@@ -126,6 +126,10 @@ publication submission, and idle scans. It can also POST the same structured
 alert to a policy-gated HTTP webhook. The local JSONL sink remains useful for
 deterministic devnet review; the webhook path is for operator integration
 without changing channel scripts.
+The multi-channel config runner has both a single-pass form and a bounded loop
+form. The loop does not introduce a separate trust model: every pass uses the
+same policy checks, package validation, confirmation-depth scan, cursor file,
+and sponsor rules as `watch-latest-package`.
 
 ## Current Non-Goals
 
@@ -158,6 +162,8 @@ A devnet demonstration is acceptable only when it includes:
   mode, and automatic sponsor capacity before publication;
 - a multi-channel watchtower config format that keeps keys out of the config
   and resolves runtime paths deterministically;
+- a bounded multi-channel watchtower loop that reuses persisted cursors between
+  passes;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   publication submission, and idle scans;
 - a conservative all-participant factory state package with verified nested

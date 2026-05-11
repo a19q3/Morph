@@ -22,7 +22,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
-| Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file` |
+| Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Smoke evidence contains watchtower detection and publication alerts | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage` |
 | Smoke comparison can be used as a regression gate | `comparison_limits_reject_metric_regressions`, `comparison_limits_reject_set_and_status_changes` |
@@ -61,6 +61,8 @@ Implemented devnet-level checks:
   `devnet sponsor-policy-negative-smoke`;
 - watchtower policy checking for confirmation depth, fee, sponsor mode, and
   automatic sponsor capacity before confirmed-block scanning starts;
+- bounded multi-channel watchtower config loops that reuse persisted cursors
+  between passes;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   submitted publication, and idle scans;
 - smoke assertions that require older-state detection and publication-submitted

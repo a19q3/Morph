@@ -103,8 +103,8 @@ Acceptance criteria:
 Status: implemented for durable state package persistence, latest package
 selection, publish-from-latest-package rebuilding, confirmation-depth block
 polling, persisted scan cursors, conservative auto-funded sponsor rotation,
-JSON operator policy, multi-channel watchtower config, local JSONL alerts, and
-policy-gated HTTP webhook alerts.
+JSON operator policy, multi-channel watchtower config, bounded config loops,
+local JSONL alerts, and policy-gated HTTP webhook alerts.
 
 - State package persistence.
 - Detection-depth polling.
@@ -115,6 +115,7 @@ policy-gated HTTP webhook alerts.
 - Operator policy for confirmation depth, fee, sponsor mode, and auto-sponsor
   capacity.
 - Multi-channel watchtower config with private keys supplied only at runtime.
+- Bounded multi-pass watchtower runner that reuses persisted cursors.
 - JSONL and HTTP webhook alert sinks for older-state detection, publication
   submission, and idle scans.
 - Smoke summary assertions for the older-state and publication-submitted alert

@@ -515,6 +515,17 @@ cargo run -q -p morph-cli -- devnet watch-config-once \
   --json
 ```
 
+The same config can be used for several consecutive passes. Each pass reuses
+the persisted cursor written by the previous pass:
+
+```sh
+cargo run -q -p morph-cli -- devnet watch-config-loop \
+  --config target/watch-config.json \
+  --passes 10 \
+  --sleep-ms 1000 \
+  --json
+```
+
 The config deliberately does not carry a private key; key material is supplied
 through `--private-key` or `MORPH_DEVNET_PRIVATE_KEY` at runtime. Relative paths
 inside the config are resolved relative to the config file.

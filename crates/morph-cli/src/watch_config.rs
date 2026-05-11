@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use crate::rpc::CkbRpcClient;
 
 const WATCH_CONFIG_SCHEMA: &str = "morph.watchtower_config.v1";
 const WATCH_CONFIG_RUN_SCHEMA: &str = "morph.watchtower_config_run.v1";
+const WATCH_CONFIG_LOOP_SCHEMA: &str = "morph.watchtower_config_loop.v1";
 const DEFAULT_STORE_DIR: &str = "target/morph-state-packages";
 const DEFAULT_DETECTION_DEPTH: u64 = 1;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -20,6 +22,7 @@ const DEFAULT_POLL_MS: u64 = 1_000;
 const DEFAULT_FEE: u64 = 100_000_000;
 const DEFAULT_MINE_BLOCKS: u64 = 4;
 const DEFAULT_AUTO_SPONSOR_CAPACITY: u64 = 50_000_000_000;
+const MAX_LOOP_PASSES: u64 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchtowerConfigV1 {
@@ -70,6 +73,13 @@ pub struct WatchtowerRuntimeOptions {
     pub private_key: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct WatchtowerConfigLoopOptions {
+    pub passes: u64,
+    pub sleep_ms: u64,
+    pub stop_after_publication: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WatchtowerConfigRunReport {
     pub schema: String,
@@ -84,6 +94,24 @@ pub struct WatchtowerConfigRunReport {
 pub struct WatchtowerChannelRunReport {
     pub channel_id: String,
     pub report: WatchLatestStatePackageReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatchtowerConfigLoopReport {
+    pub schema: String,
+    pub config_path: String,
+    pub requested_passes: u64,
+    pub completed_passes: u64,
+    pub stopped_after_publication: bool,
+    pub published_count: usize,
+    pub idle_count: usize,
+    pub passes: Vec<WatchtowerConfigPassReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatchtowerConfigPassReport {
+    pub pass_number: u64,
+    pub report: WatchtowerConfigRunReport,
 }
 
 impl WatchtowerConfigV1 {
@@ -237,6 +265,67 @@ pub fn run_watchtower_config_once(
         published_count,
         idle_count: reports.len().saturating_sub(published_count),
         channels: reports,
+    })
+}
+
+pub fn run_watchtower_config_loop(
+    rpc: &CkbRpcClient,
+    config_path: &Path,
+    config: &WatchtowerConfigV1,
+    runtime: WatchtowerRuntimeOptions,
+    options: WatchtowerConfigLoopOptions,
+) -> Result<WatchtowerConfigLoopReport> {
+    config.validate()?;
+    ensure!(
+        options.passes > 0,
+        "watchtower loop passes must be non-zero"
+    );
+    ensure!(
+        options.passes <= MAX_LOOP_PASSES,
+        "watchtower loop passes must not exceed {MAX_LOOP_PASSES}"
+    );
+    ensure!(
+        options.sleep_ms > 0,
+        "watchtower loop sleep_ms must be non-zero"
+    );
+
+    let mut pass_reports = Vec::with_capacity(options.passes as usize);
+    let mut published_count = 0usize;
+    let mut stopped_after_publication = false;
+
+    for pass_number in 1..=options.passes {
+        let report = run_watchtower_config_once(rpc, config_path, config, runtime.clone())?;
+        let pass_published = report.published_count;
+        published_count += pass_published;
+        pass_reports.push(WatchtowerConfigPassReport {
+            pass_number,
+            report,
+        });
+
+        if options.stop_after_publication && pass_published > 0 {
+            stopped_after_publication = true;
+            break;
+        }
+
+        if pass_number < options.passes {
+            std::thread::sleep(Duration::from_millis(options.sleep_ms));
+        }
+    }
+
+    let completed_passes = pass_reports.len() as u64;
+    let total_channel_runs = pass_reports
+        .iter()
+        .map(|pass| pass.report.channel_count)
+        .sum::<usize>();
+    Ok(WatchtowerConfigLoopReport {
+        schema: WATCH_CONFIG_LOOP_SCHEMA.to_string(),
+        config_path: config_path.display().to_string(),
+        requested_passes: options.passes,
+        completed_passes,
+        stopped_after_publication,
+        published_count,
+        idle_count: total_channel_runs.saturating_sub(published_count),
+        passes: pass_reports,
     })
 }
 
@@ -394,5 +483,63 @@ mod tests {
             options.cursor_file,
             Some(PathBuf::from("/tmp/morph-watch/cursor.json"))
         );
+    }
+
+    #[test]
+    fn rejects_zero_loop_options() {
+        let config = WatchtowerConfigV1::fixture();
+        let runtime = WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: "key".to_string(),
+        };
+        let err = run_watchtower_config_loop(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            Path::new("watch.json"),
+            &config,
+            runtime.clone(),
+            WatchtowerConfigLoopOptions {
+                passes: 0,
+                sleep_ms: 1_000,
+                stop_after_publication: false,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("passes must be non-zero"));
+
+        let err = run_watchtower_config_loop(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            Path::new("watch.json"),
+            &config,
+            runtime,
+            WatchtowerConfigLoopOptions {
+                passes: 1,
+                sleep_ms: 0,
+                stop_after_publication: false,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("sleep_ms must be non-zero"));
+    }
+
+    #[test]
+    fn rejects_unbounded_loop_report_size() {
+        let config = WatchtowerConfigV1::fixture();
+        let runtime = WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: "key".to_string(),
+        };
+        let err = run_watchtower_config_loop(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            Path::new("watch.json"),
+            &config,
+            runtime,
+            WatchtowerConfigLoopOptions {
+                passes: MAX_LOOP_PASSES + 1,
+                sleep_ms: 1_000,
+                stop_after_publication: false,
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("must not exceed"));
     }
 }

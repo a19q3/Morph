@@ -843,6 +843,34 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run several configured watchtower passes, reusing persisted cursors.
+    WatchConfigLoop {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls sponsor funding and change.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Watchtower config JSON path.
+        #[arg(long)]
+        config: std::path::PathBuf,
+        /// Number of passes to run.
+        #[arg(long, default_value_t = 3)]
+        passes: u64,
+        /// Milliseconds to sleep between passes.
+        #[arg(long, default_value_t = 1_000)]
+        sleep_ms: u64,
+        /// Return after the first pass that publishes any state.
+        #[arg(long)]
+        stop_after_publication: bool,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a fresh SponsorCell for an existing channel state.
     FundSponsor {
         /// Directory containing the built RISC-V contract binaries.
@@ -2520,6 +2548,53 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         channel.report.scanned_to_block,
                         channel.report.next_from_block,
                         channel.report.publication.is_some()
+                    );
+                }
+            }
+        }
+        DevnetCommand::WatchConfigLoop {
+            contracts_dir,
+            private_key,
+            config,
+            passes,
+            sleep_ms,
+            stop_after_publication,
+            json,
+        } => {
+            let config_data = watch_config::read_watchtower_config(&config)?;
+            let report = watch_config::run_watchtower_config_loop(
+                &rpc,
+                &config,
+                &config_data,
+                watch_config::WatchtowerRuntimeOptions {
+                    contracts_dir,
+                    private_key,
+                },
+                watch_config::WatchtowerConfigLoopOptions {
+                    passes,
+                    sleep_ms,
+                    stop_after_publication,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("config={}", report.config_path);
+                println!("requested_passes={}", report.requested_passes);
+                println!("completed_passes={}", report.completed_passes);
+                println!("published={}", report.published_count);
+                println!("idle={}", report.idle_count);
+                println!(
+                    "stopped_after_publication={}",
+                    report.stopped_after_publication
+                );
+                for pass in &report.passes {
+                    println!(
+                        "pass={} channels={} published={} idle={}",
+                        pass.pass_number,
+                        pass.report.channel_count,
+                        pass.report.published_count,
+                        pass.report.idle_count
                     );
                 }
             }

@@ -23,7 +23,8 @@ Current implementation stage:
   reporting from the node. It also stores reusable signed state packages for
   watchtower-style publication and validates optional watchtower operator
   policies before confirmed-block scanning. Watchtower runs can be driven from
-  a multi-channel JSON config, while the signing key remains a runtime
+  a multi-channel JSON config, either as one scan pass or as a bounded loop
+  that reuses persisted cursors, while the signing key remains a runtime
   argument or environment variable. Watchtower alerts can be written to JSONL
   and posted to a policy-gated HTTP webhook. Factory local-exit reports include
   a reusable evidence package that can be independently validated.
@@ -151,6 +152,11 @@ private keys are intentionally kept outside the config:
 ```sh
 cargo run -p morph-cli -- devnet watch-config-once \
   --config target/watch-config.json \
+  --json
+cargo run -p morph-cli -- devnet watch-config-loop \
+  --config target/watch-config.json \
+  --passes 10 \
+  --sleep-ms 1000 \
   --json
 ```
 
