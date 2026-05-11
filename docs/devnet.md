@@ -88,7 +88,10 @@ smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
 watchtower auto-sponsor path. It expects the node and `jq` to be available, and
 writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
-`MINE_BLOCKS` when needed.
+`MINE_BLOCKS` when needed. On success it also refreshes the
+`target/devnet-smoke/latest` symlink to the completed run; set `LATEST_LINK` to
+use a different pointer, or point it at an existing real directory/file to skip
+the update.
 
 At the end of a successful run, the script also writes:
 

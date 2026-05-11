@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 RPC_URL="${MORPH_CKB_RPC:-http://127.0.0.1:18114}"
 OUT_DIR="${OUT_DIR:-target/devnet-smoke/$(date -u +%Y%m%dT%H%M%SZ)}"
+LATEST_LINK="${LATEST_LINK:-target/devnet-smoke/latest}"
 MINE_BLOCKS="${MINE_BLOCKS:-1}"
 
 mkdir -p "$OUT_DIR"
@@ -192,5 +193,15 @@ log "summary -> $OUT_DIR/summary.md"
 cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" >"$OUT_DIR/summary.md"
 log "summary-json -> $OUT_DIR/summary.json"
 cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" --json >"$OUT_DIR/summary.json"
+
+if [ ! -e "$LATEST_LINK" ] || [ -L "$LATEST_LINK" ]; then
+  OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
+  mkdir -p "$(dirname "$LATEST_LINK")"
+  rm -f "$LATEST_LINK"
+  ln -s "$OUT_DIR_ABS" "$LATEST_LINK"
+  log "latest -> $LATEST_LINK"
+else
+  log "latest link skipped because $LATEST_LINK exists and is not a symlink"
+fi
 
 log "passed; artefacts are in $OUT_DIR"

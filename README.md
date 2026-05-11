@@ -98,7 +98,9 @@ exit, and finalisation transaction, including finalise-since, sponsor budget,
 competing-spend, CKB+xUDT, and factory CKB+xUDT negative smoke paths.
 `scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
 then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
-`target/devnet-smoke/`. Summary generation also validates any factory
+`target/devnet-smoke/`. After a successful run it refreshes
+`target/devnet-smoke/latest` to point at the completed run, unless that path is
+a real directory or file. Summary generation also validates any factory
 local-exit evidence package embedded in the smoke JSON. To rebuild the summary
 for a previous run:
 
