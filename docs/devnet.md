@@ -260,6 +260,18 @@ The JSON form keeps the same per-transaction `metrics` object on each step, so
 benchmark scripts can compare open, stale publication, supersession, sponsor
 top-up, and finalisation separately.
 
+There is also a live negative smoke for sponsor policy enforcement:
+
+```sh
+cargo run -q -p morph-cli -- devnet sponsor-policy-negative-smoke --json
+```
+
+It opens a channel whose initial SponsorCell may only pay for state `1`, asks
+the node to verify a state `2` publication, expects that transaction to be
+rejected by the sponsor lock, then publishes the allowed state `1` and
+finalises the channel. This catches drift between the CLI's reported
+SponsorPolicy and the actual script behaviour.
+
 ## Signed State Packages
 
 A published state should be treated as reusable channel evidence, not as a

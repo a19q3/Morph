@@ -7,7 +7,7 @@ use devnet::{
     DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY, DEFAULT_DEVNET_PRIVATE_KEY,
     DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions, OpenChannelOptions,
     PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
-    SupersedeSmokeOptions, WatchLatestStatePackageOptions,
+    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, WatchLatestStatePackageOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -403,6 +403,49 @@ enum DevnetCommand {
     },
     /// Run open -> stale publish -> sponsor top-up -> supersede -> finalise on devnet.
     SupersedeSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the channel vault lock, in shannons.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        vault_capacity: u64,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value used by channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove live devnet rejects a SponsorCell outside its state-number policy.
+    SponsorPolicyNegativeSmoke {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
@@ -1084,6 +1127,48 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     report.supersede_publish.metrics.estimated_cycles,
                     report.finalise.metrics.estimated_cycles
                 );
+            }
+        }
+        DevnetCommand::SponsorPolicyNegativeSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::sponsor_policy_negative_smoke(
+                &rpc,
+                SponsorPolicyNegativeSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("open_tx={}", report.open.tx_hash);
+                println!("rejected_state_number={}", report.rejected_state_number);
+                println!("rejection={}", report.rejection);
+                println!("allowed_publish_tx={}", report.allowed_publish.tx_hash);
+                println!("finalise_tx={}", report.finalise.tx_hash);
+                println!("channel_id={}", report.finalise.channel_id);
+                println!("finalise_status={}", report.finalise.status);
             }
         }
     }
