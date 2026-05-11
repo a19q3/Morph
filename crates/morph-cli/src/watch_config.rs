@@ -857,6 +857,57 @@ mod tests {
     }
 
     #[test]
+    fn service_stops_after_bounded_errors_and_writes_health() {
+        let dir =
+            std::env::temp_dir().join(format!("morph-watch-service-{}-error", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let health_file = dir.join("health.json");
+        let config = WatchtowerConfigV1::fixture();
+        let runtime = WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: "key".to_string(),
+        };
+
+        let report = run_watchtower_config_service(
+            &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
+            &dir.join("watch.json"),
+            &config,
+            runtime,
+            WatchtowerConfigServiceOptions {
+                max_passes: None,
+                sleep_ms: 1,
+                error_backoff_ms: 1,
+                max_consecutive_errors: 1,
+                stop_after_publication: false,
+                stop_file: None,
+                health_file: Some(health_file.clone()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.stopped_reason, "max_consecutive_errors");
+        assert_eq!(report.completed_passes, 0);
+        assert_eq!(report.error_count, 1);
+        assert_eq!(report.consecutive_errors, 1);
+        assert!(report.last_error.is_some());
+
+        let health: WatchtowerConfigServiceHealth =
+            serde_json::from_slice(&fs::read(&health_file).unwrap()).unwrap();
+        assert_eq!(health.schema, WATCH_CONFIG_HEALTH_SCHEMA);
+        assert_eq!(health.status, "stopped");
+        assert_eq!(
+            health.stopped_reason.as_deref(),
+            Some("max_consecutive_errors")
+        );
+        assert_eq!(health.completed_passes, 0);
+        assert_eq!(health.error_count, 1);
+        assert_eq!(health.consecutive_errors, 1);
+        assert!(health.last_error.is_some());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn rejects_invalid_service_options() {
         let config = WatchtowerConfigV1::fixture();
         let runtime = WatchtowerRuntimeOptions {
