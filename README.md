@@ -18,7 +18,8 @@ Current implementation stage:
 - `morph-cli`: local smoke tooling for fixture generation, invariant checks,
   native CKB devnet JSON-RPC checks, contract deployment, channel opening,
   state publication, vault finalisation, and per-transaction cycle/size
-  reporting from the node.
+  reporting from the node. It also stores reusable signed state packages for
+  watchtower-style publication.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell

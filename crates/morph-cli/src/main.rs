@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use devnet::{
     DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY, DEFAULT_DEVNET_PRIVATE_KEY,
     DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions, OpenChannelOptions,
-    PublishStateOptions, SupersedeSmokeOptions,
+    PublishStateOptions, SaveStatePackageOptions, SupersedeSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -14,6 +14,7 @@ use morph_core::*;
 use rpc::{CkbRpcClient, HeaderView};
 
 mod devnet;
+mod packages;
 mod rpc;
 
 #[derive(Debug, Parser)]
@@ -169,12 +170,60 @@ enum DevnetCommand {
         /// New state number. Defaults to old_state_number + 1.
         #[arg(long)]
         state_number: Option<u64>,
+        /// Signed state package JSON. When set, Alice/Bob keys are not used.
+        #[arg(long, conflicts_with = "state_number")]
+        state_package: Option<std::path::PathBuf>,
         /// Absolute fee paid by the SponsorCell, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a signed settling state package without broadcasting it.
+    SaveStatePackage {
+        /// Devnet Alice channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// New state number. Defaults to old_state_number + 1.
+        #[arg(long)]
+        state_number: Option<u64>,
+        /// Directory where signed state packages are stored.
+        #[arg(long, default_value = "target/morph-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List saved signed state packages.
+    ListStatePackages {
+        /// Directory where signed state packages are stored.
+        #[arg(long, default_value = "target/morph-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Optional channel id filter.
+        #[arg(long)]
+        channel_id: Option<String>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select the highest-numbered saved state package for a channel.
+    LatestStatePackage {
+        /// Directory where signed state packages are stored.
+        #[arg(long, default_value = "target/morph-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Channel id to select.
+        #[arg(long)]
+        channel_id: String,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -530,6 +579,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             state_out_point,
             sponsor_out_point,
             state_number,
+            state_package,
             fee,
             mine_blocks,
             json,
@@ -544,6 +594,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     state_out_point,
                     sponsor_out_point,
                     state_number,
+                    state_package,
                     fee,
                     mine_blocks,
                 },
@@ -569,10 +620,84 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
                 println!("sponsor_change_capacity={}", report.sponsor_change_capacity);
                 println!("fee={}", report.fee);
+                if let Some(path) = &report.state_package {
+                    println!("state_package={path}");
+                }
                 print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
+            }
+        }
+        DevnetCommand::SaveStatePackage {
+            alice_private_key,
+            bob_private_key,
+            state_out_point,
+            state_number,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_state_package(
+                &rpc,
+                SaveStatePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    state_out_point,
+                    state_number,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("channel_id={}", report.package.channel_id);
+                println!("funding_anchor={}", report.package.funding_anchor);
+                println!("state_number={}", report.package.state_number);
+                println!("signing_digest={}", report.package.signing_digest);
+            }
+        }
+        DevnetCommand::ListStatePackages {
+            store_dir,
+            channel_id,
+            json,
+        } => {
+            let packages = packages::list_packages(&store_dir, channel_id.as_deref())?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "store_dir": store_dir,
+                        "packages": packages,
+                    }))?
+                );
+            } else {
+                println!("package_count={}", packages.len());
+                for record in packages {
+                    println!(
+                        "package={} channel_id={} state_number={} signing_digest={}",
+                        record.path.display(),
+                        record.package.channel_id,
+                        record.package.state_number,
+                        record.package.signing_digest
+                    );
+                }
+            }
+        }
+        DevnetCommand::LatestStatePackage {
+            store_dir,
+            channel_id,
+            json,
+        } => {
+            let record = packages::latest_package(&store_dir, &channel_id)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&record)?);
+            } else {
+                println!("path={}", record.path.display());
+                println!("channel_id={}", record.package.channel_id);
+                println!("funding_anchor={}", record.package.funding_anchor);
+                println!("state_number={}", record.package.state_number);
+                println!("signing_digest={}", record.package.signing_digest);
             }
         }
         DevnetCommand::FundSponsor {

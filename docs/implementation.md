@@ -55,7 +55,9 @@ A devnet demonstration is acceptable only when it includes:
 - at least one successful publish/supersede/finalise path;
 - negative transactions for stale state, wrong funding anchor, sponsor drain,
   channel-paid fee leakage, and xUDT type mismatch;
-- cycle measurements for each script;
+- cycle and transaction-size measurements for each lifecycle transaction;
+- reusable signed state packages that can be published without channel signing
+  keys;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

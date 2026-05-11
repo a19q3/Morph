@@ -18,8 +18,16 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 
+Implemented devnet-level checks:
+
+- real CKB transaction construction for deploy, open, publish, supersede,
+  sponsor top-up, and finalise;
+- node-reported cycle measurement and transaction size reporting;
+- durable signed state-package storage with signature validation and latest
+  package selection.
+
 Missing devnet-level checks:
 
-- real CKB transaction construction and cycle measurement;
+- xUDT vault-cell publication and settlement;
 - mempool/rebuild behaviour against a live devnet node;
 - factory non-interference proof predicates.

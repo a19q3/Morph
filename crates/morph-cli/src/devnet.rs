@@ -27,6 +27,7 @@ use morph_script_common::{
 };
 use serde::Serialize;
 
+use crate::packages::{PackageOutPoint, StoredStatePackage, read_package, write_package};
 use crate::rpc::CkbRpcClient;
 
 const DEFAULT_SECP_TYPE_HASH: &str =
@@ -76,8 +77,18 @@ pub struct PublishStateOptions {
     pub state_out_point: String,
     pub sponsor_out_point: String,
     pub state_number: Option<u64>,
+    pub state_package: Option<PathBuf>,
     pub fee: u64,
     pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveStatePackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub state_out_point: String,
+    pub state_number: Option<u64>,
+    pub store_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -218,8 +229,16 @@ pub struct PublishStateReport {
     pub state_out_point: PrintableOutPoint,
     pub sponsor_change_capacity: u64,
     pub fee: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state_package: Option<String>,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveStatePackageReport {
+    pub path: String,
+    pub package: StoredStatePackage,
 }
 
 #[derive(Debug, Serialize)]
@@ -663,14 +682,52 @@ pub fn publish_state(
         "private key does not control the sponsor change lock"
     );
 
-    let mut new_state_data = state_cell.data.to_vec();
-    put_u64(&mut new_state_data, 100, new_state_number);
-    new_state_data[109] = PHASE_SETTLING;
-    let signature_witness = bilateral_signature_witness(
-        &new_state_data,
-        &options.alice_private_key,
-        &options.bob_private_key,
-    )?;
+    let (new_state_data, signature_witness, new_state_number, state_package) =
+        if let Some(path) = &options.state_package {
+            let package = read_package(path)?;
+            let header_bytes = package.header_bytes()?;
+            let witness_bytes = package.witness_bytes()?;
+            let package_state_number = {
+                let package_header = StateHeaderV1::parse(&header_bytes)
+                    .map_err(|err| anyhow!("state package header is invalid: {err:?}"))?;
+                ensure!(
+                    old_header.same_context_except_progress(&package_header),
+                    "state package does not match the current channel context"
+                );
+                ensure!(
+                    package_header.state_number() > old_header.state_number(),
+                    "state package number {} must be greater than old state number {}",
+                    package_header.state_number(),
+                    old_header.state_number()
+                );
+                ensure!(
+                    package_header.phase() == PHASE_SETTLING,
+                    "state package must publish a settling state"
+                );
+                package_header.state_number()
+            };
+            (
+                header_bytes,
+                witness_bytes,
+                package_state_number,
+                Some(path.display().to_string()),
+            )
+        } else {
+            let mut new_state_data = state_cell.data.to_vec();
+            put_u64(&mut new_state_data, 100, new_state_number);
+            new_state_data[109] = PHASE_SETTLING;
+            let signature_witness = bilateral_signature_witness(
+                &new_state_data,
+                &options.alice_private_key,
+                &options.bob_private_key,
+            )?;
+            (
+                new_state_data,
+                signature_witness.to_vec(),
+                new_state_number,
+                None,
+            )
+        };
 
     let tip_number = rpc.tip_header()?.number_value()?;
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
@@ -723,8 +780,52 @@ pub fn publish_state(
         },
         sponsor_change_capacity,
         fee: options.fee,
+        state_package,
         metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
+    })
+}
+
+pub fn save_state_package(
+    rpc: &CkbRpcClient,
+    options: SaveStatePackageOptions,
+) -> Result<SaveStatePackageReport> {
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
+    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+        .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+    let new_state_number = options
+        .state_number
+        .unwrap_or_else(|| old_header.state_number().saturating_add(1));
+    ensure!(
+        new_state_number > old_header.state_number(),
+        "new state number must be greater than old state number {}",
+        old_header.state_number()
+    );
+
+    let mut new_state_data = state_cell.data.to_vec();
+    put_u64(&mut new_state_data, 100, new_state_number);
+    new_state_data[109] = PHASE_SETTLING;
+    let signature_witness = bilateral_signature_witness(
+        &new_state_data,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+
+    let printable = printable_out_point(&state_out_point);
+    let package = StoredStatePackage::from_signed_state(
+        &new_state_data,
+        &signature_witness,
+        Some(PackageOutPoint {
+            tx_hash: printable.tx_hash,
+            index: printable.index,
+        }),
+    )?;
+    let path = write_package(&options.store_dir, &package)?;
+
+    Ok(SaveStatePackageReport {
+        path: path.display().to_string(),
+        package,
     })
 }
 
@@ -994,6 +1095,7 @@ pub fn supersede_smoke(
             state_out_point: initial_state_out_point,
             sponsor_out_point: initial_sponsor_out_point,
             state_number: Some(1),
+            state_package: None,
             fee: options.fee,
             mine_blocks: options.mine_blocks,
         },
@@ -1023,6 +1125,7 @@ pub fn supersede_smoke(
             state_out_point: stale_state_out_point,
             sponsor_out_point: top_up_sponsor_out_point,
             state_number: Some(2),
+            state_package: None,
             fee: options.fee,
             mine_blocks: options.mine_blocks,
         },

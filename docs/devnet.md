@@ -225,6 +225,55 @@ The JSON form keeps the same per-transaction `metrics` object on each step, so
 benchmark scripts can compare open, stale publication, supersession, sponsor
 top-up, and finalisation separately.
 
+## Signed State Packages
+
+A published state should be treated as reusable channel evidence, not as a
+fixed transaction body. The CLI therefore has a small state-package store for
+the watchtower path. A package contains:
+
+- the complete signed settling `StateHeader`;
+- the bilateral participant signature witness;
+- channel id, funding anchor, state number, and signing digest metadata;
+- the source StateCell outpoint, when created from devnet.
+
+The package reader validates the header length, witness length, participant
+commitment, ECDSA signatures, channel metadata, and signing digest before it is
+used.
+
+Create a package without broadcasting it:
+
+```sh
+PACKAGE_JSON=$(cargo run -q -p morph-cli -- devnet save-state-package \
+  --state-out-point "$STATE_OUT_POINT" \
+  --state-number 1 \
+  --json)
+PACKAGE_PATH="$(echo "$PACKAGE_JSON" | jq -r '.path')"
+```
+
+List the local package store:
+
+```sh
+cargo run -q -p morph-cli -- devnet list-state-packages
+cargo run -q -p morph-cli -- devnet latest-state-package \
+  --channel-id "$(echo "$PACKAGE_JSON" | jq -r '.package.channel_id')"
+```
+
+Publish using the saved package:
+
+```sh
+cargo run -q -p morph-cli -- devnet publish-state \
+  --state-out-point "$STATE_OUT_POINT" \
+  --sponsor-out-point "$SPONSOR_OUT_POINT" \
+  --state-package "$PACKAGE_PATH" \
+  --json
+```
+
+When `--state-package` is used, the publication transaction is rebuilt against
+the currently live StateCell and SponsorCell. Alice and Bob do not need to sign
+again, and their private keys are not needed by the publisher. The publisher
+still needs authority over the sponsor change lock, because fee payment remains
+separate from channel state authority.
+
 ## Contract Milestone
 
 The contract implementation uses fixed-width headers and a narrow witness
@@ -243,5 +292,5 @@ rights-dependency proof predicate exists.
 ## Remaining Devnet Gap
 
 The current vertical slice is CKB-only and bilateral. The next devnet work is
-to add xUDT vault cells, a mempool-level competing-spend case, and
-watchtower-grade state package storage.
+to add xUDT vault cells, a mempool-level competing-spend case, detection-depth
+watchtower polling, and emergency sponsor-budget policy.
