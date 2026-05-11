@@ -14,10 +14,9 @@ The devnet milestone is a bilateral channel vertical slice:
 
 ## Tooling Requirements
 
-The local environment used to create this repository has Rust and the CKB
-RISC-V target installed, but no `ckb`, `ckb-cli`, `capsule`, or `moleculec`
-binary on PATH. Until those tools are installed, this repository verifies the
-protocol semantics locally and keeps devnet broadcast commands as a runbook.
+The local environment used to create this repository has Rust, the CKB RISC-V
+target, and a local CKB node binary. `ckb-cli`, `capsule`, and `moleculec` are
+not required for the current devnet path.
 
 Expected tools for full devnet execution:
 
@@ -68,6 +67,7 @@ With `scripts/devnet-node.sh` running in another shell:
 cargo run -p morph-cli -- devnet check
 cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
+cargo run -p morph-cli -- devnet deploy-contracts --json
 ```
 
 These checks exercise the same invariants that the scripts must enforce:
@@ -108,6 +108,7 @@ cargo run -p morph-cli -- devnet check
 cargo run -p morph-cli -- devnet tip --json
 cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
+cargo run -p morph-cli -- devnet deploy-contracts
 ```
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
@@ -120,6 +121,21 @@ MORPH_CKB_RPC=http://127.0.0.1:18114 cargo run -p morph-cli -- devnet check
 `devnet mine` calls CKB's `generate_block` integration-test RPC method. If the
 node has not exposed that module, the command fails with the returned RPC
 error. It does not fabricate block progress.
+
+`devnet deploy-contracts` builds and signs a real CKB transaction that deploys
+the three Morph RISC-V binaries as data-hash script cells:
+
+```text
+morph-state-type
+morph-vault-lock
+morph-sponsor-lock
+```
+
+It scans the local chain for a live cell controlled by the devnet key, uses the
+genesis secp256k1 system cell as a dependency, broadcasts through
+`send_transaction`, optionally mines blocks, and reports the deployed outpoints
+and `data1` code hashes. The default key is the first generated private key in
+the local `dev` chain spec and is suitable only for isolated devnet testing.
 
 ## Contract Milestone
 
@@ -139,6 +155,6 @@ rights-dependency proof predicate exists.
 ## Remaining Devnet Gap
 
 The local machine now has a CKB node binary and the repository has native
-read/mine JSON-RPC tooling. The next missing part is Morph-specific transaction
-construction and signing for deploying scripts, funding a channel, publishing a
-state, superseding it, and finalising vault outputs against a live devnet node.
+read/mine/deploy JSON-RPC tooling. The next missing part is Morph-specific
+transaction construction and signing for funding a channel, publishing a state,
+superseding it, and finalising vault outputs against a live devnet node.

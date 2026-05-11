@@ -1643,6 +1643,10 @@ name = "morph-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ckb-crypto",
+ "ckb-hash",
+ "ckb-jsonrpc-types",
+ "ckb-types",
  "clap",
  "hex",
  "k256",

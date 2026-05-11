@@ -16,7 +16,7 @@ Current implementation stage:
 - `morph-core`: protocol objects and validation invariants for state
   supersession, sponsor policy, vault settlement, and partition conservation.
 - `morph-cli`: local smoke tooling for fixture generation, invariant checks,
-  and native CKB devnet JSON-RPC checks.
+  native CKB devnet JSON-RPC checks, and contract deployment.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
   progression, funding-anchor binding, and monotonic settling publication.
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
@@ -55,6 +55,7 @@ With a local devnet node running through `scripts/devnet-node.sh`:
 ```sh
 cargo run -p morph-cli -- devnet check
 cargo run -p morph-cli -- devnet mine --blocks 1
+cargo run -p morph-cli -- devnet deploy-contracts
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md).

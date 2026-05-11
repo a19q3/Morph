@@ -17,7 +17,7 @@ Status: in progress. The three script ELFs build, offline CKB-VM tests cover
 state publication, stale-state rejection, invalid state signatures,
 state-bound sponsor fees, descriptor-bound vault finalisation, and
 descriptor-output mismatch rejection, and the CLI can check/mine a local CKB
-devnet through native JSON-RPC.
+devnet and deploy the Morph contract binaries through native JSON-RPC.
 
 Required deliverables:
 
@@ -26,8 +26,8 @@ Required deliverables:
 - `morph-vault-lock` contract.
 - `morph-sponsor-lock` contract.
 - Native devnet RPC check/mine/wait commands.
+- Devnet contract deployment transaction.
 - RPC transaction builder.
-- Devnet deploy script.
 - Publish, supersede, and finalise integration test.
 
 Acceptance criteria:

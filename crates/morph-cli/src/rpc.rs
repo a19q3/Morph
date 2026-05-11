@@ -1,6 +1,11 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use ckb_jsonrpc_types::{
+    BlockView, CellWithStatus, OutPoint as JsonOutPoint, Status, Transaction,
+    TransactionWithStatusResponse,
+};
+use ckb_types::H256;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -91,6 +96,60 @@ impl CkbRpcClient {
         )
     }
 
+    pub fn block_by_number(&self, number: u64) -> Result<Option<BlockView>> {
+        self.call(
+            "get_block_by_number",
+            json!([format_quantity(number), format_quantity(2), false]),
+        )
+    }
+
+    pub fn live_cell(&self, out_point: JsonOutPoint, with_data: bool) -> Result<CellWithStatus> {
+        self.call("get_live_cell", json!([out_point, with_data, true]))
+    }
+
+    pub fn send_transaction(&self, transaction: Transaction) -> Result<H256> {
+        self.call("send_transaction", json!([transaction, "passthrough"]))
+    }
+
+    pub fn transaction(&self, tx_hash: H256) -> Result<TransactionWithStatusResponse> {
+        self.call(
+            "get_transaction",
+            json!([tx_hash, format_quantity(2), null]),
+        )
+    }
+
+    pub fn wait_transaction_committed(
+        &self,
+        tx_hash: H256,
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<TransactionWithStatusResponse> {
+        let started = Instant::now();
+        loop {
+            let tx = self.transaction(tx_hash.clone())?;
+            match tx.tx_status.status {
+                Status::Committed => return Ok(tx),
+                Status::Rejected => {
+                    bail!(
+                        "transaction {tx_hash:#x} rejected: {}",
+                        tx.tx_status
+                            .reason
+                            .as_deref()
+                            .unwrap_or("node did not report a rejection reason")
+                    );
+                }
+                _ => {}
+            }
+            if started.elapsed() >= timeout {
+                bail!(
+                    "timed out waiting for transaction {tx_hash:#x}; current status is {:?}",
+                    tx.tx_status.status
+                );
+            }
+            std::thread::sleep(poll_interval);
+        }
+    }
+
     pub fn wait_for_tip(
         &self,
         min_number: u64,
@@ -175,4 +234,8 @@ fn parse_quantity(value: &str) -> Result<u64> {
         .strip_prefix("0x")
         .ok_or_else(|| anyhow!("quantity is not 0x-prefixed: {value}"))?;
     u64::from_str_radix(hex, 16).with_context(|| format!("invalid hex quantity: {value}"))
+}
+
+fn format_quantity(value: u64) -> String {
+    format!("0x{value:x}")
 }

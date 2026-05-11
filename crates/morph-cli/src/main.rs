@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use devnet::{DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
 use rpc::{CkbRpcClient, HeaderView};
 
+mod devnet;
 mod rpc;
 
 #[derive(Debug, Parser)]
@@ -67,6 +69,28 @@ enum DevnetCommand {
         /// Number of blocks to generate.
         #[arg(long, default_value_t = 1)]
         blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Deploy the three Morph contract binaries to local devnet.
+    DeployContracts {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls a funded local-devnet cell.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Absolute fee to reserve for the deployment transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -162,6 +186,54 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     println!("generated_block={hash}");
                 }
                 print_tip(&tip)?;
+            }
+        }
+        DevnetCommand::DeployContracts {
+            contracts_dir,
+            private_key,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::deploy_contracts(
+                &rpc,
+                DeployContractsOptions {
+                    contracts_dir,
+                    private_key,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("input_capacity={}", report.input_capacity);
+                println!("deployed_capacity={}", report.deployed_capacity);
+                println!("change_capacity={}", report.change_capacity);
+                println!("fee={}", report.fee);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for script in report.scripts {
+                    println!(
+                        "script={} out_point={}:{} data_hash={} hash_type={} data_len={} capacity={}",
+                        script.name,
+                        script.out_point.tx_hash,
+                        script.out_point.index,
+                        script.data_hash,
+                        script.hash_type,
+                        script.data_len,
+                        script.capacity
+                    );
+                }
             }
         }
     }
