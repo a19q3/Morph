@@ -156,6 +156,8 @@ A devnet demonstration is acceptable only when it includes:
   keys;
 - a watchtower operator policy that bounds confirmation depth, fees, sponsor
   mode, and automatic sponsor capacity before publication;
+- a multi-channel watchtower config format that keeps keys out of the config
+  and resolves runtime paths deterministically;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
   publication submission, and idle scans;
 - a conservative all-participant factory state package with verified nested
@@ -184,7 +186,8 @@ A devnet demonstration is acceptable only when it includes:
 - smoke comparison gates for transaction-set, status, cycle, and byte-size
   regressions between completed devnet runs;
 - CI fixture checks for bilateral state fixtures, factory update/state/local
-  exit packages, reduced host-side factory packages, and watchtower policies;
+  exit packages, reduced host-side factory packages, watchtower policies, and
+  multi-channel watchtower configs;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

@@ -88,7 +88,8 @@ smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
 watchtower auto-sponsor path. It expects the node and `jq` to be available, and
 writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
-`MINE_BLOCKS` when needed. On success it also refreshes the
+`MINE_BLOCKS` when needed; the default is four blocks to avoid proposal-window
+flakiness on local devnet. On success it also refreshes the
 `target/devnet-smoke/latest` symlink to the completed run; set `LATEST_LINK` to
 use a different pointer, or point it at an existing real directory/file to skip
 the update. The manifest records the RPC endpoint, block-mining profile, git
@@ -491,6 +492,8 @@ StateCell is older than the latest saved package:
 ```sh
 cargo run -q -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
 cargo run -q -p morph-cli -- validate-watch-policy target/watch-policy.json
+cargo run -q -p morph-cli -- print-watch-config-fixture > target/watch-config.json
+cargo run -q -p morph-cli -- validate-watch-config target/watch-config.json
 
 cargo run -q -p morph-cli -- devnet watch-latest-package \
   --channel-id "$CHANNEL_ID" \
@@ -502,6 +505,19 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
   --json
 ```
+
+For a multi-channel watchtower process, place the channel list and operator
+paths in a config file and run one bounded scan pass:
+
+```sh
+cargo run -q -p morph-cli -- devnet watch-config-once \
+  --config target/watch-config.json \
+  --json
+```
+
+The config deliberately does not carry a private key; key material is supplied
+through `--private-key` or `MORPH_DEVNET_PRIVATE_KEY` at runtime. Relative paths
+inside the config are resolved relative to the config file.
 
 If the watcher should create its own SponsorCell at detection time, omit
 `--sponsor-out-point` and use:

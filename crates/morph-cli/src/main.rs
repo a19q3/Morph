@@ -25,6 +25,7 @@ mod packages;
 mod rpc;
 mod smoke_report;
 mod watch_alert;
+mod watch_config;
 mod watch_policy;
 
 #[derive(Debug, Parser)]
@@ -51,9 +52,19 @@ enum Command {
     PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
+    /// Print a sample multi-channel watchtower config.
+    PrintWatchConfigFixture,
     /// Validate a watchtower operator policy.
     ValidateWatchPolicy {
         /// Path to the watchtower policy JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a multi-channel watchtower config.
+    ValidateWatchConfig {
+        /// Path to the watchtower config JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -813,6 +824,25 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run one configured watchtower pass across multiple channels.
+    WatchConfigOnce {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls sponsor funding and change.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Watchtower config JSON path.
+        #[arg(long)]
+        config: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a fresh SponsorCell for an existing channel state.
     FundSponsor {
         /// Directory containing the built RISC-V contract binaries.
@@ -1241,6 +1271,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&policy)?);
             Ok(())
         }
+        Command::PrintWatchConfigFixture => {
+            let config = watch_config::fixture_config();
+            println!("{}", serde_json::to_string_pretty(&config)?);
+            Ok(())
+        }
         Command::ValidateWatchPolicy { path, json } => {
             let policy = watch_policy::read_watchtower_policy(&path)?;
             if json {
@@ -1263,6 +1298,23 @@ fn main() -> Result<()> {
                     policy.require_auto_fund_sponsor
                 );
                 println!("allow_webhook_alerts={}", policy.allow_webhook_alerts);
+            }
+            Ok(())
+        }
+        Command::ValidateWatchConfig { path, json } => {
+            let config = watch_config::read_watchtower_config(&path)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&config)?);
+            } else {
+                println!("watchtower config ok");
+                println!("schema={}", config.schema);
+                println!("channels={}", config.channels.len());
+                for channel in &config.channels {
+                    println!(
+                        "channel={} from_block={}",
+                        channel.channel_id, channel.from_block
+                    );
+                }
             }
             Ok(())
         }
@@ -2435,6 +2487,40 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     print_metrics(&publication.metrics);
                 } else {
                     println!("published=false");
+                }
+            }
+        }
+        DevnetCommand::WatchConfigOnce {
+            contracts_dir,
+            private_key,
+            config,
+            json,
+        } => {
+            let config_data = watch_config::read_watchtower_config(&config)?;
+            let report = watch_config::run_watchtower_config_once(
+                &rpc,
+                &config,
+                &config_data,
+                watch_config::WatchtowerRuntimeOptions {
+                    contracts_dir,
+                    private_key,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("config={}", report.config_path);
+                println!("channels={}", report.channel_count);
+                println!("published={}", report.published_count);
+                println!("idle={}", report.idle_count);
+                for channel in &report.channels {
+                    println!(
+                        "channel={} scanned_to={} next_from={} published={}",
+                        channel.channel_id,
+                        channel.report.scanned_to_block,
+                        channel.report.next_from_block,
+                        channel.report.publication.is_some()
+                    );
                 }
             }
         }

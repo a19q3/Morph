@@ -28,6 +28,8 @@ fixture-checks:
 	cargo run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
 	cargo run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json
 	cargo run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
+	cargo run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
+	cargo run -q -p morph-cli -- validate-watch-config target/fixture-checks/watch-config.json --json > target/fixture-checks/watch-config-summary.json
 
 build-contracts:
 	cargo build --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt

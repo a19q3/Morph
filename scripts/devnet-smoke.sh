@@ -7,7 +7,7 @@ cd "$ROOT_DIR"
 RPC_URL="${MORPH_CKB_RPC:-http://127.0.0.1:18114}"
 OUT_DIR="${OUT_DIR:-target/devnet-smoke/$(date -u +%Y%m%dT%H%M%SZ)}"
 LATEST_LINK="${LATEST_LINK:-target/devnet-smoke/latest}"
-MINE_BLOCKS="${MINE_BLOCKS:-1}"
+MINE_BLOCKS="${MINE_BLOCKS:-4}"
 
 mkdir -p "$OUT_DIR"
 
@@ -151,6 +151,7 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
+WATCH_DIR_ABS="$(cd "$WATCH_DIR" && pwd)"
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel --json >"$WATCH_DIR/open.json"
 STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
@@ -168,25 +169,49 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
 log "watch-auto-sponsor-policy -> $WATCH_DIR/watch-policy.json"
 cargo run -q -p morph-cli -- print-watch-policy-fixture >"$WATCH_DIR/watch-policy.json"
 
+log "watch-auto-sponsor-config -> $WATCH_DIR/watch-config.json"
+jq -n \
+  --arg channel_id "$CHANNEL_ID" \
+  --argjson from_block "$OPEN_BLOCK" \
+  --arg store_dir "$WATCH_DIR_ABS/packages" \
+  --arg watch_policy "$WATCH_DIR_ABS/watch-policy.json" \
+  --arg alert_file "$WATCH_DIR_ABS/watch-alerts.jsonl" \
+  '{
+    schema: "morph.watchtower_config.v1",
+    defaults: {
+      store_dir: $store_dir,
+      watch_policy: $watch_policy,
+      alert_file: $alert_file,
+      detection_depth: 3,
+      timeout_secs: 30,
+      poll_ms: 250,
+      fee: 100000000,
+      mine_blocks: 4,
+      auto_fund_sponsor: true,
+      auto_sponsor_capacity: 50000000000
+    },
+    channels: [{
+      channel_id: $channel_id,
+      from_block: $from_block
+    }]
+  }' >"$WATCH_DIR/watch-config.json"
+
+log "watch-auto-sponsor-config-check -> $WATCH_DIR/watch-config-check.json"
+cargo run -q -p morph-cli -- validate-watch-config \
+  "$WATCH_DIR/watch-config.json" \
+  --json >"$WATCH_DIR/watch-config-check.json"
+
 log "watch-auto-sponsor-depth -> $WATCH_DIR/depth.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" mine \
   --blocks 3 \
   --json >"$WATCH_DIR/depth.json"
 
 log "watch-auto-sponsor-publish -> $WATCH_DIR/watch.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
-  --channel-id "$CHANNEL_ID" \
-  --from-block "$OPEN_BLOCK" \
-  --store-dir "$WATCH_DIR/packages" \
-  --detection-depth 3 \
-  --auto-fund-sponsor \
-  --watch-policy "$WATCH_DIR/watch-policy.json" \
-  --alert-file "$WATCH_DIR/watch-alerts.jsonl" \
-  --timeout-secs 30 \
-  --poll-ms 250 \
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-once \
+  --config "$WATCH_DIR/watch-config.json" \
   --json >"$WATCH_DIR/watch.json"
 
-PUBLISHED_STATE_OUT_POINT="$(jq -r '.publication.state_out_point.tx_hash + ":" + (.publication.state_out_point.index | tostring)' "$WATCH_DIR/watch.json")"
+PUBLISHED_STATE_OUT_POINT="$(jq -r '.channels[0].report.publication.state_out_point.tx_hash + ":" + (.channels[0].report.publication.state_out_point.index | tostring)' "$WATCH_DIR/watch.json")"
 log "watch-auto-sponsor-finalise -> $WATCH_DIR/finalise.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$PUBLISHED_STATE_OUT_POINT" \

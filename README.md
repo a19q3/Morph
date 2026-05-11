@@ -22,9 +22,11 @@ Current implementation stage:
   state publication, vault finalisation, and per-transaction cycle/size
   reporting from the node. It also stores reusable signed state packages for
   watchtower-style publication and validates optional watchtower operator
-  policies before confirmed-block scanning. Watchtower alerts can be written to
-  JSONL and posted to a policy-gated HTTP webhook. Factory local-exit reports
-  include a reusable evidence package that can be independently validated.
+  policies before confirmed-block scanning. Watchtower runs can be driven from
+  a multi-channel JSON config, while the signing key remains a runtime
+  argument or environment variable. Watchtower alerts can be written to JSONL
+  and posted to a policy-gated HTTP webhook. Factory local-exit reports include
+  a reusable evidence package that can be independently validated.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
@@ -129,6 +131,8 @@ the scanner before it publishes any package:
 ```sh
 cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
 cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
+cargo run -p morph-cli -- print-watch-config-fixture > target/watch-config.json
+cargo run -p morph-cli -- validate-watch-config target/watch-config.json
 cargo run -p morph-cli -- devnet watch-latest-package \
   --channel-id "$CHANNEL_ID" \
   --from-block "$OPEN_BLOCK_NUMBER" \
@@ -137,6 +141,16 @@ cargo run -p morph-cli -- devnet watch-latest-package \
   --watch-policy target/watch-policy.json \
   --alert-file target/watch-alerts.jsonl \
   --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
+  --json
+```
+
+For multiple channels, use a watchtower config and run one bounded scan pass.
+Relative paths inside the config are resolved relative to the config file, and
+private keys are intentionally kept outside the config:
+
+```sh
+cargo run -p morph-cli -- devnet watch-config-once \
+  --config target/watch-config.json \
   --json
 ```
 

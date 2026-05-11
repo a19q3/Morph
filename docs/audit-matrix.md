@@ -22,6 +22,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Sponsor fee pays a Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication` |
 | Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
+| Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Smoke evidence contains watchtower detection and publication alerts | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage` |
 | Smoke comparison can be used as a regression gate | `comparison_limits_reject_metric_regressions`, `comparison_limits_reject_set_and_status_changes` |
@@ -72,8 +73,8 @@ Implemented devnet-level checks:
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
-  state packages, reduced host-side factory packages, local-exit evidence, and
-  watchtower policy JSON;
+  state packages, reduced host-side factory packages, local-exit evidence,
+  watchtower policy JSON, and multi-channel watchtower config JSON;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells;
