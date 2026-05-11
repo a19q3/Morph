@@ -17,7 +17,7 @@ members = [
 edition = "2024"
 license = "MIT"
 authors = ["Arthur Zhang"]
-repository = "https://github.com/a19q3/morph-channel"
+repository = "https://github.com/a19q3/Morph"
 rust-version = "1.92.0"
 
 [workspace.dependencies]
