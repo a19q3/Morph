@@ -25,6 +25,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Smoke evidence contains watchtower detection and publication alerts | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage` |
 | Smoke comparison can be used as a regression gate | `comparison_limits_reject_metric_regressions`, `comparison_limits_reject_set_and_status_changes` |
+| Generated host-side fixtures are CI-validated | `make fixture-checks` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
@@ -70,6 +71,9 @@ Implemented devnet-level checks:
   local-exit evidence through `devnet-smoke-assert`;
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
+- CI fixture checks for bilateral fixtures, factory update packages, factory
+  state packages, reduced host-side factory packages, local-exit evidence, and
+  watchtower policy JSON;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells;

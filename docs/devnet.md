@@ -490,6 +490,7 @@ StateCell is older than the latest saved package:
 
 ```sh
 cargo run -q -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
+cargo run -q -p morph-cli -- validate-watch-policy target/watch-policy.json
 
 cargo run -q -p morph-cli -- devnet watch-latest-package \
   --channel-id "$CHANNEL_ID" \

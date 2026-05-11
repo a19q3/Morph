@@ -51,6 +51,14 @@ enum Command {
     PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
+    /// Validate a watchtower operator policy.
+    ValidateWatchPolicy {
+        /// Path to the watchtower policy JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a host-side factory non-interference package.
     ValidateFactoryPackage {
         /// Path to the factory update package JSON.
@@ -1231,6 +1239,31 @@ fn main() -> Result<()> {
         Command::PrintWatchPolicyFixture => {
             let policy = watch_policy::fixture_policy();
             println!("{}", serde_json::to_string_pretty(&policy)?);
+            Ok(())
+        }
+        Command::ValidateWatchPolicy { path, json } => {
+            let policy = watch_policy::read_watchtower_policy(&path)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&policy)?);
+            } else {
+                println!("watchtower policy ok");
+                println!("schema={}", policy.schema);
+                if let Some(channel_id) = &policy.channel_id {
+                    println!("channel_id={channel_id}");
+                }
+                println!("min_detection_depth={}", policy.min_detection_depth);
+                println!("max_fee={}", policy.max_fee);
+                println!(
+                    "max_auto_sponsor_capacity={}",
+                    policy.max_auto_sponsor_capacity
+                );
+                println!("allow_explicit_sponsor={}", policy.allow_explicit_sponsor);
+                println!(
+                    "require_auto_fund_sponsor={}",
+                    policy.require_auto_fund_sponsor
+                );
+                println!("allow_webhook_alerts={}", policy.allow_webhook_alerts);
+            }
             Ok(())
         }
         Command::ValidateFactoryPackage { path, json } => {

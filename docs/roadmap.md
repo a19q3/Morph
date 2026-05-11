@@ -89,6 +89,9 @@ Acceptance criteria:
   factory local-exit evidence.
 - completed smoke directories can be compared with optional regression gates
   for transaction set, status, cycles, and byte size.
+- CI validates generated bilateral fixtures, factory packages, factory
+  local-exit evidence, reduced host-side factory packages, and watchtower
+  policies.
 - a conservative FactoryStateCell can be opened, signed as a reusable package,
   selected as the latest package, advanced on devnet without draining the
   factory state carrier for fees, and used with a FactoryVaultCell to

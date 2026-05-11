@@ -70,6 +70,7 @@ docs/                  Devnet and implementation notes.
 make ci
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
+make fixture-checks
 make build-contracts
 make contract-tests
 scripts/check-devnet-env.sh
@@ -127,6 +128,7 @@ the scanner before it publishes any package:
 
 ```sh
 cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
+cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
 cargo run -p morph-cli -- devnet watch-latest-package \
   --channel-id "$CHANNEL_ID" \
   --from-block "$OPEN_BLOCK_NUMBER" \

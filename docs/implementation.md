@@ -183,6 +183,8 @@ A devnet demonstration is acceptable only when it includes:
   before accepting a run as current evidence;
 - smoke comparison gates for transaction-set, status, cycle, and byte-size
   regressions between completed devnet runs;
+- CI fixture checks for bilateral state fixtures, factory update/state/local
+  exit packages, reduced host-side factory packages, and watchtower policies;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
 
 ## Offline Contract Tests

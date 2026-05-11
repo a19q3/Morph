@@ -1,6 +1,6 @@
-.PHONY: ci test fmt fmt-check smoke build-contracts contract-tests devnet-smoke smoke-report smoke-assert
+.PHONY: ci test fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke smoke-report smoke-assert
 
-ci: fmt-check test contract-tests
+ci: fmt-check test fixture-checks contract-tests
 
 test:
 	cargo test --workspace
@@ -14,6 +14,20 @@ fmt-check:
 smoke:
 	cargo test --workspace
 	cargo run -p morph-cli -- validate-fixture
+
+fixture-checks:
+	mkdir -p target/fixture-checks
+	cargo run -q -p morph-cli -- validate-fixture
+	cargo run -q -p morph-cli -- print-factory-fixture > target/fixture-checks/factory-update.json
+	cargo run -q -p morph-cli -- validate-factory-package target/fixture-checks/factory-update.json --json > target/fixture-checks/factory-update-summary.json
+	cargo run -q -p morph-cli -- print-factory-state-fixture > target/fixture-checks/factory-state.json
+	cargo run -q -p morph-cli -- validate-factory-state-package target/fixture-checks/factory-state.json --json > target/fixture-checks/factory-state-summary.json
+	cargo run -q -p morph-cli -- print-reduced-factory-state-fixture > target/fixture-checks/factory-state-reduced.json
+	cargo run -q -p morph-cli -- validate-factory-state-package target/fixture-checks/factory-state-reduced.json --json > target/fixture-checks/factory-state-reduced-summary.json
+	cargo run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
+	cargo run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
+	cargo run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json
+	cargo run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
 
 build-contracts:
 	cargo build --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt
