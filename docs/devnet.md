@@ -71,6 +71,18 @@ cargo run -p morph-cli -- devnet deploy-contracts --json
 cargo run -p morph-cli -- devnet open-channel --json
 ```
 
+For a repeatable local regression run:
+
+```sh
+scripts/devnet-smoke.sh
+```
+
+This script runs the real workspace tests, RISC-V contract tests, devnet RPC
+check, contract deployment, supersession smoke, and sponsor-policy negative
+smoke. It expects the node to already be running and writes logs plus JSON
+reports under `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`,
+`OUT_DIR`, or `MINE_BLOCKS` when needed.
+
 Devnet transaction reports include two measurement fields:
 
 ```text
