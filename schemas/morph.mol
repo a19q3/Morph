@@ -12,6 +12,8 @@
 // - FactoryStateHeaderV1: 238 bytes
 // - BilateralSignatureWitnessV1: 198 bytes
 // - FactorySignatureWitnessV1: 262 bytes
+// - FactoryRightV1: 114 bytes
+// - FactoryReducedRightsWitnessV1: 2580 bytes
 // - FactoryLocalExitWitnessV1: 726 bytes
 // - FactoryLocalExitXudtWitnessV1: 790 bytes
 // - BilateralCkbSettlementDescriptorV1: 84 bytes
@@ -85,6 +87,54 @@ struct FactorySignatureWitnessV1 {
     participant_1_id: Byte32,
     participant_1_pubkey: Secp256k1CompressedPubkey,
     participant_1_signature: EcdsaSignature,
+}
+
+struct FactoryRightV1 {
+    participant: Byte32,
+    subchannel: Byte32,
+    kind: byte,
+    asset_present: byte,
+    asset_type: Byte32,
+    quantity: uint128,
+}
+
+struct FactoryReducedRightsParticipantV1 {
+    participant: Byte32,
+    pubkey: Secp256k1CompressedPubkey,
+    signed: byte,
+    signature: EcdsaSignature,
+}
+
+struct FactoryReducedRightsWitnessV1 {
+    version: uint16,
+    participant_threshold: byte,
+    participant_count: byte,
+    authorised_count: byte,
+    right_count: byte,
+    reserved: uint16,
+    participant_0: FactoryReducedRightsParticipantV1,
+    participant_1: FactoryReducedRightsParticipantV1,
+    touched_participant: Byte32,
+    before_0: FactoryRightV1,
+    before_1: FactoryRightV1,
+    before_2: FactoryRightV1,
+    before_3: FactoryRightV1,
+    before_4: FactoryRightV1,
+    before_5: FactoryRightV1,
+    before_6: FactoryRightV1,
+    before_7: FactoryRightV1,
+    before_8: FactoryRightV1,
+    before_9: FactoryRightV1,
+    after_0: FactoryRightV1,
+    after_1: FactoryRightV1,
+    after_2: FactoryRightV1,
+    after_3: FactoryRightV1,
+    after_4: FactoryRightV1,
+    after_5: FactoryRightV1,
+    after_6: FactoryRightV1,
+    after_7: FactoryRightV1,
+    after_8: FactoryRightV1,
+    after_9: FactoryRightV1,
 }
 
 struct FactoryLocalExitWitnessV1 {

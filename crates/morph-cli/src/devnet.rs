@@ -5778,6 +5778,12 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
             Some("FactoryReserveMismatch")
         }
         value if value == ScriptError::StateTypeMismatch as i16 => Some("StateTypeMismatch"),
+        value if value == ScriptError::FactoryReducedProofEncoding as i16 => {
+            Some("FactoryReducedProofEncoding")
+        }
+        value if value == ScriptError::FactoryReducedProofMismatch as i16 => {
+            Some("FactoryReducedProofMismatch")
+        }
         _ => None,
     }
 }

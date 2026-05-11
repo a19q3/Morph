@@ -131,12 +131,17 @@ Status: host-level non-interference predicate implemented, conservative
 full-participant factory state packages implemented at the CLI layer, and a
 host-side authorised-participant reduced package implemented for the same
 predicate. A conservative factory type script and factory vault lock execute in
-CKB-VM tests, and the CLI can open a FactoryStateCell plus FactoryVaultCell,
-save a reusable signed factory-state-cell package, select the latest package,
-publish a signed monotonic update on devnet, and materialise a bilateral child
-channel from the factory reserve. The same conservative exit path supports a
-typed factory reserve that releases a CKB+xUDT child vault and then uses the
-ordinary xUDT finalisation path.
+CKB-VM tests. The factory type script now also verifies a bounded on-chain
+reduced-rights proof for claim-reducing updates: one authorised participant may
+decrease only their own committed rights, while every other right remains
+unchanged and the old/new state roots, access roots, non-interference digest,
+full participant commitment, and reduced signature are checked. The CLI can
+open a FactoryStateCell plus FactoryVaultCell, save a reusable signed
+factory-state-cell package, select the latest package, publish a signed
+monotonic update on devnet, and materialise a bilateral child channel from the
+factory reserve. The same conservative exit path supports a typed factory
+reserve that releases a CKB+xUDT child vault and then uses the ordinary xUDT
+finalisation path.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.
@@ -150,9 +155,28 @@ ordinary xUDT finalisation path.
   validation.
 - Conservative factory type script for one-live-FactoryStateCell monotonic
   updates under full-participant signatures.
+- Bounded reduced-rights witness for one-signer, claim-reducing factory updates
+  with script-level root and non-interference checks.
 - Devnet `open-factory`, `save-factory-state-package`, `update-factory`,
   `factory-exit-channel`, and `factory-smoke` commands.
 
 ## M4: Reduced-Signature Factory Mode
 
-This remains blocked until a formal rights-dependency proof predicate exists.
+Status: partially implemented for the narrow claim-reducing update case.
+
+Implemented:
+
+- fixed-width `FactoryReducedRightsWitnessV1`;
+- script-level verification of full participant membership commitment;
+- old/new rights-root and access-manifest-root checks;
+- non-interference digest binding;
+- one authorised signature over the new FactoryStateHeader;
+- rejection of touched-right inflation and unrelated participant mutation in
+  CKB-VM tests.
+
+Still open:
+
+- reduced-signature value-releasing factory exits;
+- general Merkle proof bundles for larger factories;
+- benchmarked cycle limits for larger proof shapes;
+- devnet CLI publication for reduced-rights packages.

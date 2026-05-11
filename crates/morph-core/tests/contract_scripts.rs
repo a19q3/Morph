@@ -15,12 +15,17 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
     COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_V1_LEN,
-    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1,
     FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryStateHeaderV1,
-    PHASE_ACTIVE, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1,
-    blake2b256, factory_local_exit_digest_v1, factory_participants_commitment_v1,
-    participants_commitment_v1, settlement_descriptor_commitment_v1,
+    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN,
+    FactoryReducedRightsWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
+    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1, blake2b256,
+    factory_local_exit_digest_v1, factory_participants_commitment_v1, participants_commitment_v1,
+    settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -283,6 +288,154 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
         old.to_vec().into(),
         new.to_vec().into(),
         witness.to_vec().into(),
+    )
+}
+
+fn reduced_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_right_offset(after: bool, index: usize) -> usize {
+    let before_offset = reduced_touched_offset() + BYTE32_LEN;
+    if after {
+        before_offset
+            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
+            + index * FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_V1_LEN
+    }
+}
+
+fn factory_right_bytes(
+    participant: u8,
+    subchannel: u8,
+    kind: u8,
+    quantity: u128,
+) -> [u8; FACTORY_RIGHT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+    raw[0..BYTE32_LEN].fill(participant);
+    raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
+    raw[2 * BYTE32_LEN] = kind;
+    raw[2 * BYTE32_LEN + 1] = 0;
+    put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
+    raw
+}
+
+fn reduced_rights_pair(
+    touched_after_balance: u128,
+) -> (
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+) {
+    let before = [
+        factory_right_bytes(1, 10, 0, 100),
+        factory_right_bytes(1, 10, 1, 50),
+        factory_right_bytes(1, 10, 2, 1),
+        factory_right_bytes(1, 10, 3, 1),
+        factory_right_bytes(1, 10, 4, 20),
+        factory_right_bytes(2, 10, 0, 100),
+        factory_right_bytes(2, 10, 1, 50),
+        factory_right_bytes(2, 10, 2, 1),
+        factory_right_bytes(2, 10, 3, 1),
+        factory_right_bytes(2, 10, 4, 20),
+    ];
+    let mut after = before;
+    after[0] = factory_right_bytes(1, 10, 0, touched_after_balance);
+    (before, after)
+}
+
+fn reduced_rights_witness_raw(
+    touched_after_balance: u128,
+) -> (
+    [u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN],
+    SigningKey,
+    SigningKey,
+) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let (before, after) = reduced_rights_pair(touched_after_balance);
+
+    let mut raw = [0u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+        let offset = reduced_participant_offset(index);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(participant == &[1u8; BYTE32_LEN]);
+    }
+    raw[reduced_touched_offset()..reduced_touched_offset() + BYTE32_LEN]
+        .copy_from_slice(&[1u8; BYTE32_LEN]);
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+        let before_offset = reduced_right_offset(false, index);
+        raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&before[index]);
+        let after_offset = reduced_right_offset(true, index);
+        raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+    }
+
+    (raw, key0, key1)
+}
+
+fn signed_reduced_factory_rights_pair(
+    old_number: u64,
+    new_number: u64,
+    touched_after_balance: u128,
+) -> (Bytes, Bytes, Bytes) {
+    let (mut witness_raw, key0, key1) = reduced_rights_witness_raw(touched_after_balance);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let participants_commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let witness = FactoryReducedRightsWitnessV1::parse(&witness_raw).unwrap();
+
+    let mut old = factory_header_raw(old_number);
+    old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
+    old[108..140].copy_from_slice(&participants_commitment);
+    old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
+    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+
+    let mut new = factory_header_raw(new_number);
+    new[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
+    new[108..140].copy_from_slice(&participants_commitment);
+    new[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
+    let preliminary_new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let digest = witness
+        .non_interference_digest(&old_header, &preliminary_new_header)
+        .unwrap();
+    new[172..204].copy_from_slice(&digest);
+    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let sig = signature(&key0, &new_header.signing_digest());
+    let signature_offset =
+        reduced_participant_offset(0) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+    witness_raw[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&sig);
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness_raw.to_vec().into(),
     )
 }
 
@@ -715,6 +868,80 @@ fn factory_type_accepts_signed_factory_update() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_reduced_rights_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, reduced_witness) = signed_reduced_factory_rights_pair(1, 2, 90);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(reduced_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("reduced factory rights update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_rights_increase() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, reduced_witness) = signed_reduced_factory_rights_pair(1, 2, 110);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(reduced_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

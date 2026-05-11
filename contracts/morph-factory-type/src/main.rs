@@ -20,9 +20,11 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FACTORY_SIGNATURE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactorySignatureWitnessV1,
+    FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FactoryLocalExitWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
     FactoryStateHeaderV1, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError,
     StateHeaderV1, blake2b256, read_u128, verify_factory_state_signatures,
+    verify_reduced_factory_rights_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -98,13 +100,16 @@ fn validate_update(
     if !old_header.same_context_except_progress(&new_header) {
         return Err(ScriptError::HeaderContextChanged);
     }
-    validate_participant_authorisation(&new_header)?;
+    validate_participant_authorisation(old_header, &new_header)?;
     validate_output_capacity()?;
     Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_participant_authorisation(header: &FactoryStateHeaderV1) -> Result<()> {
+fn validate_participant_authorisation(
+    old_header: &FactoryStateHeaderV1,
+    header: &FactoryStateHeaderV1,
+) -> Result<()> {
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::ParticipantWitnessMissing)?;
     let input_type = witness_args
@@ -115,6 +120,9 @@ fn validate_participant_authorisation(header: &FactoryStateHeaderV1) -> Result<(
     if raw.len() == FACTORY_SIGNATURE_WITNESS_V1_LEN {
         let witness = FactorySignatureWitnessV1::parse(raw.as_ref())?;
         verify_factory_state_signatures(header, &witness)
+    } else if raw.len() == FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN {
+        let witness = FactoryReducedRightsWitnessV1::parse(raw.as_ref())?;
+        verify_reduced_factory_rights_update(old_header, header, &witness)
     } else {
         let witness = FactoryLocalExitWitnessV1::parse(raw.as_ref())?;
         let signatures = witness.factory_signature()?;

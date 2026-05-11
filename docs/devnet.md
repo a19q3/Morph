@@ -798,10 +798,12 @@ both an `older_state_detected` alert and a `publication_submitted` alert.
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
 vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
-script, a factory reserve lock, devnet factory open/update transactions, and
+script, a factory reserve lock, devnet factory open/update transactions,
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
-child bilateral channels.
-The remaining devnet work is a formal reduced-signature factory proof path.
+child bilateral channels, and a bounded CKB-VM-tested reduced-rights proof for
+claim-reducing factory updates.
+The remaining devnet work is reduced-signature factory exit publication and a
+general proof path for larger factories.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -833,7 +835,11 @@ the updated FactoryStateHeader.
 The `morph-factory-type` script is one step closer than the host package: it
 already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
 accepts a signed monotonic factory update, and rejects equal update numbers or
-invalid participant signatures. In the conservative local-exit path it verifies
-the child channel evidence committed by the factory header, including xUDT
-child-vault type and amount checks, while `morph-factory-vault-lock` enforces
-reserve conservation. It does not yet verify a reduced-signature proof.
+invalid participant signatures. It also accepts a bounded reduced-rights
+witness that proves old/new rights roots, access roots, non-interference
+digest, and one authorised signature for a claim-reducing update; attempted
+claim inflation is rejected in CKB-VM tests. In the conservative local-exit
+path it verifies the child channel evidence committed by the factory header,
+including xUDT child-vault type and amount checks, while
+`morph-factory-vault-lock` enforces reserve conservation. It does not yet
+verify a reduced-signature value-releasing factory exit.

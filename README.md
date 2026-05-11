@@ -34,7 +34,9 @@ Current implementation stage:
   progression, funding-anchor binding, and monotonic settling publication.
 - `contracts/morph-factory-type`: no-std CKB type script for conservative
   one-live-FactoryStateCell progression with full-participant signatures and
-  local-exit evidence checks.
+  local-exit evidence checks. It also supports a bounded reduced-rights proof
+  path where one authorised participant may reduce only their own committed
+  factory rights while all other rights remain unchanged.
 - `contracts/morph-factory-vault-lock`: no-std CKB lock script for factory
   reserve conservation during child-channel materialisation.
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
@@ -56,6 +58,9 @@ CKB and CKB+xUDT child bilateral channels from the factory reserve, and then
 publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
 local test asset into the vault and settle exact token balances through the
 same StateCell and VaultCell authority model.
+The reduced-signature factory work is deliberately narrow at this stage:
+CKB-VM tests cover a fixed-width proof for claim-reducing rights updates, but
+reduced-signature factory exits remain behind the proof-system gate.
 
 ## Repository Layout
 

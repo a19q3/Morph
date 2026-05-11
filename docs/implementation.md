@@ -21,8 +21,12 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 - Factory type: consumes exactly one FactoryStateCell and recreates exactly one
   newer FactoryStateCell under the same factory id and participant context; the
   devnet V1 path is deliberately conservative and requires signatures from all
-  two factory participants. For local exits, it also checks that the updated
-  factory header commits to the child-channel materialisation evidence.
+  two factory participants for ordinary updates. It also accepts a bounded
+  reduced-rights proof where one authorised participant may decrease only their
+  own committed rights, while every other right remains unchanged and both the
+  old and new roots are verified. For local exits, it still requires the
+  conservative signature path and checks that the updated factory header commits
+  to the child-channel materialisation evidence.
 - Factory vault lock: holds factory reserve capacity and permits only a
   conservative local exit that recreates the factory reserve while releasing
   exactly the child-channel vault capacity committed by the same exit evidence.
@@ -45,7 +49,8 @@ selection remain outside those state-signature domains.
 The draft Molecule schema in `schemas/morph.mol` now names every active
 fixed-width V1 object used by the devnet contracts: `StateHeaderV1`,
 `FactoryStateHeaderV1`, `BilateralSignatureWitnessV1`,
-`FactorySignatureWitnessV1`, `FactoryLocalExitWitnessV1`, CKB and CKB+xUDT
+`FactorySignatureWitnessV1`, `FactoryRightV1`,
+`FactoryReducedRightsWitnessV1`, `FactoryLocalExitWitnessV1`, CKB and CKB+xUDT
 settlement descriptors, and `SponsorPolicyV1`. The contracts still parse
 fixed-width bytes directly; the schema is treated as the public wire-boundary
 record until generated Molecule code is introduced.
@@ -69,8 +74,16 @@ track. A factory-local update is described as changes to a set of participant
 rights: balance, reserve claim, membership, exit path, and sponsor budget
 claim. Any right outside the declared touched participant set must be
 byte-for-byte unchanged, and every touched participant must appear in the
-authorisation set. This is not yet an on-chain reduced-signature proof system;
-it is the executable rule that a future proof bundle must satisfy.
+authorisation set.
+
+There is now a bounded on-chain reduced-rights proof for the narrow safe case:
+two factory participants, ten fixed-width rights, one touched participant, and
+one signature. The proof verifies the full participant commitment, old/new
+rights roots, old/new access-manifest roots, the non-interference digest, and
+the touched participant's signature. It only allows the touched participant's
+own right quantities to decrease; inflation, unrelated participant changes, and
+digest/root mismatches are rejected. This is intentionally not a general
+Merkle factory proof and not a reduced-signature factory exit.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -144,7 +157,8 @@ process manager rather than becoming its own process manager.
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
-- No reduced-signature factory exits.
+- No reduced-signature factory exits. The implemented reduced-rights path is a
+  bounded claim-reducing state update, not a value-releasing local exit.
 - No generic descriptor runtime.
 - No base-layer CKB change.
 

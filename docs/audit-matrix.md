@@ -33,6 +33,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
 | Factory reduced host package signs only authorised participants | `validates_reduced_factory_state_package`, `rejects_reduced_factory_state_missing_authorised_signature`, `rejects_reduced_factory_state_extra_participant` |
+| Factory reduced on-chain proof can only decrease touched rights | `verifies_reduced_factory_rights_decrease`, `rejects_reduced_factory_rights_increase`, `factory_type_accepts_reduced_rights_update`, `factory_type_rejects_reduced_rights_increase` |
 
 Implemented devnet-level checks:
 
@@ -40,6 +41,8 @@ Implemented devnet-level checks:
   sponsor top-up, and finalise;
 - CKB-VM factory type execution for canonical factory creation and signed
   monotonic factory updates;
+- CKB-VM factory type execution for a bounded reduced-rights update where one
+  authorised participant can decrease only their own committed rights;
 - CKB-VM factory local-exit execution with a FactoryVaultCell, committed
   child-channel evidence, reserve conservation, and CKB+xUDT child-vault
   materialisation;
@@ -92,7 +95,9 @@ Implemented devnet-level checks:
 
 Missing devnet-level checks:
 
-- reduced-signature factory non-interference proof predicates.
+- reduced-signature factory exits and general Merkle proof predicates. The
+  current on-chain reduced proof is deliberately limited to fixed-width,
+  claim-reducing rights updates.
 
 Implemented host-level factory checks:
 
