@@ -84,6 +84,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Assert that a completed devnet smoke directory covers required paths.
+    DevnetSmokeAssert {
+        /// Directory produced by scripts/devnet-smoke.sh.
+        #[arg(long, default_value = "target/devnet-smoke/latest")]
+        dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Compare two completed devnet smoke output directories.
     DevnetSmokeCompare {
         /// Baseline directory produced by scripts/devnet-smoke.sh.
@@ -1274,6 +1283,23 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else {
                 print!("{}", smoke_report::render_markdown(&summary));
+            }
+            Ok(())
+        }
+        Command::DevnetSmokeAssert { dir, json } => {
+            let report = smoke_report::assert_default_devnet_smoke(&dir)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("devnet smoke assertions ok");
+                println!("directory={}", report.directory);
+                println!("transactions={}", report.transaction_count);
+                println!("committed={}", report.committed_count);
+                println!(
+                    "expected_script_failures={}",
+                    report.expected_script_failures
+                );
+                println!("factory_local_exits={}", report.factory_local_exits);
             }
             Ok(())
         }

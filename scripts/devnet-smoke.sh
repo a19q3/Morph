@@ -36,47 +36,6 @@ run_json() {
   cargo run -q -p morph-cli -- "$@" --json >"$path"
 }
 
-require_failure() {
-  local check="$1"
-  local morph_error="$2"
-  local error_code="$3"
-  if ! jq -e \
-    --arg check "$check" \
-    --arg morph_error "$morph_error" \
-    --argjson error_code "$error_code" \
-    'any(.script_failures[]; .check == $check and .morph_error == $morph_error and .error_code == $error_code)' \
-    "$OUT_DIR/summary.json" >/dev/null; then
-    printf 'missing expected script failure: %s %s %s\n' "$check" "$morph_error" "$error_code" >&2
-    exit 1
-  fi
-}
-
-assert_summary() {
-  log "summary-check -> $OUT_DIR/summary.json"
-  jq -e '.manifest.status == "passed"' "$OUT_DIR/summary.json" >/dev/null
-  jq -e '.totals.transaction_count > 0 and .totals.committed_count > 0' "$OUT_DIR/summary.json" >/dev/null
-
-  local failure_count
-  failure_count="$(jq '.script_failures | length' "$OUT_DIR/summary.json")"
-  if [ "$failure_count" -ne 5 ]; then
-    printf 'unexpected script failure count: got %s, expected 5\n' "$failure_count" >&2
-    exit 1
-  fi
-
-  require_failure "factory-xudt-negative/smoke" "SettlementOutputMismatch" 28
-  require_failure "finalise-since-negative-smoke" "StateSinceNotMature" 16
-  require_failure "sponsor-budget-negative-smoke" "SponsorFeeTooHigh" 17
-  require_failure "sponsor-policy-negative-smoke" "SponsorStateOutOfRange" 29
-  require_failure "xudt-negative-smoke" "SettlementOutputMismatch" 28
-
-  jq -e '
-    (.factory_local_exits | length) == 6
-    and all(.factory_local_exits[]; .child_phase == "active" and .child_state_number == 0)
-    and ([.factory_local_exits[].descriptor_version] | map(select(. == 1)) | length) == 2
-    and ([.factory_local_exits[].descriptor_version] | map(select(. == 2)) | length) == 4
-  ' "$OUT_DIR/summary.json" >/dev/null
-}
-
 cat >"$OUT_DIR/manifest.txt" <<EOF
 rpc_url=$RPC_URL
 started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -234,7 +193,8 @@ log "summary -> $OUT_DIR/summary.md"
 cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" >"$OUT_DIR/summary.md"
 log "summary-json -> $OUT_DIR/summary.json"
 cargo run -q -p morph-cli -- devnet-smoke-report --dir "$OUT_DIR" --json >"$OUT_DIR/summary.json"
-assert_summary
+log "summary-check -> $OUT_DIR/summary-check.json"
+cargo run -q -p morph-cli -- devnet-smoke-assert --dir "$OUT_DIR" --json >"$OUT_DIR/summary-check.json"
 
 if [ ! -e "$LATEST_LINK" ] || [ -L "$LATEST_LINK" ]; then
   OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"

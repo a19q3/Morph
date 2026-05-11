@@ -103,10 +103,11 @@ then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 a real directory or file. Summary generation also validates any factory
 local-exit evidence package embedded in the smoke JSON, and the script asserts
 that the expected negative-path failures and factory exit evidence are present.
-To rebuild the summary for a previous run:
+To rebuild or assert a previous run:
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
+cargo run -p morph-cli -- devnet-smoke-assert --dir target/devnet-smoke/<run>
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
   --candidate target/devnet-smoke/<new-run>

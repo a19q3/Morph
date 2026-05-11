@@ -61,6 +61,8 @@ Implemented devnet-level checks:
   submitted publication, and idle scans;
 - node-reported cycle measurement and transaction size reporting, summarised by
   `devnet-smoke-report`;
+- semantic smoke coverage assertions for the expected negative-path script
+  failures and factory local-exit evidence through `devnet-smoke-assert`;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells;

@@ -20,6 +20,15 @@ pub struct DevnetSmokeSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DevnetSmokeAssertionReport {
+    pub directory: String,
+    pub transaction_count: usize,
+    pub committed_count: usize,
+    pub expected_script_failures: usize,
+    pub factory_local_exits: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TransactionSummary {
     pub check: String,
     pub path: String,
@@ -140,6 +149,88 @@ pub fn compare_devnet_smoke(
     let baseline = summarize_devnet_smoke(baseline_dir)?;
     let candidate = summarize_devnet_smoke(candidate_dir)?;
     Ok(compare_summaries(&baseline, &candidate))
+}
+
+pub fn assert_default_devnet_smoke(dir: &Path) -> Result<DevnetSmokeAssertionReport> {
+    let summary = summarize_devnet_smoke(dir)?;
+    assert_devnet_smoke_summary(&summary)?;
+    Ok(DevnetSmokeAssertionReport {
+        directory: summary.directory,
+        transaction_count: summary.totals.transaction_count,
+        committed_count: summary.totals.committed_count,
+        expected_script_failures: EXPECTED_SCRIPT_FAILURES.len(),
+        factory_local_exits: summary.factory_local_exits.len(),
+    })
+}
+
+pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
+    if summary.manifest.get("status").map(String::as_str) != Some("passed") {
+        return Err(anyhow!("smoke manifest status is not passed"));
+    }
+    if summary.totals.transaction_count == 0 || summary.totals.committed_count == 0 {
+        return Err(anyhow!("smoke summary contains no committed transactions"));
+    }
+    if summary.script_failures.len() != EXPECTED_SCRIPT_FAILURES.len() {
+        return Err(anyhow!(
+            "unexpected script failure count: got {}, expected {}",
+            summary.script_failures.len(),
+            EXPECTED_SCRIPT_FAILURES.len()
+        ));
+    }
+    for expected in EXPECTED_SCRIPT_FAILURES {
+        let found = summary.script_failures.iter().any(|failure| {
+            failure.check == expected.check
+                && failure.morph_error.as_deref() == Some(expected.morph_error)
+                && failure.error_code == Some(expected.error_code)
+        });
+        if !found {
+            return Err(anyhow!(
+                "missing expected script failure: {} {} {}",
+                expected.check,
+                expected.morph_error,
+                expected.error_code
+            ));
+        }
+    }
+
+    if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
+        return Err(anyhow!(
+            "unexpected factory local-exit evidence count: got {}, expected {}",
+            summary.factory_local_exits.len(),
+            EXPECTED_FACTORY_LOCAL_EXITS
+        ));
+    }
+    if summary
+        .factory_local_exits
+        .iter()
+        .any(|exit| exit.child_phase != "active" || exit.child_state_number != 0)
+    {
+        return Err(anyhow!(
+            "factory local-exit evidence must create active child state number 0"
+        ));
+    }
+    let ckb_descriptors = summary
+        .factory_local_exits
+        .iter()
+        .filter(|exit| exit.descriptor_version == 1)
+        .count();
+    let xudt_descriptors = summary
+        .factory_local_exits
+        .iter()
+        .filter(|exit| exit.descriptor_version == 2)
+        .count();
+    if ckb_descriptors != EXPECTED_FACTORY_CKB_EXITS
+        || xudt_descriptors != EXPECTED_FACTORY_XUDT_EXITS
+    {
+        return Err(anyhow!(
+            "unexpected factory descriptor coverage: got CKB {}, xUDT {}; expected CKB {}, xUDT {}",
+            ckb_descriptors,
+            xudt_descriptors,
+            EXPECTED_FACTORY_CKB_EXITS,
+            EXPECTED_FACTORY_XUDT_EXITS
+        ));
+    }
+    Ok(())
 }
 
 pub fn compare_summaries(
@@ -365,6 +456,43 @@ pub fn render_comparison_markdown(comparison: &DevnetSmokeComparison) -> String 
     out
 }
 
+struct ExpectedScriptFailure {
+    check: &'static str,
+    morph_error: &'static str,
+    error_code: i64,
+}
+
+const EXPECTED_SCRIPT_FAILURES: &[ExpectedScriptFailure] = &[
+    ExpectedScriptFailure {
+        check: "factory-xudt-negative/smoke",
+        morph_error: "SettlementOutputMismatch",
+        error_code: 28,
+    },
+    ExpectedScriptFailure {
+        check: "finalise-since-negative-smoke",
+        morph_error: "StateSinceNotMature",
+        error_code: 16,
+    },
+    ExpectedScriptFailure {
+        check: "sponsor-budget-negative-smoke",
+        morph_error: "SponsorFeeTooHigh",
+        error_code: 17,
+    },
+    ExpectedScriptFailure {
+        check: "sponsor-policy-negative-smoke",
+        morph_error: "SponsorStateOutOfRange",
+        error_code: 29,
+    },
+    ExpectedScriptFailure {
+        check: "xudt-negative-smoke",
+        morph_error: "SettlementOutputMismatch",
+        error_code: 28,
+    },
+];
+const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
+const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
+const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
+
 fn ensure_directory(dir: &Path) -> Result<()> {
     let metadata = fs::metadata(dir)
         .with_context(|| format!("failed to read smoke directory {}", dir.display()))?;
@@ -404,7 +532,8 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             collect_json_files(&path, out)?;
             continue;
         }
-        if path.file_name().and_then(|name| name.to_str()) == Some("summary.json") {
+        let file_name = path.file_name().and_then(|name| name.to_str());
+        if file_name == Some("summary.json") || file_name == Some("summary-check.json") {
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
@@ -630,6 +759,31 @@ mod tests {
     }
 
     #[test]
+    fn asserts_full_smoke_semantic_coverage() {
+        let summary = passing_assertion_summary();
+        assert_devnet_smoke_summary(&summary).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_expected_smoke_failure() {
+        let mut summary = passing_assertion_summary();
+        summary.script_failures.pop();
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(err.to_string().contains("unexpected script failure count"));
+    }
+
+    #[test]
+    fn rejects_incomplete_factory_exit_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary.factory_local_exits[0].descriptor_version = 2;
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unexpected factory descriptor coverage")
+        );
+    }
+
+    #[test]
     fn compares_smoke_summary_metrics() {
         let baseline_dir = temp_report_dir();
         let candidate_dir = temp_report_dir();
@@ -651,6 +805,75 @@ mod tests {
 
         fs::remove_dir_all(&baseline_dir).ok();
         fs::remove_dir_all(&candidate_dir).ok();
+    }
+
+    fn passing_assertion_summary() -> DevnetSmokeSummary {
+        let mut manifest = BTreeMap::new();
+        manifest.insert("status".to_string(), "passed".to_string());
+        DevnetSmokeSummary {
+            directory: "target/devnet-smoke/test".to_string(),
+            manifest,
+            json_files: 36,
+            transactions: Vec::new(),
+            script_failures: vec![
+                failure(
+                    "factory-xudt-negative/smoke",
+                    "SettlementOutputMismatch",
+                    28,
+                ),
+                failure("finalise-since-negative-smoke", "StateSinceNotMature", 16),
+                failure("sponsor-budget-negative-smoke", "SponsorFeeTooHigh", 17),
+                failure(
+                    "sponsor-policy-negative-smoke",
+                    "SponsorStateOutOfRange",
+                    29,
+                ),
+                failure("xudt-negative-smoke", "SettlementOutputMismatch", 28),
+            ],
+            factory_local_exits: vec![
+                factory_exit("factory/exit-channel", 1),
+                factory_exit("factory/local-exit-package", 1),
+                factory_exit("factory-xudt/local-exit-package", 2),
+                factory_exit("factory-xudt/smoke", 2),
+                factory_exit("factory-xudt-negative/local-exit-package", 2),
+                factory_exit("factory-xudt-negative/smoke", 2),
+            ],
+            totals: MetricTotals {
+                transaction_count: 46,
+                committed_count: 45,
+                pending_count: 1,
+                total_estimated_cycles: 1,
+                max_estimated_cycles: 1,
+                total_tx_size_bytes: 1,
+                max_tx_size_bytes: 1,
+            },
+        }
+    }
+
+    fn failure(check: &str, morph_error: &str, error_code: i64) -> ScriptFailureSummary {
+        ScriptFailureSummary {
+            check: check.to_string(),
+            path: "$.script_failure".to_string(),
+            source: Some("Inputs[0].Type".to_string()),
+            error_code: Some(error_code),
+            morph_error: Some(morph_error.to_string()),
+        }
+    }
+
+    fn factory_exit(check: &str, descriptor_version: u16) -> FactoryLocalExitEvidenceSummary {
+        FactoryLocalExitEvidenceSummary {
+            check: check.to_string(),
+            path: "$.local_exit_package".to_string(),
+            factory_id: "0x00".to_string(),
+            update_number: 1,
+            exit_digest: "0x11".to_string(),
+            child_channel_id: "0x22".to_string(),
+            child_state_number: 0,
+            child_phase: "active".to_string(),
+            descriptor_version,
+            state_output_index: 0,
+            vault_output_index: 1,
+        }
     }
 
     fn write_metric_json(dir: &Path, file_name: &str, tx_hash: &str, cycles: u64, bytes: usize) {
