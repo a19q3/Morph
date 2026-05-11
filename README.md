@@ -17,7 +17,8 @@ Current implementation stage:
   supersession, sponsor policy, vault settlement, and partition conservation.
 - `morph-cli`: local smoke tooling for fixture generation, invariant checks,
   native CKB devnet JSON-RPC checks, contract deployment, channel opening,
-  state publication, and vault finalisation.
+  state publication, vault finalisation, and per-transaction cycle/size
+  reporting from the node.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
 - `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
@@ -64,4 +65,7 @@ cargo run -p morph-cli -- devnet open-channel
 cargo run -p morph-cli -- devnet supersede-smoke
 ```
 
-The devnet path is documented in [docs/devnet.md](docs/devnet.md).
+The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
+include CKB `estimate_cycles` output and serialized transaction size for each
+deployment, open, publication, sponsor top-up, supersession, and finalisation
+transaction.

@@ -417,6 +417,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("deployed_capacity={}", report.deployed_capacity);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
@@ -484,6 +485,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("sponsor_capacity={}", report.sponsor_capacity);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
@@ -567,6 +569,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
                 println!("sponsor_change_capacity={}", report.sponsor_change_capacity);
                 println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
@@ -612,6 +615,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("sponsor_capacity={}", report.sponsor_capacity);
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
@@ -665,6 +669,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("bob_capacity={}", report.bob_capacity);
                 println!("state_refund_capacity={}", report.state_refund_capacity);
                 println!("fee={}", report.fee);
+                print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
                 }
@@ -726,10 +731,23 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
                 println!("final_state_number={}", report.finalise.state_number);
                 println!("finalise_status={}", report.finalise.status);
+                println!(
+                    "cycles=open:{} stale_publish:{} sponsor_top_up:{} supersede_publish:{} finalise:{}",
+                    report.open.metrics.estimated_cycles,
+                    report.stale_publish.metrics.estimated_cycles,
+                    report.sponsor_top_up.metrics.estimated_cycles,
+                    report.supersede_publish.metrics.estimated_cycles,
+                    report.finalise.metrics.estimated_cycles
+                );
             }
         }
     }
     Ok(())
+}
+
+fn print_metrics(metrics: &devnet::TransactionMetrics) {
+    println!("estimated_cycles={}", metrics.estimated_cycles);
+    println!("tx_size_bytes={}", metrics.tx_size_bytes);
 }
 
 fn print_tip(tip: &HeaderView) -> Result<()> {

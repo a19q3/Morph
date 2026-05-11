@@ -121,12 +121,19 @@ pub struct SupersedeSmokeOptions {
 }
 
 #[derive(Debug, Serialize)]
+pub struct TransactionMetrics {
+    pub estimated_cycles: u64,
+    pub tx_size_bytes: usize,
+}
+
+#[derive(Debug, Serialize)]
 pub struct DeployContractsReport {
     pub tx_hash: String,
     pub input_capacity: u64,
     pub deployed_capacity: u64,
     pub change_capacity: u64,
     pub fee: u64,
+    pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub status: String,
     pub block_number: Option<u64>,
@@ -165,6 +172,7 @@ pub struct OpenChannelReport {
     pub sponsor_capacity: u64,
     pub change_capacity: u64,
     pub fee: u64,
+    pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub participants: Vec<ParticipantReport>,
     pub scripts: Vec<ResolvedScriptReport>,
@@ -210,6 +218,7 @@ pub struct PublishStateReport {
     pub state_out_point: PrintableOutPoint,
     pub sponsor_change_capacity: u64,
     pub fee: u64,
+    pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
 }
 
@@ -225,6 +234,7 @@ pub struct FundSponsorReport {
     pub sponsor_capacity: u64,
     pub change_capacity: u64,
     pub fee: u64,
+    pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
 }
 
@@ -241,6 +251,7 @@ pub struct FinaliseChannelReport {
     pub bob_capacity: u64,
     pub state_refund_capacity: u64,
     pub fee: u64,
+    pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub outputs: Vec<ChannelCellReport>,
 }
@@ -270,6 +281,7 @@ struct SentTransactionReport {
     status: String,
     block_number: Option<u64>,
     block_hash: Option<String>,
+    metrics: TransactionMetrics,
     mined_blocks: Vec<String>,
 }
 
@@ -335,35 +347,9 @@ pub fn deploy_contracts(
         change_capacity,
     );
     let signed = sign_single_secp_input(unsigned, &privkey)?;
-    let tx_hash = signed.hash();
-    let json_tx: ckb_jsonrpc_types::Transaction = signed.data().into();
-    let sent_hash = rpc.send_transaction(json_tx)?;
-    ensure!(
-        sent_hash == tx_hash.clone().into(),
-        "node returned tx hash {sent_hash:#x}, but locally built {:#x}",
-        H256::from(tx_hash)
-    );
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
 
-    let mut mined_blocks = Vec::new();
-    for _ in 0..options.mine_blocks {
-        mined_blocks.push(rpc.generate_block()?);
-        let status = rpc.transaction(sent_hash.clone())?;
-        if status.tx_status.status == Status::Committed {
-            break;
-        }
-    }
-
-    let status = if options.mine_blocks > 0 {
-        rpc.wait_transaction_committed(
-            sent_hash.clone(),
-            Duration::from_secs(30),
-            Duration::from_millis(500),
-        )?
-    } else {
-        rpc.transaction(sent_hash.clone())?
-    };
-
-    let tx_hash_string = format!("{sent_hash:#x}");
+    let tx_hash_string = sent.tx_hash.clone();
     let scripts = contracts
         .into_iter()
         .enumerate()
@@ -386,10 +372,11 @@ pub fn deploy_contracts(
         deployed_capacity,
         change_capacity,
         fee: options.fee,
-        mined_blocks,
-        status: format!("{:?}", status.tx_status.status),
-        block_number: status.tx_status.block_number.map(|number| number.value()),
-        block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
         scripts,
     })
 }
@@ -567,34 +554,9 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .output_data(Bytes::new().pack())
         .build();
     let signed = sign_single_secp_input(unsigned, &owner_key)?;
-    let tx_hash = signed.hash();
-    let json_tx: ckb_jsonrpc_types::Transaction = signed.data().into();
-    let sent_hash = rpc.send_transaction(json_tx)?;
-    ensure!(
-        sent_hash == tx_hash.clone().into(),
-        "node returned tx hash {sent_hash:#x}, but locally built {:#x}",
-        H256::from(tx_hash)
-    );
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
 
-    let mut mined_blocks = Vec::new();
-    for _ in 0..options.mine_blocks {
-        mined_blocks.push(rpc.generate_block()?);
-        let status = rpc.transaction(sent_hash.clone())?;
-        if status.tx_status.status == Status::Committed {
-            break;
-        }
-    }
-    let status = if options.mine_blocks > 0 {
-        rpc.wait_transaction_committed(
-            sent_hash.clone(),
-            Duration::from_secs(30),
-            Duration::from_millis(500),
-        )?
-    } else {
-        rpc.transaction(sent_hash.clone())?
-    };
-
-    let tx_hash_string = format!("{sent_hash:#x}");
+    let tx_hash_string = sent.tx_hash.clone();
     let cell =
         |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
             ChannelCellReport {
@@ -615,9 +577,9 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
 
     Ok(OpenChannelReport {
         tx_hash: tx_hash_string.clone(),
-        status: format!("{:?}", status.tx_status.status),
-        block_number: status.tx_status.block_number.map(|number| number.value()),
-        block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
         channel_id: hex32(&channel_id),
         funding_anchor: hex32(&funding_anchor),
         finalise_since: options.finalise_since,
@@ -627,7 +589,8 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         sponsor_capacity: options.sponsor_capacity,
         change_capacity,
         fee: options.fee,
-        mined_blocks,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
         participants: vec![
             ParticipantReport {
                 role: "alice".to_string(),
@@ -760,6 +723,7 @@ pub fn publish_state(
         },
         sponsor_change_capacity,
         fee: options.fee,
+        metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
     })
 }
@@ -850,6 +814,7 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         sponsor_capacity: options.sponsor_capacity,
         change_capacity,
         fee: options.fee,
+        metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
     })
 }
@@ -980,6 +945,7 @@ pub fn finalise_channel(
         bob_capacity,
         state_refund_capacity,
         fee: options.fee,
+        metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
         outputs: vec![
             output_report("alice", 0, secp256k1_lock(&alice_key)?, alice_capacity),
@@ -1139,6 +1105,7 @@ fn send_and_mine(
     tx: ckb_types::core::TransactionView,
     mine_blocks: u64,
 ) -> Result<SentTransactionReport> {
+    let metrics = transaction_metrics(rpc, &tx)?;
     let tx_hash = tx.hash();
     let json_tx: ckb_jsonrpc_types::Transaction = tx.data().into();
     let sent_hash = rpc.send_transaction(json_tx)?;
@@ -1171,7 +1138,20 @@ fn send_and_mine(
         status: format!("{:?}", status.tx_status.status),
         block_number: status.tx_status.block_number.map(|number| number.value()),
         block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
+        metrics,
         mined_blocks,
+    })
+}
+
+fn transaction_metrics(
+    rpc: &CkbRpcClient,
+    tx: &ckb_types::core::TransactionView,
+) -> Result<TransactionMetrics> {
+    let json_tx: ckb_jsonrpc_types::Transaction = tx.data().into();
+    let estimate = rpc.estimate_cycles(json_tx)?;
+    Ok(TransactionMetrics {
+        estimated_cycles: estimate.cycles.value(),
+        tx_size_bytes: tx.data().as_slice().len(),
     })
 }
 

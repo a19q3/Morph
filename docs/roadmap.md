@@ -20,7 +20,8 @@ descriptor-bound vault finalisation, and descriptor-output mismatch rejection.
 The CLI can check/mine a local CKB devnet, deploy the Morph contract binaries,
 open a channel, publish a signed settling state, top up sponsor capacity,
 publish a newer signed state over the old settling state, and finalise the
-vault through native JSON-RPC.
+vault through native JSON-RPC. Each transaction report includes node-estimated
+cycles and serialized transaction size.
 
 Required deliverables:
 
@@ -33,6 +34,7 @@ Required deliverables:
 - Devnet contract deployment transaction.
 - RPC transaction builder.
 - Publish, supersede, and finalise devnet path.
+- Per-transaction cycle and size reporting from the devnet node.
 
 Acceptance criteria:
 
@@ -45,6 +47,8 @@ Acceptance criteria:
 - channel reserve cannot pay publication fees;
 - sponsor policy cannot spend outside its budget;
 - xUDT type mismatch is rejected in host-side invariants.
+- JSON devnet reports expose `estimated_cycles` and `tx_size_bytes` for every
+  lifecycle transaction.
 
 ## M2: Watchtower
 

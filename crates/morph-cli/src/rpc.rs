@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use ckb_jsonrpc_types::{
-    BlockView, CellWithStatus, OutPoint as JsonOutPoint, Status, Transaction,
+    BlockView, CellWithStatus, EstimateCycles, OutPoint as JsonOutPoint, Status, Transaction,
     TransactionWithStatusResponse,
 };
 use ckb_types::H256;
@@ -109,6 +109,10 @@ impl CkbRpcClient {
 
     pub fn send_transaction(&self, transaction: Transaction) -> Result<H256> {
         self.call("send_transaction", json!([transaction, "passthrough"]))
+    }
+
+    pub fn estimate_cycles(&self, transaction: Transaction) -> Result<EstimateCycles> {
+        self.call("estimate_cycles", json!([transaction]))
     }
 
     pub fn transaction(&self, tx_hash: H256) -> Result<TransactionWithStatusResponse> {

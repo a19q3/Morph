@@ -71,6 +71,19 @@ cargo run -p morph-cli -- devnet deploy-contracts --json
 cargo run -p morph-cli -- devnet open-channel --json
 ```
 
+Devnet transaction reports include two measurement fields:
+
+```text
+metrics.estimated_cycles
+metrics.tx_size_bytes
+```
+
+`estimated_cycles` is returned by the local CKB node through
+`estimate_cycles` before broadcast. `tx_size_bytes` is the serialized
+transaction size constructed by the CLI. These fields are intended as a
+repeatable baseline for script and transaction-shape changes; they are not a
+mainnet fee recommendation.
+
 These checks exercise the same invariants that the scripts must enforce:
 
 - one live State Cell transition;
@@ -202,6 +215,16 @@ publish state 2 over state 1
 finalise the vault using state 2
 ```
 
+The non-JSON form prints a compact cycle summary for the full path:
+
+```text
+cycles=open:<n> stale_publish:<n> sponsor_top_up:<n> supersede_publish:<n> finalise:<n>
+```
+
+The JSON form keeps the same per-transaction `metrics` object on each step, so
+benchmark scripts can compare open, stale publication, supersession, sponsor
+top-up, and finalisation separately.
+
 ## Contract Milestone
 
 The contract implementation uses fixed-width headers and a narrow witness
@@ -220,5 +243,5 @@ rights-dependency proof predicate exists.
 ## Remaining Devnet Gap
 
 The current vertical slice is CKB-only and bilateral. The next devnet work is
-to add xUDT vault cells, cycle reports, a mempool-level competing-spend case,
-and watchtower-grade state package storage.
+to add xUDT vault cells, a mempool-level competing-spend case, and
+watchtower-grade state package storage.
