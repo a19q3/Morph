@@ -58,7 +58,14 @@ fn main() -> Result<()> {
         return Err(ScriptError::StateSinceNotMature);
     }
 
-    let descriptor = load_settlement_descriptor()?;
+    let witness_args = load_witness_args(0, Source::GroupInput)
+        .map_err(|_| ScriptError::SettlementWitnessMissing)?;
+    let input_type = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(ScriptError::SettlementWitnessMissing)?;
+    let descriptor_raw = input_type.raw_data();
+    let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
     if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
         return Err(ScriptError::SettlementDescriptorMismatch);
     }
@@ -69,19 +76,6 @@ fn main() -> Result<()> {
     verify_descriptor_outputs(&descriptor)?;
 
     Ok(())
-}
-
-#[cfg(target_arch = "riscv64")]
-fn load_settlement_descriptor() -> Result<BilateralCkbSettlementDescriptorV1<'static>> {
-    let witness_args = load_witness_args(0, Source::GroupInput)
-        .map_err(|_| ScriptError::SettlementWitnessMissing)?;
-    let input_type = witness_args
-        .input_type()
-        .to_opt()
-        .ok_or(ScriptError::SettlementWitnessMissing)?;
-    let raw = input_type.raw_data();
-    let leaked = alloc::boxed::Box::leak(raw.as_ref().to_vec().into_boxed_slice());
-    BilateralCkbSettlementDescriptorV1::parse(leaked)
 }
 
 #[cfg(target_arch = "riscv64")]
