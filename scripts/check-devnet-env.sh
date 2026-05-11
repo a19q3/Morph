@@ -28,6 +28,7 @@ check_bin() {
 
 check cargo
 check rustup
+check jq
 
 DEFAULT_LOCAL_CKB="/Users/arthur/RustroverProjects/ckb/target/debug/ckb"
 CKB_BIN="${CKB_BIN:-}"
