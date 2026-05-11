@@ -70,6 +70,7 @@ cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
 cargo run -p morph-cli -- devnet supersede-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
+cargo run -p morph-cli -- devnet xudt-negative-smoke
 scripts/devnet-smoke.sh
 ```
 

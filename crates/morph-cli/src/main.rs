@@ -8,7 +8,7 @@ use devnet::{
     DeployContractsOptions, FinaliseChannelOptions, FundSponsorOptions, OpenChannelOptions,
     PublishLatestStatePackageOptions, PublishStateOptions, SaveStatePackageOptions,
     SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, WatchLatestStatePackageOptions,
-    XudtSmokeOptions,
+    XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -501,6 +501,55 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove live devnet rejects tampered CKB+xUDT vault settlement.
+    XudtNegativeSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the xUDT vault lock, in shannons.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        vault_capacity: u64,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's final xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's final xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value used by channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Emit machine-readable JSON.
@@ -1269,6 +1318,64 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     report.publish.metrics.estimated_cycles,
                     report.finalise.metrics.estimated_cycles
                 );
+            }
+        }
+        DevnetCommand::XudtNegativeSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::xudt_negative_smoke(
+                &rpc,
+                XudtNegativeSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("open_tx={}", report.open.tx_hash);
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!(
+                    "rejected_xudt_amounts={}:{}",
+                    report.rejected_alice_xudt_amount, report.rejected_bob_xudt_amount
+                );
+                println!("rejection={}", report.rejection);
+                if let Some(source) = &report.script_failure.source {
+                    println!("script_failure_source={source}");
+                }
+                if let Some(code) = report.script_failure.error_code {
+                    println!("script_failure_error_code={code}");
+                }
+                if let Some(name) = &report.script_failure.morph_error {
+                    println!("script_failure_morph_error={name}");
+                }
+                println!("finalise_tx={}", report.finalise.tx_hash);
+                println!("xudt_type_hash={}", report.finalise.xudt_type_hash);
+                println!("finalise_status={}", report.finalise.status);
             }
         }
         DevnetCommand::SponsorPolicyNegativeSmoke {

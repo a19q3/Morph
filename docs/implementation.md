@@ -60,6 +60,8 @@ A devnet demonstration is acceptable only when it includes:
 - cycle and transaction-size measurements for each lifecycle transaction;
 - a CKB+xUDT vault smoke that mints only under the devnet issuer lock and then
   settles by ordinary xUDT conservation;
+- a CKB+xUDT negative smoke proving that unchanged total supply is not enough:
+  the vault lock must reject a tampered recipient-level token distribution;
 - reusable signed state packages that can be published without channel signing
   keys;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

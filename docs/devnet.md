@@ -80,8 +80,9 @@ scripts/devnet-smoke.sh
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
 check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-CKB+xUDT settlement smoke, and the watchtower auto-sponsor path. It expects the
-node and `jq` to be available, and writes logs plus JSON reports under
+CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, and the
+watchtower auto-sponsor path. It expects the node and `jq` to be available, and
+writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed.
 
@@ -216,6 +217,19 @@ The command deploys no shortcuts: it opens a real channel with an xUDT vault,
 publishes a signed settling state through sponsor capacity, finalises through
 the vault lock after the relative `since`, and produces Alice/Bob xUDT
 settlement cells.
+
+There is also a live xUDT negative smoke:
+
+```sh
+cargo run -q -p morph-cli -- devnet xudt-negative-smoke --json
+```
+
+It first opens and publishes the same CKB+xUDT channel shape, then attempts a
+tampered finalisation where Alice receives one extra token and Bob receives one
+fewer token. The total xUDT supply is unchanged, so the xUDT type script is not
+the interesting boundary. The expected rejection is
+`SettlementOutputMismatch` from the vault lock, proving that the signed
+settlement descriptor binds the concrete token distribution.
 
 ## Sponsor Policy
 

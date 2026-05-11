@@ -209,6 +209,23 @@ pub struct XudtSmokeOptions {
     pub mine_blocks: u64,
 }
 
+#[derive(Debug, Clone)]
+pub struct XudtNegativeSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct SponsorPolicySettings {
     min_state_number: u64,
@@ -439,6 +456,17 @@ pub struct XudtFinaliseReport {
 pub struct XudtSmokeReport {
     pub open: OpenChannelReport,
     pub publish: PublishStateReport,
+    pub finalise: XudtFinaliseReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct XudtNegativeSmokeReport {
+    pub open: OpenChannelReport,
+    pub publish: PublishStateReport,
+    pub rejected_alice_xudt_amount: u128,
+    pub rejected_bob_xudt_amount: u128,
+    pub rejection: String,
+    pub script_failure: ScriptFailureReport,
     pub finalise: XudtFinaliseReport,
 }
 
@@ -1751,11 +1779,50 @@ fn finalise_xudt_channel(
     state_out_point: String,
     vault_out_point: String,
 ) -> Result<XudtFinaliseReport> {
+    let build = build_xudt_finalise_transaction(
+        rpc,
+        options,
+        state_out_point,
+        vault_out_point,
+        (options.alice_xudt_amount, options.bob_xudt_amount),
+    )?;
+    let sent = send_and_mine(rpc, build.tx.clone(), options.mine_blocks)?;
+    Ok(xudt_finalise_report(build, sent))
+}
+
+struct BuiltXudtFinalise {
+    tx: ckb_types::core::TransactionView,
+    channel_id: String,
+    funding_anchor: String,
+    state_number: u64,
+    xudt_type_hash: String,
+    alice_capacity: u64,
+    bob_capacity: u64,
+    alice_xudt_amount: u128,
+    bob_xudt_amount: u128,
+    state_refund_capacity: u64,
+    fee: u64,
+    alice_output: CellOutput,
+    bob_output: CellOutput,
+    refund_output: CellOutput,
+}
+
+fn build_xudt_finalise_transaction(
+    rpc: &CkbRpcClient,
+    options: &XudtSmokeOptions,
+    state_out_point: String,
+    vault_out_point: String,
+    output_amounts: (u128, u128),
+) -> Result<BuiltXudtFinalise> {
     ensure!(options.fee > 0, "fee must be non-zero");
     let total_xudt_amount = options
         .alice_xudt_amount
         .checked_add(options.bob_xudt_amount)
         .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+    output_amounts
+        .0
+        .checked_add(output_amounts.1)
+        .ok_or_else(|| anyhow!("xUDT output amount overflow"))?;
 
     let owner_key = parse_privkey(&options.private_key)
         .with_context(|| "invalid secp256k1 private key for state refund")?;
@@ -1869,15 +1936,36 @@ fn finalise_xudt_channel(
         .output(alice_output.clone())
         .output(bob_output.clone())
         .output(refund_output.clone())
-        .output_data(xudt_amount_bytes(options.alice_xudt_amount).pack())
-        .output_data(xudt_amount_bytes(options.bob_xudt_amount).pack())
+        .output_data(xudt_amount_bytes(output_amounts.0).pack())
+        .output_data(xudt_amount_bytes(output_amounts.1).pack())
         .output_data(Bytes::new().pack())
         .witness(empty_witness())
         .witness(witness_with_input_type(Bytes::copy_from_slice(&descriptor)))
         .build();
-    let sent_hash = send_and_mine(rpc, tx, options.mine_blocks)?;
-    let tx_hash = sent_hash.tx_hash.clone();
 
+    Ok(BuiltXudtFinalise {
+        tx,
+        channel_id: hex32(header.channel_id()),
+        funding_anchor: hex32(header.funding_anchor()),
+        state_number: header.state_number(),
+        xudt_type_hash: hex32(&xudt_type_hash),
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount: output_amounts.0,
+        bob_xudt_amount: output_amounts.1,
+        state_refund_capacity,
+        fee: options.fee,
+        alice_output,
+        bob_output,
+        refund_output,
+    })
+}
+
+fn xudt_finalise_report(
+    build: BuiltXudtFinalise,
+    sent_hash: SentTransactionReport,
+) -> XudtFinaliseReport {
+    let tx_hash = sent_hash.tx_hash.clone();
     let output_report =
         |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
             ChannelCellReport {
@@ -1896,29 +1984,29 @@ fn finalise_xudt_channel(
             }
         };
 
-    Ok(XudtFinaliseReport {
+    XudtFinaliseReport {
         tx_hash: sent_hash.tx_hash,
         status: sent_hash.status,
         block_number: sent_hash.block_number,
         block_hash: sent_hash.block_hash,
-        channel_id: hex32(header.channel_id()),
-        funding_anchor: hex32(header.funding_anchor()),
-        state_number: header.state_number(),
-        xudt_type_hash: hex32(&xudt_type_hash),
-        alice_capacity,
-        bob_capacity,
-        alice_xudt_amount: options.alice_xudt_amount,
-        bob_xudt_amount: options.bob_xudt_amount,
-        state_refund_capacity,
-        fee: options.fee,
+        channel_id: build.channel_id,
+        funding_anchor: build.funding_anchor,
+        state_number: build.state_number,
+        xudt_type_hash: build.xudt_type_hash,
+        alice_capacity: build.alice_capacity,
+        bob_capacity: build.bob_capacity,
+        alice_xudt_amount: build.alice_xudt_amount,
+        bob_xudt_amount: build.bob_xudt_amount,
+        state_refund_capacity: build.state_refund_capacity,
+        fee: build.fee,
         metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
         outputs: vec![
-            output_report("alice", 0, &alice_output, 16),
-            output_report("bob", 1, &bob_output, 16),
-            output_report("state-refund", 2, &refund_output, 0),
+            output_report("alice", 0, &build.alice_output, 16),
+            output_report("bob", 1, &build.bob_output, 16),
+            output_report("state-refund", 2, &build.refund_output, 0),
         ],
-    })
+    }
 }
 
 pub fn xudt_smoke(rpc: &CkbRpcClient, options: XudtSmokeOptions) -> Result<XudtSmokeReport> {
@@ -1947,6 +2035,101 @@ pub fn xudt_smoke(rpc: &CkbRpcClient, options: XudtSmokeOptions) -> Result<XudtS
     Ok(XudtSmokeReport {
         open,
         publish,
+        finalise,
+    })
+}
+
+pub fn xudt_negative_smoke(
+    rpc: &CkbRpcClient,
+    options: XudtNegativeSmokeOptions,
+) -> Result<XudtNegativeSmokeReport> {
+    ensure!(
+        options.bob_xudt_amount > 0,
+        "Bob xUDT amount must be non-zero so the negative smoke can preserve total supply"
+    );
+    let smoke_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: options.alice_private_key,
+        bob_private_key: options.bob_private_key,
+        vault_capacity: options.vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+
+    let open = open_xudt_channel(rpc, &smoke_options)?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "xudt-vault")?;
+    let sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: smoke_options.contracts_dir.clone(),
+            private_key: smoke_options.private_key.clone(),
+            alice_private_key: smoke_options.alice_private_key.clone(),
+            bob_private_key: smoke_options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point,
+            sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: smoke_options.fee,
+            mine_blocks: smoke_options.mine_blocks,
+        },
+    )?;
+    let settling_state_out_point = printable_out_point_string(&publish.state_out_point);
+
+    let rejected_alice_xudt_amount = smoke_options
+        .alice_xudt_amount
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("Alice xUDT amount overflow in negative smoke"))?;
+    let rejected_bob_xudt_amount = smoke_options
+        .bob_xudt_amount
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("Bob xUDT amount underflow in negative smoke"))?;
+    let rejected_build = build_xudt_finalise_transaction(
+        rpc,
+        &smoke_options,
+        settling_state_out_point.clone(),
+        vault_out_point.clone(),
+        (rejected_alice_xudt_amount, rejected_bob_xudt_amount),
+    )?;
+    let rejection = match send_and_mine(rpc, rejected_build.tx, 0) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "xUDT descriptor unexpectedly accepted tampered settlement in tx {}",
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::SettlementOutputMismatch as i16),
+        "expected SettlementOutputMismatch from vault lock, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
+
+    let finalise = finalise_xudt_channel(
+        rpc,
+        &smoke_options,
+        settling_state_out_point,
+        vault_out_point,
+    )?;
+
+    Ok(XudtNegativeSmokeReport {
+        open,
+        publish,
+        rejected_alice_xudt_amount,
+        rejected_bob_xudt_amount,
+        rejection,
+        script_failure,
         finalise,
     })
 }
@@ -3032,6 +3215,12 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
         value if value == ScriptError::SponsorStateOutOfRange as i16 => {
             Some("SponsorStateOutOfRange")
         }
+        value if value == ScriptError::XudtAmountEncoding as i16 => Some("XudtAmountEncoding"),
+        value if value == ScriptError::XudtMintUnauthorised as i16 => Some("XudtMintUnauthorised"),
+        value if value == ScriptError::XudtConservationMismatch as i16 => {
+            Some("XudtConservationMismatch")
+        }
+        value if value == ScriptError::XudtTypeMismatch as i16 => Some("XudtTypeMismatch"),
         _ => None,
     }
 }

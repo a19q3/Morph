@@ -25,6 +25,8 @@ Implemented devnet-level checks:
   sponsor top-up, and finalise;
 - CKB+xUDT vault publication and settlement on devnet through
   `devnet xudt-smoke`;
+- CKB+xUDT tampered settlement rejection on devnet through
+  `devnet xudt-negative-smoke`;
 - node-reported cycle measurement and transaction size reporting;
 - durable signed state-package storage with signature validation and latest
   package selection;
