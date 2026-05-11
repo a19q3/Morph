@@ -22,8 +22,9 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_THRESHOLD_V1, BILATERAL_SIGNATURE_WITNESS_V1_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
     ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
-    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1, blake2b256 as script_blake2b256,
-    participants_commitment_v1, settlement_descriptor_commitment_v1,
+    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, ScriptError, StateHeaderV1,
+    blake2b256 as script_blake2b256, participants_commitment_v1,
+    settlement_descriptor_commitment_v1,
 };
 use serde::Serialize;
 
@@ -404,8 +405,17 @@ pub struct SponsorPolicyNegativeSmokeReport {
     pub open: OpenChannelReport,
     pub rejected_state_number: u64,
     pub rejection: String,
+    pub script_failure: ScriptFailureReport,
     pub allowed_publish: PublishStateReport,
     pub finalise: FinaliseChannelReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScriptFailureReport {
+    pub source: Option<String>,
+    pub error_code: Option<i16>,
+    pub morph_error: Option<String>,
+    pub raw: String,
 }
 
 struct LiveCell {
@@ -1518,6 +1528,13 @@ pub fn sponsor_policy_negative_smoke(
         }
         Err(err) => err.to_string(),
     };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::SponsorStateOutOfRange as i16),
+        "expected SponsorStateOutOfRange from sponsor lock, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
 
     let allowed_publish = publish_state(
         rpc,
@@ -1557,6 +1574,7 @@ pub fn sponsor_policy_negative_smoke(
         open,
         rejected_state_number: 2,
         rejection,
+        script_failure,
         allowed_publish,
         finalise,
     })
@@ -2296,6 +2314,95 @@ fn hex_prefixed(raw: &[u8]) -> String {
     format!("0x{}", hex::encode(raw))
 }
 
+fn parse_script_failure(raw: &str) -> ScriptFailureReport {
+    let error_code = extract_error_code(raw);
+    ScriptFailureReport {
+        source: extract_between(raw, "source: ", ", cause:").map(str::to_string),
+        error_code,
+        morph_error: error_code
+            .and_then(morph_script_error_name)
+            .map(str::to_string),
+        raw: raw.to_string(),
+    }
+}
+
+fn extract_error_code(raw: &str) -> Option<i16> {
+    let (_, tail) = raw.split_once("error code ")?;
+    let digits: String = tail
+        .chars()
+        .take_while(|character| character.is_ascii_digit() || *character == '-')
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn extract_between<'a>(raw: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let (_, tail) = raw.split_once(start)?;
+    let (value, _) = tail.split_once(end)?;
+    Some(value)
+}
+
+fn morph_script_error_name(code: i16) -> Option<&'static str> {
+    match code {
+        value if value == ScriptError::IndexOutOfBounds as i16 => Some("IndexOutOfBounds"),
+        value if value == ScriptError::Encoding as i16 => Some("Encoding"),
+        value if value == ScriptError::WrongArgsLength as i16 => Some("WrongArgsLength"),
+        value if value == ScriptError::WrongGroupShape as i16 => Some("WrongGroupShape"),
+        value if value == ScriptError::FundingAnchorMismatch as i16 => {
+            Some("FundingAnchorMismatch")
+        }
+        value if value == ScriptError::NonMonotonicStateNumber as i16 => {
+            Some("NonMonotonicStateNumber")
+        }
+        value if value == ScriptError::NewStateNotSettling as i16 => Some("NewStateNotSettling"),
+        value if value == ScriptError::HeaderContextChanged as i16 => Some("HeaderContextChanged"),
+        value if value == ScriptError::OutputBelowOccupiedCapacity as i16 => {
+            Some("OutputBelowOccupiedCapacity")
+        }
+        value if value == ScriptError::StateCellMissing as i16 => Some("StateCellMissing"),
+        value if value == ScriptError::StateCellAmbiguous as i16 => Some("StateCellAmbiguous"),
+        value if value == ScriptError::StateSinceNotMature as i16 => Some("StateSinceNotMature"),
+        value if value == ScriptError::SponsorFeeTooHigh as i16 => Some("SponsorFeeTooHigh"),
+        value if value == ScriptError::SponsorBudgetExceeded as i16 => {
+            Some("SponsorBudgetExceeded")
+        }
+        value if value == ScriptError::SponsorChangeLockMismatch as i16 => {
+            Some("SponsorChangeLockMismatch")
+        }
+        value if value == ScriptError::CapacityUnderflow as i16 => Some("CapacityUnderflow"),
+        value if value == ScriptError::ParticipantWitnessMissing as i16 => {
+            Some("ParticipantWitnessMissing")
+        }
+        value if value == ScriptError::ParticipantWitnessEncoding as i16 => {
+            Some("ParticipantWitnessEncoding")
+        }
+        value if value == ScriptError::ParticipantCommitmentMismatch as i16 => {
+            Some("ParticipantCommitmentMismatch")
+        }
+        value if value == ScriptError::InvalidParticipantSignature as i16 => {
+            Some("InvalidParticipantSignature")
+        }
+        value if value == ScriptError::SettlementWitnessMissing as i16 => {
+            Some("SettlementWitnessMissing")
+        }
+        value if value == ScriptError::SettlementDescriptorEncoding as i16 => {
+            Some("SettlementDescriptorEncoding")
+        }
+        value if value == ScriptError::SettlementDescriptorMismatch as i16 => {
+            Some("SettlementDescriptorMismatch")
+        }
+        value if value == ScriptError::SettlementOutputMismatch as i16 => {
+            Some("SettlementOutputMismatch")
+        }
+        value if value == ScriptError::SponsorStateOutOfRange as i16 => {
+            Some("SponsorStateOutOfRange")
+        }
+        _ => None,
+    }
+}
+
 fn parse_h256(value: &str) -> Result<H256> {
     H256::from_str(value.strip_prefix("0x").unwrap_or(value))
         .map_err(|err| anyhow!("invalid H256 {value}: {err:?}"))
@@ -2314,4 +2421,27 @@ fn blake160(data: &[u8]) -> [u8; 20] {
 
 fn byte32_to_h256(value: ckb_types::packed::Byte32) -> H256 {
     (&value).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_ckb_script_failure() {
+        let raw = "CKB RPC error -302 on estimate_cycles: TransactionFailedToVerify: Script(TransactionScriptError { source: Inputs[1].Lock, cause: ValidationFailure: see error code 29 on page https://example.invalid#29 })";
+
+        let parsed = parse_script_failure(raw);
+
+        assert_eq!(parsed.source.as_deref(), Some("Inputs[1].Lock"));
+        assert_eq!(
+            parsed.error_code,
+            Some(ScriptError::SponsorStateOutOfRange as i16)
+        );
+        assert_eq!(
+            parsed.morph_error.as_deref(),
+            Some("SponsorStateOutOfRange")
+        );
+        assert_eq!(parsed.raw, raw);
+    }
 }

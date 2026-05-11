@@ -1183,6 +1183,15 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("open_tx={}", report.open.tx_hash);
                 println!("rejected_state_number={}", report.rejected_state_number);
                 println!("rejection={}", report.rejection);
+                if let Some(source) = &report.script_failure.source {
+                    println!("script_failure_source={source}");
+                }
+                if let Some(code) = report.script_failure.error_code {
+                    println!("script_failure_error_code={code}");
+                }
+                if let Some(name) = &report.script_failure.morph_error {
+                    println!("script_failure_morph_error={name}");
+                }
                 println!("allowed_publish_tx={}", report.allowed_publish.tx_hash);
                 println!("finalise_tx={}", report.finalise.tx_hash);
                 println!("channel_id={}", report.finalise.channel_id);

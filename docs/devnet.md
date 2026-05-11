@@ -270,7 +270,9 @@ It opens a channel whose initial SponsorCell may only pay for state `1`, asks
 the node to verify a state `2` publication, expects that transaction to be
 rejected by the sponsor lock, then publishes the allowed state `1` and
 finalises the channel. This catches drift between the CLI's reported
-SponsorPolicy and the actual script behaviour.
+SponsorPolicy and the actual script behaviour. The smoke also parses the CKB
+script failure and requires Morph error `SponsorStateOutOfRange`, so an
+unrelated transaction-construction failure does not count as a pass.
 
 ## Signed State Packages
 
