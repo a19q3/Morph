@@ -1,10 +1,14 @@
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
+use rpc::{CkbRpcClient, HeaderView};
+
+mod rpc;
 
 #[derive(Debug, Parser)]
 #[command(name = "morph")]
@@ -20,6 +24,53 @@ enum Command {
     ValidateFixture,
     /// Print a JSON state header fixture and signing digest.
     PrintFixture,
+    /// Talk to a local CKB devnet node without relying on ckb-cli.
+    Devnet {
+        /// CKB JSON-RPC endpoint.
+        #[arg(long, env = "MORPH_CKB_RPC", default_value = "http://127.0.0.1:18114")]
+        rpc_url: String,
+        #[command(subcommand)]
+        command: DevnetCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum DevnetCommand {
+    /// Print chain, node, and tip status.
+    Check {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the current canonical tip header.
+    Tip {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until the node reaches at least the requested block number.
+    WaitTip {
+        /// Minimum canonical block number.
+        min_number: u64,
+        /// Maximum time to wait.
+        #[arg(long, default_value_t = 60)]
+        timeout_secs: u64,
+        /// Poll interval in milliseconds.
+        #[arg(long, default_value_t = 1_000)]
+        poll_ms: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Generate one or more dev blocks through CKB integration-test RPC.
+    Mine {
+        /// Number of blocks to generate.
+        #[arg(long, default_value_t = 1)]
+        blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -27,7 +78,115 @@ fn main() -> Result<()> {
     match cli.command {
         Command::ValidateFixture => validate_fixture(),
         Command::PrintFixture => print_fixture(),
+        Command::Devnet { rpc_url, command } => run_devnet(&rpc_url, command),
     }
+}
+
+fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
+    let rpc = CkbRpcClient::new(rpc_url)?;
+    match command {
+        DevnetCommand::Check { json } => {
+            let status = rpc.status()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "rpc_url": rpc_url,
+                        "chain": status.chain.chain,
+                        "initial_block_download": status.chain.is_initial_block_download,
+                        "median_time": status.chain.median_time,
+                        "median_time_number": status.chain.median_time_value()?,
+                        "epoch": status.chain.epoch,
+                        "node_active": status.node.active,
+                        "node_id": status.node.node_id,
+                        "connections": status.node.connections,
+                        "connection_count": status.node.connection_count()?,
+                        "tip": tip_json(&status.tip)?,
+                    }))?
+                );
+            } else {
+                println!("rpc_url={rpc_url}");
+                println!("chain={}", status.chain.chain);
+                println!(
+                    "initial_block_download={}",
+                    status.chain.is_initial_block_download
+                );
+                println!("node_active={}", status.node.active);
+                println!("node_id={}", status.node.node_id);
+                println!("connections={}", status.node.connection_count()?);
+                print_tip(&status.tip)?;
+            }
+        }
+        DevnetCommand::Tip { json } => {
+            let tip = rpc.tip_header()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tip_json(&tip)?)?);
+            } else {
+                print_tip(&tip)?;
+            }
+        }
+        DevnetCommand::WaitTip {
+            min_number,
+            timeout_secs,
+            poll_ms,
+            json,
+        } => {
+            let tip = rpc.wait_for_tip(
+                min_number,
+                Duration::from_secs(timeout_secs),
+                Duration::from_millis(poll_ms),
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tip_json(&tip)?)?);
+            } else {
+                println!("target_tip={min_number}");
+                print_tip(&tip)?;
+            }
+        }
+        DevnetCommand::Mine { blocks, json } => {
+            let mut hashes = Vec::new();
+            for _ in 0..blocks {
+                hashes.push(rpc.generate_block()?);
+            }
+            let tip = rpc.tip_header()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "generated": hashes,
+                        "tip": tip_json(&tip)?,
+                    }))?
+                );
+            } else {
+                for hash in hashes {
+                    println!("generated_block={hash}");
+                }
+                print_tip(&tip)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_tip(tip: &HeaderView) -> Result<()> {
+    println!("tip_number={}", tip.number_value()?);
+    println!("tip_hash={}", tip.hash);
+    println!("tip_parent_hash={}", tip.parent_hash);
+    println!("tip_epoch={}", tip.epoch);
+    println!("tip_timestamp={}", tip.timestamp_value()?);
+    Ok(())
+}
+
+fn tip_json(tip: &HeaderView) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "number": tip.number,
+        "number_value": tip.number_value()?,
+        "hash": tip.hash,
+        "parent_hash": tip.parent_hash,
+        "epoch": tip.epoch,
+        "timestamp": tip.timestamp,
+        "timestamp_value": tip.timestamp_value()?,
+    }))
 }
 
 fn validate_fixture() -> Result<()> {

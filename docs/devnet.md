@@ -39,8 +39,19 @@ scripts/devnet-node.sh
 ```
 
 By default this initialises `target/devnet/node`, listens on RPC port `18114`,
-and uses the local CKB debug binary. Override with `CKB_BIN`, `CKB_DIR`,
-`RPC_PORT`, or `P2P_PORT` when needed.
+enables CKB's `IntegrationTest` RPC module for local block generation, configures
+a secp256k1 block assembler, and uses the local CKB debug binary. Override with
+`CKB_BIN`, `CKB_DIR`, `RPC_PORT`, `P2P_PORT`, `BLOCK_ASSEMBLER_CODE_HASH`, or
+`BLOCK_ASSEMBLER_ARG` when needed.
+
+The default dev block assembler arg is:
+
+```text
+0xc8328aabcd9b9e8e64fbc566c4385c3bdeb219d7
+```
+
+It is suitable for isolated local devnet mining only. Production deployments
+must replace it with an operator-controlled lock.
 
 ## Current Smoke Checks
 
@@ -49,6 +60,14 @@ cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
 make build-contracts
 make contract-tests
+```
+
+With `scripts/devnet-node.sh` running in another shell:
+
+```sh
+cargo run -p morph-cli -- devnet check
+cargo run -p morph-cli -- devnet mine --blocks 1
+cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
 ```
 
 These checks exercise the same invariants that the scripts must enforce:
@@ -82,6 +101,26 @@ transactions for:
 - sponsor fee payment accepted when change returns to the authorised wallet lock.
 - sponsor fee payment rejected when no matching settling StateHeader is produced.
 
+The CLI speaks directly to CKB JSON-RPC and does not require `ckb-cli`:
+
+```sh
+cargo run -p morph-cli -- devnet check
+cargo run -p morph-cli -- devnet tip --json
+cargo run -p morph-cli -- devnet mine --blocks 1
+cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
+```
+
+Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
+default local endpoint:
+
+```sh
+MORPH_CKB_RPC=http://127.0.0.1:18114 cargo run -p morph-cli -- devnet check
+```
+
+`devnet mine` calls CKB's `generate_block` integration-test RPC method. If the
+node has not exposed that module, the command fails with the returned RPC
+error. It does not fabricate block progress.
+
 ## Contract Milestone
 
 The contract implementation uses fixed-width headers and a narrow witness
@@ -99,7 +138,7 @@ rights-dependency proof predicate exists.
 
 ## Remaining Devnet Gap
 
-The local machine now has a CKB node binary, but the repository still needs
-Morph-specific RPC transaction tooling before it can broadcast funding,
-publication, supersession, or finalisation transactions against a live devnet
-node.
+The local machine now has a CKB node binary and the repository has native
+read/mine JSON-RPC tooling. The next missing part is Morph-specific transaction
+construction and signing for deploying scripts, funding a channel, publishing a
+state, superseding it, and finalising vault outputs against a live devnet node.
