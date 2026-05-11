@@ -105,6 +105,7 @@ cargo run -p morph-cli -- devnet watch-latest-package \
   --detection-depth 3 \
   --auto-fund-sponsor \
   --watch-policy target/watch-policy.json \
+  --alert-file target/watch-alerts.jsonl \
   --json
 ```
 

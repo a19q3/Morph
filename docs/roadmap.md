@@ -82,7 +82,8 @@ Acceptance criteria:
 Status: partially implemented for durable state package persistence, latest
 package selection, publish-from-latest-package rebuilding, confirmation-depth
 block polling, persisted scan cursors, conservative auto-funded sponsor
-rotation, and JSON operator policy. Alerting remains open.
+rotation, JSON operator policy, and local JSONL alerts. External notification
+integrations remain open.
 
 - State package persistence.
 - Detection-depth polling.
@@ -92,6 +93,8 @@ rotation, and JSON operator policy. Alerting remains open.
 - Conservative auto-funded SponsorCell rotation.
 - Operator policy for confirmation depth, fee, sponsor mode, and auto-sponsor
   capacity.
+- JSONL alert sink for older-state detection, publication submission, and idle
+  scans.
 
 ## M3: Conservative Factory Mode
 

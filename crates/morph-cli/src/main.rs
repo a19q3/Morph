@@ -21,6 +21,7 @@ mod factory_packages;
 mod packages;
 mod rpc;
 mod smoke_report;
+mod watch_alert;
 mod watch_policy;
 
 #[derive(Debug, Parser)]
@@ -344,6 +345,9 @@ enum DevnetCommand {
         /// Optional watchtower policy JSON that bounds this run.
         #[arg(long)]
         watch_policy: Option<std::path::PathBuf>,
+        /// Optional JSONL alert sink for watchtower events.
+        #[arg(long)]
+        alert_file: Option<std::path::PathBuf>,
         /// Start from --from-block even when a saved cursor exists.
         #[arg(long)]
         ignore_cursor: bool,
@@ -1244,6 +1248,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             from_block,
             cursor_file,
             watch_policy,
+            alert_file,
             ignore_cursor,
             detection_depth,
             timeout_secs,
@@ -1265,6 +1270,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     from_block,
                     cursor_file,
                     watch_policy,
+                    alert_file,
                     ignore_cursor,
                     detection_depth,
                     timeout_secs,
@@ -1286,6 +1292,9 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("detection_depth={}", report.detection_depth);
                 if let Some(path) = &report.cursor_file {
                     println!("cursor_file={}", path.display());
+                }
+                if let Some(path) = &report.alert_file {
+                    println!("alert_file={}", path.display());
                 }
                 if let Some(cursor) = &report.loaded_cursor {
                     println!("loaded_cursor_next_block={}", cursor.next_block);

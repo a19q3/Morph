@@ -459,6 +459,7 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --detection-depth 3 \
   --sponsor-out-point "$SPONSOR_OUT_POINT" \
   --watch-policy target/watch-policy.json \
+  --alert-file target/watch-alerts.jsonl \
   --json
 ```
 
@@ -472,6 +473,7 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --detection-depth 3 \
   --auto-fund-sponsor \
   --watch-policy target/watch-policy.json \
+  --alert-file target/watch-alerts.jsonl \
   --json
 ```
 
@@ -482,6 +484,13 @@ pre-existing SponsorCell may be used, whether auto-funded sponsor rotation is
 required, and the largest auto-sponsor capacity the watcher may lock. It may
 also bind itself to one canonical channel id. The policy is checked before the
 scanner reads blocks or publishes a transaction.
+
+When `--alert-file` is provided, the watcher appends JSON Lines events for
+operator review. It records older-state detection before sponsor work begins,
+successful publication after the transaction is submitted, and idle scans that
+reach the timeout without publishing. The alert file is intentionally local and
+deterministic; external notification systems can consume the JSONL stream
+without changing the channel logic.
 
 The automatically funded SponsorCell is deliberately narrow: it is bound to the
 selected latest package's state number and carries a fee budget of twice the

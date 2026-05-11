@@ -35,6 +35,9 @@ use crate::packages::{
     write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
+use crate::watch_alert::{
+    WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert, append_watchtower_alert,
+};
 use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
@@ -125,6 +128,7 @@ pub struct WatchLatestStatePackageOptions {
     pub from_block: u64,
     pub cursor_file: Option<PathBuf>,
     pub watch_policy: Option<PathBuf>,
+    pub alert_file: Option<PathBuf>,
     pub ignore_cursor: bool,
     pub detection_depth: u64,
     pub timeout_secs: u64,
@@ -432,6 +436,8 @@ pub struct WatchLatestStatePackageReport {
     pub detection_depth: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_file: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alert_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loaded_cursor: Option<WatchCursor>,
     pub selected_package: StatePackageRecord,
@@ -1525,6 +1531,22 @@ pub fn watch_latest_state_package(
                     scanned_to_block = current_block;
                     for observed in observed_state_cells(&block, &channel_id, tip_number)? {
                         if observed.state_number < selected_state_number {
+                            append_watch_alert_if_requested(
+                                &options.alert_file,
+                                WatchtowerAlert::new(
+                                    channel_id.clone(),
+                                    WatchAlertSeverity::Warning,
+                                    WatchAlertEvent::OlderStateDetected,
+                                    format!(
+                                        "confirmed StateCell {} is older than saved state {}",
+                                        observed.state_number, selected_state_number
+                                    ),
+                                    selected_state_number,
+                                    scanned_to_block,
+                                    current_block.saturating_add(1),
+                                )?
+                                .with_observed(observed.state_number, observed.out_point.clone()),
+                            )?;
                             let (sponsor_out_point, sponsor_top_up) =
                                 sponsor_for_watch_publication(
                                     rpc,
@@ -1547,6 +1569,23 @@ pub fn watch_latest_state_package(
                                     mine_blocks: options.mine_blocks,
                                 },
                             )?;
+                            append_watch_alert_if_requested(
+                                &options.alert_file,
+                                WatchtowerAlert::new(
+                                    channel_id.clone(),
+                                    WatchAlertSeverity::Warning,
+                                    WatchAlertEvent::PublicationSubmitted,
+                                    format!(
+                                        "published saved state {} against older StateCell {}",
+                                        selected_state_number, observed.state_number
+                                    ),
+                                    selected_state_number,
+                                    scanned_to_block,
+                                    current_block.saturating_add(1),
+                                )?
+                                .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_publication(publication.tx_hash.clone()),
+                            )?;
                             let next_from_block = current_block.saturating_add(1);
                             write_watch_cursor(
                                 &cursor_file,
@@ -1560,6 +1599,7 @@ pub fn watch_latest_state_package(
                                 next_from_block,
                                 detection_depth: options.detection_depth,
                                 cursor_file: Some(cursor_file),
+                                alert_file: options.alert_file.clone(),
                                 loaded_cursor,
                                 selected_package,
                                 sponsor_top_up,
@@ -1583,6 +1623,18 @@ pub fn watch_latest_state_package(
                 &cursor_file,
                 &WatchCursor::new(&channel_id, next_block, scanned_to_block)?,
             )?;
+            append_watch_alert_if_requested(
+                &options.alert_file,
+                WatchtowerAlert::new(
+                    channel_id.clone(),
+                    WatchAlertSeverity::Info,
+                    WatchAlertEvent::ScanIdle,
+                    "scan reached timeout without publishing a newer state".to_string(),
+                    selected_state_number,
+                    scanned_to_block,
+                    next_block,
+                )?,
+            )?;
             return Ok(WatchLatestStatePackageReport {
                 channel_id,
                 from_block: options.from_block,
@@ -1591,6 +1643,7 @@ pub fn watch_latest_state_package(
                 next_from_block: next_block,
                 detection_depth: options.detection_depth,
                 cursor_file: Some(cursor_file),
+                alert_file: options.alert_file.clone(),
                 loaded_cursor,
                 selected_package,
                 sponsor_top_up: None,
@@ -1600,6 +1653,16 @@ pub fn watch_latest_state_package(
         }
         std::thread::sleep(poll_interval);
     }
+}
+
+fn append_watch_alert_if_requested(
+    alert_file: &Option<PathBuf>,
+    alert: WatchtowerAlert,
+) -> Result<()> {
+    if let Some(path) = alert_file {
+        append_watchtower_alert(path, &alert)?;
+    }
+    Ok(())
 }
 
 fn sponsor_for_watch_publication(

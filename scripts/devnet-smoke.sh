@@ -84,6 +84,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
   --detection-depth 3 \
   --auto-fund-sponsor \
   --watch-policy "$WATCH_DIR/watch-policy.json" \
+  --alert-file "$WATCH_DIR/watch-alerts.jsonl" \
   --timeout-secs 30 \
   --poll-ms 250 \
   --json >"$WATCH_DIR/watch.json"
