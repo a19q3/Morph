@@ -116,7 +116,7 @@ pub struct PublishLatestStatePackageOptions {
 pub struct WatchLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
-    pub sponsor_out_point: String,
+    pub sponsor_out_point: Option<String>,
     pub store_dir: PathBuf,
     pub channel_id: String,
     pub from_block: u64,
@@ -127,6 +127,8 @@ pub struct WatchLatestStatePackageOptions {
     pub poll_ms: u64,
     pub fee: u64,
     pub mine_blocks: u64,
+    pub auto_fund_sponsor: bool,
+    pub auto_sponsor_capacity: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +352,8 @@ pub struct WatchLatestStatePackageReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loaded_cursor: Option<WatchCursor>,
     pub selected_package: StatePackageRecord,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sponsor_top_up: Option<FundSponsorReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed: Option<ObservedStateCellReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1008,6 +1012,18 @@ pub fn watch_latest_state_package(
         options.detection_depth > 0,
         "detection depth must be at least one block"
     );
+    ensure!(
+        options.sponsor_out_point.is_some() || options.auto_fund_sponsor,
+        "watch-latest-package requires --sponsor-out-point unless --auto-fund-sponsor is set"
+    );
+    ensure!(
+        options.sponsor_out_point.is_none() || !options.auto_fund_sponsor,
+        "pass either --sponsor-out-point or --auto-fund-sponsor, not both"
+    );
+    ensure!(
+        !options.auto_fund_sponsor || options.mine_blocks > 0,
+        "auto sponsor funding requires --mine-blocks greater than zero on devnet"
+    );
     let channel_id = canonical_hex32(&options.channel_id)?;
     let selected_package = latest_package(&options.store_dir, &channel_id)?;
     let selected_state_number = selected_package.package.state_number;
@@ -1054,6 +1070,13 @@ pub fn watch_latest_state_package(
                     scanned_to_block = current_block;
                     for observed in observed_state_cells(&block, &channel_id, tip_number)? {
                         if observed.state_number < selected_state_number {
+                            let (sponsor_out_point, sponsor_top_up) =
+                                sponsor_for_watch_publication(
+                                    rpc,
+                                    &options,
+                                    &observed,
+                                    selected_state_number,
+                                )?;
                             let publication = publish_state(
                                 rpc,
                                 PublishStateOptions {
@@ -1062,7 +1085,7 @@ pub fn watch_latest_state_package(
                                     alice_private_key: DEFAULT_ALICE_PRIVATE_KEY.to_string(),
                                     bob_private_key: DEFAULT_BOB_PRIVATE_KEY.to_string(),
                                     state_out_point: observed.out_point.clone(),
-                                    sponsor_out_point: options.sponsor_out_point.clone(),
+                                    sponsor_out_point,
                                     state_number: None,
                                     state_package: Some(selected_package.path.clone()),
                                     fee: options.fee,
@@ -1084,6 +1107,7 @@ pub fn watch_latest_state_package(
                                 cursor_file: Some(cursor_file),
                                 loaded_cursor,
                                 selected_package,
+                                sponsor_top_up,
                                 observed: Some(observed),
                                 publication: Some(publication),
                             });
@@ -1114,12 +1138,50 @@ pub fn watch_latest_state_package(
                 cursor_file: Some(cursor_file),
                 loaded_cursor,
                 selected_package,
+                sponsor_top_up: None,
                 observed: last_observed,
                 publication: None,
             });
         }
         std::thread::sleep(poll_interval);
     }
+}
+
+fn sponsor_for_watch_publication(
+    rpc: &CkbRpcClient,
+    options: &WatchLatestStatePackageOptions,
+    observed: &ObservedStateCellReport,
+    selected_state_number: u64,
+) -> Result<(String, Option<FundSponsorReport>)> {
+    if let Some(out_point) = &options.sponsor_out_point {
+        return Ok((out_point.clone(), None));
+    }
+
+    let policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building auto sponsor policy"))?;
+    ensure!(
+        policy_fee <= options.auto_sponsor_capacity,
+        "auto sponsor capacity must cover the emergency policy budget"
+    );
+    let sponsor_top_up = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: observed.out_point.clone(),
+            sponsor_capacity: options.auto_sponsor_capacity,
+            sponsor_min_state_number: selected_state_number,
+            sponsor_max_state_number: selected_state_number,
+            sponsor_max_fee_per_tx: Some(policy_fee),
+            sponsor_max_total_fee: Some(policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let sponsor_out_point = printable_out_point_string(&sponsor_top_up.sponsor_out_point);
+    Ok((sponsor_out_point, Some(sponsor_top_up)))
 }
 
 pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<FundSponsorReport> {

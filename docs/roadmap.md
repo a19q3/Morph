@@ -56,14 +56,16 @@ Acceptance criteria:
 ## M2: Watchtower
 
 Status: partially implemented for durable state package persistence, latest
-package selection, publish-from-latest-package rebuilding, and confirmation
-depth block polling. Sponsor policy bounds are configurable; sponsor rotation
-automation remains open.
+package selection, publish-from-latest-package rebuilding, confirmation-depth
+block polling, persisted scan cursors, and conservative auto-funded sponsor
+rotation. Broader operator policy and alerting remain open.
 
 - State package persistence.
 - Detection-depth polling.
 - Rebuild publication carrier with fresh sponsor inputs.
 - Emergency fee budget policy.
+- Persisted scan cursor.
+- Conservative auto-funded SponsorCell rotation.
 
 ## M3: Conservative Factory Mode
 

@@ -288,8 +288,9 @@ enum DevnetCommand {
         )]
         private_key: String,
         /// SponsorCell out point, formatted as <tx-hash>:<index>.
+        /// Required unless --auto-fund-sponsor is set.
         #[arg(long)]
-        sponsor_out_point: String,
+        sponsor_out_point: Option<String>,
         /// Directory where signed state packages are stored.
         #[arg(long, default_value = "target/morph-state-packages")]
         store_dir: std::path::PathBuf,
@@ -320,6 +321,12 @@ enum DevnetCommand {
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
+        /// Create a narrowly scoped SponsorCell when an older StateCell is observed.
+        #[arg(long)]
+        auto_fund_sponsor: bool,
+        /// Capacity placed under an automatically created SponsorCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        auto_sponsor_capacity: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -917,6 +924,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             poll_ms,
             fee,
             mine_blocks,
+            auto_fund_sponsor,
+            auto_sponsor_capacity,
             json,
         } => {
             let report = devnet::watch_latest_state_package(
@@ -935,6 +944,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     poll_ms,
                     fee,
                     mine_blocks,
+                    auto_fund_sponsor,
+                    auto_sponsor_capacity,
                 },
             )?;
             if json {
@@ -957,6 +968,14 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     "package_state_number={}",
                     report.selected_package.package.state_number
                 );
+                if let Some(sponsor_top_up) = &report.sponsor_top_up {
+                    println!("sponsor_top_up_tx={}", sponsor_top_up.tx_hash);
+                    println!(
+                        "sponsor_out_point={}:{}",
+                        sponsor_top_up.sponsor_out_point.tx_hash,
+                        sponsor_top_up.sponsor_out_point.index
+                    );
+                }
                 if let Some(observed) = &report.observed {
                     println!("observed_out_point={}", observed.out_point);
                     println!("observed_state_number={}", observed.state_number);

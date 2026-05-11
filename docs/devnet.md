@@ -352,6 +352,24 @@ cargo run -q -p morph-cli -- devnet watch-latest-package \
   --json
 ```
 
+If the watcher should create its own SponsorCell at detection time, omit
+`--sponsor-out-point` and use:
+
+```sh
+cargo run -q -p morph-cli -- devnet watch-latest-package \
+  --channel-id "$CHANNEL_ID" \
+  --from-block "$OPEN_BLOCK_NUMBER" \
+  --detection-depth 3 \
+  --auto-fund-sponsor \
+  --json
+```
+
+The automatically funded SponsorCell is deliberately narrow: it is bound to the
+selected latest package's state number and carries a fee budget of twice the
+requested publication fee. On devnet this mode requires `--mine-blocks` greater
+than zero, because the freshly created SponsorCell must be confirmed before it
+can pay for the publication transaction.
+
 The watcher persists its next scan height in the package store:
 
 ```text
