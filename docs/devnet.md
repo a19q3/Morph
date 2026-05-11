@@ -78,7 +78,7 @@ cargo run -p morph-cli -- devnet open-channel --json
 For a repeatable local regression run:
 
 ```sh
-scripts/devnet-smoke.sh
+make devnet-smoke
 ```
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
@@ -112,6 +112,8 @@ cargo run -q -p morph-cli -- devnet-smoke-report \
   --dir target/devnet-smoke/<timestamp>
 cargo run -q -p morph-cli -- devnet-smoke-assert \
   --dir target/devnet-smoke/<timestamp>
+make smoke-report
+make smoke-assert
 ```
 
 Two completed runs can be compared without replaying devnet:

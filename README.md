@@ -88,7 +88,7 @@ cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
-scripts/devnet-smoke.sh
+make devnet-smoke
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
@@ -108,6 +108,8 @@ To rebuild or assert a previous run:
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
 cargo run -p morph-cli -- devnet-smoke-assert --dir target/devnet-smoke/<run>
+make smoke-report
+make smoke-assert
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
   --candidate target/devnet-smoke/<new-run>

@@ -1,4 +1,4 @@
-.PHONY: test fmt smoke build-contracts contract-tests
+.PHONY: test fmt smoke build-contracts contract-tests devnet-smoke smoke-report smoke-assert
 
 test:
 	cargo test --workspace
@@ -15,3 +15,12 @@ build-contracts:
 
 contract-tests: build-contracts
 	cargo test -p morph-core --test contract_scripts -- --ignored --test-threads=1
+
+devnet-smoke:
+	scripts/devnet-smoke.sh
+
+smoke-report:
+	cargo run -p morph-cli -- devnet-smoke-report
+
+smoke-assert:
+	cargo run -p morph-cli -- devnet-smoke-assert
