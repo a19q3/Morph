@@ -671,15 +671,26 @@ cargo run -q -p morph-cli -- devnet factory-smoke --json \
   > target/factory-smoke.json
 ```
 
+The typed-reserve path is available as a single CKB+xUDT smoke. It opens a
+FactoryVaultCell carrying the devnet xUDT type, exits into a child xUDT vault,
+publishes the child state, and finalises through the ordinary xUDT vault path:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-xudt-smoke --json \
+  > target/factory-xudt-smoke.json
+```
+
 The repository-level `scripts/devnet-smoke.sh` includes the additional
-factory-local exit, child publication, and child finalisation steps.
+factory-local exit, child publication, child finalisation, and factory xUDT
+child-channel steps.
 
 ## Remaining Devnet Gap
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
 vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
 script, a factory reserve lock, devnet factory open/update transactions, and
-conservative factory-local exit materialisation into a child bilateral channel.
+conservative factory-local exit materialisation into plain CKB and CKB+xUDT
+child bilateral channels.
 The remaining devnet work is external watchtower notification integration and a
 formal reduced-signature factory proof path.
 
@@ -706,6 +717,6 @@ The `morph-factory-type` script is one step closer than the host package: it
 already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
 accepts a signed monotonic factory update, and rejects equal update numbers or
 invalid participant signatures. In the conservative local-exit path it verifies
-the child channel evidence committed by the factory header, while
-`morph-factory-vault-lock` enforces reserve conservation. It does not yet verify
-a reduced-signature proof.
+the child channel evidence committed by the factory header, including xUDT
+child-vault type and amount checks, while `morph-factory-vault-lock` enforces
+reserve conservation. It does not yet verify a reduced-signature proof.

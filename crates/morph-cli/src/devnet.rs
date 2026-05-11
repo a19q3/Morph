@@ -100,6 +100,7 @@ pub struct OpenFactoryOptions {
     pub bob_private_key: String,
     pub factory_capacity: u64,
     pub factory_vault_capacity: u64,
+    pub factory_vault_xudt_amount: Option<u128>,
     pub state_root: Option<String>,
     pub access_manifest_root: Option<String>,
     pub non_interference_digest: Option<String>,
@@ -149,6 +150,26 @@ pub struct FactorySmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct FactoryXudtSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct FactoryExitChannelOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -160,6 +181,8 @@ pub struct FactoryExitChannelOptions {
     pub vault_capacity: u64,
     pub alice_capacity: Option<u64>,
     pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: Option<u128>,
+    pub bob_xudt_amount: Option<u128>,
     pub sponsor_capacity: u64,
     pub fee: u64,
     pub finalise_since: u64,
@@ -450,6 +473,8 @@ pub struct OpenFactoryReport {
     pub input_capacity: u64,
     pub factory_capacity: u64,
     pub factory_vault_capacity: u64,
+    pub factory_vault_xudt_amount: Option<u128>,
+    pub xudt_type_hash: Option<String>,
     pub change_capacity: u64,
     pub fee: u64,
     pub metrics: TransactionMetrics,
@@ -478,8 +503,12 @@ pub struct FactoryExitChannelReport {
     pub sponsor_out_point: PrintableOutPoint,
     pub state_capacity: u64,
     pub vault_capacity: u64,
+    pub child_xudt_amount: Option<u128>,
     pub factory_vault_input_capacity: u64,
     pub factory_vault_change_capacity: u64,
+    pub factory_vault_input_xudt_amount: Option<u128>,
+    pub factory_vault_change_xudt_amount: Option<u128>,
+    pub xudt_type_hash: Option<String>,
     pub sponsor_capacity: u64,
     pub fee_change_capacity: u64,
     pub fee: u64,
@@ -683,6 +712,17 @@ pub struct XudtFinaliseReport {
 #[derive(Debug, Serialize)]
 pub struct XudtSmokeReport {
     pub open: OpenChannelReport,
+    pub publish: PublishStateReport,
+    pub finalise: XudtFinaliseReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryXudtSmokeReport {
+    pub open: OpenFactoryReport,
+    pub package: SaveFactoryStatePackageReport,
+    pub latest_package: FactoryStateCellPackageRecord,
+    pub update: UpdateFactoryReport,
+    pub exit: FactoryExitChannelReport,
     pub publish: PublishStateReport,
     pub finalise: XudtFinaliseReport,
 }
@@ -1151,6 +1191,9 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         options.factory_vault_capacity > 0,
         "factory vault capacity must be non-zero"
     );
+    if let Some(amount) = options.factory_vault_xudt_amount {
+        ensure!(amount > 0, "factory vault xUDT amount must be non-zero");
+    }
 
     let owner_key = parse_privkey(&options.private_key)
         .with_context(|| "invalid secp256k1 private key for factory opener")?;
@@ -1173,6 +1216,11 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
+    let xudt_contract = if options.factory_vault_xudt_amount.is_some() {
+        Some(contract_by_name(&contracts, "morph-devnet-xudt")?)
+    } else {
+        None
+    };
 
     let factory_input = CellInput::new(funding_cell.out_point.clone(), 0);
     let factory_id = derive_funding_anchor(&factory_input, 0);
@@ -1187,6 +1235,16 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         factory_vault_contract.data_hash.clone(),
         Bytes::from(factory_vault_args),
     );
+    let owner_lock_hash = owner_lock.calc_script_hash();
+    let xudt_type = xudt_contract.as_ref().map(|contract| {
+        data1_script(
+            contract.data_hash.clone(),
+            Bytes::copy_from_slice(owner_lock_hash.as_slice()),
+        )
+    });
+    let xudt_type_hash = xudt_type
+        .as_ref()
+        .map(|script| hex32(script.calc_script_hash().as_slice()));
 
     let state_root = parse_optional_hex32("state root", options.state_root.as_deref())?
         .unwrap_or_else(|| script_blake2b256(&[b"CKB_MORPH_EMPTY_FACTORY_STATE_ROOT_V1"]));
@@ -1225,8 +1283,17 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let factory_vault_output = CellOutput::new_builder()
         .capacity(options.factory_vault_capacity)
         .lock(factory_vault_lock)
+        .type_(xudt_type.clone().pack())
         .build();
-    ensure_output_capacity("factory vault", &factory_vault_output, 0)?;
+    let factory_vault_data = options
+        .factory_vault_xudt_amount
+        .map(xudt_amount_bytes)
+        .unwrap_or_default();
+    ensure_output_capacity(
+        "factory vault",
+        &factory_vault_output,
+        factory_vault_data.len(),
+    )?;
 
     let fixed_output_capacity = options
         .factory_capacity
@@ -1251,16 +1318,20 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         .lock(owner_lock.clone())
         .build();
 
-    let unsigned = TransactionBuilder::default()
+    let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep)
         .cell_dep(factory_contract.cell_dep.clone())
-        .cell_dep(factory_vault_contract.cell_dep.clone())
+        .cell_dep(factory_vault_contract.cell_dep.clone());
+    if let Some(contract) = xudt_contract.as_ref() {
+        builder = builder.cell_dep(contract.cell_dep.clone());
+    }
+    let unsigned = builder
         .input(factory_input)
         .output(factory_output.clone())
         .output(factory_vault_output.clone())
         .output(change_output.clone())
         .output_data(Bytes::copy_from_slice(&factory_header).pack())
-        .output_data(Bytes::new().pack())
+        .output_data(factory_vault_data.clone().pack())
         .output_data(Bytes::new().pack())
         .build();
     let signed = sign_single_secp_input(unsigned, &owner_key)?;
@@ -1294,6 +1365,8 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         input_capacity: funding_cell.capacity,
         factory_capacity: options.factory_capacity,
         factory_vault_capacity: options.factory_vault_capacity,
+        factory_vault_xudt_amount: options.factory_vault_xudt_amount,
+        xudt_type_hash,
         change_capacity,
         fee: options.fee,
         metrics: sent.metrics,
@@ -1310,7 +1383,12 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
             .collect(),
         cells: vec![
             cell("factory", 0, &factory_output, factory_header.len()),
-            cell("factory-vault", 1, &factory_vault_output, 0),
+            cell(
+                "factory-vault",
+                1,
+                &factory_vault_output,
+                factory_vault_data.len(),
+            ),
             cell("change", 2, &change_output, 0),
         ],
     })
@@ -1613,6 +1691,7 @@ pub fn factory_smoke(
             bob_private_key: options.bob_private_key.clone(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: None,
             state_root: None,
             access_manifest_root: None,
             non_interference_digest: None,
@@ -1658,6 +1737,138 @@ pub fn factory_smoke(
         saved_package,
         selected_package,
         update,
+    })
+}
+
+pub fn factory_xudt_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryXudtSmokeOptions,
+) -> Result<FactoryXudtSmokeReport> {
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("factory xUDT amount overflow"))?;
+    ensure!(
+        total_xudt_amount > 0,
+        "factory xUDT amount must be non-zero"
+    );
+
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(total_xudt_amount),
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let package = save_factory_state_package(
+        rpc,
+        SaveFactoryStatePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            update_number: None,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let latest_package = latest_factory_state_cell_package(&options.store_dir, &open.factory_id)?;
+    let update = update_factory(
+        rpc,
+        UpdateFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point,
+            update_number: None,
+            state_root: None,
+            access_manifest_root: None,
+            non_interference_digest: None,
+            factory_state_package: Some(latest_package.path.clone()),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: printable_out_point_string(&update.factory_out_point),
+            factory_vault_out_point,
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(options.alice_xudt_amount),
+            bob_xudt_amount: Some(options.bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: printable_out_point_string(&exit.state_out_point),
+            sponsor_out_point: printable_out_point_string(&exit.sponsor_out_point),
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let finalise_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: options.alice_private_key,
+        bob_private_key: options.bob_private_key,
+        vault_capacity: options.child_vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let finalise = finalise_xudt_channel(
+        rpc,
+        &finalise_options,
+        printable_out_point_string(&publish.state_out_point),
+        printable_out_point_string(&exit.vault_out_point),
+    )?;
+
+    Ok(FactoryXudtSmokeReport {
+        open,
+        package,
+        latest_package,
+        update,
+        exit,
+        publish,
+        finalise,
     })
 }
 
@@ -1751,6 +1962,60 @@ pub fn factory_exit_channel(
         &factory_vault_args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN] == factory_type_hash.as_slice(),
         "factory vault lock is for a different factory type hash"
     );
+    let factory_vault_type = factory_vault_cell.output.type_().to_opt();
+    let factory_vault_xudt_amount = if factory_vault_type.is_some() {
+        Some(xudt_amount_from_data(&factory_vault_cell.data)?)
+    } else {
+        ensure!(
+            factory_vault_cell.data.is_empty(),
+            "plain factory vault cell must not carry data"
+        );
+        None
+    };
+    let child_xudt = match factory_vault_xudt_amount {
+        Some(total_amount) => {
+            let alice_amount = options.alice_xudt_amount.ok_or_else(|| {
+                anyhow!("--alice-xudt-amount is required when the FactoryVaultCell carries xUDT")
+            })?;
+            let bob_amount = options.bob_xudt_amount.ok_or_else(|| {
+                anyhow!("--bob-xudt-amount is required when the FactoryVaultCell carries xUDT")
+            })?;
+            let child_amount = alice_amount
+                .checked_add(bob_amount)
+                .ok_or_else(|| anyhow!("child xUDT amount overflow"))?;
+            ensure!(child_amount > 0, "child xUDT amount must be non-zero");
+            ensure!(
+                child_amount <= total_amount,
+                "child xUDT amount {} exceeds factory vault amount {}",
+                child_amount,
+                total_amount
+            );
+            let xudt_type = factory_vault_type
+                .clone()
+                .ok_or_else(|| anyhow!("factory vault xUDT type script missing"))?;
+            let xudt_type_hash: [u8; BYTE32_LEN] = xudt_type.calc_script_hash().unpack();
+            Some((
+                xudt_type,
+                xudt_type_hash,
+                total_amount,
+                alice_amount,
+                bob_amount,
+                child_amount,
+            ))
+        }
+        None => {
+            ensure!(
+                options.alice_xudt_amount.is_none() && options.bob_xudt_amount.is_none(),
+                "xUDT settlement amounts require a typed FactoryVaultCell"
+            );
+            None
+        }
+    };
+    let xudt_contract = if child_xudt.is_some() {
+        Some(contract_by_name(&contracts, "morph-devnet-xudt")?)
+    } else {
+        None
+    };
 
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
@@ -1792,24 +2057,60 @@ pub fn factory_exit_channel(
         options.alice_capacity,
         options.bob_capacity,
     )?;
-    ensure_output_capacity(
-        "alice settlement",
-        &CellOutput::new_builder()
-            .capacity(alice_capacity)
-            .lock(alice_lock.clone())
-            .build(),
-        0,
-    )?;
-    ensure_output_capacity(
-        "bob settlement",
-        &CellOutput::new_builder()
-            .capacity(bob_capacity)
-            .lock(bob_lock.clone())
-            .build(),
-        0,
-    )?;
-    let descriptor =
-        bilateral_ckb_descriptor(alice_lock_hash, alice_capacity, bob_lock_hash, bob_capacity);
+    let descriptor;
+    let descriptor_version;
+    if let Some((xudt_type, xudt_type_hash, _, alice_amount, bob_amount, _)) = &child_xudt {
+        ensure_output_capacity(
+            "alice xUDT settlement",
+            &CellOutput::new_builder()
+                .capacity(alice_capacity)
+                .lock(alice_lock.clone())
+                .type_(Some(xudt_type.clone()).pack())
+                .build(),
+            16,
+        )?;
+        ensure_output_capacity(
+            "bob xUDT settlement",
+            &CellOutput::new_builder()
+                .capacity(bob_capacity)
+                .lock(bob_lock.clone())
+                .type_(Some(xudt_type.clone()).pack())
+                .build(),
+            16,
+        )?;
+        descriptor = bilateral_ckb_xudt_descriptor(
+            *xudt_type_hash,
+            alice_lock_hash,
+            alice_capacity,
+            *alice_amount,
+            bob_lock_hash,
+            bob_capacity,
+            *bob_amount,
+        )
+        .to_vec();
+        descriptor_version = BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1;
+    } else {
+        ensure_output_capacity(
+            "alice settlement",
+            &CellOutput::new_builder()
+                .capacity(alice_capacity)
+                .lock(alice_lock.clone())
+                .build(),
+            0,
+        )?;
+        ensure_output_capacity(
+            "bob settlement",
+            &CellOutput::new_builder()
+                .capacity(bob_capacity)
+                .lock(bob_lock.clone())
+                .build(),
+            0,
+        )?;
+        descriptor =
+            bilateral_ckb_descriptor(alice_lock_hash, alice_capacity, bob_lock_hash, bob_capacity)
+                .to_vec();
+        descriptor_version = BILATERAL_CKB_DESCRIPTOR_VERSION_V1;
+    }
     let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
 
     let alice_pubkey = compressed_pubkey(&alice_key)?;
@@ -1828,7 +2129,7 @@ pub fn factory_exit_channel(
         funding_anchor,
         participants_commitment,
         settlement_descriptor_commitment: descriptor_commitment,
-        descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        descriptor_version,
         challenge_policy_commitment,
     });
 
@@ -1842,11 +2143,19 @@ pub fn factory_exit_channel(
         .lock(state_lock)
         .type_(Some(state_type).pack())
         .build();
+    let child_vault_type = child_xudt
+        .as_ref()
+        .map(|(xudt_type, _, _, _, _, _)| xudt_type.clone());
+    let child_vault_data = child_xudt
+        .as_ref()
+        .map(|(_, _, _, _, _, child_amount)| xudt_amount_bytes(*child_amount))
+        .unwrap_or_default();
     let vault_output = CellOutput::new_builder()
         .capacity(options.vault_capacity)
         .lock(vault_lock)
+        .type_(child_vault_type.pack())
         .build();
-    ensure_output_capacity("child vault", &vault_output, 0)?;
+    ensure_output_capacity("child vault", &vault_output, child_vault_data.len())?;
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
         .lock(sponsor_lock)
@@ -1863,11 +2172,27 @@ pub fn factory_exit_channel(
                 options.vault_capacity
             )
         })?;
+    let factory_vault_change_xudt_amount = child_xudt
+        .as_ref()
+        .map(|(_, _, total_amount, _, _, child_amount)| total_amount - child_amount);
+    let factory_vault_change_type = match (&factory_vault_type, factory_vault_change_xudt_amount) {
+        (Some(xudt_type), Some(amount)) if amount > 0 => Some(xudt_type.clone()),
+        _ => None,
+    };
+    let factory_vault_change_data = factory_vault_change_xudt_amount
+        .filter(|amount| *amount > 0)
+        .map(xudt_amount_bytes)
+        .unwrap_or_default();
     let factory_vault_change_output = CellOutput::new_builder()
         .capacity(factory_vault_change_capacity)
         .lock(factory_vault_lock.clone())
+        .type_(factory_vault_change_type.pack())
         .build();
-    ensure_output_capacity("factory vault change", &factory_vault_change_output, 0)?;
+    ensure_output_capacity(
+        "factory vault change",
+        &factory_vault_change_output,
+        factory_vault_change_data.len(),
+    )?;
 
     ensure_output_capacity("factory", &factory_cell.output, FACTORY_STATE_HEADER_V1_LEN)?;
     let exit_digest = factory_local_exit_digest_v1(
@@ -1941,14 +2266,18 @@ pub fn factory_exit_channel(
         .lock(owner_lock)
         .build();
 
-    let unsigned = TransactionBuilder::default()
+    let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep)
         .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(state_contract.cell_dep)
         .cell_dep(factory_contract.cell_dep)
         .cell_dep(factory_vault_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
-        .cell_dep(sponsor_contract.cell_dep)
+        .cell_dep(sponsor_contract.cell_dep);
+    if let Some(contract) = xudt_contract {
+        builder = builder.cell_dep(contract.cell_dep);
+    }
+    let unsigned = builder
         .input(channel_input)
         .input(CellInput::new(factory_vault_out_point.clone(), 0))
         .input(CellInput::new(fee_cell.out_point.clone(), 0))
@@ -1960,8 +2289,8 @@ pub fn factory_exit_channel(
         .output(fee_change_output)
         .output_data(Bytes::from(new_factory_data).pack())
         .output_data(Bytes::copy_from_slice(&state_header).pack())
-        .output_data(Bytes::new().pack())
-        .output_data(Bytes::new().pack())
+        .output_data(child_vault_data.pack())
+        .output_data(factory_vault_change_data.pack())
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
@@ -2003,8 +2332,16 @@ pub fn factory_exit_channel(
         sponsor_out_point: PrintableOutPoint { tx_hash, index: 4 },
         state_capacity,
         vault_capacity: options.vault_capacity,
+        child_xudt_amount: child_xudt
+            .as_ref()
+            .map(|(_, _, _, _, _, child_amount)| *child_amount),
         factory_vault_input_capacity: factory_vault_cell.capacity,
         factory_vault_change_capacity,
+        factory_vault_input_xudt_amount: factory_vault_xudt_amount,
+        factory_vault_change_xudt_amount,
+        xudt_type_hash: child_xudt
+            .as_ref()
+            .map(|(_, xudt_type_hash, _, _, _, _)| hex32(xudt_type_hash)),
         sponsor_capacity: options.sponsor_capacity,
         fee_change_capacity,
         fee: options.fee,
@@ -4615,7 +4952,7 @@ fn factory_local_exit_witness(
     state_lock_hash: &[u8],
     state_header: &[u8],
     descriptor: &[u8],
-) -> Result<[u8; FACTORY_LOCAL_EXIT_WITNESS_V1_LEN]> {
+) -> Result<Vec<u8>> {
     ensure!(
         factory_signature.len() == FACTORY_SIGNATURE_WITNESS_V1_LEN,
         "factory signature witness must be {} bytes",
@@ -4639,12 +4976,18 @@ fn factory_local_exit_witness(
         STATE_HEADER_V1_LEN
     );
     ensure!(
-        descriptor.len() == BILATERAL_CKB_DESCRIPTOR_V1_LEN,
-        "settlement descriptor must be {} bytes",
-        BILATERAL_CKB_DESCRIPTOR_V1_LEN
+        descriptor.len() == BILATERAL_CKB_DESCRIPTOR_V1_LEN
+            || descriptor.len() == BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN,
+        "settlement descriptor must be {} or {} bytes",
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
     );
 
-    let mut witness = [0u8; FACTORY_LOCAL_EXIT_WITNESS_V1_LEN];
+    let mut witness = vec![
+        0u8;
+        FACTORY_LOCAL_EXIT_WITNESS_V1_LEN - BILATERAL_CKB_DESCRIPTOR_V1_LEN
+            + descriptor.len()
+    ];
     put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
     let mut offset = 2;
     witness[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(factory_signature);
@@ -4661,7 +5004,7 @@ fn factory_local_exit_witness(
     offset += BYTE32_LEN;
     witness[offset..offset + STATE_HEADER_V1_LEN].copy_from_slice(state_header);
     offset += STATE_HEADER_V1_LEN;
-    witness[offset..offset + BILATERAL_CKB_DESCRIPTOR_V1_LEN].copy_from_slice(descriptor);
+    witness[offset..offset + descriptor.len()].copy_from_slice(descriptor);
     Ok(witness)
 }
 

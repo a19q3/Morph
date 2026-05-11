@@ -13,6 +13,7 @@
 // - BilateralSignatureWitnessV1: 198 bytes
 // - FactorySignatureWitnessV1: 262 bytes
 // - FactoryLocalExitWitnessV1: 726 bytes
+// - FactoryLocalExitXudtWitnessV1: 790 bytes
 // - BilateralCkbSettlementDescriptorV1: 84 bytes
 // - BilateralCkbXudtSettlementDescriptorV1: 148 bytes
 // - SponsorPolicyV1: 144 bytes
@@ -96,6 +97,18 @@ struct FactoryLocalExitWitnessV1 {
     state_lock_hash: Byte32,
     exit_state_header: StateHeaderV1,
     settlement_descriptor: BilateralCkbSettlementDescriptorV1,
+}
+
+struct FactoryLocalExitXudtWitnessV1 {
+    version: uint16,
+    factory_signature: FactorySignatureWitnessV1,
+    state_output_index: uint32,
+    vault_output_index: uint32,
+    state_type_hash: Byte32,
+    vault_lock_hash: Byte32,
+    state_lock_hash: Byte32,
+    exit_state_header: StateHeaderV1,
+    settlement_descriptor: BilateralCkbXudtSettlementDescriptorV1,
 }
 
 struct BilateralCkbSettlementOutputV1 {

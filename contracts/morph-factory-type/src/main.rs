@@ -17,9 +17,12 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, BilateralCkbSettlementDescriptorV1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FactoryLocalExitWitnessV1, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
-    Result, ScriptError, StateHeaderV1, blake2b256, verify_factory_state_signatures,
+    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
+    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
+    FACTORY_SIGNATURE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactorySignatureWitnessV1,
+    FactoryStateHeaderV1, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError,
+    StateHeaderV1, blake2b256, read_u128, verify_factory_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -156,8 +159,10 @@ fn validate_local_exit(
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    let descriptor = BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
-    if exit_header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+    let descriptor_raw = witness.settlement_descriptor();
+    if exit_header.settlement_descriptor_commitment()
+        != blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, descriptor_raw]).as_slice()
+    {
         return Err(ScriptError::SettlementDescriptorMismatch);
     }
 
@@ -173,26 +178,66 @@ fn validate_local_exit(
     if vault_lock_hash.as_slice() != witness.vault_lock_hash() {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    let vault_data =
-        load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if !vault_data.is_empty() {
-        return Err(ScriptError::FactoryLocalExitMismatch);
-    }
-    let vault_type =
-        load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if vault_type.is_some() {
-        return Err(ScriptError::XudtTypeMismatch);
-    }
-    let expected_vault_capacity = descriptor
-        .capacity(0)
-        .checked_add(descriptor.capacity(1))
-        .ok_or(ScriptError::CapacityUnderflow)?;
-    let vault_capacity =
-        load_cell_capacity(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if vault_capacity != expected_vault_capacity {
-        return Err(ScriptError::SettlementOutputMismatch);
-    }
+    validate_child_vault_shape(exit_header, descriptor_raw, vault_index)?;
 
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_child_vault_shape(
+    exit_header: StateHeaderV1,
+    descriptor_raw: &[u8],
+    vault_index: usize,
+) -> Result<()> {
+    match descriptor_raw.len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1 {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw)?;
+            let vault_data =
+                load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+            if !vault_data.is_empty() {
+                return Err(ScriptError::FactoryLocalExitMismatch);
+            }
+            let vault_type = load_cell_type_hash(vault_index, Source::Output)
+                .map_err(|_| ScriptError::Encoding)?;
+            if vault_type.is_some() {
+                return Err(ScriptError::XudtTypeMismatch);
+            }
+            let vault_capacity = load_cell_capacity(vault_index, Source::Output)
+                .map_err(|_| ScriptError::Encoding)?;
+            if vault_capacity != descriptor.total_capacity() {
+                return Err(ScriptError::SettlementOutputMismatch);
+            }
+        }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(descriptor_raw)?;
+            let vault_type = load_cell_type_hash(vault_index, Source::Output)
+                .map_err(|_| ScriptError::Encoding)?
+                .ok_or(ScriptError::XudtTypeMismatch)?;
+            if vault_type.as_slice() != descriptor.xudt_type_hash() {
+                return Err(ScriptError::XudtTypeMismatch);
+            }
+            let vault_data =
+                load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+            if vault_data.len() != 16 {
+                return Err(ScriptError::XudtAmountEncoding);
+            }
+            if read_u128(&vault_data, 0) != descriptor.total_xudt_amount() {
+                return Err(ScriptError::SettlementOutputMismatch);
+            }
+            let vault_capacity = load_cell_capacity(vault_index, Source::Output)
+                .map_err(|_| ScriptError::Encoding)?;
+            if vault_capacity != descriptor.total_capacity() {
+                return Err(ScriptError::SettlementOutputMismatch);
+            }
+        }
+        _ => return Err(ScriptError::SettlementDescriptorEncoding),
+    }
     Ok(())
 }
 

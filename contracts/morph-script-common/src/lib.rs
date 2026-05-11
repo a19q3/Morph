@@ -26,6 +26,15 @@ pub const FACTORY_LOCAL_EXIT_WITNESS_V1_LEN: usize = 2
     + BYTE32_LEN
     + STATE_HEADER_V1_LEN
     + BILATERAL_CKB_DESCRIPTOR_V1_LEN;
+pub const FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN: usize = 2
+    + FACTORY_SIGNATURE_WITNESS_V1_LEN
+    + 4
+    + 4
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + STATE_HEADER_V1_LEN
+    + BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN;
 
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
@@ -401,7 +410,9 @@ pub struct FactoryLocalExitWitnessV1<'a> {
 
 impl<'a> FactoryLocalExitWitnessV1<'a> {
     pub fn parse(raw: &'a [u8]) -> Result<Self> {
-        if raw.len() != FACTORY_LOCAL_EXIT_WITNESS_V1_LEN {
+        if raw.len() != FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
+            && raw.len() != FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN
+        {
             return Err(ScriptError::ParticipantWitnessEncoding);
         }
         let witness = Self { raw };
@@ -410,7 +421,15 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
         }
         FactorySignatureWitnessV1::parse(witness.factory_signature_bytes())?;
         StateHeaderV1::parse(witness.exit_state_header())?;
-        BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+        match witness.settlement_descriptor().len() {
+            BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+                BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            }
+            BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+                BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            }
+            _ => return Err(ScriptError::SettlementDescriptorEncoding),
+        }
         Ok(witness)
     }
 
@@ -467,11 +486,9 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
     }
 
     pub fn settlement_descriptor(&self) -> &'a [u8] {
-        field(
-            self.raw,
-            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN + STATE_HEADER_V1_LEN,
-            BILATERAL_CKB_DESCRIPTOR_V1_LEN,
-        )
+        let offset =
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN + STATE_HEADER_V1_LEN;
+        field(self.raw, offset, self.raw.len() - offset)
     }
 
     pub fn exit_digest(&self) -> [u8; 32] {
@@ -1090,11 +1107,13 @@ mod tests {
             "FactoryStateHeaderV1: 238 bytes",
             "FactorySignatureWitnessV1: 262 bytes",
             "FactoryLocalExitWitnessV1: 726 bytes",
+            "FactoryLocalExitXudtWitnessV1: 790 bytes",
             "struct StateHeaderV1",
             "struct FactoryStateHeaderV1",
             "struct BilateralSignatureWitnessV1",
             "struct FactorySignatureWitnessV1",
             "struct FactoryLocalExitWitnessV1",
+            "struct FactoryLocalExitXudtWitnessV1",
             "struct BilateralCkbSettlementDescriptorV1",
             "struct BilateralCkbXudtSettlementDescriptorV1",
             "struct SponsorPolicyV1",

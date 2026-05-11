@@ -107,6 +107,13 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
   --vault-out-point "$FACTORY_CHILD_VAULT_OUT_POINT" \
   --json >"$FACTORY_DIR/child-finalise.json"
 
+FACTORY_XUDT_DIR="$OUT_DIR/factory-xudt"
+mkdir -p "$FACTORY_XUDT_DIR"
+log "factory-xudt-smoke -> $FACTORY_XUDT_DIR/smoke.json"
+cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-smoke \
+  --store-dir "$FACTORY_XUDT_DIR/packages" \
+  --json >"$FACTORY_XUDT_DIR/smoke.json"
+
 WATCH_DIR="$OUT_DIR/watch-auto-sponsor"
 mkdir -p "$WATCH_DIR"
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"

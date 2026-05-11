@@ -97,9 +97,14 @@ channel on devnet without claiming reduced-signature proof mode. The transaction
 consumes the current FactoryStateCell, the FactoryVaultCell, and a normal owner
 fee input; it recreates the newer FactoryStateCell, returns the remaining
 factory reserve, and creates a child StateCell, VaultCell, and SponsorCell. The
-factory state header commits to the local-exit digest, the factory type checks
-the child StateCell type hash, StateCell lock hash, vault lock hash, and vault
-shape, and the factory vault lock enforces reserve conservation:
+child VaultCell may be plain CKB or CKB+xUDT. In the xUDT case, the factory
+type checks the child vault type hash and token amount against the committed
+settlement descriptor, while the devnet xUDT type script preserves token
+supply across the factory vault input, the child vault output, and any factory
+vault change. The factory state header commits to the local-exit digest, the
+factory type checks the child StateCell type hash, StateCell lock hash, vault
+lock hash, and vault shape, and the factory vault lock enforces reserve
+conservation:
 
 ```text
 factory reserve input = factory reserve change + child vault capacity
@@ -160,8 +165,8 @@ A devnet demonstration is acceptable only when it includes:
   reusable factory-state-cell package, selects the latest package, and publishes
   a package-backed update without using the state carrier as a fee source;
 - a conservative factory-local exit path that releases reserve capacity into a
-  bilateral child channel, then publishes and finalises that child channel on
-  devnet;
+  bilateral child channel, including a CKB+xUDT child vault path, then
+  publishes and finalises that child channel on devnet;
 - a smoke summary report that preserves cycle, size, status, and expected
   script-error evidence for review;
 - a reproducible runbook with deployed script outpoints and transaction hashes.

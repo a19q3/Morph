@@ -348,7 +348,11 @@ fn factory_local_exit_witness(
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Bytes {
-    let mut witness = vec![0u8; FACTORY_LOCAL_EXIT_WITNESS_V1_LEN];
+    let mut witness = vec![
+        0u8;
+        FACTORY_LOCAL_EXIT_WITNESS_V1_LEN - BILATERAL_CKB_DESCRIPTOR_V1_LEN
+            + descriptor.len()
+    ];
     put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
     witness[2..2 + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(factory_signature);
     let offset = 2 + FACTORY_SIGNATURE_WITNESS_V1_LEN;
@@ -976,6 +980,173 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         .build();
     let split_reserve_tx = context.complete_tx(split_reserve_tx);
     assert!(context.verify_tx(&split_reserve_tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let xudt_owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+    let xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        xudt_owner_lock.calc_script_hash().as_slice().to_vec(),
+    );
+    let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
+
+    let descriptor = ckb_xudt_descriptor_bytes(
+        xudt_type_hash,
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        ALICE_XUDT_AMOUNT,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+        BOB_XUDT_AMOUNT,
+    );
+    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest(1, 2, [0u8; 32]);
+
+    let factory_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data,
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(factory_input_out_point)
+        .build();
+    let factory_vault_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(300_000_000_000u64)
+            .lock(factory_vault_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT),
+    );
+    let reserve_input = CellInput::new_builder()
+        .previous_output(factory_vault_input_out_point)
+        .build();
+    let fee_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(reserve_lock_placeholder)
+            .build(),
+        Bytes::new(),
+    );
+
+    let state_output_index = 1u32;
+    let vault_output_index = 2u32;
+    let child_anchor = derived_funding_anchor(&factory_input, state_output_index as u64);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(child_anchor, 0),
+    );
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
+    let state_lock_hash: [u8; 32] = state_lock.calc_script_hash().unpack();
+    let mut vault_args = child_anchor.to_vec();
+    vault_args.extend_from_slice(&0u64.to_le_bytes());
+    let vault_lock = deploy_contract(&mut context, "morph-vault-lock", vault_args);
+    let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
+
+    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    child_state[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    put_u16(
+        &mut child_state,
+        206,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+    );
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
+    child_pubkeys.sort();
+    child_state[110..142].copy_from_slice(&participants_commitment_v1(
+        2,
+        &[&child_pubkeys[0], &child_pubkeys[1]],
+    ));
+
+    let exit_digest = factory_local_exit_digest_v1(
+        state_output_index,
+        vault_output_index,
+        &state_type_hash,
+        &vault_lock_hash,
+        &state_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest(1, 2, exit_digest);
+    let exit_witness = factory_local_exit_witness(
+        &factory_sig,
+        state_output_index,
+        vault_output_index,
+        state_type_hash,
+        vault_lock_hash,
+        state_lock_hash,
+        &child_state,
+        &descriptor,
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(factory_input)
+        .input(reserve_input)
+        .input(
+            CellInput::new_builder()
+                .previous_output(fee_input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY + BOB_CAPACITY)
+                .lock(vault_lock)
+                .type_(Some(xudt_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(200_000_000_000u64)
+                .lock(factory_vault_lock)
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .output_data(Bytes::from(child_state.to_vec()).pack())
+        .output_data(xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT).pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(exit_witness.clone()))
+        .witness(witness_with_input_type(exit_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory xUDT local exit should verify");
 }
 
 #[ignore = "requires `make build-contracts`"]

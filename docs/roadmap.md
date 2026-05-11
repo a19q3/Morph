@@ -23,10 +23,12 @@ conservative factory type and factory vault progression. The CLI can check/mine
 a local CKB devnet, deploy the Morph contract binaries, open a channel, publish
 a signed settling state, top up sponsor capacity, publish a newer signed state
 over the old settling state, finalise the vault, materialise a child channel
-from a conservative factory reserve, and run a competing-spend smoke, a
+from a conservative factory reserve, materialise a CKB+xUDT child channel from
+a typed factory reserve, and run a competing-spend smoke, a
 finalise-since negative smoke, a sponsor-budget negative smoke, a CKB+xUDT
-settlement smoke, a tampered-settlement xUDT negative smoke, and a conservative
-factory open/package/update/exit smoke through native JSON-RPC. Each
+settlement smoke, a tampered-settlement xUDT negative smoke, a conservative
+factory open/package/update/exit smoke, and a factory xUDT child-channel smoke
+through native JSON-RPC. Each
 transaction report includes node-estimated cycles and serialized transaction
 size.
 SponsorCells can carry explicit state-number and fee-budget bounds. Smoke runs
@@ -85,7 +87,8 @@ Acceptance criteria:
 - a conservative FactoryStateCell can be opened, signed as a reusable package,
   selected as the latest package, advanced on devnet without draining the
   factory state carrier for fees, and used with a FactoryVaultCell to
-  materialise a child bilateral channel.
+  materialise a child bilateral channel, including a CKB+xUDT child vault when
+  the FactoryVaultCell carries the same devnet xUDT type.
 
 ## M2: Watchtower
 
@@ -114,7 +117,9 @@ conservative factory type script and factory vault lock execute in CKB-VM
 tests, and the CLI can open a FactoryStateCell plus FactoryVaultCell, save a
 reusable signed factory-state-cell package, select the latest package, publish a
 signed monotonic update on devnet, and materialise a bilateral child channel
-from the factory reserve.
+from the factory reserve. The same conservative exit path supports a typed
+factory reserve that releases a CKB+xUDT child vault and then uses the ordinary
+xUDT finalisation path.
 
 - Factory state roots and access manifest.
 - Full-participant signature mode.

@@ -6,12 +6,12 @@ use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitChannelOptions,
-    FactorySmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
-    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
-    PublishStateOptions, SaveFactoryStatePackageOptions, SaveStatePackageOptions,
-    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
-    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
-    XudtSmokeOptions,
+    FactorySmokeOptions, FactoryXudtSmokeOptions, FinaliseChannelOptions,
+    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryStatePackageOptions,
+    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
+    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
+    XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -231,6 +231,9 @@ enum DevnetCommand {
         /// Reserve capacity placed under the FactoryVaultCell, in shannons.
         #[arg(long, default_value_t = 300_000_000_000)]
         factory_vault_capacity: u64,
+        /// Optional devnet xUDT amount placed under the FactoryVaultCell.
+        #[arg(long)]
+        factory_vault_xudt_amount: Option<u128>,
         /// Optional 32-byte state root for the initial factory state.
         #[arg(long)]
         state_root: Option<String>,
@@ -395,6 +398,64 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run a conservative factory-local CKB+xUDT child-channel smoke.
+    FactoryXudtSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Capacity released from the factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's final xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's final xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed factory state packages are stored.
+        #[arg(long, default_value = "target/morph-factory-xudt-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Materialise a bilateral child channel from a conservative factory reserve.
     FactoryExitChannel {
         /// Directory containing the built RISC-V contract binaries.
@@ -431,6 +492,12 @@ enum DevnetCommand {
         /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
         #[arg(long)]
         bob_capacity: Option<u64>,
+        /// Alice's child-channel xUDT amount when the FactoryVaultCell carries xUDT.
+        #[arg(long)]
+        alice_xudt_amount: Option<u128>,
+        /// Bob's child-channel xUDT amount when the FactoryVaultCell carries xUDT.
+        #[arg(long)]
+        bob_xudt_amount: Option<u128>,
         /// Capacity placed under the child channel sponsor lock.
         #[arg(long, default_value_t = 50_000_000_000)]
         sponsor_capacity: u64,
@@ -1354,6 +1421,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             bob_private_key,
             factory_capacity,
             factory_vault_capacity,
+            factory_vault_xudt_amount,
             state_root,
             access_manifest_root,
             non_interference_digest,
@@ -1370,6 +1438,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     bob_private_key,
                     factory_capacity,
                     factory_vault_capacity,
+                    factory_vault_xudt_amount,
                     state_root,
                     access_manifest_root,
                     non_interference_digest,
@@ -1392,6 +1461,12 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("input_capacity={}", report.input_capacity);
                 println!("factory_capacity={}", report.factory_capacity);
                 println!("factory_vault_capacity={}", report.factory_vault_capacity);
+                if let Some(amount) = report.factory_vault_xudt_amount {
+                    println!("factory_vault_xudt_amount={amount}");
+                }
+                if let Some(type_hash) = &report.xudt_type_hash {
+                    println!("xudt_type_hash={type_hash}");
+                }
                 println!("change_capacity={}", report.change_capacity);
                 println!("fee={}", report.fee);
                 print_metrics(&report.metrics);
@@ -1625,6 +1700,68 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 print_metrics(&report.update.metrics);
             }
         }
+        DevnetCommand::FactoryXudtSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_xudt_smoke(
+                &rpc,
+                FactoryXudtSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!(
+                    "xudt_type_hash={}",
+                    report.exit.xudt_type_hash.unwrap_or_default()
+                );
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("update_tx_hash={}", report.update.tx_hash);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("publish_tx_hash={}", report.publish.tx_hash);
+                println!("finalise_tx_hash={}", report.finalise.tx_hash);
+                println!(
+                    "child_xudt_amount={}",
+                    report.exit.child_xudt_amount.unwrap_or(0)
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.exit.metrics);
+                print_metrics(&report.finalise.metrics);
+            }
+        }
         DevnetCommand::FactoryExitChannel {
             contracts_dir,
             private_key,
@@ -1636,6 +1773,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             vault_capacity,
             alice_capacity,
             bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
             sponsor_capacity,
             fee,
             finalise_since,
@@ -1655,6 +1794,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     vault_capacity,
                     alice_capacity,
                     bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
                     sponsor_capacity,
                     fee,
                     finalise_since,
@@ -1700,6 +1841,12 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
                 println!("state_capacity={}", report.state_capacity);
                 println!("vault_capacity={}", report.vault_capacity);
+                if let Some(amount) = report.child_xudt_amount {
+                    println!("child_xudt_amount={amount}");
+                }
+                if let Some(type_hash) = &report.xudt_type_hash {
+                    println!("xudt_type_hash={type_hash}");
+                }
                 println!(
                     "factory_vault_input_capacity={}",
                     report.factory_vault_input_capacity
@@ -1708,6 +1855,12 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     "factory_vault_change_capacity={}",
                     report.factory_vault_change_capacity
                 );
+                if let Some(amount) = report.factory_vault_input_xudt_amount {
+                    println!("factory_vault_input_xudt_amount={amount}");
+                }
+                if let Some(amount) = report.factory_vault_change_xudt_amount {
+                    println!("factory_vault_change_xudt_amount={amount}");
+                }
                 println!("sponsor_capacity={}", report.sponsor_capacity);
                 println!("fee_change_capacity={}", report.fee_change_capacity);
                 println!("fee={}", report.fee);

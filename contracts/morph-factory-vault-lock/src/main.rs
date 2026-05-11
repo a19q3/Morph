@@ -14,8 +14,9 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, BilateralCkbSettlementDescriptorV1, FactoryLocalExitWitnessV1,
-    FactoryStateHeaderV1, Result, ScriptError,
+    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
+    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
+    FactoryLocalExitWitnessV1, FactoryStateHeaderV1, Result, ScriptError, read_u128,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -104,17 +105,26 @@ fn find_unique_factory_state(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_child_vault(witness: &FactoryLocalExitWitnessV1) -> Result<u64> {
-    let descriptor = BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
-    let expected_capacity = descriptor
-        .capacity(0)
-        .checked_add(descriptor.capacity(1))
-        .ok_or(ScriptError::CapacityUnderflow)?;
     let vault_index = witness.vault_output_index() as usize;
     let vault_lock_hash =
         load_cell_lock_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if vault_lock_hash.as_slice() != witness.vault_lock_hash() {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
+    match witness.settlement_descriptor().len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => validate_ckb_child_vault(witness, vault_index),
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => validate_xudt_child_vault(witness, vault_index),
+        _ => Err(ScriptError::SettlementDescriptorEncoding),
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_ckb_child_vault(
+    witness: &FactoryLocalExitWitnessV1,
+    vault_index: usize,
+) -> Result<u64> {
+    let descriptor = BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+    let expected_capacity = descriptor.total_capacity();
     let vault_data =
         load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if !vault_data.is_empty() {
@@ -125,6 +135,36 @@ fn validate_child_vault(witness: &FactoryLocalExitWitnessV1) -> Result<u64> {
     if vault_type.is_some() {
         return Err(ScriptError::XudtTypeMismatch);
     }
+    let vault_capacity =
+        load_cell_capacity(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if vault_capacity != expected_capacity {
+        return Err(ScriptError::SettlementOutputMismatch);
+    }
+    Ok(expected_capacity)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_xudt_child_vault(
+    witness: &FactoryLocalExitWitnessV1,
+    vault_index: usize,
+) -> Result<u64> {
+    let descriptor =
+        BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+    let vault_type =
+        load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let vault_type = vault_type.ok_or(ScriptError::XudtTypeMismatch)?;
+    if vault_type.as_slice() != descriptor.xudt_type_hash() {
+        return Err(ScriptError::XudtTypeMismatch);
+    }
+    let vault_data =
+        load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if vault_data.len() != 16 {
+        return Err(ScriptError::XudtAmountEncoding);
+    }
+    if read_u128(&vault_data, 0) != descriptor.total_xudt_amount() {
+        return Err(ScriptError::SettlementOutputMismatch);
+    }
+    let expected_capacity = descriptor.total_capacity();
     let vault_capacity =
         load_cell_capacity(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if vault_capacity != expected_capacity {
