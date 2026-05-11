@@ -81,6 +81,16 @@ pub struct PublishStateOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct FundSponsorOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub state_out_point: String,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct FinaliseChannelOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -92,6 +102,21 @@ pub struct FinaliseChannelOptions {
     pub bob_capacity: Option<u64>,
     pub finalise_since: u64,
     pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SupersedeSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
     pub mine_blocks: u64,
 }
 
@@ -189,6 +214,21 @@ pub struct PublishStateReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct FundSponsorReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub channel_id: String,
+    pub state_number: u64,
+    pub sponsor_out_point: PrintableOutPoint,
+    pub sponsor_capacity: u64,
+    pub change_capacity: u64,
+    pub fee: u64,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct FinaliseChannelReport {
     pub tx_hash: String,
     pub status: String,
@@ -203,6 +243,15 @@ pub struct FinaliseChannelReport {
     pub fee: u64,
     pub mined_blocks: Vec<String>,
     pub outputs: Vec<ChannelCellReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SupersedeSmokeReport {
+    pub open: OpenChannelReport,
+    pub stale_publish: PublishStateReport,
+    pub sponsor_top_up: FundSponsorReport,
+    pub supersede_publish: PublishStateReport,
+    pub finalise: FinaliseChannelReport,
 }
 
 struct LiveCell {
@@ -715,6 +764,96 @@ pub fn publish_state(
     })
 }
 
+pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<FundSponsorReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    ensure!(
+        options.sponsor_capacity > 0,
+        "sponsor capacity must be non-zero"
+    );
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for sponsor funding")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point)?;
+    let header = StateHeaderV1::parse(state_cell.data.as_ref())
+        .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
+
+    let change_lock_hash = owner_lock.calc_script_hash();
+    let channel_id: &[u8; 32] = header
+        .channel_id()
+        .try_into()
+        .map_err(|_| anyhow!("state header channel id is not 32 bytes"))?;
+    let sponsor_policy = sponsor_policy_bytes(
+        channel_id,
+        options.sponsor_capacity / 2,
+        options.sponsor_capacity,
+        change_lock_hash.as_slice().try_into().unwrap(),
+    );
+    let sponsor_lock = data1_script(
+        sponsor_contract.data_hash.clone(),
+        Bytes::copy_from_slice(&sponsor_policy),
+    );
+    let sponsor_output = CellOutput::new_builder()
+        .capacity(options.sponsor_capacity)
+        .lock(sponsor_lock)
+        .build();
+    ensure_output_capacity("sponsor", &sponsor_output, 0)?;
+
+    let change_capacity = funding_cell
+        .capacity
+        .checked_sub(options.sponsor_capacity)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "funding cell capacity {} cannot cover sponsor {} and fee {}",
+                funding_cell.capacity,
+                options.sponsor_capacity,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, change_capacity)?;
+
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .input(CellInput::new(funding_cell.out_point.clone(), 0))
+        .output(sponsor_output)
+        .output(
+            CellOutput::new_builder()
+                .capacity(change_capacity)
+                .lock(owner_lock.clone())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+
+    Ok(FundSponsorReport {
+        tx_hash: sent.tx_hash.clone(),
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        channel_id: hex32(header.channel_id()),
+        state_number: header.state_number(),
+        sponsor_out_point: PrintableOutPoint {
+            tx_hash: sent.tx_hash,
+            index: 0,
+        },
+        sponsor_capacity: options.sponsor_capacity,
+        change_capacity,
+        fee: options.fee,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
 pub fn finalise_channel(
     rpc: &CkbRpcClient,
     options: FinaliseChannelOptions,
@@ -852,6 +991,101 @@ pub fn finalise_channel(
                 state_refund_capacity,
             ),
         ],
+    })
+}
+
+pub fn supersede_smoke(
+    rpc: &CkbRpcClient,
+    options: SupersedeSmokeOptions,
+) -> Result<SupersedeSmokeReport> {
+    let open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let vault_out_point = channel_cell_out_point(&open, "vault")?;
+    let initial_sponsor_out_point = channel_cell_out_point(&open, "sponsor")?;
+
+    let stale_publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point,
+            sponsor_out_point: initial_sponsor_out_point,
+            state_number: Some(1),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let stale_state_out_point = printable_out_point_string(&stale_publish.state_out_point);
+
+    let sponsor_top_up = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: stale_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let top_up_sponsor_out_point = printable_out_point_string(&sponsor_top_up.sponsor_out_point);
+
+    let supersede_publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: stale_state_out_point,
+            sponsor_out_point: top_up_sponsor_out_point,
+            state_number: Some(2),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let newer_state_out_point = printable_out_point_string(&supersede_publish.state_out_point);
+
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: newer_state_out_point,
+            vault_out_point,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(SupersedeSmokeReport {
+        open,
+        stale_publish,
+        sponsor_top_up,
+        supersede_publish,
+        finalise,
     })
 }
 
@@ -1437,6 +1671,19 @@ fn printable_out_point(out_point: &OutPoint) -> PrintableOutPoint {
         tx_hash: format!("{:#x}", byte32_to_h256(out_point.tx_hash())),
         index: out_point.index().unpack(),
     }
+}
+
+fn channel_cell_out_point(report: &OpenChannelReport, role: &str) -> Result<String> {
+    report
+        .cells
+        .iter()
+        .find(|cell| cell.role == role)
+        .map(|cell| printable_out_point_string(&cell.out_point))
+        .ok_or_else(|| anyhow!("open-channel report does not contain {role} cell"))
+}
+
+fn printable_out_point_string(out_point: &PrintableOutPoint) -> String {
+    format!("{}:{}", out_point.tx_hash, out_point.index)
 }
 
 fn parse_out_point(value: &str) -> Result<OutPoint> {

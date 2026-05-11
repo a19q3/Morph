@@ -31,8 +31,8 @@ This is not mainnet software. It is a production-oriented implementation
 repository with tests that turn the paper's audit matrix into executable
 checks. Participant state signatures are verified in both host-side invariants
 and the `morph-state-type` CKB script; the current devnet path opens a channel,
-publishes a newer signed settling state using sponsor capacity, and finalises
-the vault without modifying CKB consensus.
+publishes a signed settling state using sponsor capacity, supersedes it with a
+higher signed state, and finalises the vault without modifying CKB consensus.
 
 ## Repository Layout
 
@@ -61,6 +61,7 @@ cargo run -p morph-cli -- devnet check
 cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
+cargo run -p morph-cli -- devnet supersede-smoke
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md).

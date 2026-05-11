@@ -169,6 +169,39 @@ wallet lock. `finalise-channel` consumes the settling StateCell and VaultCell,
 materialises the descriptor outputs, and returns the StateCell carrier capacity
 minus fee to the opener's wallet lock.
 
+To exercise the newer-state-wins path, top up a fresh SponsorCell against the
+currently live settling StateCell and publish a higher state number:
+
+```sh
+TOP_UP_JSON=$(cargo run -q -p morph-cli -- devnet fund-sponsor \
+  --state-out-point "$SETTLING_STATE_OUT_POINT" \
+  --json)
+TOP_UP_SPONSOR_OUT_POINT="$(echo "$TOP_UP_JSON" | jq -r '"\(.sponsor_out_point.tx_hash):\(.sponsor_out_point.index)"')"
+
+SUPERSEDE_JSON=$(cargo run -q -p morph-cli -- devnet publish-state \
+  --state-out-point "$SETTLING_STATE_OUT_POINT" \
+  --sponsor-out-point "$TOP_UP_SPONSOR_OUT_POINT" \
+  --state-number 2 \
+  --json)
+NEWER_STATE_OUT_POINT="$(echo "$SUPERSEDE_JSON" | jq -r '"\(.state_out_point.tx_hash):\(.state_out_point.index)"')"
+```
+
+The complete reproducible smoke path is also available as one command:
+
+```sh
+cargo run -q -p morph-cli -- devnet supersede-smoke --json
+```
+
+It performs:
+
+```text
+open channel
+publish state 1
+fund a fresh SponsorCell
+publish state 2 over state 1
+finalise the vault using state 2
+```
+
 ## Contract Milestone
 
 The contract implementation uses fixed-width headers and a narrow witness
@@ -187,5 +220,5 @@ rights-dependency proof predicate exists.
 ## Remaining Devnet Gap
 
 The current vertical slice is CKB-only and bilateral. The next devnet work is
-to add xUDT vault cells, cycle reports, a stale-state supersession scenario
-with two competing settling states, and watchtower-grade state package storage.
+to add xUDT vault cells, cycle reports, a mempool-level competing-spend case,
+and watchtower-grade state package storage.

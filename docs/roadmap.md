@@ -18,8 +18,9 @@ build, offline CKB-VM tests cover state-lock delegation, state publication,
 stale-state rejection, invalid state signatures, state-bound sponsor fees,
 descriptor-bound vault finalisation, and descriptor-output mismatch rejection.
 The CLI can check/mine a local CKB devnet, deploy the Morph contract binaries,
-open a channel, publish a newer signed settling state with sponsor capacity,
-and finalise the vault through native JSON-RPC.
+open a channel, publish a signed settling state, top up sponsor capacity,
+publish a newer signed state over the old settling state, and finalise the
+vault through native JSON-RPC.
 
 Required deliverables:
 
@@ -37,6 +38,7 @@ Acceptance criteria:
 
 - a canonical StateCell is created from the funding input and output index;
 - a newer signed state can replace the active StateCell and enter settling;
+- a newer signed state can replace an already settling StateCell;
 - sponsor capacity pays publication fees without touching vault value;
 - finalisation consumes the settling StateCell and vault, then materialises the
   descriptor outputs;
