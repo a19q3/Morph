@@ -225,7 +225,7 @@ enum DevnetCommand {
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
-        #[arg(long, default_value_t = 10_000_000_000)]
+        #[arg(long, default_value_t = 50_000_000_000)]
         factory_capacity: u64,
         /// Optional 32-byte state root for the initial factory state.
         #[arg(long)]
@@ -373,7 +373,7 @@ enum DevnetCommand {
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
-        #[arg(long, default_value_t = 10_000_000_000)]
+        #[arg(long, default_value_t = 50_000_000_000)]
         factory_capacity: u64,
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
