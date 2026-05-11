@@ -34,6 +34,7 @@ rustup target list --installed | grep riscv64imac-unknown-none-elf
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
 make build-contracts
+make contract-tests
 ```
 
 These checks exercise the same invariants that the scripts must enforce:
@@ -55,6 +56,14 @@ target/riscv64imac-unknown-none-elf/release/morph-vault-lock
 target/riscv64imac-unknown-none-elf/release/morph-sponsor-lock
 ```
 
+`make contract-tests` builds those ELFs and runs offline `ckb-testtool`
+transactions for:
+
+- newer-state publication accepted by `morph-state-type`;
+- equal state number rejected by `morph-state-type`;
+- vault finalisation accepted when a current settling State Cell is consumed;
+- sponsor fee payment accepted when change returns to the authorised wallet lock.
+
 ## Contract Milestone
 
 The contract implementation uses fixed-width headers and a narrow witness
@@ -74,5 +83,6 @@ rights-dependency proof predicate exists.
 
 The local machine still needs `ckb` and `ckb-cli` on PATH before the scripts can
 be deployed and exercised against a live devnet node. Until then, the repository
-can build the script ELFs and run host-side invariant tests, but it cannot
-broadcast funding, publication, supersession, or finalisation transactions.
+can build the script ELFs and run host-side plus offline CKB-VM tests, but it
+cannot broadcast funding, publication, supersession, or finalisation
+transactions.

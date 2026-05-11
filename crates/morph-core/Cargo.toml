@@ -14,5 +14,6 @@ serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+ckb-testtool.workspace = true
+morph-script-common = { path = "../../contracts/morph-script-common" }
 serde_json.workspace = true
-

@@ -44,6 +44,7 @@ docs/                  Devnet and implementation notes.
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
 make build-contracts
+make contract-tests
 ```
 
 The devnet path is documented in [docs/devnet.md](docs/devnet.md).

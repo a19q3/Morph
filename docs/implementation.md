@@ -16,11 +16,12 @@ evidence and sponsor authorisation.
 The contract crates now implement the fixed-width V1 subset for devnet:
 
 - State type: consumes exactly one State Cell and recreates exactly one newer
-  settling State Cell under the same funding anchor and channel context.
+  settling State Cell under the same funding anchor and channel context; it can
+  also close the state track after the configured relative `since` has matured.
 - Vault lock: permits vault spend only when a unique settling State Cell with
   the expected funding anchor is present and its relative `since` has matured.
 - Sponsor lock: permits fee payment only within an explicit sponsor policy and
-  requires sponsor change to return to the authorised lock hash.
+  counts only outputs returning to the authorised change lock as sponsor change.
 
 These scripts are intentionally structural. They enforce the Cell and accounting
 boundaries first; participant signature verification is the next implementation
@@ -42,3 +43,10 @@ A devnet demonstration is acceptable only when it includes:
   channel-paid fee leakage, and xUDT type mismatch;
 - cycle measurements for each script;
 - a reproducible runbook with deployed script outpoints and transaction hashes.
+
+## Offline Contract Tests
+
+`make contract-tests` uses `ckb-testtool` to execute the compiled RISC-V scripts
+inside transaction-shaped fixtures. These tests are not a substitute for a live
+devnet run, but they catch script-group mistakes, occupied-capacity mistakes,
+and missing finalisation paths before a node is involved.
