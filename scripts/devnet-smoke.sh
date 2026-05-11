@@ -69,6 +69,9 @@ run_json xudt-negative-smoke devnet --rpc-url "$RPC_URL" xudt-negative-smoke
 mkdir -p "$OUT_DIR/factory-reduced-rights-packages"
 run_json factory-reduced-rights-smoke devnet --rpc-url "$RPC_URL" factory-reduced-rights-smoke \
   --store-dir "$OUT_DIR/factory-reduced-rights-packages"
+FACTORY_REDUCED_RIGHTS_PACKAGE_PATH="$(jq -r '.package.path' "$OUT_DIR/factory-reduced-rights-smoke.json")"
+run_json factory-reduced-rights-package-check validate-factory-reduced-rights-package \
+  "$FACTORY_REDUCED_RIGHTS_PACKAGE_PATH"
 
 FACTORY_DIR="$OUT_DIR/factory"
 mkdir -p "$FACTORY_DIR"

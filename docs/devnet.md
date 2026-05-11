@@ -64,6 +64,14 @@ make build-contracts
 make contract-tests
 ```
 
+If the active Rust toolchain does not have the CKB RISC-V target installed,
+run the contract build through another installed toolchain without changing the
+Makefile:
+
+```sh
+make CONTRACT_CARGO='cargo +nightly' contract-tests
+```
+
 With `scripts/devnet-node.sh` running in another shell:
 
 ```sh
