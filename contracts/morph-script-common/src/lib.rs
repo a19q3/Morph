@@ -8,6 +8,8 @@ pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_V1_LEN: usize = 274;
 pub const SPONSOR_POLICY_V1_LEN: usize = 144;
 pub const BILATERAL_CKB_DESCRIPTOR_V1_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
+pub const BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN: usize =
+    2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
 pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
 pub const ECDSA_SIGNATURE_LEN: usize = 64;
 pub const BILATERAL_SIGNATURE_WITNESS_V1_LEN: usize =
@@ -23,7 +25,9 @@ pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
+pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1: u16 = 2;
 pub const BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1: u8 = 2;
+pub const BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1: u8 = 1;
 
 #[repr(i8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +57,10 @@ pub enum ScriptError {
     SettlementDescriptorMismatch = 27,
     SettlementOutputMismatch = 28,
     SponsorStateOutOfRange = 29,
+    XudtAmountEncoding = 30,
+    XudtMintUnauthorised = 31,
+    XudtConservationMismatch = 32,
+    XudtTypeMismatch = 33,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -276,6 +284,80 @@ impl<'a> BilateralCkbSettlementDescriptorV1<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilateralCkbXudtSettlementDescriptorV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BilateralCkbXudtSettlementDescriptorV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        let descriptor = Self { raw };
+        if descriptor.version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1
+            || descriptor.output_count() != BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1
+            || descriptor.asset_count() != BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1
+        {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        if descriptor.lock_hash(0) >= descriptor.lock_hash(1) {
+            return Err(ScriptError::SettlementDescriptorEncoding);
+        }
+        Ok(descriptor)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn output_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn asset_count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn xudt_type_hash(&self) -> &'a [u8] {
+        field(self.raw, 4, BYTE32_LEN)
+    }
+
+    pub fn lock_hash(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            ckb_xudt_descriptor_output_offset(index),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn capacity(&self, index: usize) -> u64 {
+        read_u64(
+            self.raw,
+            ckb_xudt_descriptor_output_offset(index) + BYTE32_LEN,
+        )
+    }
+
+    pub fn xudt_amount(&self, index: usize) -> u128 {
+        read_u128(
+            self.raw,
+            ckb_xudt_descriptor_output_offset(index) + BYTE32_LEN + 8,
+        )
+    }
+
+    pub fn total_capacity(&self) -> u64 {
+        self.capacity(0).saturating_add(self.capacity(1))
+    }
+
+    pub fn total_xudt_amount(&self) -> u128 {
+        self.xudt_amount(0).saturating_add(self.xudt_amount(1))
+    }
+
+    pub fn commitment(&self) -> [u8; 32] {
+        settlement_descriptor_commitment_v1(self.raw)
+    }
+}
+
 pub fn settlement_descriptor_commitment_v1(raw: &[u8]) -> [u8; 32] {
     blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, raw])
 }
@@ -342,6 +424,12 @@ pub fn read_u64(raw: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes)
 }
 
+pub fn read_u128(raw: &[u8], offset: usize) -> u128 {
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&raw[offset..offset + 16]);
+    u128::from_le_bytes(bytes)
+}
+
 pub fn field(raw: &[u8], offset: usize, len: usize) -> &[u8] {
     &raw[offset..offset + len]
 }
@@ -377,6 +465,10 @@ fn participant_offset(index: usize) -> usize {
 
 fn descriptor_output_offset(index: usize) -> usize {
     4 + index * (BYTE32_LEN + 8)
+}
+
+fn ckb_xudt_descriptor_output_offset(index: usize) -> usize {
+    4 + BYTE32_LEN + index * (BYTE32_LEN + 8 + 16)
 }
 
 #[cfg(test)]
@@ -448,6 +540,36 @@ mod tests {
             let offset = descriptor_output_offset(index);
             raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
             put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+        }
+        raw
+    }
+
+    fn ckb_xudt_descriptor_bytes(
+        xudt_type_hash: [u8; 32],
+        left_lock_hash: [u8; 32],
+        left_capacity: u64,
+        left_amount: u128,
+        right_lock_hash: [u8; 32],
+        right_capacity: u64,
+        right_amount: u128,
+    ) -> [u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN] {
+        let mut entries = [
+            (left_lock_hash, left_capacity, left_amount),
+            (right_lock_hash, right_capacity, right_amount),
+        ];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN];
+        put_u16(&mut raw, 0, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1);
+        raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+        raw[3] = BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1;
+        raw[4..36].copy_from_slice(&xudt_type_hash);
+        for (index, (lock_hash, capacity, amount)) in entries.iter().enumerate() {
+            let offset = ckb_xudt_descriptor_output_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+            put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+            raw[offset + BYTE32_LEN + 8..offset + BYTE32_LEN + 24]
+                .copy_from_slice(&amount.to_le_bytes());
         }
         raw
     }
@@ -601,6 +723,29 @@ mod tests {
         assert_eq!(descriptor.capacity(0), 100);
         assert_eq!(descriptor.lock_hash(1), &[2u8; 32]);
         assert_eq!(descriptor.capacity(1), 200);
+        assert_eq!(
+            descriptor.commitment(),
+            settlement_descriptor_commitment_v1(&raw)
+        );
+    }
+
+    #[test]
+    fn parses_and_commits_bilateral_ckb_xudt_descriptor() {
+        let raw = ckb_xudt_descriptor_bytes([9u8; 32], [2u8; 32], 200, 3, [1u8; 32], 100, 7);
+        let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(&raw).unwrap();
+
+        assert_eq!(descriptor.version(), 2);
+        assert_eq!(descriptor.output_count(), 2);
+        assert_eq!(descriptor.asset_count(), 1);
+        assert_eq!(descriptor.xudt_type_hash(), &[9u8; 32]);
+        assert_eq!(descriptor.lock_hash(0), &[1u8; 32]);
+        assert_eq!(descriptor.capacity(0), 100);
+        assert_eq!(descriptor.xudt_amount(0), 7);
+        assert_eq!(descriptor.lock_hash(1), &[2u8; 32]);
+        assert_eq!(descriptor.capacity(1), 200);
+        assert_eq!(descriptor.xudt_amount(1), 3);
+        assert_eq!(descriptor.total_capacity(), 300);
+        assert_eq!(descriptor.total_xudt_amount(), 10);
         assert_eq!(
             descriptor.commitment(),
             settlement_descriptor_commitment_v1(&raw)

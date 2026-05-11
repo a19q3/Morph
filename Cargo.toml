@@ -8,6 +8,7 @@ members = [
   "contracts/morph-state-type",
   "contracts/morph-vault-lock",
   "contracts/morph-sponsor-lock",
+  "contracts/morph-devnet-xudt",
 ]
 
 [workspace.package]

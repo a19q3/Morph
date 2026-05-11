@@ -9,15 +9,16 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_input, load_script,
-    load_witness_args,
+    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_cell_type_hash, load_input,
+    load_script, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, BilateralCkbSettlementDescriptorV1, PHASE_SETTLING, Result, ScriptError,
-    StateHeaderV1, read_u64,
+    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
+    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_SETTLING,
+    Result, ScriptError, StateHeaderV1, read_u64, read_u128,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -65,15 +66,32 @@ fn main() -> Result<()> {
         .to_opt()
         .ok_or(ScriptError::SettlementWitnessMissing)?;
     let descriptor_raw = input_type.raw_data();
-    let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
-    if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
-        return Err(ScriptError::SettlementDescriptorMismatch);
+    match descriptor_raw.len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+            let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
+            if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            let vault_capacity = sum_group_capacity(Source::GroupInput)?;
+            if descriptor.total_capacity() != vault_capacity {
+                return Err(ScriptError::SettlementOutputMismatch);
+            }
+            verify_ckb_descriptor_outputs(&descriptor)?;
+        }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+            let descriptor =
+                BilateralCkbXudtSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
+            if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            let vault_capacity = sum_group_capacity(Source::GroupInput)?;
+            if descriptor.total_capacity() != vault_capacity {
+                return Err(ScriptError::SettlementOutputMismatch);
+            }
+            verify_ckb_xudt_descriptor_outputs(&descriptor)?;
+        }
+        _ => return Err(ScriptError::SettlementDescriptorEncoding),
     }
-    let vault_capacity = sum_group_capacity(Source::GroupInput)?;
-    if descriptor.total_capacity() != vault_capacity {
-        return Err(ScriptError::SettlementOutputMismatch);
-    }
-    verify_descriptor_outputs(&descriptor)?;
 
     Ok(())
 }
@@ -96,10 +114,34 @@ fn sum_group_capacity(source: Source) -> Result<u64> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn verify_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptorV1) -> Result<()> {
+fn verify_ckb_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptorV1) -> Result<()> {
     for entry in 0..2 {
         let actual = sum_outputs_by_lock_hash(descriptor.lock_hash(entry))?;
         if actual != descriptor.capacity(entry) {
+            return Err(ScriptError::SettlementOutputMismatch);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn verify_ckb_xudt_descriptor_outputs(
+    descriptor: &BilateralCkbXudtSettlementDescriptorV1,
+) -> Result<()> {
+    let input_amount = sum_group_xudt_amount(Source::GroupInput, descriptor.xudt_type_hash())?;
+    if input_amount != descriptor.total_xudt_amount() {
+        return Err(ScriptError::SettlementOutputMismatch);
+    }
+    for entry in 0..2 {
+        let actual_capacity = sum_outputs_by_lock_hash(descriptor.lock_hash(entry))?;
+        if actual_capacity != descriptor.capacity(entry) {
+            return Err(ScriptError::SettlementOutputMismatch);
+        }
+        let actual_amount = sum_outputs_xudt_by_lock_hash(
+            descriptor.lock_hash(entry),
+            descriptor.xudt_type_hash(),
+        )?;
+        if actual_amount != descriptor.xudt_amount(entry) {
             return Err(ScriptError::SettlementOutputMismatch);
         }
     }
@@ -125,6 +167,61 @@ fn sum_outputs_by_lock_hash(expected: &[u8]) -> Result<u64> {
         }
     }
     Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_group_xudt_amount(source: Source, expected_type_hash: &[u8]) -> Result<u128> {
+    let mut sum = 0u128;
+    let mut index = 0;
+    loop {
+        match load_cell_type_hash(index, source) {
+            Ok(Some(type_hash)) => {
+                if type_hash.as_slice() != expected_type_hash {
+                    return Err(ScriptError::XudtTypeMismatch);
+                }
+                sum = sum.saturating_add(load_xudt_amount(index, source)?);
+                index += 1;
+            }
+            Ok(None) => return Err(ScriptError::XudtTypeMismatch),
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_outputs_xudt_by_lock_hash(expected_lock: &[u8], expected_type_hash: &[u8]) -> Result<u128> {
+    let mut sum = 0u128;
+    let mut index = 0;
+    loop {
+        match load_cell_lock_hash(index, Source::Output) {
+            Ok(lock_hash) => {
+                if lock_hash.as_slice() == expected_lock {
+                    if let Some(type_hash) = load_cell_type_hash(index, Source::Output)
+                        .map_err(|_| ScriptError::Encoding)?
+                    {
+                        if type_hash.as_slice() == expected_type_hash {
+                            sum = sum.saturating_add(load_xudt_amount(index, Source::Output)?);
+                        }
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn load_xudt_amount(index: usize, source: Source) -> Result<u128> {
+    let data = load_cell_data(index, source).map_err(|_| ScriptError::Encoding)?;
+    if data.len() != 16 {
+        return Err(ScriptError::XudtAmountEncoding);
+    }
+    Ok(read_u128(&data, 0))
 }
 
 #[cfg(target_arch = "riscv64")]

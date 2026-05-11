@@ -43,11 +43,12 @@ pub const DEFAULT_ALICE_PRIVATE_KEY: &str =
     "0x1111111111111111111111111111111111111111111111111111111111111111";
 pub const DEFAULT_BOB_PRIVATE_KEY: &str =
     "0x2222222222222222222222222222222222222222222222222222222222222222";
-const CONTRACTS: [(&str, &str); 4] = [
+const CONTRACTS: [(&str, &str); 5] = [
     ("morph-state-lock", "morph-state-lock"),
     ("morph-state-type", "morph-state-type"),
     ("morph-vault-lock", "morph-vault-lock"),
     ("morph-sponsor-lock", "morph-sponsor-lock"),
+    ("morph-devnet-xudt", "morph-devnet-xudt"),
 ];
 
 #[derive(Debug, Clone)]

@@ -10,11 +10,13 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1, BILATERAL_CKB_DESCRIPTOR_V1_LEN,
-    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_SIGNATURE_COUNT_V1,
-    BILATERAL_SIGNATURE_THRESHOLD_V1, BILATERAL_SIGNATURE_WITNESS_V1_LEN,
-    BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
-    StateHeaderV1, blake2b256, participants_commitment_v1, settlement_descriptor_commitment_v1,
+    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+    BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
+    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, PHASE_ACTIVE, PHASE_SETTLING,
+    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1, blake2b256,
+    participants_commitment_v1, settlement_descriptor_commitment_v1,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -24,6 +26,8 @@ const CELL_CAPACITY: u64 = 100_000_000_000;
 const ALICE_CAPACITY: u64 = 60_000_000_000;
 const BOB_CAPACITY: u64 = 40_000_000_000;
 const FUNDING_ANCHOR: [u8; 32] = [4u8; 32];
+const ALICE_XUDT_AMOUNT: u128 = 70;
+const BOB_XUDT_AMOUNT: u128 = 30;
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -80,6 +84,10 @@ fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
 
 fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
     raw[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u128(raw: &mut [u8], offset: usize, value: u128) {
+    raw[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
 }
 
 fn state_args(finalise_since: u64) -> Vec<u8> {
@@ -145,6 +153,18 @@ fn derived_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
 fn header_with_descriptor(state_number: u64, phase: u8, descriptor_commitment: [u8; 32]) -> Bytes {
     let mut raw = header_raw(state_number, phase);
     raw[174..206].copy_from_slice(&descriptor_commitment);
+    raw.to_vec().into()
+}
+
+fn header_with_descriptor_version(
+    state_number: u64,
+    phase: u8,
+    descriptor_commitment: [u8; 32],
+    descriptor_version: u16,
+) -> Bytes {
+    let mut raw = header_raw(state_number, phase);
+    raw[174..206].copy_from_slice(&descriptor_commitment);
+    put_u16(&mut raw, 206, descriptor_version);
     raw.to_vec().into()
 }
 
@@ -220,6 +240,39 @@ fn descriptor_bytes(
         put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
     }
     raw.to_vec().into()
+}
+
+fn ckb_xudt_descriptor_bytes(
+    xudt_type_hash: [u8; 32],
+    left_lock_hash: [u8; 32],
+    left_capacity: u64,
+    left_amount: u128,
+    right_lock_hash: [u8; 32],
+    right_capacity: u64,
+    right_amount: u128,
+) -> Bytes {
+    let mut entries = [
+        (left_lock_hash, left_capacity, left_amount),
+        (right_lock_hash, right_capacity, right_amount),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut raw = [0u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1);
+    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+    raw[3] = BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1;
+    raw[4..36].copy_from_slice(&xudt_type_hash);
+    for (index, (lock_hash, capacity, amount)) in entries.iter().enumerate() {
+        let offset = 36 + index * (BYTE32_LEN + 8 + 16);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(lock_hash);
+        put_u64(&mut raw, offset + BYTE32_LEN, *capacity);
+        put_u128(&mut raw, offset + BYTE32_LEN + 8, *amount);
+    }
+    raw.to_vec().into()
+}
+
+fn xudt_amount_data(amount: u128) -> Bytes {
+    Bytes::copy_from_slice(&amount.to_le_bytes())
 }
 
 fn sponsor_policy(change_lock_hash: &[u8; 32], max_fee: u64) -> Vec<u8> {
@@ -654,6 +707,166 @@ fn vault_lock_rejects_descriptor_output_mismatch() {
     let tx = context.complete_tx(tx);
 
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn devnet_xudt_allows_owner_mint_and_conserves_transfer() {
+    let mut context = Context::default();
+    let owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
+    let xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        owner_lock.calc_script_hash().as_slice().to_vec(),
+    );
+
+    let owner_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(owner_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let mint_tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(owner_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(alice_lock.clone())
+                .type_(Some(xudt_type.clone()).pack())
+                .build(),
+        )
+        .output_data(xudt_amount_data(100).pack())
+        .build();
+    let mint_tx = context.complete_tx(mint_tx);
+    context
+        .verify_tx(&mint_tx, MAX_CYCLES)
+        .expect("owner mint should verify");
+
+    let xudt_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(alice_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        xudt_amount_data(100),
+    );
+    let transfer_tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(xudt_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY)
+                .lock(alice_lock)
+                .type_(Some(xudt_type.clone()).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(bob_lock)
+                .type_(Some(xudt_type).pack())
+                .build(),
+        )
+        .output_data(xudt_amount_data(ALICE_XUDT_AMOUNT).pack())
+        .output_data(xudt_amount_data(BOB_XUDT_AMOUNT).pack())
+        .build();
+    let transfer_tx = context.complete_tx(transfer_tx);
+    context
+        .verify_tx(&transfer_tx, MAX_CYCLES)
+        .expect("xUDT amount conservation should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_accepts_xudt_finalise_with_descriptor_amounts() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let xudt_owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        xudt_owner_lock.calc_script_hash().as_slice().to_vec(),
+    );
+    let xudt_type_hash = xudt_type.calc_script_hash().unpack();
+    let descriptor = ckb_xudt_descriptor_bytes(
+        xudt_type_hash,
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        ALICE_XUDT_AMOUNT,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+        BOB_XUDT_AMOUNT,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let mut vault_args = FUNDING_ANCHOR.to_vec();
+    vault_args.extend_from_slice(&0u64.to_le_bytes());
+    let vault_lock = deploy_contract(&mut context, "morph-vault-lock", vault_args);
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock)
+            .type_(Some(state_type).pack())
+            .build(),
+        header_with_descriptor_version(3, PHASE_SETTLING, descriptor_commitment, 2),
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(vault_lock)
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY)
+                .lock(alice_lock)
+                .type_(Some(xudt_type.clone()).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(bob_lock)
+                .type_(Some(xudt_type).pack())
+                .build(),
+        )
+        .output_data(xudt_amount_data(ALICE_XUDT_AMOUNT).pack())
+        .output_data(xudt_amount_data(BOB_XUDT_AMOUNT).pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(descriptor))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("xUDT vault finalise should verify");
 }
 
 #[ignore = "requires `make build-contracts`"]
