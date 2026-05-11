@@ -16,6 +16,13 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  GIT_DIRTY="true"
+else
+  GIT_DIRTY="false"
+fi
+
 log() {
   printf '[devnet-smoke] %s\n' "$*"
 }
@@ -40,6 +47,8 @@ cat >"$OUT_DIR/manifest.txt" <<EOF
 rpc_url=$RPC_URL
 started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 mine_blocks=$MINE_BLOCKS
+git_commit=$GIT_COMMIT
+git_dirty=$GIT_DIRTY
 EOF
 
 run_log check-devnet-env scripts/check-devnet-env.sh

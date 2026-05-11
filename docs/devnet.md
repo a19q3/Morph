@@ -91,7 +91,8 @@ writes logs plus JSON reports under
 `MINE_BLOCKS` when needed. On success it also refreshes the
 `target/devnet-smoke/latest` symlink to the completed run; set `LATEST_LINK` to
 use a different pointer, or point it at an existing real directory/file to skip
-the update.
+the update. The manifest records the RPC endpoint, block-mining profile, git
+commit, and whether tracked files were dirty when the run started.
 
 At the end of a successful run, the script also writes:
 
