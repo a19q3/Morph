@@ -146,6 +146,11 @@ fn validate_local_exit(
     if state_type_hash.as_slice() != witness.state_type_hash() {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
+    let state_lock_hash =
+        load_cell_lock_hash(state_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if state_lock_hash.as_slice() != witness.state_lock_hash() {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
 
     let exit_header = StateHeaderV1::parse(witness.exit_state_header())?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {

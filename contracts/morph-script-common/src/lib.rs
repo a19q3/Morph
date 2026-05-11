@@ -23,6 +23,7 @@ pub const FACTORY_LOCAL_EXIT_WITNESS_V1_LEN: usize = 2
     + 4
     + BYTE32_LEN
     + BYTE32_LEN
+    + BYTE32_LEN
     + STATE_HEADER_V1_LEN
     + BILATERAL_CKB_DESCRIPTOR_V1_LEN;
 
@@ -449,10 +450,18 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
         )
     }
 
-    pub fn exit_state_header(&self) -> &'a [u8] {
+    pub fn state_lock_hash(&self) -> &'a [u8] {
         field(
             self.raw,
             2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 2 * BYTE32_LEN,
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn exit_state_header(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN,
             STATE_HEADER_V1_LEN,
         )
     }
@@ -460,7 +469,7 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
     pub fn settlement_descriptor(&self) -> &'a [u8] {
         field(
             self.raw,
-            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 2 * BYTE32_LEN + STATE_HEADER_V1_LEN,
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN + STATE_HEADER_V1_LEN,
             BILATERAL_CKB_DESCRIPTOR_V1_LEN,
         )
     }
@@ -471,6 +480,7 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
             self.vault_output_index(),
             self.state_type_hash(),
             self.vault_lock_hash(),
+            self.state_lock_hash(),
             self.exit_state_header(),
             self.settlement_descriptor(),
         )
@@ -636,6 +646,7 @@ pub fn factory_local_exit_digest_v1(
     vault_output_index: u32,
     state_type_hash: &[u8],
     vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
     exit_state_header: &[u8],
     settlement_descriptor: &[u8],
 ) -> [u8; 32] {
@@ -645,6 +656,7 @@ pub fn factory_local_exit_digest_v1(
         &vault_output_index.to_le_bytes(),
         state_type_hash,
         vault_lock_hash,
+        state_lock_hash,
         exit_state_header,
         settlement_descriptor,
     ])
@@ -1077,13 +1089,16 @@ mod tests {
             "SponsorPolicyV1: 144 bytes",
             "FactoryStateHeaderV1: 238 bytes",
             "FactorySignatureWitnessV1: 262 bytes",
+            "FactoryLocalExitWitnessV1: 726 bytes",
             "struct StateHeaderV1",
             "struct FactoryStateHeaderV1",
             "struct BilateralSignatureWitnessV1",
             "struct FactorySignatureWitnessV1",
+            "struct FactoryLocalExitWitnessV1",
             "struct BilateralCkbSettlementDescriptorV1",
             "struct BilateralCkbXudtSettlementDescriptorV1",
             "struct SponsorPolicyV1",
+            "state_lock_hash: Byte32",
             "xudt_type_hash: Byte32",
             "xudt_amount: uint128",
             "max_fee_per_tx: uint64",

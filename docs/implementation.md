@@ -98,8 +98,8 @@ consumes the current FactoryStateCell, the FactoryVaultCell, and a normal owner
 fee input; it recreates the newer FactoryStateCell, returns the remaining
 factory reserve, and creates a child StateCell, VaultCell, and SponsorCell. The
 factory state header commits to the local-exit digest, the factory type checks
-the child StateCell and vault shape, and the factory vault lock enforces reserve
-conservation:
+the child StateCell type hash, StateCell lock hash, vault lock hash, and vault
+shape, and the factory vault lock enforces reserve conservation:
 
 ```text
 factory reserve input = factory reserve change + child vault capacity

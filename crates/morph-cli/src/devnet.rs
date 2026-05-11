@@ -1766,6 +1766,7 @@ pub fn factory_exit_channel(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(&state_type_hash),
     );
+    let state_lock_hash: [u8; BYTE32_LEN] = state_lock.calc_script_hash().unpack();
     let mut vault_args = funding_anchor.to_vec();
     vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
     let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
@@ -1874,6 +1875,7 @@ pub fn factory_exit_channel(
         vault_output_index,
         &state_type_hash,
         &vault_lock_hash,
+        &state_lock_hash,
         &state_header,
         &descriptor,
     );
@@ -1903,6 +1905,7 @@ pub fn factory_exit_channel(
         vault_output_index,
         &state_type_hash,
         &vault_lock_hash,
+        &state_lock_hash,
         &state_header,
         &descriptor,
     )?;
@@ -4609,6 +4612,7 @@ fn factory_local_exit_witness(
     vault_output_index: u32,
     state_type_hash: &[u8],
     vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Result<[u8; FACTORY_LOCAL_EXIT_WITNESS_V1_LEN]> {
@@ -4624,6 +4628,10 @@ fn factory_local_exit_witness(
     ensure!(
         vault_lock_hash.len() == BYTE32_LEN,
         "vault lock hash must be 32 bytes"
+    );
+    ensure!(
+        state_lock_hash.len() == BYTE32_LEN,
+        "state lock hash must be 32 bytes"
     );
     ensure!(
         state_header.len() == STATE_HEADER_V1_LEN,
@@ -4648,6 +4656,8 @@ fn factory_local_exit_witness(
     witness[offset..offset + BYTE32_LEN].copy_from_slice(state_type_hash);
     offset += BYTE32_LEN;
     witness[offset..offset + BYTE32_LEN].copy_from_slice(vault_lock_hash);
+    offset += BYTE32_LEN;
+    witness[offset..offset + BYTE32_LEN].copy_from_slice(state_lock_hash);
     offset += BYTE32_LEN;
     witness[offset..offset + STATE_HEADER_V1_LEN].copy_from_slice(state_header);
     offset += STATE_HEADER_V1_LEN;
