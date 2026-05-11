@@ -1,10 +1,15 @@
-.PHONY: test fmt smoke build-contracts contract-tests devnet-smoke smoke-report smoke-assert
+.PHONY: ci test fmt fmt-check smoke build-contracts contract-tests devnet-smoke smoke-report smoke-assert
+
+ci: fmt-check test contract-tests
 
 test:
 	cargo test --workspace
 
 fmt:
 	cargo fmt --all
+
+fmt-check:
+	cargo fmt --all -- --check
 
 smoke:
 	cargo test --workspace

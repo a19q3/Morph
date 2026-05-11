@@ -67,6 +67,7 @@ docs/                  Devnet and implementation notes.
 ## Quick Start
 
 ```sh
+make ci
 cargo test --workspace
 cargo run -p morph-cli -- validate-fixture
 make build-contracts
