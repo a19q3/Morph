@@ -23,14 +23,18 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
     COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_V1_LEN,
-    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_SIGNATURE_COUNT_V1,
-    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryStateHeaderV1,
-    PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
-    SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, ScriptError, StateHeaderV1,
-    blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
-    factory_participants_commitment_v1, participants_commitment_v1,
-    settlement_descriptor_commitment_v1,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
+    FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+    FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1, FACTORY_SIGNATURE_THRESHOLD_V1,
+    FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
+    FACTORY_STATE_HEADER_V1_LEN, FactoryReducedExitWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
+    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN,
+    STATE_HEADER_V1_LEN, ScriptError, StateHeaderV1, blake2b256 as script_blake2b256,
+    factory_local_exit_digest_v1, factory_participants_commitment_v1, participants_commitment_v1,
+    settlement_descriptor_commitment_v1, verify_reduced_factory_exit_update,
 };
 use serde::Serialize;
 
@@ -178,6 +182,42 @@ pub struct FactoryReducedRightsSmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct FactoryReducedExitSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactoryReducedXudtExitSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct FactoryXudtSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -236,12 +276,19 @@ pub struct FactoryExitChannelOptions {
     pub finalise_since: u64,
     pub mine_blocks: u64,
     pub tamper: FactoryExitChannelTamper,
+    pub authorisation: FactoryExitAuthorisation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FactoryExitChannelTamper {
     None,
     ChildXudtAmountMinusOnePreserveFactoryChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryExitAuthorisation {
+    FullParticipants,
+    ReducedReserveClaim,
 }
 
 #[derive(Debug, Clone)]
@@ -546,6 +593,7 @@ pub struct FactoryExitChannelReport {
     pub status: String,
     pub block_number: Option<u64>,
     pub block_hash: Option<String>,
+    pub authorisation: String,
     pub factory_id: String,
     pub old_update_number: u64,
     pub new_update_number: u64,
@@ -565,13 +613,28 @@ pub struct FactoryExitChannelReport {
     pub factory_vault_input_xudt_amount: Option<u128>,
     pub factory_vault_change_xudt_amount: Option<u128>,
     pub xudt_type_hash: Option<String>,
-    pub local_exit_package: StoredFactoryLocalExitPackage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_exit_package: Option<StoredFactoryLocalExitPackage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reduced_exit: Option<FactoryReducedExitEvidenceReport>,
     pub sponsor_capacity: u64,
     pub fee_change_capacity: u64,
     pub fee: u64,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub participants: Vec<ParticipantReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedExitEvidenceReport {
+    pub release_quantity: u128,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub local_exit_digest: String,
+    pub witness_len: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -622,6 +685,22 @@ pub struct FactoryReducedRightsSmokeReport {
     pub open: OpenFactoryReport,
     pub package: SaveFactoryReducedRightsPackageReport,
     pub update: UpdateFactoryReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedExitSmokeReport {
+    pub open: OpenFactoryReport,
+    pub exit: FactoryExitChannelReport,
+    pub publish: PublishStateReport,
+    pub finalise: FinaliseChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedXudtExitSmokeReport {
+    pub open: OpenFactoryReport,
+    pub exit: FactoryExitChannelReport,
+    pub publish: PublishStateReport,
+    pub finalise: XudtFinaliseReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -1954,6 +2033,213 @@ pub fn factory_reduced_rights_smoke(
     })
 }
 
+pub fn factory_reduced_exit_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryReducedExitSmokeOptions,
+) -> Result<FactoryReducedExitSmokeReport> {
+    ensure!(
+        options.child_vault_capacity > 0,
+        "child vault capacity must be non-zero"
+    );
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let (old_state_root, old_access_manifest_root) =
+        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
+
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: None,
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: Some(hex32(&old_access_manifest_root)),
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: None,
+            bob_xudt_amount: None,
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
+        },
+    )?;
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: printable_out_point_string(&exit.state_out_point),
+            sponsor_out_point: printable_out_point_string(&exit.sponsor_out_point),
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: printable_out_point_string(&publish.state_out_point),
+            vault_out_point: printable_out_point_string(&exit.vault_out_point),
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(FactoryReducedExitSmokeReport {
+        open,
+        exit,
+        publish,
+        finalise,
+    })
+}
+
+pub fn factory_reduced_xudt_exit_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryReducedXudtExitSmokeOptions,
+) -> Result<FactoryReducedXudtExitSmokeReport> {
+    ensure!(
+        options.child_vault_capacity > 0,
+        "child xUDT vault capacity must be non-zero"
+    );
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
+    ensure!(
+        total_xudt_amount > 0,
+        "factory reduced xUDT amount must be non-zero"
+    );
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let (old_state_root, old_access_manifest_root) =
+        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
+
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(total_xudt_amount),
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: Some(hex32(&old_access_manifest_root)),
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(options.alice_xudt_amount),
+            bob_xudt_amount: Some(options.bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
+        },
+    )?;
+    let publish = publish_state(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: printable_out_point_string(&exit.state_out_point),
+            sponsor_out_point: printable_out_point_string(&exit.sponsor_out_point),
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let finalise_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: options.alice_private_key,
+        bob_private_key: options.bob_private_key,
+        vault_capacity: options.child_vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let finalise = finalise_xudt_channel(
+        rpc,
+        &finalise_options,
+        printable_out_point_string(&publish.state_out_point),
+        printable_out_point_string(&exit.vault_out_point),
+    )?;
+
+    Ok(FactoryReducedXudtExitSmokeReport {
+        open,
+        exit,
+        publish,
+        finalise,
+    })
+}
+
 pub fn factory_xudt_smoke(
     rpc: &CkbRpcClient,
     options: FactoryXudtSmokeOptions,
@@ -2037,6 +2323,7 @@ pub fn factory_xudt_smoke(
             finalise_since: options.finalise_since,
             mine_blocks: options.mine_blocks,
             tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
         },
     )?;
     let publish = publish_state(
@@ -2179,6 +2466,7 @@ pub fn factory_xudt_negative_smoke(
             finalise_since: options.finalise_since,
             mine_blocks: 0,
             tamper: FactoryExitChannelTamper::ChildXudtAmountMinusOnePreserveFactoryChange,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
         },
     ) {
         Ok(report) => {
@@ -2217,6 +2505,7 @@ pub fn factory_xudt_negative_smoke(
             finalise_since: options.finalise_since,
             mine_blocks: options.mine_blocks,
             tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
         },
     )?;
     let publish = publish_state(
@@ -2620,50 +2909,93 @@ pub fn factory_exit_channel(
     )?;
 
     ensure_output_capacity("factory", &factory_cell.output, FACTORY_STATE_HEADER_V1_LEN)?;
-    let exit_digest = factory_local_exit_digest_v1(
-        state_output_index,
-        vault_output_index,
-        &state_type_hash,
-        &vault_lock_hash,
-        &state_lock_hash,
-        &state_header,
-        &descriptor,
-    );
-    let state_root = derived_factory_update_digest(
-        b"CKB_MORPH_FACTORY_STATE_ROOT_EXIT_V1",
-        old_header.state_root(),
-        new_update_number,
-    );
-    let access_manifest_root = derived_factory_update_digest(
-        b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_EXIT_V1",
-        old_header.access_manifest_root(),
-        new_update_number,
-    );
-    let mut new_factory_data = factory_cell.data.to_vec();
-    put_u64(&mut new_factory_data, 68, new_update_number);
-    new_factory_data[76..108].copy_from_slice(&state_root);
-    new_factory_data[140..172].copy_from_slice(&access_manifest_root);
-    new_factory_data[172..204].copy_from_slice(&exit_digest);
-    let factory_signature = factory_signature_witness(
-        &new_factory_data,
-        &options.alice_private_key,
-        &options.bob_private_key,
-    )?;
-    let local_exit_witness = factory_local_exit_witness(
-        &factory_signature,
-        state_output_index,
-        vault_output_index,
-        &state_type_hash,
-        &vault_lock_hash,
-        &state_lock_hash,
-        &state_header,
-        &descriptor,
-    )?;
-    let local_exit_package = StoredFactoryLocalExitPackage::from_factory_local_exit(
-        &new_factory_data,
-        &local_exit_witness,
-    )
-    .context("constructed factory local-exit package is invalid")?;
+    let (new_factory_data, factory_exit_witness, local_exit_package, reduced_exit, authorisation) =
+        match options.authorisation {
+            FactoryExitAuthorisation::FullParticipants => {
+                let exit_digest = factory_local_exit_digest_v1(
+                    state_output_index,
+                    vault_output_index,
+                    &state_type_hash,
+                    &vault_lock_hash,
+                    &state_lock_hash,
+                    &state_header,
+                    &descriptor,
+                );
+                let state_root = derived_factory_update_digest(
+                    b"CKB_MORPH_FACTORY_STATE_ROOT_EXIT_V1",
+                    old_header.state_root(),
+                    new_update_number,
+                );
+                let access_manifest_root = derived_factory_update_digest(
+                    b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_EXIT_V1",
+                    old_header.access_manifest_root(),
+                    new_update_number,
+                );
+                let mut new_factory_data = factory_cell.data.to_vec();
+                put_u64(&mut new_factory_data, 68, new_update_number);
+                new_factory_data[76..108].copy_from_slice(&state_root);
+                new_factory_data[140..172].copy_from_slice(&access_manifest_root);
+                new_factory_data[172..204].copy_from_slice(&exit_digest);
+                let factory_signature = factory_signature_witness(
+                    &new_factory_data,
+                    &options.alice_private_key,
+                    &options.bob_private_key,
+                )?;
+                let local_exit_witness = factory_local_exit_witness(
+                    &factory_signature,
+                    state_output_index,
+                    vault_output_index,
+                    &state_type_hash,
+                    &vault_lock_hash,
+                    &state_lock_hash,
+                    &state_header,
+                    &descriptor,
+                )?;
+                let local_exit_package = StoredFactoryLocalExitPackage::from_factory_local_exit(
+                    &new_factory_data,
+                    &local_exit_witness,
+                )
+                .context("constructed factory local-exit package is invalid")?;
+                (
+                    new_factory_data,
+                    local_exit_witness,
+                    Some(local_exit_package),
+                    None,
+                    "full-participants".to_string(),
+                )
+            }
+            FactoryExitAuthorisation::ReducedReserveClaim => {
+                ensure!(
+                    matches!(options.tamper, FactoryExitChannelTamper::None),
+                    "reduced factory exit does not support tampered child vault construction"
+                );
+                let alice_factory_key = k256_signing_key(&options.alice_private_key)
+                    .with_context(|| "invalid Alice factory private key")?;
+                let bob_factory_key = k256_signing_key(&options.bob_private_key)
+                    .with_context(|| "invalid Bob factory private key")?;
+                let reduced = reduced_exit_from_factory_header(
+                    factory_cell.data.as_ref(),
+                    &alice_factory_key,
+                    &bob_factory_key,
+                    new_update_number,
+                    options.vault_capacity as u128,
+                    state_output_index,
+                    vault_output_index,
+                    &state_type_hash,
+                    &vault_lock_hash,
+                    &state_lock_hash,
+                    &state_header,
+                    &descriptor,
+                )?;
+                (
+                    reduced.new_header,
+                    reduced.witness,
+                    None,
+                    Some(reduced.report),
+                    "reduced-reserve-claim".to_string(),
+                )
+            }
+        };
 
     let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     ensure!(
@@ -2727,7 +3059,7 @@ pub fn factory_exit_channel(
     let signed = sign_factory_exit_transaction(
         unsigned,
         &owner_key,
-        Bytes::copy_from_slice(&local_exit_witness),
+        Bytes::copy_from_slice(&factory_exit_witness),
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash = sent.tx_hash.clone();
@@ -2737,6 +3069,7 @@ pub fn factory_exit_channel(
         status: sent.status,
         block_number: sent.block_number,
         block_hash: sent.block_hash,
+        authorisation,
         factory_id: hex32(old_header.factory_id()),
         old_update_number,
         new_update_number,
@@ -2773,6 +3106,7 @@ pub fn factory_exit_channel(
             .as_ref()
             .map(|(_, xudt_type_hash, _, _, _, _)| hex32(xudt_type_hash)),
         local_exit_package,
+        reduced_exit,
         sponsor_capacity: options.sponsor_capacity,
         fee_change_capacity,
         fee: options.fee,
@@ -5394,6 +5728,391 @@ fn factory_signature_witness(
             .copy_from_slice(&ecdsa_signature(key, &digest)?);
     }
     Ok(witness)
+}
+
+struct BuiltReducedExit {
+    new_header: Vec<u8>,
+    witness: Vec<u8>,
+    report: FactoryReducedExitEvidenceReport,
+}
+
+fn reduced_exit_initial_roots(
+    alice: &SigningKey,
+    bob: &SigningKey,
+    release_quantity: u128,
+) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
+    let mut state_header = [0u8; STATE_HEADER_V1_LEN];
+    put_u16(&mut state_header, 0, 1);
+    put_u16(
+        &mut state_header,
+        34,
+        SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+    );
+    state_header[109] = PHASE_ACTIVE;
+    put_u16(&mut state_header, 206, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    let descriptor = bilateral_ckb_descriptor([1u8; BYTE32_LEN], 1, [2u8; BYTE32_LEN], 2);
+    state_header[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    let witness = reduced_exit_witness_bytes(
+        alice,
+        bob,
+        release_quantity,
+        1,
+        2,
+        &[3u8; BYTE32_LEN],
+        &[4u8; BYTE32_LEN],
+        &[5u8; BYTE32_LEN],
+        &state_header,
+        &descriptor,
+    )?;
+    let parsed = FactoryReducedExitWitnessV1::parse(&witness)
+        .map_err(|err| anyhow!("constructed reduced-exit fixture is invalid: {err:?}"))?;
+    Ok((
+        parsed
+            .rights_root(false)
+            .map_err(|err| anyhow!("failed to compute reduced-exit initial root: {err:?}"))?,
+        parsed.access_manifest_root(false).map_err(|err| {
+            anyhow!("failed to compute reduced-exit initial access root: {err:?}")
+        })?,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reduced_exit_from_factory_header(
+    old_header_bytes: &[u8],
+    alice: &SigningKey,
+    bob: &SigningKey,
+    new_update_number: u64,
+    release_quantity: u128,
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8],
+    vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
+    state_header: &[u8],
+    descriptor: &[u8],
+) -> Result<BuiltReducedExit> {
+    ensure!(
+        release_quantity > 0,
+        "reduced factory exit release quantity must be non-zero"
+    );
+    let old_header = FactoryStateHeaderV1::parse(old_header_bytes)
+        .map_err(|err| anyhow!("old factory header is invalid: {err:?}"))?;
+    ensure!(
+        new_update_number > old_header.update_number(),
+        "new update number must be greater than old update number {}",
+        old_header.update_number()
+    );
+
+    let mut witness = reduced_exit_witness_bytes(
+        alice,
+        bob,
+        release_quantity,
+        state_output_index,
+        vault_output_index,
+        state_type_hash,
+        vault_lock_hash,
+        state_lock_hash,
+        state_header,
+        descriptor,
+    )?;
+    let parsed_witness = FactoryReducedExitWitnessV1::parse(&witness)
+        .map_err(|err| anyhow!("constructed reduced-exit witness is invalid: {err:?}"))?;
+    let participant_entries = reduced_exit_participant_entries(alice, bob);
+    let participants_commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (
+                participant_entries[0].0.as_slice(),
+                participant_entries[0].1.as_slice(),
+            ),
+            (
+                participant_entries[1].0.as_slice(),
+                participant_entries[1].1.as_slice(),
+            ),
+        ],
+    );
+    ensure!(
+        old_header.participants_commitment() == participants_commitment.as_slice(),
+        "live factory participant commitment does not match supplied Alice/Bob keys"
+    );
+
+    let old_state_root = parsed_witness
+        .rights_root(false)
+        .map_err(|err| anyhow!("failed to compute reduced-exit old root: {err:?}"))?;
+    ensure!(
+        old_header.state_root() == old_state_root.as_slice(),
+        "live factory state_root does not match reduced-exit old root"
+    );
+    let old_access_manifest_root = parsed_witness
+        .access_manifest_root(false)
+        .map_err(|err| anyhow!("failed to compute reduced-exit old access root: {err:?}"))?;
+    ensure!(
+        old_header.access_manifest_root() == old_access_manifest_root.as_slice(),
+        "live factory access_manifest_root does not match reduced-exit old access root"
+    );
+    let new_state_root = parsed_witness
+        .rights_root(true)
+        .map_err(|err| anyhow!("failed to compute reduced-exit new root: {err:?}"))?;
+    let new_access_manifest_root = parsed_witness
+        .access_manifest_root(true)
+        .map_err(|err| anyhow!("failed to compute reduced-exit new access root: {err:?}"))?;
+
+    let mut new_header = old_header_bytes.to_vec();
+    put_u64(&mut new_header, 68, new_update_number);
+    new_header[76..108].copy_from_slice(&new_state_root);
+    new_header[140..172].copy_from_slice(&new_access_manifest_root);
+    let preliminary_new = FactoryStateHeaderV1::parse(&new_header)
+        .map_err(|err| anyhow!("preliminary reduced-exit header is invalid: {err:?}"))?;
+    let non_interference_digest = parsed_witness
+        .non_interference_digest(&old_header, &preliminary_new)
+        .map_err(|err| anyhow!("failed to compute reduced-exit digest: {err:?}"))?;
+    new_header[172..204].copy_from_slice(&non_interference_digest);
+    let new_header_parsed = FactoryStateHeaderV1::parse(&new_header)
+        .map_err(|err| anyhow!("new reduced-exit header is invalid: {err:?}"))?;
+    sign_reduced_exit_witness(
+        &mut witness,
+        [1u8; BYTE32_LEN],
+        alice,
+        &new_header_parsed.signing_digest(),
+    )?;
+    let signed_witness = FactoryReducedExitWitnessV1::parse(&witness)
+        .map_err(|err| anyhow!("signed reduced-exit witness is invalid: {err:?}"))?;
+    verify_reduced_factory_exit_update(&old_header, &new_header_parsed, &signed_witness)
+        .map_err(|err| anyhow!("constructed reduced-exit update is invalid: {err:?}"))?;
+    let local_exit_digest = signed_witness.local_exit_digest();
+    let witness_len = witness.len();
+
+    Ok(BuiltReducedExit {
+        new_header,
+        witness,
+        report: FactoryReducedExitEvidenceReport {
+            release_quantity,
+            old_state_root: hex32(&old_state_root),
+            new_state_root: hex32(&new_state_root),
+            old_access_manifest_root: hex32(&old_access_manifest_root),
+            new_access_manifest_root: hex32(&new_access_manifest_root),
+            non_interference_digest: hex32(&non_interference_digest),
+            local_exit_digest: hex32(&local_exit_digest),
+            witness_len,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reduced_exit_witness_bytes(
+    alice: &SigningKey,
+    bob: &SigningKey,
+    release_quantity: u128,
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8],
+    vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
+    state_header: &[u8],
+    descriptor: &[u8],
+) -> Result<Vec<u8>> {
+    ensure!(
+        state_type_hash.len() == BYTE32_LEN,
+        "state type hash must be 32 bytes"
+    );
+    ensure!(
+        vault_lock_hash.len() == BYTE32_LEN,
+        "vault lock hash must be 32 bytes"
+    );
+    ensure!(
+        state_lock_hash.len() == BYTE32_LEN,
+        "state lock hash must be 32 bytes"
+    );
+    ensure!(
+        state_header.len() == STATE_HEADER_V1_LEN,
+        "exit state header must be {} bytes",
+        STATE_HEADER_V1_LEN
+    );
+    let witness_len = match descriptor.len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
+        _ => {
+            return Err(anyhow!(
+                "settlement descriptor must be {} or {} bytes",
+                BILATERAL_CKB_DESCRIPTOR_V1_LEN,
+                BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
+            ));
+        }
+    };
+    let entries = reduced_exit_participant_entries(alice, bob);
+    let (before, after) = reduced_exit_rights_pair(release_quantity);
+
+    let mut raw = vec![0u8; witness_len];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+        let offset = reduced_exit_participant_offset(index);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(participant == &[1u8; BYTE32_LEN]);
+    }
+    raw[reduced_exit_touched_offset()..reduced_exit_touched_offset() + BYTE32_LEN]
+        .copy_from_slice(&[1u8; BYTE32_LEN]);
+    put_u128(
+        &mut raw,
+        reduced_exit_release_quantity_offset(),
+        release_quantity,
+    );
+    put_u32(
+        &mut raw,
+        reduced_exit_state_output_index_offset(),
+        state_output_index,
+    );
+    put_u32(
+        &mut raw,
+        reduced_exit_vault_output_index_offset(),
+        vault_output_index,
+    );
+    raw[reduced_exit_state_type_hash_offset()..reduced_exit_state_type_hash_offset() + BYTE32_LEN]
+        .copy_from_slice(state_type_hash);
+    raw[reduced_exit_vault_lock_hash_offset()..reduced_exit_vault_lock_hash_offset() + BYTE32_LEN]
+        .copy_from_slice(vault_lock_hash);
+    raw[reduced_exit_state_lock_hash_offset()..reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
+        .copy_from_slice(state_lock_hash);
+    raw[reduced_exit_state_header_offset()
+        ..reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN]
+        .copy_from_slice(state_header);
+    raw[reduced_exit_descriptor_offset()..reduced_exit_descriptor_offset() + descriptor.len()]
+        .copy_from_slice(descriptor);
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+        let before_offset = reduced_exit_right_offset(false, descriptor.len(), index);
+        raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&before[index]);
+        let after_offset = reduced_exit_right_offset(true, descriptor.len(), index);
+        raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+    }
+    Ok(raw)
+}
+
+fn reduced_exit_participant_entries(
+    alice: &SigningKey,
+    bob: &SigningKey,
+) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
+    let mut entries = [
+        ([1u8; BYTE32_LEN], k256_pubkey(alice)),
+        ([2u8; BYTE32_LEN], k256_pubkey(bob)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    entries
+}
+
+fn reduced_exit_rights_pair(
+    release_quantity: u128,
+) -> (
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+) {
+    let before = [
+        factory_right_bytes(1, 10, 0, 100),
+        factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, release_quantity),
+        factory_right_bytes(1, 10, 2, 1),
+        factory_right_bytes(1, 10, 3, 1),
+        factory_right_bytes(1, 10, 4, 20),
+        factory_right_bytes(2, 10, 0, 100),
+        factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+        factory_right_bytes(2, 10, 2, 1),
+        factory_right_bytes(2, 10, 3, 1),
+        factory_right_bytes(2, 10, 4, 20),
+    ];
+    let mut after = before;
+    after[1] = factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 0);
+    (before, after)
+}
+
+fn factory_right_bytes(
+    participant: u8,
+    subchannel: u8,
+    kind: u8,
+    quantity: u128,
+) -> [u8; FACTORY_RIGHT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+    raw[0..BYTE32_LEN].fill(participant);
+    raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
+    raw[2 * BYTE32_LEN] = kind;
+    raw[2 * BYTE32_LEN + 1] = 0;
+    put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
+    raw
+}
+
+fn sign_reduced_exit_witness(
+    witness: &mut [u8],
+    participant: [u8; BYTE32_LEN],
+    key: &SigningKey,
+    digest: &[u8; BYTE32_LEN],
+) -> Result<()> {
+    let sig = ecdsa_signature(key, digest)?;
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+        let offset = reduced_exit_participant_offset(index);
+        if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&sig);
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "participant not present in reduced factory exit witness"
+    ))
+}
+
+fn reduced_exit_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_exit_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn reduced_exit_release_quantity_offset() -> usize {
+    reduced_exit_touched_offset() + BYTE32_LEN
+}
+
+fn reduced_exit_state_output_index_offset() -> usize {
+    reduced_exit_release_quantity_offset() + 16
+}
+
+fn reduced_exit_vault_output_index_offset() -> usize {
+    reduced_exit_state_output_index_offset() + 4
+}
+
+fn reduced_exit_state_type_hash_offset() -> usize {
+    reduced_exit_vault_output_index_offset() + 4
+}
+
+fn reduced_exit_vault_lock_hash_offset() -> usize {
+    reduced_exit_state_type_hash_offset() + BYTE32_LEN
+}
+
+fn reduced_exit_state_lock_hash_offset() -> usize {
+    reduced_exit_vault_lock_hash_offset() + BYTE32_LEN
+}
+
+fn reduced_exit_state_header_offset() -> usize {
+    reduced_exit_state_lock_hash_offset() + BYTE32_LEN
+}
+
+fn reduced_exit_descriptor_offset() -> usize {
+    reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN
+}
+
+fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
+    let before_offset = reduced_exit_descriptor_offset() + descriptor_len;
+    if after {
+        before_offset
+            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
+            + index * FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_V1_LEN
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

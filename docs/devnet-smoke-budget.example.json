@@ -1,15 +1,51 @@
 {
   "schema": "morph.devnet_smoke_budget.v1",
   "max_total_cycles": 200000000,
-  "max_tx_cycles": 20000000,
+  "max_tx_cycles": 10000000,
   "max_total_bytes": 2000000,
-  "max_tx_bytes": 50000,
+  "max_tx_bytes": 500000,
   "transactions": [
+    {
+      "check": "deploy-contracts",
+      "path": "$",
+      "max_cycles": 2000000,
+      "max_bytes": 500000
+    },
     {
       "check": "factory-reduced-rights-smoke",
       "path": "$.update",
       "max_cycles": 6000000,
       "max_bytes": 4000
+    },
+    {
+      "check": "factory-reduced-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 10000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 10000000,
+      "max_bytes": 9500
+    },
+    {
+      "check": "factory/exit-channel",
+      "path": "$",
+      "max_cycles": 9000000,
+      "max_bytes": 4000
+    },
+    {
+      "check": "factory-xudt/smoke",
+      "path": "$.exit",
+      "max_cycles": 9000000,
+      "max_bytes": 4500
+    },
+    {
+      "check": "factory-xudt-negative/smoke",
+      "path": "$.exit",
+      "max_cycles": 9000000,
+      "max_bytes": 4500
     }
   ]
 }

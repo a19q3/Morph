@@ -85,6 +85,23 @@ own right quantities to decrease; inflation, unrelated participant changes, and
 digest/root mismatches are rejected. This is intentionally not a general
 Merkle factory proof and not a reduced-signature factory exit.
 
+The reduced factory-exit safety predicate is now represented both at the host
+layer and in a fixed-width on-chain witness. In the narrow reserve-claim case,
+exactly one authorised participant may release their own `ReserveClaim`; the
+release amount must match the before/after delta, and every other factory
+right must remain unchanged. The CLI can serialise this predicate as a
+`morph.factory_reduced_exit_package.v1` fixture and validate it independently.
+On chain, `FactoryReducedExitWitnessV1` binds the rights-root transition, the
+one-signer reduced signature, the local child StateCell evidence, the
+settlement descriptor, and the factory vault release. `morph-factory-type`
+checks the FactoryStateHeader transition and child materialisation, while
+`morph-factory-vault-lock` enforces reserve conservation.
+CKB-VM tests cover both the CKB and CKB+xUDT reduced-exit child-vault shapes,
+including typed amount and type mismatch rejection.
+`factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke` publish
+this path on devnet, then use the ordinary child-channel publication and
+finalisation flow.
+
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
 `non_interference_digest`; `validate-factory-package` checks canonical roots,
@@ -98,8 +115,9 @@ emits the narrower host-side form: after the non-interference predicate passes,
 only the authorised participants sign the same style of digest.
 `validate-factory-state-package` verifies the nested update package, the
 participant-id/public-key bindings, the selected signature mode, the threshold,
-and every secp256k1 signature. The reduced form is still a host-side proof
-package, not an on-chain reduced-signature factory exit.
+and every secp256k1 signature. This reduced factory-state fixture remains a
+host-side package; on-chain reduced publication uses the dedicated fixed-width
+reduced-rights and reduced-exit witnesses.
 
 For chain publication, the CLI also supports a narrower factory-state-cell
 package. It stores the exact `FactoryStateHeaderV1` bytes and the
@@ -162,8 +180,9 @@ process manager rather than becoming its own process manager.
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
-- No reduced-signature factory exits. The implemented reduced-rights path is a
-  bounded claim-reducing state update, not a value-releasing local exit.
+- No general reduced-signature factory proof bundle yet. The implemented
+  reduced-exit path is fixed-width and covers CKB and CKB+xUDT reserve-claim
+  smokes.
 - No generic descriptor runtime.
 - No base-layer CKB change.
 

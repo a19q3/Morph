@@ -25,6 +25,22 @@ pub const FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN: usize = 8
     + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
     + BYTE32_LEN
     + 2 * FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN;
+pub const FACTORY_REDUCED_EXIT_COMMON_V1_LEN: usize = 8
+    + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    + BYTE32_LEN
+    + 16
+    + 4
+    + 4
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + STATE_HEADER_V1_LEN;
+pub const FACTORY_REDUCED_EXIT_WITNESS_V1_LEN: usize = FACTORY_REDUCED_EXIT_COMMON_V1_LEN
+    + BILATERAL_CKB_DESCRIPTOR_V1_LEN
+    + 2 * FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN;
+pub const FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN: usize = FACTORY_REDUCED_EXIT_COMMON_V1_LEN
+    + BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
+    + 2 * FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN;
 pub const FACTORY_LOCAL_EXIT_WITNESS_V1_LEN: usize = 2
     + FACTORY_SIGNATURE_WITNESS_V1_LEN
     + 4
@@ -57,6 +73,8 @@ pub const FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1: u16 = 2;
 pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1: u8 = 2;
 pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1: u8 = 2;
 pub const FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1: u8 = 1;
+pub const FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1: u16 = 3;
+pub const FACTORY_RIGHT_KIND_RESERVE_CLAIM: u8 = 1;
 pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1: u16 = 1;
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
@@ -66,6 +84,7 @@ pub const FACTORY_RIGHTS_ROOT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHTS_ROOT
 pub const FACTORY_ACCESS_MANIFEST_ROOT_DOMAIN_V1: &[u8] =
     b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_ROOT_V1";
 pub const FACTORY_REDUCED_RIGHTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_REDUCED_RIGHTS_V1";
+pub const FACTORY_REDUCED_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_REDUCED_EXIT_V1";
 pub const FACTORY_LOCAL_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_LOCAL_EXIT_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
@@ -797,6 +816,422 @@ fn verify_reduced_rights_signature(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactoryReducedExitWitnessV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactoryReducedExitWitnessV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
+            && raw.len() != FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1
+            || witness.participant_threshold() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1
+            || witness.participant_count() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1
+            || witness.authorised_count() != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1
+            || witness.right_count() != FACTORY_REDUCED_RIGHTS_COUNT_V1
+            || read_u16(raw, 6) != 0
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        if witness.participant(0) >= witness.participant(1)
+            || witness.pubkey(0) == witness.pubkey(1)
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        if witness.signed_count() != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1 {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        StateHeaderV1::parse(witness.exit_state_header())?;
+        match witness.settlement_descriptor().len() {
+            BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+                BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            }
+            BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+                BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            }
+            _ => return Err(ScriptError::SettlementDescriptorEncoding),
+        }
+        witness.validate_right_order(false)?;
+        witness.validate_right_order(true)?;
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn participant_threshold(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn participant_count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn authorised_count(&self) -> u8 {
+        self.raw[4]
+    }
+
+    pub fn right_count(&self) -> u8 {
+        self.raw[5]
+    }
+
+    pub fn participant(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_participant_offset(index),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn pubkey(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_participant_offset(index) + BYTE32_LEN,
+            COMPRESSED_SECP256K1_PUBKEY_LEN,
+        )
+    }
+
+    pub fn signed_flag(&self, index: usize) -> u8 {
+        self.raw[factory_reduced_exit_participant_offset(index)
+            + BYTE32_LEN
+            + COMPRESSED_SECP256K1_PUBKEY_LEN]
+    }
+
+    pub fn signature(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_participant_offset(index)
+                + BYTE32_LEN
+                + COMPRESSED_SECP256K1_PUBKEY_LEN
+                + 1,
+            ECDSA_SIGNATURE_LEN,
+        )
+    }
+
+    pub fn touched_participant(&self) -> &'a [u8] {
+        field(self.raw, factory_reduced_exit_touched_offset(), BYTE32_LEN)
+    }
+
+    pub fn release_quantity(&self) -> u128 {
+        read_u128(self.raw, factory_reduced_exit_release_quantity_offset())
+    }
+
+    pub fn state_output_index(&self) -> u32 {
+        read_u32(self.raw, factory_reduced_exit_state_output_index_offset())
+    }
+
+    pub fn vault_output_index(&self) -> u32 {
+        read_u32(self.raw, factory_reduced_exit_vault_output_index_offset())
+    }
+
+    pub fn state_type_hash(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_state_type_hash_offset(),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn vault_lock_hash(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_vault_lock_hash_offset(),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn state_lock_hash(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_state_lock_hash_offset(),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn exit_state_header(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_reduced_exit_state_header_offset(),
+            STATE_HEADER_V1_LEN,
+        )
+    }
+
+    pub fn settlement_descriptor(&self) -> &'a [u8] {
+        let offset = factory_reduced_exit_descriptor_offset();
+        let len = if self.raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN {
+            BILATERAL_CKB_DESCRIPTOR_V1_LEN
+        } else {
+            BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
+        };
+        field(self.raw, offset, len)
+    }
+
+    pub fn right_before(&self, index: usize) -> Result<FactoryRightV1<'a>> {
+        FactoryRightV1::parse(field(
+            self.raw,
+            factory_reduced_exit_right_offset(false, self.settlement_descriptor().len(), index),
+            FACTORY_RIGHT_V1_LEN,
+        ))
+    }
+
+    pub fn right_after(&self, index: usize) -> Result<FactoryRightV1<'a>> {
+        FactoryRightV1::parse(field(
+            self.raw,
+            factory_reduced_exit_right_offset(true, self.settlement_descriptor().len(), index),
+            FACTORY_RIGHT_V1_LEN,
+        ))
+    }
+
+    pub fn local_exit_digest(&self) -> [u8; 32] {
+        factory_local_exit_digest_v1(
+            self.state_output_index(),
+            self.vault_output_index(),
+            self.state_type_hash(),
+            self.vault_lock_hash(),
+            self.state_lock_hash(),
+            self.exit_state_header(),
+            self.settlement_descriptor(),
+        )
+    }
+
+    pub fn participants_commitment(&self) -> [u8; 32] {
+        factory_participants_commitment_v1(
+            self.participant_threshold(),
+            &[
+                (self.participant(0), self.pubkey(0)),
+                (self.participant(1), self.pubkey(1)),
+            ],
+        )
+    }
+
+    pub fn rights_root(&self, after: bool) -> Result<[u8; 32]> {
+        let count = [self.right_count()];
+        let mut hasher = new_blake2b();
+        hasher.update(FACTORY_RIGHTS_ROOT_DOMAIN_V1);
+        hasher.update(&count);
+        for index in 0..self.right_count() as usize {
+            let right = if after {
+                self.right_after(index)?
+            } else {
+                self.right_before(index)?
+            };
+            hasher.update(right.raw());
+        }
+        let mut out = [0u8; 32];
+        hasher.finalize(&mut out);
+        Ok(out)
+    }
+
+    pub fn access_manifest_root(&self, after: bool) -> Result<[u8; 32]> {
+        let count = [self.right_count()];
+        let mut hasher = new_blake2b();
+        hasher.update(FACTORY_ACCESS_MANIFEST_ROOT_DOMAIN_V1);
+        hasher.update(&count);
+        for index in 0..self.right_count() as usize {
+            let right = if after {
+                self.right_after(index)?
+            } else {
+                self.right_before(index)?
+            };
+            hasher.update(right.participant());
+            hasher.update(right.subchannel());
+            hasher.update(&[right.kind(), right.asset_present()]);
+            hasher.update(right.asset_type());
+        }
+        let mut out = [0u8; 32];
+        hasher.finalize(&mut out);
+        Ok(out)
+    }
+
+    pub fn non_interference_digest(
+        &self,
+        old_header: &FactoryStateHeaderV1,
+        new_header: &FactoryStateHeaderV1,
+    ) -> Result<[u8; 32]> {
+        let old_update_number = old_header.update_number().to_le_bytes();
+        let new_update_number = new_header.update_number().to_le_bytes();
+        let release_quantity = self.release_quantity().to_le_bytes();
+        let before_root = self.rights_root(false)?;
+        let after_root = self.rights_root(true)?;
+        let before_access_root = self.access_manifest_root(false)?;
+        let after_access_root = self.access_manifest_root(true)?;
+        let local_exit_digest = self.local_exit_digest();
+        Ok(blake2b256(&[
+            FACTORY_REDUCED_EXIT_DOMAIN_V1,
+            old_header.factory_id(),
+            &old_update_number,
+            &new_update_number,
+            &before_root,
+            &after_root,
+            &before_access_root,
+            &after_access_root,
+            self.touched_participant(),
+            &release_quantity,
+            &local_exit_digest,
+        ]))
+    }
+
+    fn signed_count(&self) -> u8 {
+        let mut count = 0u8;
+        for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+            match self.signed_flag(index) {
+                0 => {}
+                1 => count = count.saturating_add(1),
+                _ => return u8::MAX,
+            }
+        }
+        count
+    }
+
+    fn validate_right_order(&self, after: bool) -> Result<()> {
+        let mut previous: Option<FactoryRightV1> = None;
+        for index in 0..self.right_count() as usize {
+            let right = if after {
+                self.right_after(index)?
+            } else {
+                self.right_before(index)?
+            };
+            if let Some(prev) = previous
+                && prev.id_key() >= right.id_key()
+            {
+                return Err(ScriptError::FactoryReducedProofEncoding);
+            }
+            previous = Some(right);
+        }
+        Ok(())
+    }
+}
+
+pub fn verify_reduced_factory_exit_update(
+    old_header: &FactoryStateHeaderV1,
+    new_header: &FactoryStateHeaderV1,
+    witness: &FactoryReducedExitWitnessV1,
+) -> Result<()> {
+    if new_header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1 {
+        return Err(ScriptError::FactoryReducedProofEncoding);
+    }
+    if new_header.participants_commitment() != witness.participants_commitment().as_slice() {
+        return Err(ScriptError::ParticipantCommitmentMismatch);
+    }
+
+    let before_root = witness.rights_root(false)?;
+    let after_root = witness.rights_root(true)?;
+    if old_header.state_root() != before_root.as_slice()
+        || new_header.state_root() != after_root.as_slice()
+    {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    let before_access_root = witness.access_manifest_root(false)?;
+    let after_access_root = witness.access_manifest_root(true)?;
+    if old_header.access_manifest_root() != before_access_root.as_slice()
+        || new_header.access_manifest_root() != after_access_root.as_slice()
+    {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    let digest = witness.non_interference_digest(old_header, new_header)?;
+    if new_header.non_interference_digest() != digest.as_slice() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+
+    validate_reduced_exit_local_evidence(witness)?;
+    validate_reduced_exit_non_interference(witness)?;
+    verify_reduced_exit_signature(new_header, witness)
+}
+
+fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -> Result<()> {
+    let exit_header = StateHeaderV1::parse(witness.exit_state_header())?;
+    if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    if exit_header.settlement_descriptor_commitment()
+        != settlement_descriptor_commitment_v1(witness.settlement_descriptor()).as_slice()
+    {
+        return Err(ScriptError::SettlementDescriptorMismatch);
+    }
+    match witness.settlement_descriptor().len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1 {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+        }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+        }
+        _ => return Err(ScriptError::SettlementDescriptorEncoding),
+    }
+    Ok(())
+}
+
+fn validate_reduced_exit_non_interference(witness: &FactoryReducedExitWitnessV1) -> Result<()> {
+    if witness.release_quantity() == 0 {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    let touched = witness.touched_participant();
+    let release_quantity = witness.release_quantity();
+    let mut consumed_claims = 0u8;
+
+    for index in 0..witness.right_count() as usize {
+        let before = witness.right_before(index)?;
+        let after = witness.right_after(index)?;
+        if !before.same_id(&after) {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+
+        if before.participant() == touched
+            && before.kind() == FACTORY_RIGHT_KIND_RESERVE_CLAIM
+            && before.quantity() >= release_quantity
+            && before.quantity() - release_quantity == after.quantity()
+        {
+            consumed_claims = consumed_claims.saturating_add(1);
+        } else if after.quantity() != before.quantity() {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+    }
+
+    if consumed_claims == 1 {
+        Ok(())
+    } else {
+        Err(ScriptError::FactoryReducedProofMismatch)
+    }
+}
+
+fn verify_reduced_exit_signature(
+    header: &FactoryStateHeaderV1,
+    witness: &FactoryReducedExitWitnessV1,
+) -> Result<()> {
+    let digest = header.signing_digest();
+    let mut matched = false;
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+        if witness.signed_flag(index) == 0 {
+            continue;
+        }
+        if witness.participant(index) != witness.touched_participant() {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        let verifying_key = VerifyingKey::from_sec1_bytes(witness.pubkey(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        let signature = Signature::try_from(witness.signature(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| ScriptError::InvalidParticipantSignature)?;
+        matched = true;
+    }
+    if matched {
+        Ok(())
+    } else {
+        Err(ScriptError::FactoryReducedProofMismatch)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FactoryLocalExitWitnessV1<'a> {
     raw: &'a [u8],
 }
@@ -1219,6 +1654,58 @@ fn factory_reduced_right_offset(after: bool, index: usize) -> usize {
     }
 }
 
+fn factory_reduced_exit_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn factory_reduced_exit_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn factory_reduced_exit_release_quantity_offset() -> usize {
+    factory_reduced_exit_touched_offset() + BYTE32_LEN
+}
+
+fn factory_reduced_exit_state_output_index_offset() -> usize {
+    factory_reduced_exit_release_quantity_offset() + 16
+}
+
+fn factory_reduced_exit_vault_output_index_offset() -> usize {
+    factory_reduced_exit_state_output_index_offset() + 4
+}
+
+fn factory_reduced_exit_state_type_hash_offset() -> usize {
+    factory_reduced_exit_vault_output_index_offset() + 4
+}
+
+fn factory_reduced_exit_vault_lock_hash_offset() -> usize {
+    factory_reduced_exit_state_type_hash_offset() + BYTE32_LEN
+}
+
+fn factory_reduced_exit_state_lock_hash_offset() -> usize {
+    factory_reduced_exit_vault_lock_hash_offset() + BYTE32_LEN
+}
+
+fn factory_reduced_exit_state_header_offset() -> usize {
+    factory_reduced_exit_state_lock_hash_offset() + BYTE32_LEN
+}
+
+fn factory_reduced_exit_descriptor_offset() -> usize {
+    factory_reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN
+}
+
+fn factory_reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
+    let before_offset = factory_reduced_exit_descriptor_offset() + descriptor_len;
+    if after {
+        before_offset
+            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
+            + index * FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_V1_LEN
+    }
+}
+
 fn descriptor_output_offset(index: usize) -> usize {
     4 + index * (BYTE32_LEN + 8)
 }
@@ -1451,6 +1938,208 @@ mod tests {
         (old_raw, new_raw, witness_raw)
     }
 
+    fn reduced_exit_rights_pair(
+        reserve_claim_after_quantity: u128,
+        mutate_other_right: bool,
+    ) -> (
+        [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+        [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    ) {
+        let before = [
+            factory_right_bytes(1, 10, 0, 100),
+            factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+            factory_right_bytes(1, 10, 2, 1),
+            factory_right_bytes(1, 10, 3, 1),
+            factory_right_bytes(1, 10, 4, 20),
+            factory_right_bytes(2, 10, 0, 100),
+            factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+            factory_right_bytes(2, 10, 2, 1),
+            factory_right_bytes(2, 10, 3, 1),
+            factory_right_bytes(2, 10, 4, 20),
+        ];
+        let mut after = before;
+        after[1] = factory_right_bytes(
+            1,
+            10,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            reserve_claim_after_quantity,
+        );
+        if mutate_other_right {
+            after[0] = factory_right_bytes(1, 10, 0, 90);
+        }
+        (before, after)
+    }
+
+    fn reduced_exit_witness_raw(
+        key0: &SigningKey,
+        key1: &SigningKey,
+        release_quantity: u128,
+        exit_state_header: &[u8; STATE_HEADER_V1_LEN],
+        settlement_descriptor: &[u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN],
+        before: &[[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+        after: &[[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    ) -> [u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN] {
+        let touched = [1u8; BYTE32_LEN];
+        let mut entries = [([1u8; 32], pubkey(key0)), ([2u8; 32], pubkey(key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN];
+        put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1);
+        raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+        raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+        raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+        raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+        for (index, (participant, pubkey)) in entries.iter().enumerate() {
+            let offset = factory_reduced_exit_participant_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(pubkey);
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+                u8::from(participant.as_slice() == touched.as_slice());
+        }
+        raw[factory_reduced_exit_touched_offset()
+            ..factory_reduced_exit_touched_offset() + BYTE32_LEN]
+            .copy_from_slice(&touched);
+        put_u128(
+            &mut raw,
+            factory_reduced_exit_release_quantity_offset(),
+            release_quantity,
+        );
+        put_u32(
+            &mut raw,
+            factory_reduced_exit_state_output_index_offset(),
+            1,
+        );
+        put_u32(
+            &mut raw,
+            factory_reduced_exit_vault_output_index_offset(),
+            2,
+        );
+        raw[factory_reduced_exit_state_type_hash_offset()
+            ..factory_reduced_exit_state_type_hash_offset() + BYTE32_LEN]
+            .fill(11);
+        raw[factory_reduced_exit_vault_lock_hash_offset()
+            ..factory_reduced_exit_vault_lock_hash_offset() + BYTE32_LEN]
+            .fill(12);
+        raw[factory_reduced_exit_state_lock_hash_offset()
+            ..factory_reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
+            .fill(13);
+        raw[factory_reduced_exit_state_header_offset()
+            ..factory_reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN]
+            .copy_from_slice(exit_state_header);
+        raw[factory_reduced_exit_descriptor_offset()
+            ..factory_reduced_exit_descriptor_offset() + BILATERAL_CKB_DESCRIPTOR_V1_LEN]
+            .copy_from_slice(settlement_descriptor);
+        for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+            let before_offset =
+                factory_reduced_exit_right_offset(false, BILATERAL_CKB_DESCRIPTOR_V1_LEN, index);
+            raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN]
+                .copy_from_slice(&before[index]);
+            let after_offset =
+                factory_reduced_exit_right_offset(true, BILATERAL_CKB_DESCRIPTOR_V1_LEN, index);
+            raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+        }
+        raw
+    }
+
+    fn sign_reduced_exit_witness(
+        raw: &mut [u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN],
+        participant: [u8; BYTE32_LEN],
+        key: &SigningKey,
+        digest: &[u8; 32],
+    ) {
+        let sig = signature(key, digest);
+        for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+            if field(
+                raw,
+                factory_reduced_exit_participant_offset(index),
+                BYTE32_LEN,
+            ) == participant.as_slice()
+            {
+                let offset = factory_reduced_exit_participant_offset(index)
+                    + BYTE32_LEN
+                    + COMPRESSED_SECP256K1_PUBKEY_LEN
+                    + 1;
+                raw[offset..offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&sig);
+            }
+        }
+    }
+
+    fn reduced_exit_headers_and_witness(
+        release_quantity: u128,
+        reserve_claim_after_quantity: u128,
+        mutate_other_right: bool,
+        descriptor_commitment_valid: bool,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN],
+    ) {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let participants_commitment = factory_participants_commitment_v1(
+            2,
+            &[
+                (entries[0].0.as_slice(), entries[0].1.as_slice()),
+                (entries[1].0.as_slice(), entries[1].1.as_slice()),
+            ],
+        );
+
+        let settlement_descriptor = descriptor_bytes([1u8; 32], 100, [2u8; 32], 200);
+        let mut exit_state_header = header_bytes(0, PHASE_ACTIVE);
+        if descriptor_commitment_valid {
+            exit_state_header[174..206]
+                .copy_from_slice(&settlement_descriptor_commitment_v1(&settlement_descriptor));
+        } else {
+            exit_state_header[174..206].fill(99);
+        }
+        put_u16(
+            &mut exit_state_header,
+            206,
+            BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        );
+
+        let (before, after) =
+            reduced_exit_rights_pair(reserve_claim_after_quantity, mutate_other_right);
+        let mut witness_raw = reduced_exit_witness_raw(
+            &key0,
+            &key1,
+            release_quantity,
+            &exit_state_header,
+            &settlement_descriptor,
+            &before,
+            &after,
+        );
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        let mut old_raw = factory_header_bytes(1);
+        old_raw[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
+        old_raw[108..140].copy_from_slice(&participants_commitment);
+        old_raw[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+
+        let mut new_raw = factory_header_bytes(2);
+        new_raw[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
+        new_raw[108..140].copy_from_slice(&participants_commitment);
+        new_raw[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
+        let preliminary_new = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let digest = witness
+            .non_interference_digest(&old_header, &preliminary_new)
+            .unwrap();
+        new_raw[172..204].copy_from_slice(&digest);
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        sign_reduced_exit_witness(
+            &mut witness_raw,
+            [1u8; 32],
+            &key0,
+            &new_header.signing_digest(),
+        );
+
+        (old_raw, new_raw, witness_raw)
+    }
+
     fn descriptor_bytes(
         left_lock_hash: [u8; 32],
         left_capacity: u64,
@@ -1507,6 +2196,10 @@ mod tests {
 
     fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
         raw[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn put_u32(raw: &mut [u8], offset: usize, value: u32) {
+        raw[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
@@ -1671,6 +2364,8 @@ mod tests {
             "FactorySignatureWitnessV1: 262 bytes",
             "FactoryRightV1: 114 bytes",
             "FactoryReducedRightsWitnessV1: 2580 bytes",
+            "FactoryReducedExitWitnessV1: 3058 bytes",
+            "FactoryReducedExitXudtWitnessV1: 3122 bytes",
             "FactoryLocalExitWitnessV1: 726 bytes",
             "FactoryLocalExitXudtWitnessV1: 790 bytes",
             "struct StateHeaderV1",
@@ -1678,6 +2373,8 @@ mod tests {
             "struct BilateralSignatureWitnessV1",
             "struct FactorySignatureWitnessV1",
             "struct FactoryReducedRightsWitnessV1",
+            "struct FactoryReducedExitWitnessV1",
+            "struct FactoryReducedExitXudtWitnessV1",
             "struct FactoryLocalExitWitnessV1",
             "struct FactoryLocalExitXudtWitnessV1",
             "struct BilateralCkbSettlementDescriptorV1",
@@ -1691,6 +2388,7 @@ mod tests {
             "change_lock_hash: Byte32",
             "participant_0_id: Byte32",
             "non_interference_digest: Byte32",
+            "release_quantity: uint128",
         ] {
             assert!(
                 schema.contains(expected),
@@ -1829,6 +2527,101 @@ mod tests {
         assert_eq!(
             verify_reduced_factory_rights_update(&old_header, &new_header, &witness).unwrap_err(),
             ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn reduced_factory_exit_witness_fields_are_fixed_width() {
+        let (_, _, witness_raw) = reduced_exit_headers_and_witness(20, 30, false, true);
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(witness.version(), FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1);
+        assert_eq!(witness.release_quantity(), 20);
+        assert_eq!(witness.state_output_index(), 1);
+        assert_eq!(witness.vault_output_index(), 2);
+        assert_eq!(witness.state_type_hash(), &[11u8; 32]);
+        assert_eq!(witness.vault_lock_hash(), &[12u8; 32]);
+        assert_eq!(witness.state_lock_hash(), &[13u8; 32]);
+        assert_eq!(
+            StateHeaderV1::parse(witness.exit_state_header())
+                .unwrap()
+                .phase(),
+            PHASE_ACTIVE
+        );
+        assert_eq!(
+            witness.settlement_descriptor().len(),
+            BILATERAL_CKB_DESCRIPTOR_V1_LEN
+        );
+        assert_eq!(witness.right_before(1).unwrap().quantity(), 50);
+        assert_eq!(witness.right_after(1).unwrap().quantity(), 30);
+    }
+
+    #[test]
+    fn verifies_reduced_factory_exit_reserve_release() {
+        let (old_raw, new_raw, witness_raw) = reduced_exit_headers_and_witness(20, 30, false, true);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap();
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_release_mismatch() {
+        let (old_raw, new_raw, witness_raw) = reduced_exit_headers_and_witness(20, 35, false, true);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_other_right_mutation() {
+        let (old_raw, new_raw, witness_raw) = reduced_exit_headers_and_witness(20, 30, true, true);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_bad_signature() {
+        let (old_raw, new_raw, mut witness_raw) =
+            reduced_exit_headers_and_witness(20, 30, false, true);
+        let signature_offset = factory_reduced_exit_participant_offset(0)
+            + BYTE32_LEN
+            + COMPRESSED_SECP256K1_PUBKEY_LEN
+            + 1;
+        witness_raw[signature_offset + ECDSA_SIGNATURE_LEN - 1] ^= 1;
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_descriptor_mismatch() {
+        let (old_raw, new_raw, witness_raw) =
+            reduced_exit_headers_and_witness(20, 30, false, false);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::SettlementDescriptorMismatch
         );
     }
 

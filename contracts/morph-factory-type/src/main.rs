@@ -20,10 +20,12 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
+    FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
     FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FactoryLocalExitWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
-    FactoryStateHeaderV1, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError,
-    StateHeaderV1, blake2b256, read_u128, verify_factory_state_signatures,
+    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1,
+    FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
+    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV1, blake2b256, read_u128,
+    verify_factory_state_signatures, verify_reduced_factory_exit_update,
     verify_reduced_factory_rights_update,
 };
 
@@ -123,6 +125,12 @@ fn validate_participant_authorisation(
     } else if raw.len() == FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN {
         let witness = FactoryReducedRightsWitnessV1::parse(raw.as_ref())?;
         verify_reduced_factory_rights_update(old_header, header, &witness)
+    } else if raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
+        || raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
+    {
+        let witness = FactoryReducedExitWitnessV1::parse(raw.as_ref())?;
+        verify_reduced_factory_exit_update(old_header, header, &witness)?;
+        validate_reduced_exit(header, &witness)
     } else {
         let witness = FactoryLocalExitWitnessV1::parse(raw.as_ref())?;
         let signatures = witness.factory_signature()?;
@@ -140,34 +148,70 @@ fn validate_local_exit(
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
 
-    let state_index = witness.state_output_index() as usize;
-    let vault_index = witness.vault_output_index() as usize;
+    validate_exit_materialisation(
+        witness.state_output_index(),
+        witness.vault_output_index(),
+        witness.state_type_hash(),
+        witness.vault_lock_hash(),
+        witness.state_lock_hash(),
+        witness.exit_state_header(),
+        witness.settlement_descriptor(),
+    )
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_reduced_exit(
+    _header: &FactoryStateHeaderV1,
+    witness: &FactoryReducedExitWitnessV1,
+) -> Result<()> {
+    validate_exit_materialisation(
+        witness.state_output_index(),
+        witness.vault_output_index(),
+        witness.state_type_hash(),
+        witness.vault_lock_hash(),
+        witness.state_lock_hash(),
+        witness.exit_state_header(),
+        witness.settlement_descriptor(),
+    )
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_exit_materialisation(
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8],
+    vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
+    exit_state_header: &[u8],
+    descriptor_raw: &[u8],
+) -> Result<()> {
+    let state_index = state_output_index as usize;
+    let vault_index = vault_output_index as usize;
     if state_index == vault_index {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
 
     let state_data =
         load_cell_data(state_index, Source::Output).map_err(|_| ScriptError::StateCellMissing)?;
-    if state_data.as_slice() != witness.exit_state_header() {
+    if state_data.as_slice() != exit_state_header {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    let state_type_hash = load_cell_type_hash(state_index, Source::Output)
+    let output_state_type_hash = load_cell_type_hash(state_index, Source::Output)
         .map_err(|_| ScriptError::FactoryLocalExitMismatch)?
         .ok_or(ScriptError::FactoryLocalExitMismatch)?;
-    if state_type_hash.as_slice() != witness.state_type_hash() {
+    if output_state_type_hash.as_slice() != state_type_hash {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    let state_lock_hash =
+    let output_state_lock_hash =
         load_cell_lock_hash(state_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if state_lock_hash.as_slice() != witness.state_lock_hash() {
+    if output_state_lock_hash.as_slice() != state_lock_hash {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
 
-    let exit_header = StateHeaderV1::parse(witness.exit_state_header())?;
+    let exit_header = StateHeaderV1::parse(exit_state_header)?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    let descriptor_raw = witness.settlement_descriptor();
     if exit_header.settlement_descriptor_commitment()
         != blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, descriptor_raw]).as_slice()
     {
@@ -181,9 +225,9 @@ fn validate_local_exit(
         return Err(ScriptError::FundingAnchorMismatch);
     }
 
-    let vault_lock_hash =
+    let output_vault_lock_hash =
         load_cell_lock_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if vault_lock_hash.as_slice() != witness.vault_lock_hash() {
+    if output_vault_lock_hash.as_slice() != vault_lock_hash {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
     validate_child_vault_shape(exit_header, descriptor_raw, vault_index)?;

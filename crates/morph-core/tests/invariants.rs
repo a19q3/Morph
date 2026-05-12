@@ -154,6 +154,23 @@ fn factory_update() -> FactoryUpdate {
     }
 }
 
+fn factory_reduced_exit(update: &FactoryUpdate, release_quantity: Amount) -> FactoryReducedExit {
+    let reserve_claim = update
+        .before
+        .iter()
+        .find(|right| {
+            right.id.participant == bytes32(1) && right.id.kind == FactoryRightKind::ReserveClaim
+        })
+        .expect("fixture reserve claim")
+        .id
+        .clone();
+    FactoryReducedExit {
+        participant: bytes32(1),
+        reserve_claim,
+        release_quantity,
+    }
+}
+
 #[test]
 fn signing_digest_is_domain_separated_and_state_sensitive() {
     let h1 = header(1, Phase::Settling);
@@ -327,6 +344,67 @@ fn factory_non_interference_rejects_duplicate_right_ids() {
 
     let err = validate_factory_non_interference(&update).unwrap_err();
     assert_eq!(err, MorphError::FactoryDuplicateRight);
+}
+
+#[test]
+fn reduced_factory_exit_accepts_authorised_reserve_claim_release() {
+    let mut update = factory_update();
+    update.after[1].quantity = 30;
+    let exit = factory_reduced_exit(&update, 20);
+
+    validate_reduced_factory_exit(&update, &exit).unwrap();
+}
+
+#[test]
+fn reduced_factory_exit_accepts_full_reserve_claim_consumption() {
+    let mut update = factory_update();
+    let exit = factory_reduced_exit(&update, 50);
+    update.after.retain(|right| right.id != exit.reserve_claim);
+
+    validate_reduced_factory_exit(&update, &exit).unwrap();
+}
+
+#[test]
+fn reduced_factory_exit_rejects_release_amount_mismatch() {
+    let mut update = factory_update();
+    update.after[1].quantity = 31;
+    let exit = factory_reduced_exit(&update, 20);
+
+    let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+    assert_eq!(err, MorphError::FactoryReducedExitInvalid);
+}
+
+#[test]
+fn reduced_factory_exit_rejects_other_touched_right_changes() {
+    let mut update = factory_update();
+    update.after[0].quantity = 90;
+    update.after[1].quantity = 30;
+    let exit = factory_reduced_exit(&update, 20);
+
+    let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+    assert_eq!(err, MorphError::FactoryReducedExitInterference);
+}
+
+#[test]
+fn reduced_factory_exit_requires_exiting_participant_authorisation() {
+    let mut update = factory_update();
+    update.after[1].quantity = 30;
+    update.authorised_participants.clear();
+    let exit = factory_reduced_exit(&update, 20);
+
+    let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMissingAuthorisation);
+}
+
+#[test]
+fn reduced_factory_exit_rejects_extra_authorised_participant() {
+    let mut update = factory_update();
+    update.after[1].quantity = 30;
+    update.authorised_participants.insert(bytes32(2));
+    let exit = factory_reduced_exit(&update, 20);
+
+    let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMissingAuthorisation);
 }
 
 #[test]

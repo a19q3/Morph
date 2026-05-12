@@ -75,6 +75,10 @@ pub enum MorphError {
     FactoryMissingAuthorisation,
     #[error("factory update changes a right outside the declared touched set")]
     FactoryNonInterferenceViolation,
+    #[error("reduced factory exit claim is invalid")]
+    FactoryReducedExitInvalid,
+    #[error("reduced factory exit changes rights outside the consumed reserve claim")]
+    FactoryReducedExitInterference,
 }
 
 pub type Result<T> = std::result::Result<T, MorphError>;
@@ -192,6 +196,57 @@ pub fn validate_factory_non_interference(update: &FactoryUpdate) -> Result<()> {
     for id in after.keys() {
         if !before.contains_key(id) {
             require_factory_right_change_authorised(update, id)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_reduced_factory_exit(
+    update: &FactoryUpdate,
+    exit: &FactoryReducedExit,
+) -> Result<()> {
+    if exit.release_quantity == 0
+        || exit.reserve_claim.participant != exit.participant
+        || exit.reserve_claim.kind != FactoryRightKind::ReserveClaim
+    {
+        return Err(MorphError::FactoryReducedExitInvalid);
+    }
+    if update.touched_participants.len() != 1
+        || update.authorised_participants.len() != 1
+        || !update.touched_participants.contains(&exit.participant)
+        || !update.authorised_participants.contains(&exit.participant)
+    {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+
+    let before = factory_right_map(&update.before)?;
+    let after = factory_right_map(&update.after)?;
+    let before_claim = before
+        .get(&exit.reserve_claim)
+        .ok_or(MorphError::FactoryReducedExitInvalid)?;
+    let after_claim_quantity = after
+        .get(&exit.reserve_claim)
+        .map(|right| right.quantity)
+        .unwrap_or_default();
+    if before_claim.quantity < exit.release_quantity
+        || before_claim.quantity - exit.release_quantity != after_claim_quantity
+    {
+        return Err(MorphError::FactoryReducedExitInvalid);
+    }
+
+    for (id, before_right) in &before {
+        if id == &exit.reserve_claim {
+            continue;
+        }
+        match after.get(id) {
+            Some(after_right) if after_right.quantity == before_right.quantity => {}
+            Some(_) | None => return Err(MorphError::FactoryReducedExitInterference),
+        }
+    }
+    for id in after.keys() {
+        if !before.contains_key(id) {
+            return Err(MorphError::FactoryReducedExitInterference);
         }
     }
 

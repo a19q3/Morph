@@ -139,6 +139,7 @@ the matching binaries. The same command can enforce absolute smoke budgets:
 cargo run -q -p morph-cli -- devnet-smoke-assert \
   --dir target/devnet-smoke/<timestamp> \
   --budget-profile docs/devnet-smoke-budget.example.json
+make smoke-assert-budget
 ```
 
 The profile can set global ceilings and per-transaction ceilings keyed by the
@@ -254,6 +255,25 @@ the live factory cell, and publishes the update through the ordinary
 ```sh
 cargo run -q -p morph-cli -- devnet factory-reduced-rights-smoke --json \
   > target/factory-reduced-rights-smoke.json
+```
+
+The reduced-exit factory path has a separate smoke command. It opens a factory
+whose roots match the bounded reserve-claim fixture, uses Alice's one-signer
+reduced-exit witness to release a child vault, publishes the child state, and
+finalises the child channel:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-reduced-exit-smoke --json \
+  > target/factory-reduced-exit-smoke.json
+```
+
+The typed variant exercises the same reduced signature path, but the released
+child vault carries the devnet xUDT type and commits exact Alice/Bob token
+amounts in the child settlement descriptor:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-reduced-xudt-exit-smoke --json \
+  > target/factory-reduced-xudt-exit-smoke.json
 ```
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
@@ -667,7 +687,11 @@ StateHeaderV1
 FactoryStateHeaderV1
 BilateralSignatureWitnessV1
 FactorySignatureWitnessV1
+FactoryReducedRightsWitnessV1
+FactoryReducedExitWitnessV1
+FactoryReducedExitXudtWitnessV1
 FactoryLocalExitWitnessV1
+FactoryLocalExitXudtWitnessV1
 SponsorPolicyV1
 BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
@@ -681,8 +705,9 @@ consensus or node requirement.
 The conservative factory path is now executable on devnet. It is deliberately
 small: one FactoryStateCell, two named participants, all-participant signatures,
 one FactoryVaultCell, and monotonic update numbers. It can materialise a
-bilateral child channel under full factory-participant consent, but it does not
-claim reduced-signature factory exits yet.
+bilateral child channel under full factory-participant consent. A bounded
+reduced-signature reserve-claim exit is covered in CKB-VM tests; wiring that
+path into the devnet CLI remains open.
 
 Open a factory state cell:
 
@@ -784,7 +809,7 @@ cargo run -q -p morph-cli -- devnet update-factory \
   --json > target/update-reduced-factory.json
 ```
 
-This proves the narrow reduced case on chain: Alice signs a claim-reducing
+This proves the narrow reduced-rights case on chain: Alice signs a claim-reducing
 update, Bob's rights remain unchanged, and the script rejects inflation or root
 mismatch. It is still not a reduced-signature factory exit.
 
@@ -874,8 +899,9 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 ```
 
 The repository-level `scripts/devnet-smoke.sh` includes the additional
-factory-local exit, child publication, child finalisation, and factory xUDT
-child-channel steps, including the factory xUDT negative path.
+factory-local exit, reduced-exit, child publication, child finalisation, and
+factory xUDT child-channel steps, including the factory xUDT negative path and
+the reduced xUDT reserve-claim path.
 `devnet-smoke-report` validates any embedded
 `local_exit_package` while building the summary, so a malformed package fails
 the report rather than being silently displayed. It also parses watchtower
@@ -888,10 +914,12 @@ The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT
 vault, watchtower policy/alerts, a CKB-VM-tested conservative factory type
 script, a factory reserve lock, devnet factory open/update transactions,
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
-child bilateral channels, and a bounded CKB-VM-tested reduced-rights proof for
-claim-reducing factory updates.
-The remaining devnet work is reduced-signature factory exit publication and a
-general proof path for larger factories.
+child bilateral channels, a bounded reduced-rights proof for claim-reducing
+factory updates, and a bounded reduced-exit path that releases a reserve claim
+into child CKB and CKB+xUDT channels.
+The remaining devnet work is a general proof path for larger factories and
+additional typed reduced-exit variants beyond the fixed-width reserve-claim
+smokes.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -909,6 +937,11 @@ cargo run -q -p morph-cli -- print-factory-reduced-rights-fixture \
   > target/factory-reduced-rights.json
 cargo run -q -p morph-cli -- validate-factory-reduced-rights-package \
   target/factory-reduced-rights.json \
+  --json
+cargo run -q -p morph-cli -- print-factory-reduced-exit-fixture \
+  > target/factory-reduced-exit.json
+cargo run -q -p morph-cli -- validate-factory-reduced-exit-package \
+  target/factory-reduced-exit.json \
   --json
 cargo run -q -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json
@@ -934,5 +967,6 @@ digest, and one authorised signature for a claim-reducing update; attempted
 claim inflation is rejected in CKB-VM tests. In the conservative local-exit
 path it verifies the child channel evidence committed by the factory header,
 including xUDT child-vault type and amount checks, while
-`morph-factory-vault-lock` enforces reserve conservation. It does not yet
-verify a reduced-signature value-releasing factory exit.
+`morph-factory-vault-lock` enforces reserve conservation. The devnet CLI now
+also publishes the bounded reserve-claim reduced-exit witnesses in
+`factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke`.

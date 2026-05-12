@@ -153,6 +153,13 @@ pub struct FactoryUpdate {
     pub authorised_participants: BTreeSet<Bytes32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedExit {
+    pub participant: Bytes32,
+    pub reserve_claim: FactoryRightId,
+    pub release_quantity: Amount,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CellClass {
     ChannelReserve,

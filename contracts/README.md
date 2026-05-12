@@ -13,6 +13,13 @@ fixed-width V1 validation subset in no-std CKB scripts:
   descriptor-bound settlement output checks.
 - `morph-sponsor-lock`: owns bounded sponsor budget spending and requires a
   matching settling StateHeader output.
+- `morph-factory-type`: owns conservative FactoryStateCell creation,
+  monotonic updates, full-participant signatures, bounded reduced-rights
+  updates, bounded reserve-claim reduced exits, and local-exit evidence checks.
+- `morph-factory-vault-lock`: owns factory reserve conservation while a
+  conservative or reduced exit materialises a child channel.
+- `morph-devnet-xudt`: provides the devnet-only xUDT issuer and conservation
+  script used by CKB+xUDT smoke paths.
 
 Build the current scripts with:
 

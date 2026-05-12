@@ -7,8 +7,9 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitChannelOptions,
-    FactoryExitChannelTamper, FactoryReducedRightsSmokeOptions, FactorySmokeOptions,
+    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitAuthorisation,
+    FactoryExitChannelOptions, FactoryExitChannelTamper, FactoryReducedExitSmokeOptions,
+    FactoryReducedRightsSmokeOptions, FactoryReducedXudtExitSmokeOptions, FactorySmokeOptions,
     FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions, FinaliseChannelOptions,
     FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
     PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryReducedRightsPackageOptions,
@@ -53,6 +54,8 @@ enum Command {
     PrintReducedFactoryStateFixture,
     /// Print an on-chain reduced-rights factory update package fixture.
     PrintFactoryReducedRightsFixture,
+    /// Print a host-side reduced factory-exit package fixture.
+    PrintFactoryReducedExitFixture,
     /// Print a valid factory local-exit evidence package fixture.
     PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
@@ -94,6 +97,14 @@ enum Command {
     /// Validate an on-chain reduced-rights factory update package.
     ValidateFactoryReducedRightsPackage {
         /// Path to the factory reduced-rights package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a host-side reduced factory-exit package.
+    ValidateFactoryReducedExitPackage {
+        /// Path to the factory reduced-exit package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -551,6 +562,110 @@ enum DevnetCommand {
         /// Directory where reduced-rights factory packages are stored.
         #[arg(long, default_value = "target/morph-factory-state-packages")]
         store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> reduced reserve-claim exit -> publish/finalise child channel.
+    FactoryReducedExitSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Capacity released from the factory reserve into the child vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> reduced reserve-claim CKB+xUDT exit -> publish/finalise child channel.
+    FactoryReducedXudtExitSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Capacity released from the factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's final xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's final xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1422,6 +1537,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintFactoryReducedExitFixture => {
+            let package = factory_packages::fixture_reduced_exit_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintFactoryLocalExitFixture => {
             let package = packages::fixture_factory_local_exit_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -1555,6 +1675,29 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::ValidateFactoryReducedExitPackage { path, json } => {
+            let package = factory_packages::read_factory_reduced_exit_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory reduced-exit package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("participant={}", summary.participant);
+                println!(
+                    "reserve_claim_subchannel={}",
+                    summary.reserve_claim_subchannel
+                );
+                if let Some(asset_type) = &summary.reserve_claim_asset_type {
+                    println!("reserve_claim_asset_type={asset_type}");
+                }
+                println!("release_quantity={}", summary.release_quantity);
+                println!("reserve_claim_before={}", summary.reserve_claim_before);
+                println!("reserve_claim_after={}", summary.reserve_claim_after);
+            }
+            Ok(())
+        }
         Command::ValidateFactoryLocalExitPackage { path, json } => {
             let package = packages::read_factory_local_exit_package(&path)?;
             let summary = package.summary()?;
@@ -1657,6 +1800,7 @@ fn main() -> Result<()> {
                     "factory_reduced_rights_updates={}",
                     report.factory_reduced_rights_updates
                 );
+                println!("factory_reduced_exits={}", report.factory_reduced_exits);
                 println!("factory_local_exits={}", report.factory_local_exits);
                 if let Some(budget) = &report.budget {
                     println!("budget_total_cycles={}", budget.total_estimated_cycles);
@@ -2364,6 +2508,123 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
             }
         }
+        DevnetCommand::FactoryReducedExitSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::factory_reduced_exit_smoke(
+                &rpc,
+                FactoryReducedExitSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("publish_tx_hash={}", report.publish.tx_hash);
+                println!("finalise_tx_hash={}", report.finalise.tx_hash);
+                if let Some(reduced) = &report.exit.reduced_exit {
+                    println!("release_quantity={}", reduced.release_quantity);
+                    println!(
+                        "non_interference_digest={}",
+                        reduced.non_interference_digest
+                    );
+                }
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.exit.metrics);
+                print_metrics(&report.finalise.metrics);
+            }
+        }
+        DevnetCommand::FactoryReducedXudtExitSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::factory_reduced_xudt_exit_smoke(
+                &rpc,
+                FactoryReducedXudtExitSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!(
+                    "xudt_type_hash={}",
+                    report.exit.xudt_type_hash.as_deref().unwrap_or_default()
+                );
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("publish_tx_hash={}", report.publish.tx_hash);
+                println!("finalise_tx_hash={}", report.finalise.tx_hash);
+                if let Some(reduced) = &report.exit.reduced_exit {
+                    println!("release_quantity={}", reduced.release_quantity);
+                    println!("witness_len={}", reduced.witness_len);
+                    println!(
+                        "non_interference_digest={}",
+                        reduced.non_interference_digest
+                    );
+                }
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.exit.metrics);
+                print_metrics(&report.finalise.metrics);
+            }
+        }
         DevnetCommand::FactoryXudtSmoke {
             contracts_dir,
             private_key,
@@ -2531,6 +2792,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     finalise_since,
                     mine_blocks,
                     tamper: FactoryExitChannelTamper::None,
+                    authorisation: FactoryExitAuthorisation::FullParticipants,
                 },
             )?;
             if json {

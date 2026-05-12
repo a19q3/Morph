@@ -7,8 +7,9 @@ use anyhow::{Context, Result, ensure};
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use morph_core::{
-    Amount, Bytes32, FactoryRight, FactoryRightId, FactoryRightKind, FactoryUpdate, blake2b256,
-    bytes32, validate_factory_non_interference,
+    Amount, Bytes32, FactoryReducedExit, FactoryRight, FactoryRightId, FactoryRightKind,
+    FactoryUpdate, blake2b256, bytes32, validate_factory_non_interference,
+    validate_reduced_factory_exit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,7 @@ const FACTORY_PACKAGE_SCHEMA: &str = "morph.factory_update_package.v1";
 const FACTORY_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE_V1";
 const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package.v1";
 const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1";
+const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package.v1";
 const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
 const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1: &str = "authorised_participants_v1";
 
@@ -76,6 +78,19 @@ pub struct StoredFactoryStatePackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryReducedExitPackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub participant: String,
+    pub reserve_claim_subchannel: String,
+    pub reserve_claim_asset_type: Option<String>,
+    pub release_quantity: Amount,
+    pub update_package: StoredFactoryUpdatePackage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryPackageSummary {
     pub factory_id: String,
     pub update_number: u64,
@@ -100,6 +115,18 @@ pub struct FactoryStatePackageSummary {
     pub participants: usize,
     pub signatures: usize,
     pub factory_state_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedExitPackageSummary {
+    pub factory_id: String,
+    pub update_number: u64,
+    pub participant: String,
+    pub reserve_claim_subchannel: String,
+    pub reserve_claim_asset_type: Option<String>,
+    pub release_quantity: Amount,
+    pub reserve_claim_before: Amount,
+    pub reserve_claim_after: Amount,
 }
 
 #[derive(Debug, Serialize)]
@@ -508,6 +535,116 @@ impl StoredFactoryStatePackage {
     }
 }
 
+impl StoredFactoryReducedExitPackage {
+    pub fn from_update_package(
+        update_package: StoredFactoryUpdatePackage,
+        exit: FactoryReducedExit,
+    ) -> Result<Self> {
+        let update_summary = update_package.summary()?;
+        let mut package = Self {
+            schema: FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: update_summary.factory_id,
+            update_number: update_summary.update_number,
+            participant: hex_prefixed(&exit.participant),
+            reserve_claim_subchannel: hex_prefixed(&exit.reserve_claim.subchannel),
+            reserve_claim_asset_type: exit
+                .reserve_claim
+                .asset_type
+                .map(|asset| hex_prefixed(&asset)),
+            release_quantity: exit.release_quantity,
+            update_package,
+        };
+        package.normalise()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<FactoryReducedExit> {
+        ensure!(
+            self.schema == FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA,
+            "unsupported factory reduced-exit package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.factory_id == canonical_hex32(&self.factory_id)?,
+            "factory_id must be canonical"
+        );
+        ensure!(
+            self.participant == canonical_hex32(&self.participant)?,
+            "participant must be canonical"
+        );
+        ensure!(
+            self.reserve_claim_subchannel == canonical_hex32(&self.reserve_claim_subchannel)?,
+            "reserve_claim_subchannel must be canonical"
+        );
+        if let Some(asset_type) = &self.reserve_claim_asset_type {
+            ensure!(
+                asset_type == &canonical_hex32(asset_type)?,
+                "reserve_claim_asset_type must be canonical"
+            );
+        }
+
+        let update_summary = self.update_package.summary()?;
+        ensure!(
+            self.factory_id == update_summary.factory_id,
+            "factory reduced-exit package factory_id does not match update package"
+        );
+        ensure!(
+            self.update_number == update_summary.update_number,
+            "factory reduced-exit package update_number does not match update package"
+        );
+
+        let exit = FactoryReducedExit {
+            participant: hex32_bytes(&self.participant)?,
+            reserve_claim: FactoryRightId {
+                participant: hex32_bytes(&self.participant)?,
+                subchannel: hex32_bytes(&self.reserve_claim_subchannel)?,
+                kind: FactoryRightKind::ReserveClaim,
+                asset_type: self
+                    .reserve_claim_asset_type
+                    .as_ref()
+                    .map(|value| hex32_bytes(value))
+                    .transpose()?,
+            },
+            release_quantity: self.release_quantity,
+        };
+        let update = self.update_package.validate()?;
+        validate_reduced_factory_exit(&update, &exit)
+            .map_err(|err| anyhow::anyhow!("factory reduced-exit check failed: {err}"))?;
+        Ok(exit)
+    }
+
+    pub fn summary(&self) -> Result<FactoryReducedExitPackageSummary> {
+        let exit = self.validate()?;
+        let update = self.update_package.validate()?;
+        let before = reserve_claim_quantity(&update.before, &exit.reserve_claim)?;
+        let after = reserve_claim_quantity(&update.after, &exit.reserve_claim).unwrap_or_default();
+        Ok(FactoryReducedExitPackageSummary {
+            factory_id: self.factory_id.clone(),
+            update_number: self.update_number,
+            participant: self.participant.clone(),
+            reserve_claim_subchannel: self.reserve_claim_subchannel.clone(),
+            reserve_claim_asset_type: self.reserve_claim_asset_type.clone(),
+            release_quantity: self.release_quantity,
+            reserve_claim_before: before,
+            reserve_claim_after: after,
+        })
+    }
+
+    fn normalise(&mut self) -> Result<()> {
+        self.factory_id = canonical_hex32(&self.factory_id)?;
+        self.participant = canonical_hex32(&self.participant)?;
+        self.reserve_claim_subchannel = canonical_hex32(&self.reserve_claim_subchannel)?;
+        self.reserve_claim_asset_type = self
+            .reserve_claim_asset_type
+            .as_ref()
+            .map(|value| canonical_hex32(value))
+            .transpose()?;
+        Ok(())
+    }
+}
+
 impl StoredFactoryRight {
     fn from_right(right: &FactoryRight) -> Self {
         Self {
@@ -575,6 +712,26 @@ pub fn read_factory_state_package(path: &Path) -> Result<StoredFactoryStatePacka
     Ok(package)
 }
 
+pub fn read_factory_reduced_exit_package(path: &Path) -> Result<StoredFactoryReducedExitPackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read factory reduced-exit package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryReducedExitPackage =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "failed to parse factory reduced-exit package {}",
+                path.display()
+            )
+        })?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory reduced-exit package {}", path.display()))?;
+    Ok(package)
+}
+
 pub fn fixture_package() -> Result<StoredFactoryUpdatePackage> {
     let before = vec![
         right(1, 10, FactoryRightKind::Balance, None, 100),
@@ -598,6 +755,42 @@ pub fn fixture_package() -> Result<StoredFactoryUpdatePackage> {
         authorised_participants: BTreeSet::from([bytes32(1)]),
     };
     StoredFactoryUpdatePackage::from_update(bytes32(90), 1, bytes32(91), bytes32(92), update)
+}
+
+pub fn fixture_reduced_exit_package() -> Result<StoredFactoryReducedExitPackage> {
+    let before = vec![
+        right(1, 10, FactoryRightKind::Balance, None, 100),
+        right(1, 10, FactoryRightKind::ReserveClaim, None, 50),
+        right(1, 10, FactoryRightKind::Membership, None, 1),
+        right(1, 10, FactoryRightKind::ExitPath, None, 1),
+        right(1, 10, FactoryRightKind::SponsorBudgetClaim, None, 20),
+        right(2, 10, FactoryRightKind::Balance, None, 100),
+        right(2, 10, FactoryRightKind::ReserveClaim, None, 50),
+        right(2, 10, FactoryRightKind::Membership, None, 1),
+        right(2, 10, FactoryRightKind::ExitPath, None, 1),
+        right(2, 10, FactoryRightKind::SponsorBudgetClaim, None, 20),
+    ];
+    let mut after = before.clone();
+    after[1].quantity = 30;
+    let update = FactoryUpdate {
+        before,
+        after,
+        touched_participants: BTreeSet::from([bytes32(1)]),
+        authorised_participants: BTreeSet::from([bytes32(1)]),
+    };
+    let update_package =
+        StoredFactoryUpdatePackage::from_update(bytes32(90), 1, bytes32(91), bytes32(92), update)?;
+    let exit = FactoryReducedExit {
+        participant: bytes32(1),
+        reserve_claim: FactoryRightId {
+            participant: bytes32(1),
+            subchannel: bytes32(10),
+            kind: FactoryRightKind::ReserveClaim,
+            asset_type: None,
+        },
+        release_quantity: 20,
+    };
+    StoredFactoryReducedExitPackage::from_update_package(update_package, exit)
 }
 
 pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
@@ -632,6 +825,14 @@ fn right(
         },
         quantity,
     }
+}
+
+fn reserve_claim_quantity(rights: &[FactoryRight], id: &FactoryRightId) -> Result<Amount> {
+    rights
+        .iter()
+        .find(|right| &right.id == id)
+        .map(|right| right.quantity)
+        .ok_or_else(|| anyhow::anyhow!("reserve claim right is missing"))
 }
 
 fn canonical_hex32_vec(values: &[String]) -> Result<Vec<String>> {
@@ -871,6 +1072,42 @@ mod tests {
         assert_eq!(summary.signature_threshold, 1);
         assert_eq!(summary.participants, 1);
         assert_eq!(summary.signatures, 1);
+    }
+
+    #[test]
+    fn validates_reduced_factory_exit_package() {
+        let package = fixture_reduced_exit_package().unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.update_number, 1);
+        assert_eq!(summary.participant, hex_prefixed(&bytes32(1)));
+        assert_eq!(summary.reserve_claim_before, 50);
+        assert_eq!(summary.reserve_claim_after, 30);
+        assert_eq!(summary.release_quantity, 20);
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_release_mismatch() {
+        let mut package = fixture_reduced_exit_package().unwrap();
+        package.release_quantity = 19;
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("reduced-exit check failed"));
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_extra_authorised_participant() {
+        let mut package = fixture_reduced_exit_package().unwrap();
+        package
+            .update_package
+            .authorised_participants
+            .push(hex_prefixed(&bytes32(2)));
+        package.update_package.authorised_participants.sort();
+        package.update_package.non_interference_digest =
+            package.update_package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("reduced-exit check failed"));
     }
 
     #[test]

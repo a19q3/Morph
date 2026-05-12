@@ -8,8 +8,8 @@ This repository is intentionally conservative. The first milestone is a
 devnet-testable bilateral channel path. Factory proof mode is represented in
 the data model, package validation, and a conservative full-participant factory
 type script. Conservative factory-local exit materialisation is implemented on
-devnet; reduced-signature factory exits remain behind an explicit proof-system
-gate.
+devnet; bounded reduced-signature factory exits now have fixed-width script
+coverage in CKB-VM tests and devnet smoke for the reserve-claim path.
 
 ## Status
 
@@ -36,9 +36,12 @@ Current implementation stage:
   one-live-FactoryStateCell progression with full-participant signatures and
   local-exit evidence checks. It also supports a bounded reduced-rights proof
   path where one authorised participant may reduce only their own committed
-  factory rights while all other rights remain unchanged.
+  factory rights while all other rights remain unchanged, plus a bounded
+  reduced-exit proof for reserve-claim release into a materialised child
+  channel.
 - `contracts/morph-factory-vault-lock`: no-std CKB lock script for factory
-  reserve conservation during child-channel materialisation.
+  reserve conservation during conservative and reduced-exit child-channel
+  materialisation.
 - `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
   gated by a unique current settling State Cell and relative `since`.
 - `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
@@ -60,8 +63,9 @@ local test asset into the vault and settle exact token balances through the
 same StateCell and VaultCell authority model.
 The reduced-signature factory work is deliberately narrow at this stage:
 CKB-VM tests and devnet smoke cover a fixed-width proof for claim-reducing
-rights updates, while reduced-signature factory exits remain behind the
-proof-system gate.
+rights updates and fixed-width reserve-claim reduced exits, including a
+CKB+xUDT child vault. The remaining gap is a general proof path for larger
+factories and additional typed reduced-exit variants.
 
 ## Repository Layout
 
@@ -100,6 +104,8 @@ cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
 cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
+cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
+cargo run -p morph-cli -- devnet factory-reduced-xudt-exit-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 make devnet-smoke
 ```
@@ -128,6 +134,7 @@ cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
 cargo run -p morph-cli -- devnet-smoke-assert --dir target/devnet-smoke/<run>
 make smoke-report
 make smoke-assert
+make smoke-assert-budget
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
   --candidate target/devnet-smoke/<new-run> \
@@ -191,7 +198,10 @@ host-side non-interference package, its conservative all-participant signed
 state package, and a host-side authorised-participant reduced package. The
 devnet CLI also includes `open-factory`,
 `update-factory`, `factory-exit-channel`, and `factory-xudt-smoke` for the
-conservative on-chain path. `factory-xudt-negative-smoke` proves that a child
+conservative on-chain path, plus `factory-reduced-rights-smoke` and
+`factory-reduced-exit-smoke` / `factory-reduced-xudt-exit-smoke` for bounded
+one-signer proof paths.
+`factory-xudt-negative-smoke` proves that a child
 xUDT vault amount must match the committed local-exit descriptor even when
 overall xUDT supply is conserved:
 
@@ -208,6 +218,10 @@ cargo run -p morph-cli -- print-factory-reduced-rights-fixture \
   > target/factory-reduced-rights.json
 cargo run -p morph-cli -- validate-factory-reduced-rights-package \
   target/factory-reduced-rights.json --json
+cargo run -p morph-cli -- print-factory-reduced-exit-fixture \
+  > target/factory-reduced-exit.json
+cargo run -p morph-cli -- validate-factory-reduced-exit-package \
+  target/factory-reduced-exit.json --json
 cargo run -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json
 cargo run -p morph-cli -- validate-factory-local-exit-package \

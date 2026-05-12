@@ -92,8 +92,8 @@ Acceptance criteria:
 - completed smoke directories can be checked against absolute cycle and byte
   budgets in the same assertion command used for semantic smoke coverage.
 - CI validates generated bilateral fixtures, factory packages, factory
-  local-exit evidence, reduced host-side factory packages, and watchtower
-  policies.
+  local-exit evidence, reduced host-side factory packages, reduced-exit host
+  packages, and watchtower policies.
 - a conservative FactoryStateCell can be opened, signed as a reusable package,
   selected as the latest package, advanced on devnet without draining the
   factory state carrier for fees, and used with a FactoryVaultCell to
@@ -159,15 +159,24 @@ finalisation path.
   updates under full-participant signatures.
 - Bounded reduced-rights witness for one-signer, claim-reducing factory updates
   with script-level root and non-interference checks.
+- Bounded reduced-exit witness for one-signer reserve-claim release with
+  script-level root checks, local-exit evidence binding, child materialisation
+  checks, and factory reserve conservation in CKB-VM tests.
 - CLI package generation and `update-factory --factory-state-package`
   publication support for the bounded reduced-rights witness.
 - Devnet `open-factory`, `save-factory-state-package`, `update-factory`,
   `factory-exit-channel`, `factory-smoke`, and
   `factory-reduced-rights-smoke` commands.
+- Devnet `factory-reduced-exit-smoke` command for the bounded reserve-claim
+  reduced-exit path, followed by ordinary child-channel publication and
+  finalisation.
+- Devnet `factory-reduced-xudt-exit-smoke` command for the typed
+  reserve-claim reduced-exit path into a CKB+xUDT child vault.
 
 ## M4: Reduced-Signature Factory Mode
 
-Status: partially implemented for the narrow claim-reducing update case.
+Status: partially implemented for the narrow claim-reducing update and
+reserve-claim reduced-exit cases.
 
 Implemented:
 
@@ -177,6 +186,21 @@ Implemented:
 - non-interference digest binding;
 - one authorised signature over the new FactoryStateHeader;
 - devnet smoke coverage for reduced-rights package publication;
+- host-level reduced factory-exit predicate requiring one authorised
+  participant to consume only their own reserve claim while every other right
+  remains unchanged;
+- serialisable reduced factory-exit package fixture and CLI validation for the
+  host-level reserve-claim consumption predicate;
+- fixed-width `FactoryReducedExitWitnessV1` and
+  `FactoryReducedExitXudtWitnessV1` schema entries;
+- script-level reduced factory-exit verification in `morph-factory-type` and
+  `morph-factory-vault-lock`, including local child-channel evidence and
+  reserve-conservation checks;
+- CKB-VM coverage for a reserve-claim reduced exit that materialises a child
+  channel from the factory vault, including the CKB+xUDT child-vault shape and
+  typed amount/type mismatch rejection;
+- devnet smoke coverage for CKB and CKB+xUDT reserve-claim reduced-exit
+  publication, child-state publication, and child-vault finalisation;
 - absolute smoke budget gates for cycle and transaction-size ceilings;
 - per-transaction smoke budget profiles for critical proof paths, including
   bounded reduced-rights publication;
@@ -185,6 +209,7 @@ Implemented:
 
 Still open:
 
-- reduced-signature value-releasing factory exits;
+- additional typed reduced-exit variants beyond the fixed-width CKB+xUDT
+  reserve-claim smoke;
 - general Merkle proof bundles for larger factories;
 - empirical budget profiles for larger proof shapes.

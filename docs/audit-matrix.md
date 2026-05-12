@@ -10,7 +10,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
 | Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
-| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch` |
+| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
 | Vault outputs match the signed settlement descriptor | `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
@@ -34,6 +34,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Factory full-consent state authority is signed | `validates_factory_state_package`, `rejects_missing_factory_state_signature`, `rejects_factory_state_missing_participant_key`, `rejects_invalid_factory_state_signature`, `rejects_non_all_participant_factory_threshold` |
 | Factory reduced host package signs only authorised participants | `validates_reduced_factory_state_package`, `rejects_reduced_factory_state_missing_authorised_signature`, `rejects_reduced_factory_state_extra_participant` |
 | Factory reduced on-chain proof can only decrease touched rights | `verifies_reduced_factory_rights_decrease`, `rejects_reduced_factory_rights_increase`, `factory_type_accepts_reduced_rights_update`, `factory_type_rejects_reduced_rights_increase` |
+| Reduced factory exit can only consume the authorised participant's reserve claim | `reduced_factory_exit_accepts_authorised_reserve_claim_release`, `reduced_factory_exit_accepts_full_reserve_claim_consumption`, `reduced_factory_exit_rejects_release_amount_mismatch`, `reduced_factory_exit_rejects_other_touched_right_changes`, `reduced_factory_exit_requires_exiting_participant_authorisation`, `reduced_factory_exit_rejects_extra_authorised_participant` |
 
 Implemented devnet-level checks:
 
@@ -48,6 +49,8 @@ Implemented devnet-level checks:
 - CKB-VM factory local-exit execution with a FactoryVaultCell, committed
   child-channel evidence, reserve conservation, and CKB+xUDT child-vault
   materialisation;
+- CKB-VM reduced factory-exit execution for CKB and CKB+xUDT child vaults,
+  including xUDT child-vault amount and type mismatch rejection;
 - finalise-since rejection and maturity-block finalisation through
   `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through
@@ -91,20 +94,22 @@ Implemented devnet-level checks:
   `factory-reduced-rights-smoke $.update`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
   state packages, reduced host-side factory packages, reduced-rights factory
-  packages, local-exit evidence, watchtower policy JSON, and multi-channel
-  watchtower config JSON;
+  packages, reduced-exit host packages, local-exit evidence, watchtower policy
+  JSON, and multi-channel watchtower config JSON;
 - durable signed state-package storage with signature validation and latest
   package selection;
 - confirmation-depth block scanning for older Morph StateCells;
 - conservative factory local exit on devnet through `factory-exit-channel`,
   followed by ordinary child-channel publication and finalisation in
   `scripts/devnet-smoke.sh`.
+- bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`
+  and `factory-reduced-xudt-exit-smoke`, followed by ordinary child-channel
+  publication and finalisation in `scripts/devnet-smoke.sh`.
 
 Missing devnet-level checks:
 
-- reduced-signature factory exits and general Merkle proof predicates. The
-  current on-chain reduced proof is deliberately limited to fixed-width,
-  claim-reducing rights updates.
+- general Merkle proof predicates and additional typed reduced-exit variants
+  beyond the fixed-width CKB+xUDT reserve-claim smokes.
 
 Implemented host-level factory checks:
 
@@ -115,6 +120,13 @@ Implemented host-level factory checks:
 - rejection of balance changes, exit-right removals, and sponsor-budget
   creations outside the touched set;
 - duplicate right-id rejection before proof evaluation.
+- host-level reduced factory-exit validation for the narrow reserve-claim
+  consumption case: one authorised participant may release only their own
+  committed reserve claim, and every other right must remain unchanged.
+- serialisable reduced factory-exit package fixture and CLI validation for the
+  same host-level reserve-claim consumption predicate.
+- script-level reduced factory-exit validation for the same reserve-claim
+  release predicate, with factory type and factory vault lock CKB-VM coverage.
 - serialisable factory update package with canonical roots, canonical
   participant sets, non-interference digest checking, and CLI validation through
   `print-factory-fixture` / `validate-factory-package`.

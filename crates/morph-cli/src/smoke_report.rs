@@ -23,6 +23,7 @@ pub struct DevnetSmokeSummary {
     pub watchtower_alerts: Vec<WatchtowerAlertSummary>,
     pub watchtower_services: Vec<WatchtowerServiceSummary>,
     pub factory_reduced_rights_updates: Vec<FactoryReducedRightsEvidenceSummary>,
+    pub factory_reduced_exits: Vec<FactoryReducedExitEvidenceSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
 }
@@ -41,6 +42,7 @@ pub struct DevnetSmokeAssertionReport {
     pub watchtower_publication_alerts: usize,
     pub watchtower_service_records: usize,
     pub factory_reduced_rights_updates: usize,
+    pub factory_reduced_exits: usize,
     pub factory_local_exits: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<DevnetSmokeBudgetReport>,
@@ -136,6 +138,19 @@ pub struct FactoryReducedRightsEvidenceSummary {
     pub old_access_manifest_root: String,
     pub new_access_manifest_root: String,
     pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryReducedExitEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub authorisation: String,
+    pub release_quantity: u128,
+    pub witness_len: usize,
+    pub local_exit_digest: String,
+    pub non_interference_digest: String,
+    pub child_xudt_amount: Option<u128>,
+    pub xudt_type_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -259,6 +274,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut watchtower_alerts = Vec::new();
     let mut watchtower_services = Vec::new();
     let mut factory_reduced_rights_updates = Vec::new();
+    let mut factory_reduced_exits = Vec::new();
     let mut factory_local_exits = Vec::new();
     {
         let mut collections = SmokeCollections {
@@ -267,6 +283,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             deployed_scripts: &mut deployed_scripts,
             watchtower_services: &mut watchtower_services,
             factory_reduced_rights_updates: &mut factory_reduced_rights_updates,
+            factory_reduced_exits: &mut factory_reduced_exits,
             factory_local_exits: &mut factory_local_exits,
         };
         for path in &json_paths {
@@ -299,6 +316,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         watchtower_alerts,
         watchtower_services,
         factory_reduced_rights_updates,
+        factory_reduced_exits,
         factory_local_exits,
         totals,
     })
@@ -371,6 +389,7 @@ pub fn assert_default_devnet_smoke_with_budget(
             .count(),
         watchtower_service_records: summary.watchtower_services.len(),
         factory_reduced_rights_updates: summary.factory_reduced_rights_updates.len(),
+        factory_reduced_exits: summary.factory_reduced_exits.len(),
         factory_local_exits: summary.factory_local_exits.len(),
         budget,
     })
@@ -442,6 +461,7 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
     assert_watchtower_alert_coverage(summary)?;
     assert_watchtower_service_coverage(summary)?;
     assert_factory_reduced_rights_coverage(summary)?;
+    assert_factory_reduced_exit_coverage(summary)?;
 
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
         return Err(anyhow!(
@@ -509,6 +529,69 @@ fn assert_factory_reduced_rights_coverage(summary: &DevnetSmokeSummary) -> Resul
                 "factory reduced-rights update must include signing and non-interference digests"
             ));
         }
+    }
+    Ok(())
+}
+
+fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let ckb_exit_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-reduced-exit-smoke"
+            && tx.path == "$.exit"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !ckb_exit_committed {
+        return Err(anyhow!(
+            "missing committed factory-reduced-exit smoke transaction"
+        ));
+    }
+    let xudt_exit_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-reduced-xudt-exit-smoke"
+            && tx.path == "$.exit"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !xudt_exit_committed {
+        return Err(anyhow!(
+            "missing committed factory-reduced-xudt-exit smoke transaction"
+        ));
+    }
+    if summary.factory_reduced_exits.len() != EXPECTED_FACTORY_REDUCED_EXITS {
+        return Err(anyhow!(
+            "unexpected factory reduced-exit evidence count: got {}, expected {}",
+            summary.factory_reduced_exits.len(),
+            EXPECTED_FACTORY_REDUCED_EXITS
+        ));
+    }
+    let ckb_exits = summary
+        .factory_reduced_exits
+        .iter()
+        .filter(|exit| exit.xudt_type_hash.is_none())
+        .count();
+    let xudt_exits = summary
+        .factory_reduced_exits
+        .iter()
+        .filter(|exit| exit.xudt_type_hash.is_some() && exit.child_xudt_amount.is_some())
+        .count();
+    if ckb_exits != EXPECTED_FACTORY_REDUCED_CKB_EXITS
+        || xudt_exits != EXPECTED_FACTORY_REDUCED_XUDT_EXITS
+    {
+        return Err(anyhow!(
+            "unexpected factory reduced-exit descriptor coverage: got CKB {}, xUDT {}; expected CKB {}, xUDT {}",
+            ckb_exits,
+            xudt_exits,
+            EXPECTED_FACTORY_REDUCED_CKB_EXITS,
+            EXPECTED_FACTORY_REDUCED_XUDT_EXITS
+        ));
+    }
+    if summary.factory_reduced_exits.iter().any(|exit| {
+        exit.authorisation != "reduced-reserve-claim"
+            || exit.release_quantity == 0
+            || exit.witness_len == 0
+            || exit.local_exit_digest.is_empty()
+            || exit.non_interference_digest.is_empty()
+    }) {
+        return Err(anyhow!(
+            "factory reduced-exit evidence must include reserve-claim authorisation, release quantity, witness length, and digests"
+        ));
     }
     Ok(())
 }
@@ -1052,6 +1135,29 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Factory Reduced Exits\n\n");
+    if summary.factory_reduced_exits.is_empty() {
+        out.push_str("No factory reduced-exit evidence was recorded.\n");
+    } else {
+        out.push_str("| Check | Path | Auth | Release | Witness bytes | xUDT amount | Non-interference digest |\n");
+        out.push_str("| --- | --- | --- | ---: | ---: | ---: | --- |\n");
+        for exit in &summary.factory_reduced_exits {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | `{}` |\n",
+                table_cell(&exit.check),
+                table_cell(&exit.path),
+                table_cell(&exit.authorisation),
+                exit.release_quantity,
+                exit.witness_len,
+                exit.child_xudt_amount
+                    .map(|amount| amount.to_string())
+                    .unwrap_or_default(),
+                exit.non_interference_digest
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Local Exits\n\n");
     if summary.factory_local_exits.is_empty() {
         out.push_str("No factory local-exit evidence packages were recorded.\n");
@@ -1186,6 +1292,9 @@ const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
 const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
 const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
 const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
+const EXPECTED_FACTORY_REDUCED_EXITS: usize = 2;
+const EXPECTED_FACTORY_REDUCED_CKB_EXITS: usize = 1;
+const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 1;
 const EXPECTED_WATCHTOWER_ALERTS: usize = 2;
 const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &["older_state_detected", "publication_submitted"];
 const EXPECTED_WATCHTOWER_SERVICE_RECORDS: usize = 2;
@@ -1332,6 +1441,7 @@ struct SmokeCollections<'a> {
     deployed_scripts: &'a mut Vec<DeployedScriptSummary>,
     watchtower_services: &'a mut Vec<WatchtowerServiceSummary>,
     factory_reduced_rights_updates: &'a mut Vec<FactoryReducedRightsEvidenceSummary>,
+    factory_reduced_exits: &'a mut Vec<FactoryReducedExitEvidenceSummary>,
     factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
 }
 
@@ -1426,6 +1536,30 @@ fn collect_from_value(
             });
     }
 
+    if let Some(Value::Object(reduced_exit)) = object.get("reduced_exit") {
+        collections
+            .factory_reduced_exits
+            .push(FactoryReducedExitEvidenceSummary {
+                check: check.to_string(),
+                path: append_path(path, "reduced_exit"),
+                authorisation: string_field(object, "authorisation").unwrap_or_default(),
+                release_quantity: reduced_exit
+                    .get("release_quantity")
+                    .and_then(value_as_u128)
+                    .unwrap_or_default(),
+                witness_len: reduced_exit
+                    .get("witness_len")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default() as usize,
+                local_exit_digest: string_field(reduced_exit, "local_exit_digest")
+                    .unwrap_or_default(),
+                non_interference_digest: string_field(reduced_exit, "non_interference_digest")
+                    .unwrap_or_default(),
+                child_xudt_amount: object.get("child_xudt_amount").and_then(value_as_u128),
+                xudt_type_hash: string_field(object, "xudt_type_hash"),
+            });
+    }
+
     if let Some(service) = watchtower_service_from_object(check, path, object) {
         collections.watchtower_services.push(service);
     }
@@ -1516,6 +1650,10 @@ fn string_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<St
         .get(key)
         .and_then(Value::as_str)
         .map(ToString::to_string)
+}
+
+fn value_as_u128(value: &Value) -> Option<u128> {
+    value.as_u64().map(u128::from)
 }
 
 fn summarise_totals(transactions: &[TransactionSummary]) -> MetricTotals {
@@ -1634,7 +1772,22 @@ mod tests {
                 .unwrap();
         fs::write(
             dir.join("factory.json"),
-            format!(r#"{{"exit": {{"local_exit_package": {local_exit_package}}}}}"#),
+            format!(
+                r#"{{
+                  "exit": {{
+                    "authorisation": "reduced-reserve-claim",
+                    "child_xudt_amount": 100,
+                    "xudt_type_hash": "0x1234",
+                    "local_exit_package": {local_exit_package},
+                    "reduced_exit": {{
+                      "release_quantity": 200,
+                      "witness_len": 3122,
+                      "local_exit_digest": "0xabcd",
+                      "non_interference_digest": "0xef01"
+                    }}
+                  }}
+                }}"#
+            ),
         )
         .unwrap();
         let reduced_package = serde_json::to_string(
@@ -1722,6 +1875,12 @@ mod tests {
         );
         assert_eq!(summary.factory_reduced_rights_updates.len(), 1);
         assert_eq!(summary.factory_reduced_rights_updates[0].path, "$.package");
+        assert_eq!(summary.factory_reduced_exits.len(), 1);
+        assert_eq!(summary.factory_reduced_exits[0].witness_len, 3122);
+        assert_eq!(
+            summary.factory_reduced_exits[0].child_xudt_amount,
+            Some(100)
+        );
         assert_eq!(summary.watchtower_alerts.len(), 2);
         assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
         assert_eq!(summary.watchtower_services.len(), 2);
@@ -1917,6 +2076,28 @@ mod tests {
     }
 
     #[test]
+    fn reads_repository_smoke_budget_profile() {
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("repository root");
+        let path = repo_root.join("docs/devnet-smoke-budget.example.json");
+
+        let profile = read_smoke_budget_profile(&path).unwrap();
+        assert_eq!(profile.max_total_cycles, Some(200_000_000));
+        assert_eq!(profile.max_tx_bytes, Some(500_000));
+        assert!(
+            profile
+                .transactions
+                .iter()
+                .any(|limit| limit.check == "deploy-contracts" && limit.path == "$")
+        );
+        assert!(profile.transactions.iter().any(|limit| {
+            limit.check == "factory-reduced-rights-smoke" && limit.path == "$.update"
+        }));
+    }
+
+    #[test]
     fn verifies_deployed_script_hashes_against_local_binaries() {
         let dir = temp_report_dir();
         fs::create_dir_all(&dir).unwrap();
@@ -2013,6 +2194,7 @@ mod tests {
             watchtower_alerts: Vec::new(),
             watchtower_services: Vec::new(),
             factory_reduced_rights_updates: Vec::new(),
+            factory_reduced_exits: Vec::new(),
             factory_local_exits: Vec::new(),
             totals: MetricTotals::default(),
         };
@@ -2056,11 +2238,11 @@ mod tests {
             directory: "target/devnet-smoke/test".to_string(),
             manifest,
             json_files: 36,
-            transactions: vec![transaction(
-                "factory-reduced-rights-smoke",
-                "$.update",
-                "Committed",
-            )],
+            transactions: vec![
+                transaction("factory-reduced-rights-smoke", "$.update", "Committed"),
+                transaction("factory-reduced-exit-smoke", "$.exit", "Committed"),
+                transaction("factory-reduced-xudt-exit-smoke", "$.exit", "Committed"),
+            ],
             script_failures: vec![
                 failure(
                     "factory-xudt-negative/smoke",
@@ -2079,6 +2261,10 @@ mod tests {
             watchtower_alerts: watchtower_alerts(),
             watchtower_services: watchtower_services(),
             factory_reduced_rights_updates: vec![factory_reduced_rights_update()],
+            factory_reduced_exits: vec![
+                factory_reduced_exit("factory-reduced-exit-smoke", None),
+                factory_reduced_exit("factory-reduced-xudt-exit-smoke", Some(1_000_000)),
+            ],
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
                 factory_exit("factory/local-exit-package", 1),
@@ -2089,8 +2275,8 @@ mod tests {
             ],
             deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
-                transaction_count: 46,
-                committed_count: 45,
+                transaction_count: 54,
+                committed_count: 53,
                 pending_count: 1,
                 total_estimated_cycles: 1,
                 max_estimated_cycles: 1,
@@ -2135,6 +2321,23 @@ mod tests {
             old_access_manifest_root: "0x44".to_string(),
             new_access_manifest_root: "0x55".to_string(),
             non_interference_digest: "0x66".to_string(),
+        }
+    }
+
+    fn factory_reduced_exit(
+        check: &str,
+        child_xudt_amount: Option<u128>,
+    ) -> FactoryReducedExitEvidenceSummary {
+        FactoryReducedExitEvidenceSummary {
+            check: check.to_string(),
+            path: "$.exit.reduced_exit".to_string(),
+            authorisation: "reduced-reserve-claim".to_string(),
+            release_quantity: 1,
+            witness_len: 1,
+            local_exit_digest: "0x77".to_string(),
+            non_interference_digest: "0x88".to_string(),
+            child_xudt_amount,
+            xudt_type_hash: child_xudt_amount.map(|_| "0x99".to_string()),
         }
     }
 

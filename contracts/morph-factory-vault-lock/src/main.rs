@@ -16,7 +16,10 @@ use ckb_std::{default_alloc, entry};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FactoryLocalExitWitnessV1, FactoryStateHeaderV1, Result, ScriptError, read_u128,
+    FACTORY_LOCAL_EXIT_WITNESS_V1_LEN, FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN,
+    FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
+    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryStateHeaderV1, Result,
+    ScriptError, read_u128,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -52,18 +55,40 @@ fn main() -> Result<()> {
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
     let input_type_raw = input_type.raw_data();
-    let witness = FactoryLocalExitWitnessV1::parse(input_type_raw.as_ref())?;
 
     let old_header = find_unique_factory_state(Source::Input, factory_id, factory_type_hash)?;
     let new_header = find_unique_factory_state(Source::Output, factory_id, factory_type_hash)?;
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
-    if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
-        return Err(ScriptError::FactoryLocalExitMismatch);
-    }
-
-    let child_vault_capacity = validate_child_vault(&witness)?;
+    let child_vault_capacity = if input_type_raw.len() == FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
+        || input_type_raw.len() == FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN
+    {
+        let witness = FactoryLocalExitWitnessV1::parse(input_type_raw.as_ref())?;
+        if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
+            return Err(ScriptError::FactoryLocalExitMismatch);
+        }
+        validate_child_vault(
+            witness.vault_output_index(),
+            witness.vault_lock_hash(),
+            witness.settlement_descriptor(),
+        )?
+    } else if input_type_raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
+        || input_type_raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
+    {
+        let witness = FactoryReducedExitWitnessV1::parse(input_type_raw.as_ref())?;
+        let digest = witness.non_interference_digest(&old_header, &new_header)?;
+        if new_header.non_interference_digest() != digest.as_slice() {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        validate_child_vault(
+            witness.vault_output_index(),
+            witness.vault_lock_hash(),
+            witness.settlement_descriptor(),
+        )?
+    } else {
+        return Err(ScriptError::ParticipantWitnessEncoding);
+    };
     validate_factory_reserve_conservation(child_vault_capacity)?;
     Ok(())
 }
@@ -104,26 +129,31 @@ fn find_unique_factory_state(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_child_vault(witness: &FactoryLocalExitWitnessV1) -> Result<u64> {
-    let vault_index = witness.vault_output_index() as usize;
+fn validate_child_vault(
+    vault_output_index: u32,
+    expected_vault_lock_hash: &[u8],
+    settlement_descriptor: &[u8],
+) -> Result<u64> {
+    let vault_index = vault_output_index as usize;
     let vault_lock_hash =
         load_cell_lock_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
-    if vault_lock_hash.as_slice() != witness.vault_lock_hash() {
+    if vault_lock_hash.as_slice() != expected_vault_lock_hash {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-    match witness.settlement_descriptor().len() {
-        BILATERAL_CKB_DESCRIPTOR_V1_LEN => validate_ckb_child_vault(witness, vault_index),
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => validate_xudt_child_vault(witness, vault_index),
+    match settlement_descriptor.len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+            validate_ckb_child_vault(settlement_descriptor, vault_index)
+        }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+            validate_xudt_child_vault(settlement_descriptor, vault_index)
+        }
         _ => Err(ScriptError::SettlementDescriptorEncoding),
     }
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_ckb_child_vault(
-    witness: &FactoryLocalExitWitnessV1,
-    vault_index: usize,
-) -> Result<u64> {
-    let descriptor = BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+fn validate_ckb_child_vault(settlement_descriptor: &[u8], vault_index: usize) -> Result<u64> {
+    let descriptor = BilateralCkbSettlementDescriptorV1::parse(settlement_descriptor)?;
     let expected_capacity = descriptor.total_capacity();
     let vault_data =
         load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
@@ -144,12 +174,8 @@ fn validate_ckb_child_vault(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_xudt_child_vault(
-    witness: &FactoryLocalExitWitnessV1,
-    vault_index: usize,
-) -> Result<u64> {
-    let descriptor =
-        BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+fn validate_xudt_child_vault(settlement_descriptor: &[u8], vault_index: usize) -> Result<u64> {
+    let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(settlement_descriptor)?;
     let vault_type =
         load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     let vault_type = vault_type.ok_or(ScriptError::XudtTypeMismatch)?;
