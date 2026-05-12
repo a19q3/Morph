@@ -108,10 +108,10 @@ Implemented devnet-level checks:
 
 Missing devnet-level checks:
 
-- general Merkle proof predicates and additional typed reduced-exit variants
-  beyond the fixed-width CKB+xUDT reserve-claim smokes.
+- additional typed reduced-exit variants beyond the fixed-width CKB+xUDT
+  reserve-claim smokes.
 
-Implemented host-level factory checks:
+Implemented factory checks:
 
 - rights-dependency model for balances, reserve claims, membership, exit paths,
   and sponsor budget claims;
@@ -125,6 +125,13 @@ Implemented host-level factory checks:
   committed reserve claim, and every other right must remain unchanged.
 - serialisable reduced factory-exit package fixture and CLI validation for the
   same host-level reserve-claim consumption predicate.
+- serialisable sparse Merkle factory update fixture and CLI validation for a
+  single-right transition inside a larger rights tree.
+- script-level sparse Merkle factory update witness for the same single-right
+  transition, with CKB-VM accept/reject coverage.
+- devnet smoke coverage for the sparse Merkle factory update witness, including
+  package evidence and proof-shape budget profile evidence in the smoke
+  summary assertion.
 - script-level reduced factory-exit validation for the same reserve-claim
   release predicate, with factory type and factory vault lock CKB-VM coverage.
 - serialisable factory update package with canonical roots, canonical

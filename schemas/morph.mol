@@ -14,6 +14,7 @@
 // - FactorySignatureWitnessV1: 262 bytes
 // - FactoryRightV1: 114 bytes
 // - FactoryReducedRightsWitnessV1: 2580 bytes
+// - FactoryMerkleUpdateWitnessV1: 8718 bytes
 // - FactoryReducedExitWitnessV1: 3058 bytes
 // - FactoryReducedExitXudtWitnessV1: 3122 bytes
 // - FactoryLocalExitWitnessV1: 726 bytes
@@ -23,6 +24,7 @@
 // - SponsorPolicyV1: 144 bytes
 
 array Byte32 [byte; 32];
+array FactoryMerkleProofSiblingsV1 [Byte32; 256];
 array Secp256k1CompressedPubkey [byte; 33];
 array EcdsaSignature [byte; 64];
 
@@ -137,6 +139,21 @@ struct FactoryReducedRightsWitnessV1 {
     after_7: FactoryRightV1,
     after_8: FactoryRightV1,
     after_9: FactoryRightV1,
+}
+
+struct FactoryMerkleUpdateWitnessV1 {
+    version: uint16,
+    participant_threshold: byte,
+    participant_count: byte,
+    authorised_count: byte,
+    right_count: byte,
+    reserved: uint16,
+    participant_0: FactoryReducedRightsParticipantV1,
+    participant_1: FactoryReducedRightsParticipantV1,
+    touched_participant: Byte32,
+    right_before: FactoryRightV1,
+    right_after: FactoryRightV1,
+    proof_siblings: FactoryMerkleProofSiblingsV1,
 }
 
 struct FactoryReducedExitWitnessV1 {

@@ -64,8 +64,11 @@ same StateCell and VaultCell authority model.
 The reduced-signature factory work is deliberately narrow at this stage:
 CKB-VM tests and devnet smoke cover a fixed-width proof for claim-reducing
 rights updates and fixed-width reserve-claim reduced exits, including a
-CKB+xUDT child vault. The remaining gap is a general proof path for larger
-factories and additional typed reduced-exit variants.
+CKB+xUDT child vault. Sparse Merkle update packages and a fixed-width no-std
+Merkle witness now cover the first general proof-bundle step for larger
+factories, including a devnet smoke path that updates one right through the
+256-sibling proof. The remaining gaps are empirical budgets for larger proof
+profiles and additional typed reduced-exit variants.
 
 ## Repository Layout
 
@@ -104,6 +107,7 @@ cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
 cargo run -p morph-cli -- devnet xudt-negative-smoke
 cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
+cargo run -p morph-cli -- devnet factory-merkle-update-smoke
 cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
 cargo run -p morph-cli -- devnet factory-reduced-xudt-exit-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
@@ -120,10 +124,11 @@ then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
 `target/devnet-smoke/`. After a successful run it refreshes
 `target/devnet-smoke/latest` to point at the completed run, unless that path is
 a real directory or file. Summary generation also validates any factory
-local-exit evidence package embedded in the smoke JSON, extracts deployed
-script outpoints and data hashes, and records watchtower JSONL alerts. The
-script asserts that the expected negative-path failures, deployed scripts,
-local contract binary hashes, watchtower alert events, and factory exit
+local-exit evidence package and factory Merkle update evidence embedded in the
+smoke JSON, extracts deployed script outpoints and data hashes, derives
+proof-shape budget profiles, and records watchtower JSONL alerts. The script
+asserts that the expected negative-path failures, deployed scripts, local
+contract binary hashes, watchtower alert events, and factory update/exit
 evidence are present. `devnet-smoke-assert` can also enforce absolute
 cycle/byte budgets for completed smoke runs, including per-transaction budgets
 from [docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
@@ -222,6 +227,10 @@ cargo run -p morph-cli -- print-factory-reduced-exit-fixture \
   > target/factory-reduced-exit.json
 cargo run -p morph-cli -- validate-factory-reduced-exit-package \
   target/factory-reduced-exit.json --json
+cargo run -p morph-cli -- print-factory-merkle-update-fixture \
+  > target/factory-merkle-update.json
+cargo run -p morph-cli -- validate-factory-merkle-update-package \
+  target/factory-merkle-update.json --json
 cargo run -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json
 cargo run -p morph-cli -- validate-factory-local-exit-package \

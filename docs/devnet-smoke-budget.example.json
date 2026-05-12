@@ -1,7 +1,7 @@
 {
   "schema": "morph.devnet_smoke_budget.v1",
   "max_total_cycles": 200000000,
-  "max_tx_cycles": 10000000,
+  "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
   "max_tx_bytes": 500000,
   "transactions": [
@@ -16,6 +16,12 @@
       "path": "$.update",
       "max_cycles": 6000000,
       "max_bytes": 4000
+    },
+    {
+      "check": "factory-merkle-update-smoke",
+      "path": "$.update",
+      "max_cycles": 30000000,
+      "max_bytes": 20000
     },
     {
       "check": "factory-reduced-exit-smoke",

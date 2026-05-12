@@ -4,8 +4,14 @@ use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use thiserror::Error;
 
-use crate::hash::participants_commitment;
+use crate::hash::{blake2b256, participants_commitment};
 use crate::types::*;
+
+const FACTORY_RIGHT_KEY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY_V1";
+const FACTORY_RIGHT_LEAF_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF_V1";
+const FACTORY_RIGHT_NODE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE_V1";
+const FACTORY_RIGHT_EMPTY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY_V1";
+const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MorphError {
@@ -79,6 +85,10 @@ pub enum MorphError {
     FactoryReducedExitInvalid,
     #[error("reduced factory exit changes rights outside the consumed reserve claim")]
     FactoryReducedExitInterference,
+    #[error("factory Merkle proof is invalid")]
+    FactoryMerkleProofInvalid,
+    #[error("factory Merkle proof changes data outside the proved right")]
+    FactoryMerkleProofInterference,
 }
 
 pub type Result<T> = std::result::Result<T, MorphError>;
@@ -253,6 +263,114 @@ pub fn validate_reduced_factory_exit(
     Ok(())
 }
 
+pub fn validate_factory_single_right_merkle_update(
+    update: &FactorySingleRightMerkleUpdate,
+) -> Result<()> {
+    verify_factory_right_merkle_proof(update.before_root, &update.before)?;
+    verify_factory_right_merkle_proof(update.after_root, &update.after)?;
+
+    if update.before.right.id != update.after.right.id
+        || update.before.right.quantity == update.after.right.quantity
+    {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    if update.before.siblings != update.after.siblings {
+        return Err(MorphError::FactoryMerkleProofInterference);
+    }
+
+    let participant = update.before.right.id.participant;
+    if update.touched_participants.len() != 1
+        || update.authorised_participants.len() != 1
+        || !update.touched_participants.contains(&participant)
+        || !update.authorised_participants.contains(&participant)
+    {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+
+    Ok(())
+}
+
+pub fn verify_factory_right_merkle_proof(
+    expected_root: Bytes32,
+    proof: &FactoryRightMerkleProof,
+) -> Result<()> {
+    if proof.siblings.len() != FACTORY_SPARSE_MERKLE_DEPTH {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    let mut current = factory_right_leaf_hash(&proof.right);
+    for (depth, sibling) in proof.siblings.iter().enumerate().rev() {
+        current = match sibling.side {
+            FactoryMerkleSiblingSide::Left => factory_right_node_hash(depth, sibling.hash, current),
+            FactoryMerkleSiblingSide::Right => {
+                factory_right_node_hash(depth, current, sibling.hash)
+            }
+        };
+    }
+    if current == expected_root {
+        Ok(())
+    } else {
+        Err(MorphError::FactoryMerkleProofInvalid)
+    }
+}
+
+pub fn factory_right_sparse_root(rights: &[FactoryRight]) -> Result<Bytes32> {
+    let entries = factory_sparse_entries(rights)?;
+    let empty_hashes = factory_empty_hashes();
+    Ok(factory_sparse_subtree_root(&entries, 0, &empty_hashes))
+}
+
+pub fn factory_right_sparse_proof(
+    rights: &[FactoryRight],
+    id: &FactoryRightId,
+) -> Result<FactoryRightMerkleProof> {
+    let entries = factory_sparse_entries(rights)?;
+    let key = factory_right_key(id);
+    let empty_hashes = factory_empty_hashes();
+    let mut siblings = Vec::with_capacity(FACTORY_SPARSE_MERKLE_DEPTH);
+    let right = factory_sparse_proof_inner(&entries, key, 0, &empty_hashes, &mut siblings)?;
+    Ok(FactoryRightMerkleProof { right, siblings })
+}
+
+pub fn factory_right_key(id: &FactoryRightId) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(128);
+    bytes.extend_from_slice(FACTORY_RIGHT_KEY_DOMAIN_V1);
+    bytes.extend_from_slice(&id.participant);
+    bytes.extend_from_slice(&id.subchannel);
+    bytes.push(factory_right_kind_byte(id.kind));
+    match id.asset_type {
+        Some(asset_type) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&asset_type);
+        }
+        None => {
+            bytes.push(0);
+            bytes.extend_from_slice(&[0u8; 32]);
+        }
+    }
+    blake2b256(&bytes)
+}
+
+pub fn factory_right_leaf_hash(right: &FactoryRight) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(160);
+    bytes.extend_from_slice(FACTORY_RIGHT_LEAF_DOMAIN_V1);
+    bytes.extend_from_slice(&factory_right_key(&right.id));
+    bytes.extend_from_slice(&right.id.participant);
+    bytes.extend_from_slice(&right.id.subchannel);
+    bytes.push(factory_right_kind_byte(right.id.kind));
+    match right.id.asset_type {
+        Some(asset_type) => {
+            bytes.push(1);
+            bytes.extend_from_slice(&asset_type);
+        }
+        None => {
+            bytes.push(0);
+            bytes.extend_from_slice(&[0u8; 32]);
+        }
+    }
+    bytes.extend_from_slice(&right.quantity.to_le_bytes());
+    blake2b256(&bytes)
+}
+
 pub fn validate_vault_spend(spend: &VaultSpend) -> Result<()> {
     match spend.operation {
         ChannelOperation::Finalise
@@ -355,6 +473,120 @@ fn factory_right_map(rights: &[FactoryRight]) -> Result<BTreeMap<FactoryRightId,
         }
     }
     Ok(map)
+}
+
+fn factory_sparse_entries(
+    rights: &[FactoryRight],
+) -> Result<Vec<(Bytes32, Bytes32, FactoryRight)>> {
+    let mut entries = rights
+        .iter()
+        .map(|right| {
+            (
+                factory_right_key(&right.id),
+                factory_right_leaf_hash(right),
+                right.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    if entries.windows(2).any(|window| window[0].0 == window[1].0) {
+        return Err(MorphError::FactoryDuplicateRight);
+    }
+    Ok(entries)
+}
+
+fn factory_sparse_proof_inner(
+    entries: &[(Bytes32, Bytes32, FactoryRight)],
+    target_key: Bytes32,
+    depth: usize,
+    empty_hashes: &[Bytes32; FACTORY_SPARSE_MERKLE_DEPTH + 1],
+    siblings: &mut Vec<FactoryMerkleSibling>,
+) -> Result<FactoryRight> {
+    if depth == FACTORY_SPARSE_MERKLE_DEPTH {
+        return entries
+            .iter()
+            .find(|(key, _, _)| *key == target_key)
+            .map(|(_, _, right)| right.clone())
+            .ok_or(MorphError::FactoryMerkleProofInvalid);
+    }
+
+    let split = entries.partition_point(|(key, _, _)| !factory_key_bit(key, depth));
+    let target_is_right = factory_key_bit(&target_key, depth);
+    let (branch, sibling, side) = if target_is_right {
+        (
+            &entries[split..],
+            &entries[..split],
+            FactoryMerkleSiblingSide::Left,
+        )
+    } else {
+        (
+            &entries[..split],
+            &entries[split..],
+            FactoryMerkleSiblingSide::Right,
+        )
+    };
+    let sibling_hash = factory_sparse_subtree_root(sibling, depth + 1, empty_hashes);
+    siblings.push(FactoryMerkleSibling {
+        side,
+        hash: sibling_hash,
+    });
+    factory_sparse_proof_inner(branch, target_key, depth + 1, empty_hashes, siblings)
+}
+
+fn factory_sparse_subtree_root(
+    entries: &[(Bytes32, Bytes32, FactoryRight)],
+    depth: usize,
+    empty_hashes: &[Bytes32; FACTORY_SPARSE_MERKLE_DEPTH + 1],
+) -> Bytes32 {
+    if entries.is_empty() {
+        return empty_hashes[FACTORY_SPARSE_MERKLE_DEPTH - depth];
+    }
+    if depth == FACTORY_SPARSE_MERKLE_DEPTH {
+        return entries[0].1;
+    }
+
+    let split = entries.partition_point(|(key, _, _)| !factory_key_bit(key, depth));
+    let left = factory_sparse_subtree_root(&entries[..split], depth + 1, empty_hashes);
+    let right = factory_sparse_subtree_root(&entries[split..], depth + 1, empty_hashes);
+    factory_right_node_hash(depth, left, right)
+}
+
+fn factory_empty_hashes() -> [Bytes32; FACTORY_SPARSE_MERKLE_DEPTH + 1] {
+    let mut out = [[0u8; 32]; FACTORY_SPARSE_MERKLE_DEPTH + 1];
+    out[0] = blake2b256(FACTORY_RIGHT_EMPTY_DOMAIN_V1);
+    for height in 1..=FACTORY_SPARSE_MERKLE_DEPTH {
+        out[height] = factory_right_node_hash(
+            FACTORY_SPARSE_MERKLE_DEPTH - height,
+            out[height - 1],
+            out[height - 1],
+        );
+    }
+    out
+}
+
+fn factory_right_node_hash(depth: usize, left: Bytes32, right: Bytes32) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(72);
+    bytes.extend_from_slice(FACTORY_RIGHT_NODE_DOMAIN_V1);
+    bytes.extend_from_slice(&(depth as u16).to_le_bytes());
+    bytes.extend_from_slice(&left);
+    bytes.extend_from_slice(&right);
+    blake2b256(&bytes)
+}
+
+fn factory_key_bit(key: &Bytes32, depth: usize) -> bool {
+    let byte = key[depth / 8];
+    let mask = 0x80u8 >> (depth % 8);
+    byte & mask != 0
+}
+
+fn factory_right_kind_byte(kind: FactoryRightKind) -> u8 {
+    match kind {
+        FactoryRightKind::Balance => 0,
+        FactoryRightKind::ReserveClaim => 1,
+        FactoryRightKind::Membership => 2,
+        FactoryRightKind::ExitPath => 3,
+        FactoryRightKind::SponsorBudgetClaim => 4,
+    }
 }
 
 fn require_factory_right_change_authorised(

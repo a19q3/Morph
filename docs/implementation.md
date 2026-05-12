@@ -106,8 +106,14 @@ The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
 `non_interference_digest`; `validate-factory-package` checks canonical roots,
 canonical participant sets, digest consistency, and the host-side
-non-interference predicate. This remains the data-layer predicate that a future
-reduced-signature proof bundle would need to satisfy.
+non-interference predicate. `print-factory-merkle-update-fixture` emits the
+first general proof-bundle shape: a sparse Merkle proof for one changed right
+inside an arbitrary factory rights tree, with identical sibling frontier before
+and after to prove no unlisted subtree changed. `FactoryMerkleUpdateWitnessV1`
+uses the same single-right proof shape on chain with a fixed 256-sibling
+frontier, and `morph-factory-type` verifies the old/new sparse roots,
+unchanged access-manifest root, header digest, and one authorised participant
+signature in CKB-VM tests.
 The next factory layer is a signed state package. `print-factory-state-fixture`
 wraps the update package, computes a domain-separated factory-state digest, and
 signs it with every participant key. `print-reduced-factory-state-fixture`
@@ -180,9 +186,9 @@ process manager rather than becoming its own process manager.
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
-- No general reduced-signature factory proof bundle yet. The implemented
-  reduced-exit path is fixed-width and covers CKB and CKB+xUDT reserve-claim
-  smokes.
+- No multi-right or variable-depth reduced-signature proof bundle yet. The
+  implemented on-chain paths are fixed-width: CKB/CKB+xUDT reserve-claim
+  reduced exits and a single-right 256-sibling sparse Merkle update.
 - No generic descriptor runtime.
 - No base-layer CKB change.
 
@@ -235,9 +241,12 @@ A devnet demonstration is acceptable only when it includes:
 - a reusable factory local-exit evidence package that binds the updated
   FactoryStateHeader, embedded factory signatures, child StateHeader,
   settlement descriptor, output indices, and local-exit digest;
+- a sparse Merkle factory-update smoke path that stores the package evidence,
+  validates the live old FactoryStateHeader, and publishes a one-right update
+  through the fixed 256-sibling proof witness;
 - a smoke summary report that preserves cycle, size, status, deployed script
-  hashes, deployed script outpoints, watchtower alert events, and expected
-  script-error evidence for review;
+  hashes, deployed script outpoints, watchtower alert events, proof-shape
+  budget profiles, and expected script-error evidence for review;
 - smoke assertions that compare deployed script hashes with the local RISC-V
   contract binaries and require the watchtower older-state/publication alerts
   before accepting a run as current evidence;

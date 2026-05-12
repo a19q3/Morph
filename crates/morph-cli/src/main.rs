@@ -8,14 +8,16 @@ use clap::{Parser, Subcommand};
 use devnet::{
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitAuthorisation,
-    FactoryExitChannelOptions, FactoryExitChannelTamper, FactoryReducedExitSmokeOptions,
-    FactoryReducedRightsSmokeOptions, FactoryReducedXudtExitSmokeOptions, FactorySmokeOptions,
-    FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions, FinaliseChannelOptions,
-    FinaliseSinceNegativeSmokeOptions, FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions,
-    PublishLatestStatePackageOptions, PublishStateOptions, SaveFactoryReducedRightsPackageOptions,
-    SaveFactoryStatePackageOptions, SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions,
-    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
-    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
+    FactoryExitChannelOptions, FactoryExitChannelTamper, FactoryMerkleUpdateSmokeOptions,
+    FactoryReducedExitSmokeOptions, FactoryReducedRightsSmokeOptions,
+    FactoryReducedXudtExitSmokeOptions, FactorySmokeOptions, FactoryXudtNegativeSmokeOptions,
+    FactoryXudtSmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
+    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
+    PublishStateOptions, SaveFactoryMerkleUpdatePackageOptions,
+    SaveFactoryReducedRightsPackageOptions, SaveFactoryStatePackageOptions,
+    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
+    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
+    XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -56,6 +58,8 @@ enum Command {
     PrintFactoryReducedRightsFixture,
     /// Print a host-side reduced factory-exit package fixture.
     PrintFactoryReducedExitFixture,
+    /// Print a host-side single-right sparse Merkle factory update package fixture.
+    PrintFactoryMerkleUpdateFixture,
     /// Print a valid factory local-exit evidence package fixture.
     PrintFactoryLocalExitFixture,
     /// Print a sample watchtower operator policy.
@@ -105,6 +109,14 @@ enum Command {
     /// Validate a host-side reduced factory-exit package.
     ValidateFactoryReducedExitPackage {
         /// Path to the factory reduced-exit package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a host-side single-right sparse Merkle factory update package.
+    ValidateFactoryMerkleUpdatePackage {
+        /// Path to the factory Merkle update package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -465,6 +477,30 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Save a sparse Merkle factory update package without broadcasting it.
+    SaveFactoryMerkleUpdatePackage {
+        /// Devnet Alice factory signing key. Alice is the touched participant in the single-right proof.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory key used to prove full membership. Bob does not sign the Merkle update.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// New factory update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// New Alice balance quantity in the sparse Merkle fixture. Must be lower than 1000.
+        #[arg(long, default_value_t = 900)]
+        touched_after_balance: u128,
+        /// Directory where sparse Merkle factory packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// List saved signed factory state packages.
     ListFactoryStatePackages {
         /// Directory where signed factory state packages are stored.
@@ -560,6 +596,46 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Directory where reduced-rights factory packages are stored.
+        #[arg(long, default_value = "target/morph-factory-state-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> sparse Merkle package -> package update for a larger factory rights tree.
+    FactoryMerkleUpdateSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key. Alice signs the Merkle update.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// New Alice balance quantity in the sparse Merkle fixture. Must be lower than 1000.
+        #[arg(long, default_value_t = 900)]
+        touched_after_balance: u128,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where sparse Merkle factory packages are stored.
         #[arg(long, default_value = "target/morph-factory-state-packages")]
         store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
@@ -1542,6 +1618,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintFactoryMerkleUpdateFixture => {
+            let package = factory_packages::fixture_merkle_update_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintFactoryLocalExitFixture => {
             let package = packages::fixture_factory_local_exit_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -1698,6 +1779,34 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::ValidateFactoryMerkleUpdatePackage { path, json } => {
+            let package = factory_packages::read_factory_merkle_update_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory Merkle update package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("state_root_before={}", summary.state_root_before);
+                println!("state_root_after={}", summary.state_root_after);
+                println!("touched_participants={}", summary.touched_participants);
+                println!(
+                    "authorised_participants={}",
+                    summary.authorised_participants
+                );
+                println!("changed_participant={}", summary.changed_participant);
+                println!("changed_kind={:?}", summary.changed_kind);
+                println!("quantity_before={}", summary.quantity_before);
+                println!("quantity_after={}", summary.quantity_after);
+                println!("proof_siblings={}", summary.proof_siblings);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+            }
+            Ok(())
+        }
         Command::ValidateFactoryLocalExitPackage { path, json } => {
             let package = packages::read_factory_local_exit_package(&path)?;
             let summary = package.summary()?;
@@ -1800,6 +1909,8 @@ fn main() -> Result<()> {
                     "factory_reduced_rights_updates={}",
                     report.factory_reduced_rights_updates
                 );
+                println!("factory_merkle_updates={}", report.factory_merkle_updates);
+                println!("factory_proof_profiles={}", report.factory_proof_profiles);
                 println!("factory_reduced_exits={}", report.factory_reduced_exits);
                 println!("factory_local_exits={}", report.factory_local_exits);
                 if let Some(budget) = &report.budget {
@@ -2360,6 +2471,44 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
             }
         }
+        DevnetCommand::SaveFactoryMerkleUpdatePackage {
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            update_number,
+            touched_after_balance,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_factory_merkle_update_package(
+                &rpc,
+                SaveFactoryMerkleUpdatePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    update_number,
+                    touched_after_balance,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("factory_id={}", report.package.factory_id);
+                println!("old_update_number={}", report.package.old_update_number);
+                println!("new_update_number={}", report.package.new_update_number);
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("old_state_root={}", report.package.old_state_root);
+                println!("new_state_root={}", report.package.new_state_root);
+                println!(
+                    "non_interference_digest={}",
+                    report.package.non_interference_digest
+                );
+                println!("proof_siblings={}", report.package.proof_siblings);
+                println!("witness_len={}", report.package.witness_len);
+            }
+        }
         DevnetCommand::ListFactoryStatePackages {
             store_dir,
             factory_id,
@@ -2491,6 +2640,67 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     "new_update_number={}",
                     report.package.package.new_update_number
                 );
+                println!("update_tx_hash={}", report.update.tx_hash);
+                println!("update_status={}", report.update.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.update.factory_out_point.tx_hash, report.update.factory_out_point.index
+                );
+                println!(
+                    "non_interference_digest={}",
+                    report.update.non_interference_digest
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.update.metrics);
+                for hash in report.update.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FactoryMerkleUpdateSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            touched_after_balance,
+            fee,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_merkle_update_smoke(
+                &rpc,
+                FactoryMerkleUpdateSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    touched_after_balance,
+                    fee,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!(
+                    "old_update_number={}",
+                    report.package.package.old_update_number
+                );
+                println!(
+                    "new_update_number={}",
+                    report.package.package.new_update_number
+                );
+                println!("proof_siblings={}", report.package.package.proof_siblings);
+                println!("witness_len={}", report.package.package.witness_len);
                 println!("update_tx_hash={}", report.update.tx_hash);
                 println!("update_status={}", report.update.status);
                 println!(

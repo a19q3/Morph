@@ -160,6 +160,34 @@ pub struct FactoryReducedExit {
     pub release_quantity: Amount,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FactoryMerkleSiblingSide {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryMerkleSibling {
+    pub side: FactoryMerkleSiblingSide,
+    pub hash: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryRightMerkleProof {
+    pub right: FactoryRight,
+    pub siblings: Vec<FactoryMerkleSibling>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactorySingleRightMerkleUpdate {
+    pub before_root: Bytes32,
+    pub after_root: Bytes32,
+    pub touched_participants: BTreeSet<Bytes32>,
+    pub authorised_participants: BTreeSet<Bytes32>,
+    pub before: FactoryRightMerkleProof,
+    pub after: FactoryRightMerkleProof,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CellClass {
     ChannelReserve,

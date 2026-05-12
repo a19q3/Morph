@@ -20,11 +20,12 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
-    FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1,
-    FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
-    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV1, blake2b256, read_u128,
+    FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
+    FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
+    FACTORY_SIGNATURE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1,
+    FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
+    FactoryStateHeaderV1, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError,
+    StateHeaderV1, blake2b256, read_u128, verify_factory_merkle_update,
     verify_factory_state_signatures, verify_reduced_factory_exit_update,
     verify_reduced_factory_rights_update,
 };
@@ -125,6 +126,9 @@ fn validate_participant_authorisation(
     } else if raw.len() == FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN {
         let witness = FactoryReducedRightsWitnessV1::parse(raw.as_ref())?;
         verify_reduced_factory_rights_update(old_header, header, &witness)
+    } else if raw.len() == FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN {
+        let witness = FactoryMerkleUpdateWitnessV1::parse(raw.as_ref())?;
+        verify_factory_merkle_update(old_header, header, &witness)
     } else if raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
         || raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
     {

@@ -34,6 +34,8 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-rights-package target/fixture-checks/factory-reduced-rights.json --json > target/fixture-checks/factory-reduced-rights-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-reduced-exit-fixture > target/fixture-checks/factory-reduced-exit.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-exit-package target/fixture-checks/factory-reduced-exit.json --json > target/fixture-checks/factory-reduced-exit-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-merkle-update-fixture > target/fixture-checks/factory-merkle-update.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-merkle-update-package target/fixture-checks/factory-merkle-update.json --json > target/fixture-checks/factory-merkle-update-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json

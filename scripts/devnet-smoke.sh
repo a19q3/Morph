@@ -73,6 +73,10 @@ FACTORY_REDUCED_RIGHTS_PACKAGE_PATH="$(jq -r '.package.path' "$OUT_DIR/factory-r
 run_json factory-reduced-rights-package-check validate-factory-reduced-rights-package \
   "$FACTORY_REDUCED_RIGHTS_PACKAGE_PATH"
 
+mkdir -p "$OUT_DIR/factory-merkle-update-packages"
+run_json factory-merkle-update-smoke devnet --rpc-url "$RPC_URL" factory-merkle-update-smoke \
+  --store-dir "$OUT_DIR/factory-merkle-update-packages"
+
 run_json factory-reduced-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-exit-smoke
 run_json factory-reduced-xudt-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke
 

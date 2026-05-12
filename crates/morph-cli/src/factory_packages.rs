@@ -7,9 +7,11 @@ use anyhow::{Context, Result, ensure};
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use morph_core::{
-    Amount, Bytes32, FactoryReducedExit, FactoryRight, FactoryRightId, FactoryRightKind,
-    FactoryUpdate, blake2b256, bytes32, validate_factory_non_interference,
-    validate_reduced_factory_exit,
+    Amount, Bytes32, FactoryMerkleSibling, FactoryMerkleSiblingSide, FactoryReducedExit,
+    FactoryRight, FactoryRightId, FactoryRightKind, FactoryRightMerkleProof,
+    FactorySingleRightMerkleUpdate, FactoryUpdate, blake2b256, bytes32, factory_right_sparse_proof,
+    factory_right_sparse_root, validate_factory_non_interference,
+    validate_factory_single_right_merkle_update, validate_reduced_factory_exit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +22,8 @@ const FACTORY_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE_V1";
 const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package.v1";
 const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1";
 const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package.v1";
+const FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_merkle_update_package.v1";
+const FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_MERKLE_UPDATE_PACKAGE_V1";
 const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
 const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1: &str = "authorised_participants_v1";
 
@@ -91,6 +95,28 @@ pub struct StoredFactoryReducedExitPackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryMerkleSibling {
+    pub side: String,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryMerkleUpdatePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub touched_participants: Vec<String>,
+    pub authorised_participants: Vec<String>,
+    pub right_before: StoredFactoryRight,
+    pub right_after: StoredFactoryRight,
+    pub proof_siblings: Vec<StoredFactoryMerkleSibling>,
+    pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryPackageSummary {
     pub factory_id: String,
     pub update_number: u64,
@@ -129,6 +155,22 @@ pub struct FactoryReducedExitPackageSummary {
     pub reserve_claim_after: Amount,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryMerkleUpdatePackageSummary {
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub touched_participants: usize,
+    pub authorised_participants: usize,
+    pub changed_participant: String,
+    pub changed_kind: FactoryRightKind,
+    pub quantity_before: Amount,
+    pub quantity_after: Amount,
+    pub proof_siblings: usize,
+    pub non_interference_digest: String,
+}
+
 #[derive(Debug, Serialize)]
 struct DigestPayload {
     domain: &'static str,
@@ -155,6 +197,21 @@ struct FactoryStateDigestPayload {
     non_interference_digest: String,
     signature_threshold: u8,
     participant_keys: Vec<StoredFactoryParticipantKey>,
+}
+
+#[derive(Debug, Serialize)]
+struct FactoryMerkleDigestPayload {
+    domain: &'static str,
+    schema: &'static str,
+    factory_id: String,
+    update_number: u64,
+    state_root_before: String,
+    state_root_after: String,
+    touched_participants: Vec<String>,
+    authorised_participants: Vec<String>,
+    right_before: StoredFactoryRight,
+    right_after: StoredFactoryRight,
+    proof_siblings: Vec<StoredFactoryMerkleSibling>,
 }
 
 impl StoredFactoryUpdatePackage {
@@ -645,6 +702,169 @@ impl StoredFactoryReducedExitPackage {
     }
 }
 
+impl StoredFactoryMerkleUpdatePackage {
+    pub fn from_rights(
+        factory_id: Bytes32,
+        update_number: u64,
+        before: Vec<FactoryRight>,
+        after: Vec<FactoryRight>,
+        changed_id: FactoryRightId,
+        touched_participants: BTreeSet<Bytes32>,
+        authorised_participants: BTreeSet<Bytes32>,
+    ) -> Result<Self> {
+        let before_root = factory_right_sparse_root(&before)
+            .map_err(|err| anyhow::anyhow!("failed to compute before root: {err}"))?;
+        let after_root = factory_right_sparse_root(&after)
+            .map_err(|err| anyhow::anyhow!("failed to compute after root: {err}"))?;
+        let before_proof = factory_right_sparse_proof(&before, &changed_id)
+            .map_err(|err| anyhow::anyhow!("failed to build before proof: {err}"))?;
+        let after_proof = factory_right_sparse_proof(&after, &changed_id)
+            .map_err(|err| anyhow::anyhow!("failed to build after proof: {err}"))?;
+        ensure!(
+            before_proof.siblings == after_proof.siblings,
+            "single-right Merkle update requires an unchanged sibling frontier"
+        );
+
+        let mut package = Self {
+            schema: FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(&factory_id),
+            update_number,
+            state_root_before: hex_prefixed(&before_root),
+            state_root_after: hex_prefixed(&after_root),
+            touched_participants: touched_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            authorised_participants: authorised_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            right_before: StoredFactoryRight::from_right(&before_proof.right),
+            right_after: StoredFactoryRight::from_right(&after_proof.right),
+            proof_siblings: before_proof
+                .siblings
+                .iter()
+                .map(StoredFactoryMerkleSibling::from_sibling)
+                .collect(),
+            non_interference_digest: String::new(),
+        };
+        package.normalise()?;
+        package.non_interference_digest = package.compute_digest()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<FactorySingleRightMerkleUpdate> {
+        ensure!(
+            self.schema == FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA,
+            "unsupported factory Merkle update package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.factory_id == canonical_hex32(&self.factory_id)?,
+            "factory_id must be canonical"
+        );
+        ensure!(
+            self.state_root_before == canonical_hex32(&self.state_root_before)?,
+            "state_root_before must be canonical"
+        );
+        ensure!(
+            self.state_root_after == canonical_hex32(&self.state_root_after)?,
+            "state_root_after must be canonical"
+        );
+        ensure_sorted_unique_hex32(&self.touched_participants, "touched_participants")?;
+        ensure_sorted_unique_hex32(&self.authorised_participants, "authorised_participants")?;
+        ensure!(
+            self.proof_siblings == canonical_merkle_siblings(&self.proof_siblings)?,
+            "proof_siblings must be canonical"
+        );
+        ensure!(
+            self.non_interference_digest == self.compute_digest()?,
+            "factory Merkle update package non_interference_digest mismatch"
+        );
+
+        let siblings = self
+            .proof_siblings
+            .iter()
+            .map(StoredFactoryMerkleSibling::to_sibling)
+            .collect::<Result<Vec<_>>>()?;
+        let update = FactorySingleRightMerkleUpdate {
+            before_root: hex32_bytes(&self.state_root_before)?,
+            after_root: hex32_bytes(&self.state_root_after)?,
+            touched_participants: self
+                .touched_participants
+                .iter()
+                .map(|value| hex32_bytes(value))
+                .collect::<Result<BTreeSet<_>>>()?,
+            authorised_participants: self
+                .authorised_participants
+                .iter()
+                .map(|value| hex32_bytes(value))
+                .collect::<Result<BTreeSet<_>>>()?,
+            before: FactoryRightMerkleProof {
+                right: self.right_before.to_right()?,
+                siblings: siblings.clone(),
+            },
+            after: FactoryRightMerkleProof {
+                right: self.right_after.to_right()?,
+                siblings,
+            },
+        };
+        validate_factory_single_right_merkle_update(&update)
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    pub fn summary(&self) -> Result<FactoryMerkleUpdatePackageSummary> {
+        let update = self.validate()?;
+        Ok(FactoryMerkleUpdatePackageSummary {
+            factory_id: self.factory_id.clone(),
+            update_number: self.update_number,
+            state_root_before: self.state_root_before.clone(),
+            state_root_after: self.state_root_after.clone(),
+            touched_participants: self.touched_participants.len(),
+            authorised_participants: self.authorised_participants.len(),
+            changed_participant: hex_prefixed(&update.before.right.id.participant),
+            changed_kind: update.before.right.id.kind,
+            quantity_before: update.before.right.quantity,
+            quantity_after: update.after.right.quantity,
+            proof_siblings: self.proof_siblings.len(),
+            non_interference_digest: self.non_interference_digest.clone(),
+        })
+    }
+
+    fn normalise(&mut self) -> Result<()> {
+        self.factory_id = canonical_hex32(&self.factory_id)?;
+        self.state_root_before = canonical_hex32(&self.state_root_before)?;
+        self.state_root_after = canonical_hex32(&self.state_root_after)?;
+        self.touched_participants = canonical_hex32_vec(&self.touched_participants)?;
+        self.authorised_participants = canonical_hex32_vec(&self.authorised_participants)?;
+        self.right_before = self.right_before.canonical()?;
+        self.right_after = self.right_after.canonical()?;
+        self.proof_siblings = canonical_merkle_siblings(&self.proof_siblings)?;
+        Ok(())
+    }
+
+    fn compute_digest(&self) -> Result<String> {
+        let payload = FactoryMerkleDigestPayload {
+            domain: FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN_V1,
+            schema: FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA,
+            factory_id: canonical_hex32(&self.factory_id)?,
+            update_number: self.update_number,
+            state_root_before: canonical_hex32(&self.state_root_before)?,
+            state_root_after: canonical_hex32(&self.state_root_after)?,
+            touched_participants: canonical_hex32_vec(&self.touched_participants)?,
+            authorised_participants: canonical_hex32_vec(&self.authorised_participants)?,
+            right_before: self.right_before.canonical()?,
+            right_after: self.right_after.canonical()?,
+            proof_siblings: canonical_merkle_siblings(&self.proof_siblings)?,
+        };
+        let encoded = serde_json::to_vec(&payload)?;
+        Ok(hex_prefixed(&blake2b256(&encoded)))
+    }
+}
+
 impl StoredFactoryRight {
     fn from_right(right: &FactoryRight) -> Self {
         Self {
@@ -690,6 +910,42 @@ impl StoredFactoryRight {
     }
 }
 
+impl StoredFactoryMerkleSibling {
+    fn from_sibling(sibling: &FactoryMerkleSibling) -> Self {
+        Self {
+            side: match sibling.side {
+                FactoryMerkleSiblingSide::Left => "left",
+                FactoryMerkleSiblingSide::Right => "right",
+            }
+            .to_string(),
+            hash: hex_prefixed(&sibling.hash),
+        }
+    }
+
+    fn to_sibling(&self) -> Result<FactoryMerkleSibling> {
+        let side = match self.side.as_str() {
+            "left" => FactoryMerkleSiblingSide::Left,
+            "right" => FactoryMerkleSiblingSide::Right,
+            other => return Err(anyhow::anyhow!("unsupported Merkle sibling side {other}")),
+        };
+        Ok(FactoryMerkleSibling {
+            side,
+            hash: hex32_bytes(&self.hash)?,
+        })
+    }
+
+    fn canonical(&self) -> Result<Self> {
+        ensure!(
+            self.side == "left" || self.side == "right",
+            "Merkle sibling side must be left or right"
+        );
+        Ok(Self {
+            side: self.side.clone(),
+            hash: canonical_hex32(&self.hash)?,
+        })
+    }
+}
+
 pub fn read_factory_update_package(path: &Path) -> Result<StoredFactoryUpdatePackage> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read factory package {}", path.display()))?;
@@ -729,6 +985,26 @@ pub fn read_factory_reduced_exit_package(path: &Path) -> Result<StoredFactoryRed
     package
         .validate()
         .with_context(|| format!("invalid factory reduced-exit package {}", path.display()))?;
+    Ok(package)
+}
+
+pub fn read_factory_merkle_update_package(path: &Path) -> Result<StoredFactoryMerkleUpdatePackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read factory Merkle update package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryMerkleUpdatePackage =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "failed to parse factory Merkle update package {}",
+                path.display()
+            )
+        })?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory Merkle update package {}", path.display()))?;
     Ok(package)
 }
 
@@ -793,6 +1069,31 @@ pub fn fixture_reduced_exit_package() -> Result<StoredFactoryReducedExitPackage>
     StoredFactoryReducedExitPackage::from_update_package(update_package, exit)
 }
 
+pub fn fixture_merkle_update_package() -> Result<StoredFactoryMerkleUpdatePackage> {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let changed_id = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    after
+        .iter_mut()
+        .find(|right| right.id == changed_id)
+        .ok_or_else(|| anyhow::anyhow!("fixture changed right is missing"))?
+        .quantity = 35;
+    StoredFactoryMerkleUpdatePackage::from_rights(
+        bytes32(90),
+        2,
+        before,
+        after,
+        changed_id,
+        BTreeSet::from([bytes32(3)]),
+        BTreeSet::from([bytes32(3)]),
+    )
+}
+
 pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
     let update_package = fixture_package()?;
     let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
@@ -801,6 +1102,36 @@ pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
         update_package,
         &[(bytes32(1), alice), (bytes32(2), bob)],
     )
+}
+
+fn large_factory_rights() -> Vec<FactoryRight> {
+    let mut rights = Vec::new();
+    for participant in 1..=8 {
+        for subchannel in 10..=13 {
+            rights.push(right(
+                participant,
+                subchannel,
+                FactoryRightKind::Balance,
+                None,
+                100,
+            ));
+            rights.push(right(
+                participant,
+                subchannel,
+                FactoryRightKind::ReserveClaim,
+                None,
+                50,
+            ));
+            rights.push(right(
+                participant,
+                subchannel,
+                FactoryRightKind::Membership,
+                None,
+                1,
+            ));
+        }
+    }
+    rights
 }
 
 pub fn fixture_reduced_state_package() -> Result<StoredFactoryStatePackage> {
@@ -856,6 +1187,15 @@ fn canonical_rights(values: &[StoredFactoryRight]) -> Result<Vec<StoredFactoryRi
         .collect::<Result<Vec<_>>>()?;
     out.sort_by_key(right_sort_key);
     Ok(out)
+}
+
+fn canonical_merkle_siblings(
+    values: &[StoredFactoryMerkleSibling],
+) -> Result<Vec<StoredFactoryMerkleSibling>> {
+    values
+        .iter()
+        .map(StoredFactoryMerkleSibling::canonical)
+        .collect()
 }
 
 fn ensure_sorted_unique_hex32(values: &[String], field: &str) -> Result<()> {
@@ -1084,6 +1424,38 @@ mod tests {
         assert_eq!(summary.reserve_claim_before, 50);
         assert_eq!(summary.reserve_claim_after, 30);
         assert_eq!(summary.release_quantity, 20);
+    }
+
+    #[test]
+    fn validates_factory_merkle_update_package() {
+        let package = fixture_merkle_update_package().unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.update_number, 2);
+        assert_eq!(summary.changed_participant, hex_prefixed(&bytes32(3)));
+        assert_eq!(summary.changed_kind, FactoryRightKind::ReserveClaim);
+        assert_eq!(summary.quantity_before, 50);
+        assert_eq!(summary.quantity_after, 35);
+        assert_eq!(summary.proof_siblings, 256);
+    }
+
+    #[test]
+    fn rejects_factory_merkle_update_digest_mismatch() {
+        let mut package = fixture_merkle_update_package().unwrap();
+        package.non_interference_digest = hex_prefixed(&[9u8; 32]);
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("digest mismatch"));
+    }
+
+    #[test]
+    fn rejects_factory_merkle_update_sibling_mismatch() {
+        let mut package = fixture_merkle_update_package().unwrap();
+        package.proof_siblings[0].hash = hex_prefixed(&[8u8; 32]);
+        package.non_interference_digest = package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(err.to_string().contains("Merkle update proof failed"));
     }
 
     #[test]

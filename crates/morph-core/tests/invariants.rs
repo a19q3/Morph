@@ -171,6 +171,36 @@ fn factory_reduced_exit(update: &FactoryUpdate, release_quantity: Amount) -> Fac
     }
 }
 
+fn large_factory_rights() -> Vec<FactoryRight> {
+    let mut rights = Vec::new();
+    for participant in 1..=8 {
+        for subchannel in 10..=13 {
+            rights.push(factory_right(
+                participant,
+                subchannel,
+                FactoryRightKind::Balance,
+                None,
+                100,
+            ));
+            rights.push(factory_right(
+                participant,
+                subchannel,
+                FactoryRightKind::ReserveClaim,
+                None,
+                50,
+            ));
+            rights.push(factory_right(
+                participant,
+                subchannel,
+                FactoryRightKind::Membership,
+                None,
+                1,
+            ));
+        }
+    }
+    rights
+}
+
 #[test]
 fn signing_digest_is_domain_separated_and_state_sensitive() {
     let h1 = header(1, Phase::Settling);
@@ -179,6 +209,105 @@ fn signing_digest_is_domain_separated_and_state_sensitive() {
 
     assert_ne!(h1.signing_digest(), h2.signing_digest());
     assert_eq!(h1.signing_digest(), h1.signing_digest());
+}
+
+#[test]
+fn factory_sparse_merkle_proof_accepts_single_right_update_in_large_tree() {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let changed = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    let changed_after = after
+        .iter_mut()
+        .find(|right| right.id == changed)
+        .expect("changed right");
+    changed_after.quantity = 35;
+
+    let proof = FactorySingleRightMerkleUpdate {
+        before_root: factory_right_sparse_root(&before).unwrap(),
+        after_root: factory_right_sparse_root(&after).unwrap(),
+        touched_participants: BTreeSet::from([bytes32(3)]),
+        authorised_participants: BTreeSet::from([bytes32(3)]),
+        before: factory_right_sparse_proof(&before, &changed).unwrap(),
+        after: factory_right_sparse_proof(&after, &changed).unwrap(),
+    };
+
+    validate_factory_single_right_merkle_update(&proof).unwrap();
+}
+
+#[test]
+fn factory_sparse_merkle_root_is_order_independent() {
+    let rights = large_factory_rights();
+    let mut reversed = rights.clone();
+    reversed.reverse();
+
+    assert_eq!(
+        factory_right_sparse_root(&rights).unwrap(),
+        factory_right_sparse_root(&reversed).unwrap()
+    );
+}
+
+#[test]
+fn factory_sparse_merkle_proof_rejects_unproved_sibling_change() {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let changed = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    after
+        .iter_mut()
+        .find(|right| right.id == changed)
+        .expect("changed right")
+        .quantity = 35;
+
+    let mut proof = FactorySingleRightMerkleUpdate {
+        before_root: factory_right_sparse_root(&before).unwrap(),
+        after_root: factory_right_sparse_root(&after).unwrap(),
+        touched_participants: BTreeSet::from([bytes32(3)]),
+        authorised_participants: BTreeSet::from([bytes32(3)]),
+        before: factory_right_sparse_proof(&before, &changed).unwrap(),
+        after: factory_right_sparse_proof(&after, &changed).unwrap(),
+    };
+    proof.after.siblings[0].hash[0] ^= 1;
+
+    let err = validate_factory_single_right_merkle_update(&proof).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMerkleProofInvalid);
+}
+
+#[test]
+fn factory_sparse_merkle_update_requires_authorised_touched_participant() {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let changed = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    after
+        .iter_mut()
+        .find(|right| right.id == changed)
+        .expect("changed right")
+        .quantity = 35;
+
+    let proof = FactorySingleRightMerkleUpdate {
+        before_root: factory_right_sparse_root(&before).unwrap(),
+        after_root: factory_right_sparse_root(&after).unwrap(),
+        touched_participants: BTreeSet::from([bytes32(3)]),
+        authorised_participants: BTreeSet::from([bytes32(4)]),
+        before: factory_right_sparse_proof(&before, &changed).unwrap(),
+        after: factory_right_sparse_proof(&after, &changed).unwrap(),
+    };
+
+    let err = validate_factory_single_right_merkle_update(&proof).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMissingAuthorisation);
 }
 
 #[test]

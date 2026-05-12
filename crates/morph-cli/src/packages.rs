@@ -9,25 +9,33 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
     BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
     BilateralSignatureWitnessV1, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
-    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
     FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1,
     FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
     FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryLocalExitWitnessV1,
-    FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
-    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN,
-    StateHeaderV1, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
+    FactoryMerkleUpdateWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
+    FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN, StateHeaderV1,
+    blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
     factory_participants_commitment_v1, participants_commitment_v1,
     settlement_descriptor_commitment_v1, verify_bilateral_state_signatures,
-    verify_factory_state_signatures, verify_reduced_factory_rights_update,
+    verify_factory_merkle_update, verify_factory_state_signatures,
+    verify_reduced_factory_rights_update,
+};
+#[cfg(test)]
+use morph_script_common::{
+    FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1,
 };
 use serde::{Deserialize, Serialize};
 
 const PACKAGE_SCHEMA: &str = "morph.state_package.v1";
 const FACTORY_STATE_CELL_PACKAGE_SCHEMA: &str = "morph.factory_state_cell_package.v1";
 const FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA: &str = "morph.factory_reduced_rights_package.v1";
+const FACTORY_MERKLE_UPDATE_STATE_PACKAGE_SCHEMA: &str =
+    "morph.factory_merkle_update_state_package.v1";
 const FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_local_exit_package.v1";
 const WATCH_CURSOR_SCHEMA: &str = "morph.watch_cursor.v1";
 
@@ -98,6 +106,30 @@ pub struct StoredFactoryReducedRightsPackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryMerkleUpdateStatePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub changed_participant: String,
+    pub quantity_before: u128,
+    pub quantity_after: u128,
+    pub proof_siblings: usize,
+    pub witness_len: usize,
+    pub old_header_hex: String,
+    pub new_header_hex: String,
+    pub witness_hex: String,
+    pub source_factory_out_point: Option<PackageOutPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryReducedRightsPackageSummary {
     pub factory_id: String,
     pub old_update_number: u64,
@@ -111,10 +143,29 @@ pub struct FactoryReducedRightsPackageSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryMerkleUpdateStatePackageSummary {
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub changed_participant: String,
+    pub quantity_before: u128,
+    pub quantity_after: u128,
+    pub proof_siblings: usize,
+    pub witness_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FactoryStateCellUpdatePackage {
     Full(StoredFactoryStateCellPackage),
     ReducedRights(StoredFactoryReducedRightsPackage),
+    MerkleUpdate(StoredFactoryMerkleUpdateStatePackage),
 }
 
 impl FactoryStateCellUpdatePackage {
@@ -122,6 +173,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => package.header_bytes(),
             Self::ReducedRights(package) => package.new_header_bytes(),
+            Self::MerkleUpdate(package) => package.new_header_bytes(),
         }
     }
 
@@ -129,6 +181,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => package.witness_bytes(),
             Self::ReducedRights(package) => package.witness_bytes(),
+            Self::MerkleUpdate(package) => package.witness_bytes(),
         }
     }
 
@@ -136,6 +189,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => &package.factory_id,
             Self::ReducedRights(package) => &package.factory_id,
+            Self::MerkleUpdate(package) => &package.factory_id,
         }
     }
 
@@ -143,6 +197,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => package.update_number,
             Self::ReducedRights(package) => package.new_update_number,
+            Self::MerkleUpdate(package) => package.new_update_number,
         }
     }
 
@@ -150,6 +205,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => &package.state_root,
             Self::ReducedRights(package) => &package.new_state_root,
+            Self::MerkleUpdate(package) => &package.new_state_root,
         }
     }
 
@@ -157,6 +213,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => &package.access_manifest_root,
             Self::ReducedRights(package) => &package.new_access_manifest_root,
+            Self::MerkleUpdate(package) => &package.new_access_manifest_root,
         }
     }
 
@@ -164,6 +221,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(package) => &package.non_interference_digest,
             Self::ReducedRights(package) => &package.non_interference_digest,
+            Self::MerkleUpdate(package) => &package.non_interference_digest,
         }
     }
 
@@ -174,6 +232,7 @@ impl FactoryStateCellUpdatePackage {
         match self {
             Self::Full(_) => Ok(()),
             Self::ReducedRights(package) => package.validate_against_current_header(current_header),
+            Self::MerkleUpdate(package) => package.validate_against_current_header(current_header),
         }
     }
 }
@@ -606,6 +665,192 @@ impl StoredFactoryReducedRightsPackage {
     }
 }
 
+impl StoredFactoryMerkleUpdateStatePackage {
+    pub fn from_merkle_update(
+        old_header_bytes: &[u8],
+        new_header_bytes: &[u8],
+        witness_bytes: &[u8],
+        source_factory_out_point: Option<PackageOutPoint>,
+    ) -> Result<Self> {
+        let old_header = parse_factory_header(old_header_bytes)?;
+        let new_header = parse_factory_header(new_header_bytes)?;
+        let witness = parse_factory_merkle_update_witness(witness_bytes)?;
+        validate_merkle_update_pair(&old_header, &new_header, &witness)?;
+        let right_before = witness
+            .right_before()
+            .map_err(|err| anyhow!("factory Merkle package right_before is invalid: {err:?}"))?;
+        let right_after = witness
+            .right_after()
+            .map_err(|err| anyhow!("factory Merkle package right_after is invalid: {err:?}"))?;
+
+        let package = Self {
+            schema: FACTORY_MERKLE_UPDATE_STATE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(new_header.factory_id()),
+            old_update_number: old_header.update_number(),
+            new_update_number: new_header.update_number(),
+            signing_digest: hex_prefixed(&new_header.signing_digest()),
+            old_state_root: hex_prefixed(old_header.state_root()),
+            new_state_root: hex_prefixed(new_header.state_root()),
+            old_access_manifest_root: hex_prefixed(old_header.access_manifest_root()),
+            new_access_manifest_root: hex_prefixed(new_header.access_manifest_root()),
+            non_interference_digest: hex_prefixed(new_header.non_interference_digest()),
+            changed_participant: hex_prefixed(right_before.participant()),
+            quantity_before: right_before.quantity(),
+            quantity_after: right_after.quantity(),
+            proof_siblings: 256,
+            witness_len: witness_bytes.len(),
+            old_header_hex: hex_prefixed(old_header_bytes),
+            new_header_hex: hex_prefixed(new_header_bytes),
+            witness_hex: hex_prefixed(witness_bytes),
+            source_factory_out_point,
+        };
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema == FACTORY_MERKLE_UPDATE_STATE_PACKAGE_SCHEMA,
+            "unsupported factory Merkle update package schema {}",
+            self.schema
+        );
+
+        let old_header_bytes = self.old_header_bytes()?;
+        let new_header_bytes = self.new_header_bytes()?;
+        let witness_bytes = self.witness_bytes()?;
+        let old_header = parse_factory_header(&old_header_bytes)?;
+        let new_header = parse_factory_header(&new_header_bytes)?;
+        let witness = parse_factory_merkle_update_witness(&witness_bytes)?;
+        validate_merkle_update_pair(&old_header, &new_header, &witness)?;
+        let right_before = witness
+            .right_before()
+            .map_err(|err| anyhow!("factory Merkle package right_before is invalid: {err:?}"))?;
+        let right_after = witness
+            .right_after()
+            .map_err(|err| anyhow!("factory Merkle package right_after is invalid: {err:?}"))?;
+
+        ensure!(
+            self.factory_id == hex_prefixed(new_header.factory_id()),
+            "factory Merkle package factory_id does not match new header"
+        );
+        ensure!(
+            self.old_update_number == old_header.update_number(),
+            "factory Merkle package old_update_number does not match old header"
+        );
+        ensure!(
+            self.new_update_number == new_header.update_number(),
+            "factory Merkle package new_update_number does not match new header"
+        );
+        ensure!(
+            self.signing_digest == hex_prefixed(&new_header.signing_digest()),
+            "factory Merkle package signing_digest does not match new header"
+        );
+        ensure!(
+            self.old_state_root == hex_prefixed(old_header.state_root()),
+            "factory Merkle package old_state_root does not match old header"
+        );
+        ensure!(
+            self.new_state_root == hex_prefixed(new_header.state_root()),
+            "factory Merkle package new_state_root does not match new header"
+        );
+        ensure!(
+            self.old_access_manifest_root == hex_prefixed(old_header.access_manifest_root()),
+            "factory Merkle package old_access_manifest_root does not match old header"
+        );
+        ensure!(
+            self.new_access_manifest_root == hex_prefixed(new_header.access_manifest_root()),
+            "factory Merkle package new_access_manifest_root does not match new header"
+        );
+        ensure!(
+            self.non_interference_digest == hex_prefixed(new_header.non_interference_digest()),
+            "factory Merkle package non_interference_digest does not match new header"
+        );
+        ensure!(
+            self.changed_participant == hex_prefixed(right_before.participant()),
+            "factory Merkle package changed_participant does not match witness"
+        );
+        ensure!(
+            self.quantity_before == right_before.quantity()
+                && self.quantity_after == right_after.quantity(),
+            "factory Merkle package quantity metadata does not match witness"
+        );
+        ensure!(
+            self.proof_siblings == 256 && self.witness_len == FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN,
+            "factory Merkle package proof metadata is invalid"
+        );
+        Ok(())
+    }
+
+    pub fn validate_against_current_header(
+        &self,
+        current_header: &FactoryStateHeaderV1<'_>,
+    ) -> Result<()> {
+        self.validate()?;
+        let old_header_bytes = self.old_header_bytes()?;
+        let old_header = parse_factory_header(&old_header_bytes)?;
+        ensure!(
+            factory_headers_equal(&old_header, current_header),
+            "factory Merkle package old header does not match the current FactoryStateCell"
+        );
+        Ok(())
+    }
+
+    pub fn summary(&self) -> Result<FactoryMerkleUpdateStatePackageSummary> {
+        self.validate()?;
+        Ok(FactoryMerkleUpdateStatePackageSummary {
+            factory_id: self.factory_id.clone(),
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            signing_digest: self.signing_digest.clone(),
+            old_state_root: self.old_state_root.clone(),
+            new_state_root: self.new_state_root.clone(),
+            old_access_manifest_root: self.old_access_manifest_root.clone(),
+            new_access_manifest_root: self.new_access_manifest_root.clone(),
+            non_interference_digest: self.non_interference_digest.clone(),
+            changed_participant: self.changed_participant.clone(),
+            quantity_before: self.quantity_before,
+            quantity_after: self.quantity_after,
+            proof_siblings: self.proof_siblings,
+            witness_len: self.witness_len,
+        })
+    }
+
+    pub fn old_header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.old_header_hex,
+            FACTORY_STATE_HEADER_V1_LEN,
+            "old_header_hex",
+        )
+    }
+
+    pub fn new_header_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.new_header_hex,
+            FACTORY_STATE_HEADER_V1_LEN,
+            "new_header_hex",
+        )
+    }
+
+    pub fn witness_bytes(&self) -> Result<Vec<u8>> {
+        decode_hex_exact(
+            &self.witness_hex,
+            FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN,
+            "witness_hex",
+        )
+    }
+
+    pub fn file_name(&self) -> String {
+        let factory = self.factory_id.trim_start_matches("0x");
+        let digest = self.signing_digest.trim_start_matches("0x");
+        format!(
+            "factory-merkle-update-{factory}-{:020}-{}.json",
+            self.new_update_number,
+            &digest[0..16]
+        )
+    }
+}
+
 impl StoredFactoryLocalExitPackage {
     pub fn from_factory_local_exit(
         factory_header_bytes: &[u8],
@@ -815,6 +1060,32 @@ pub fn write_factory_reduced_rights_package(
     Ok(path)
 }
 
+pub fn write_factory_merkle_update_package(
+    dir: &Path,
+    package: &StoredFactoryMerkleUpdateStatePackage,
+) -> Result<PathBuf> {
+    package.validate()?;
+    fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create package directory {}", dir.display()))?;
+    let path = dir.join(package.file_name());
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json).with_context(|| {
+        format!(
+            "failed to write temporary factory Merkle package {}",
+            tmp.display()
+        )
+    })?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move factory Merkle package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
 pub fn default_watch_cursor_path(dir: &Path, channel_id: &str) -> Result<PathBuf> {
     let channel = canonical_hex32(channel_id)?;
     Ok(dir.join(format!(
@@ -938,6 +1209,19 @@ pub fn read_factory_state_cell_update_package(
                 format!("invalid factory reduced-rights package {}", path.display())
             })?;
             Ok(FactoryStateCellUpdatePackage::ReducedRights(package))
+        }
+        FACTORY_MERKLE_UPDATE_STATE_PACKAGE_SCHEMA => {
+            let package: StoredFactoryMerkleUpdateStatePackage = serde_json::from_value(value)
+                .with_context(|| {
+                    format!(
+                        "failed to parse factory Merkle update package {}",
+                        path.display()
+                    )
+                })?;
+            package.validate().with_context(|| {
+                format!("invalid factory Merkle update package {}", path.display())
+            })?;
+            Ok(FactoryStateCellUpdatePackage::MerkleUpdate(package))
         }
         other => Err(anyhow!(
             "unsupported factory update package schema {other} in {}",
@@ -1106,6 +1390,64 @@ pub fn fixture_factory_reduced_rights_package() -> Result<StoredFactoryReducedRi
     )?;
 
     StoredFactoryReducedRightsPackage::from_reduced_rights_update(
+        &old_header,
+        &new_header,
+        &witness,
+        None,
+    )
+}
+
+#[cfg(test)]
+pub fn fixture_factory_merkle_update_package() -> Result<StoredFactoryMerkleUpdateStatePackage> {
+    let alice = k256::ecdsa::SigningKey::from_slice(&[1u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Alice key: {err:?}"))?;
+    let bob = k256::ecdsa::SigningKey::from_slice(&[2u8; 32])
+        .map_err(|err| anyhow!("invalid fixture Bob key: {err:?}"))?;
+    let mut witness = merkle_update_witness_bytes(900, &alice, &bob)?;
+    let parsed_witness = parse_factory_merkle_update_witness(&witness)?;
+
+    let entries = reduced_participant_entries(&alice, &bob);
+    let participants_commitment = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let access_manifest_root = script_blake2b256(&[b"CKB_MORPH_FACTORY_MERKLE_ACCESS_FIXTURE_V1"]);
+
+    let mut old_header = factory_header_fixture(1, [8u8; BYTE32_LEN]);
+    old_header[76..108].copy_from_slice(
+        &parsed_witness
+            .rights_root(false)
+            .map_err(|err| anyhow!("failed to compute Merkle old root: {err:?}"))?,
+    );
+    old_header[108..140].copy_from_slice(&participants_commitment);
+    old_header[140..172].copy_from_slice(&access_manifest_root);
+    let old_parsed = parse_factory_header(&old_header)?;
+
+    let mut new_header = factory_header_fixture(2, [8u8; BYTE32_LEN]);
+    new_header[76..108].copy_from_slice(
+        &parsed_witness
+            .rights_root(true)
+            .map_err(|err| anyhow!("failed to compute Merkle new root: {err:?}"))?,
+    );
+    new_header[108..140].copy_from_slice(&participants_commitment);
+    new_header[140..172].copy_from_slice(&access_manifest_root);
+    let preliminary_new = parse_factory_header(&new_header)?;
+    let non_interference_digest = parsed_witness
+        .non_interference_digest(&old_parsed, &preliminary_new)
+        .map_err(|err| anyhow!("failed to compute Merkle digest: {err:?}"))?;
+    new_header[172..204].copy_from_slice(&non_interference_digest);
+    let new_parsed = parse_factory_header(&new_header)?;
+    sign_merkle_update_witness(
+        &mut witness,
+        [1u8; BYTE32_LEN],
+        &alice,
+        &new_parsed.signing_digest(),
+    )?;
+
+    StoredFactoryMerkleUpdateStatePackage::from_merkle_update(
         &old_header,
         &new_header,
         &witness,
@@ -1415,6 +1757,11 @@ fn parse_factory_reduced_rights_witness(raw: &[u8]) -> Result<FactoryReducedRigh
         .map_err(|err| anyhow!("invalid factory reduced-rights witness: {err:?}"))
 }
 
+fn parse_factory_merkle_update_witness(raw: &[u8]) -> Result<FactoryMerkleUpdateWitnessV1<'_>> {
+    FactoryMerkleUpdateWitnessV1::parse(raw)
+        .map_err(|err| anyhow!("invalid factory Merkle update witness: {err:?}"))
+}
+
 fn parse_factory_local_exit_witness(raw: &[u8]) -> Result<FactoryLocalExitWitnessV1<'_>> {
     FactoryLocalExitWitnessV1::parse(raw)
         .map_err(|err| anyhow!("invalid factory local-exit witness: {err:?}"))
@@ -1440,6 +1787,29 @@ fn validate_reduced_rights_pair(
     );
     verify_reduced_factory_rights_update(old_header, new_header, witness)
         .map_err(|err| anyhow!("factory reduced-rights proof is invalid: {err:?}"))?;
+    Ok(())
+}
+
+fn validate_merkle_update_pair(
+    old_header: &FactoryStateHeaderV1<'_>,
+    new_header: &FactoryStateHeaderV1<'_>,
+    witness: &FactoryMerkleUpdateWitnessV1<'_>,
+) -> Result<()> {
+    ensure!(
+        new_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        "unsupported factory signature scheme {}",
+        new_header.signature_scheme_id()
+    );
+    ensure!(
+        old_header.same_context_except_progress(new_header),
+        "factory Merkle package changes immutable factory context"
+    );
+    ensure!(
+        new_header.update_number() > old_header.update_number(),
+        "factory Merkle package must advance the update number"
+    );
+    verify_factory_merkle_update(old_header, new_header, witness)
+        .map_err(|err| anyhow!("factory Merkle update proof is invalid: {err:?}"))?;
     Ok(())
 }
 
@@ -1613,6 +1983,32 @@ fn reduced_right_offset(after: bool, index: usize) -> usize {
     }
 }
 
+#[cfg(test)]
+fn merkle_update_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+#[cfg(test)]
+fn merkle_update_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+#[cfg(test)]
+fn merkle_update_right_offset(after: bool) -> usize {
+    let before_offset = merkle_update_touched_offset() + BYTE32_LEN;
+    if after {
+        before_offset + FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset
+    }
+}
+
+#[cfg(test)]
+fn merkle_update_sibling_offset(depth: usize) -> usize {
+    merkle_update_right_offset(true) + FACTORY_RIGHT_V1_LEN + depth * BYTE32_LEN
+}
+
 fn factory_right_bytes(
     participant: u8,
     subchannel: u8,
@@ -1626,6 +2022,42 @@ fn factory_right_bytes(
     raw[2 * BYTE32_LEN + 1] = 0;
     put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
     raw
+}
+
+#[cfg(test)]
+fn merkle_update_witness_bytes(
+    touched_after_balance: u128,
+    alice: &k256::ecdsa::SigningKey,
+    bob: &k256::ecdsa::SigningKey,
+) -> Result<[u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN]> {
+    let entries = reduced_participant_entries(alice, bob);
+    let mut raw = [0u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1;
+    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+        let offset = merkle_update_participant_offset(index);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(participant == &[1u8; BYTE32_LEN]);
+    }
+    raw[merkle_update_touched_offset()..merkle_update_touched_offset() + BYTE32_LEN]
+        .copy_from_slice(&[1u8; BYTE32_LEN]);
+    raw[merkle_update_right_offset(false)
+        ..merkle_update_right_offset(false) + FACTORY_RIGHT_V1_LEN]
+        .copy_from_slice(&factory_right_bytes(1, 10, 0, 1_000));
+    raw[merkle_update_right_offset(true)..merkle_update_right_offset(true) + FACTORY_RIGHT_V1_LEN]
+        .copy_from_slice(&factory_right_bytes(1, 10, 0, touched_after_balance));
+    for depth in 0..256 {
+        let offset = merkle_update_sibling_offset(depth);
+        raw[offset..offset + BYTE32_LEN].fill(depth as u8);
+    }
+    parse_factory_merkle_update_witness(&raw)?;
+    Ok(raw)
 }
 
 fn reduced_rights_pair(
@@ -1719,6 +2151,32 @@ fn sign_reduced_rights_witness(
     }
     Err(anyhow!(
         "participant not present in reduced factory rights witness"
+    ))
+}
+
+#[cfg(test)]
+fn sign_merkle_update_witness(
+    witness: &mut [u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN],
+    participant: [u8; BYTE32_LEN],
+    key: &k256::ecdsa::SigningKey,
+    digest: &[u8; BYTE32_LEN],
+) -> Result<()> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    let sig: k256::ecdsa::Signature = key
+        .sign_prehash(digest)
+        .map_err(|err| anyhow!("failed to sign factory Merkle update witness: {err:?}"))?;
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+        let offset = merkle_update_participant_offset(index);
+        if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(sig.to_bytes().as_slice());
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "participant not present in factory Merkle update witness"
     ))
 }
 

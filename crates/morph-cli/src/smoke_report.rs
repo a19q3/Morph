@@ -7,7 +7,10 @@ use ckb_hash::blake2b_256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::packages::{StoredFactoryLocalExitPackage, StoredFactoryReducedRightsPackage};
+use crate::packages::{
+    StoredFactoryLocalExitPackage, StoredFactoryMerkleUpdateStatePackage,
+    StoredFactoryReducedRightsPackage,
+};
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
 const DEVNET_SMOKE_BUDGET_SCHEMA: &str = "morph.devnet_smoke_budget.v1";
@@ -23,6 +26,8 @@ pub struct DevnetSmokeSummary {
     pub watchtower_alerts: Vec<WatchtowerAlertSummary>,
     pub watchtower_services: Vec<WatchtowerServiceSummary>,
     pub factory_reduced_rights_updates: Vec<FactoryReducedRightsEvidenceSummary>,
+    pub factory_merkle_updates: Vec<FactoryMerkleUpdateEvidenceSummary>,
+    pub factory_proof_profiles: Vec<FactoryProofProfileSummary>,
     pub factory_reduced_exits: Vec<FactoryReducedExitEvidenceSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub totals: MetricTotals,
@@ -42,6 +47,8 @@ pub struct DevnetSmokeAssertionReport {
     pub watchtower_publication_alerts: usize,
     pub watchtower_service_records: usize,
     pub factory_reduced_rights_updates: usize,
+    pub factory_merkle_updates: usize,
+    pub factory_proof_profiles: usize,
     pub factory_reduced_exits: usize,
     pub factory_local_exits: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -138,6 +145,38 @@ pub struct FactoryReducedRightsEvidenceSummary {
     pub old_access_manifest_root: String,
     pub new_access_manifest_root: String,
     pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryMerkleUpdateEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub signing_digest: String,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub non_interference_digest: String,
+    pub changed_participant: String,
+    pub quantity_before: u128,
+    pub quantity_after: u128,
+    pub proof_siblings: usize,
+    pub witness_len: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FactoryProofProfileSummary {
+    pub check: String,
+    pub transaction_path: String,
+    pub evidence_path: String,
+    pub proof_kind: String,
+    pub proof_siblings: usize,
+    pub witness_len: usize,
+    pub estimated_cycles: u64,
+    pub tx_size_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -274,6 +313,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut watchtower_alerts = Vec::new();
     let mut watchtower_services = Vec::new();
     let mut factory_reduced_rights_updates = Vec::new();
+    let mut factory_merkle_updates = Vec::new();
     let mut factory_reduced_exits = Vec::new();
     let mut factory_local_exits = Vec::new();
     {
@@ -283,6 +323,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             deployed_scripts: &mut deployed_scripts,
             watchtower_services: &mut watchtower_services,
             factory_reduced_rights_updates: &mut factory_reduced_rights_updates,
+            factory_merkle_updates: &mut factory_merkle_updates,
             factory_reduced_exits: &mut factory_reduced_exits,
             factory_local_exits: &mut factory_local_exits,
         };
@@ -305,6 +346,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         collect_watchtower_alerts(dir, path, &mut watchtower_alerts)?;
     }
 
+    let factory_proof_profiles = factory_proof_profiles(&factory_merkle_updates, &transactions);
     let totals = summarise_totals(&transactions);
     Ok(DevnetSmokeSummary {
         directory: dir.display().to_string(),
@@ -316,6 +358,8 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         watchtower_alerts,
         watchtower_services,
         factory_reduced_rights_updates,
+        factory_merkle_updates,
+        factory_proof_profiles,
         factory_reduced_exits,
         factory_local_exits,
         totals,
@@ -389,6 +433,8 @@ pub fn assert_default_devnet_smoke_with_budget(
             .count(),
         watchtower_service_records: summary.watchtower_services.len(),
         factory_reduced_rights_updates: summary.factory_reduced_rights_updates.len(),
+        factory_merkle_updates: summary.factory_merkle_updates.len(),
+        factory_proof_profiles: summary.factory_proof_profiles.len(),
         factory_reduced_exits: summary.factory_reduced_exits.len(),
         factory_local_exits: summary.factory_local_exits.len(),
         budget,
@@ -461,6 +507,8 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
     assert_watchtower_alert_coverage(summary)?;
     assert_watchtower_service_coverage(summary)?;
     assert_factory_reduced_rights_coverage(summary)?;
+    assert_factory_merkle_update_coverage(summary)?;
+    assert_factory_proof_profile_coverage(summary)?;
     assert_factory_reduced_exit_coverage(summary)?;
 
     if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
@@ -529,6 +577,68 @@ fn assert_factory_reduced_rights_coverage(summary: &DevnetSmokeSummary) -> Resul
                 "factory reduced-rights update must include signing and non-interference digests"
             ));
         }
+    }
+    Ok(())
+}
+
+fn assert_factory_merkle_update_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let update_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-merkle-update-smoke"
+            && tx.path == "$.update"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !update_committed {
+        return Err(anyhow!(
+            "missing committed factory-merkle-update smoke transaction"
+        ));
+    }
+
+    if summary.factory_merkle_updates.is_empty() {
+        return Err(anyhow!("missing factory Merkle update package evidence"));
+    }
+    for update in &summary.factory_merkle_updates {
+        if update.new_update_number <= update.old_update_number {
+            return Err(anyhow!("factory Merkle update must be strictly monotonic"));
+        }
+        if update.proof_siblings != 256 || update.witness_len == 0 {
+            return Err(anyhow!(
+                "factory Merkle update must include the full sparse proof witness"
+            ));
+        }
+        if update.quantity_after >= update.quantity_before {
+            return Err(anyhow!(
+                "factory Merkle update fixture must decrease a right"
+            ));
+        }
+        if update.signing_digest.is_empty() || update.non_interference_digest.is_empty() {
+            return Err(anyhow!(
+                "factory Merkle update must include signing and non-interference digests"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let Some(profile) = summary
+        .factory_proof_profiles
+        .iter()
+        .find(|profile| profile.check == "factory-merkle-update-smoke")
+    else {
+        return Err(anyhow!(
+            "missing factory Merkle proof budget profile evidence"
+        ));
+    };
+    if profile.proof_kind != "factory_sparse_merkle_update_v1"
+        || profile.transaction_path != "$.update"
+        || profile.proof_siblings != 256
+        || profile.witness_len == 0
+        || profile.estimated_cycles == 0
+        || profile.tx_size_bytes == 0
+    {
+        return Err(anyhow!(
+            "factory Merkle proof budget profile must bind proof shape to non-zero transaction metrics"
+        ));
     }
     Ok(())
 }
@@ -1135,6 +1245,52 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Factory Merkle Updates\n\n");
+    if summary.factory_merkle_updates.is_empty() {
+        out.push_str("No factory Merkle update packages were recorded.\n");
+    } else {
+        out.push_str("| Check | Path | Old update | New update | Quantity | Proof siblings | Witness bytes | Non-interference digest |\n");
+        out.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n");
+        for update in &summary.factory_merkle_updates {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} -> {} | {} | {} | `{}` |\n",
+                table_cell(&update.check),
+                table_cell(&update.path),
+                update.old_update_number,
+                update.new_update_number,
+                update.quantity_before,
+                update.quantity_after,
+                update.proof_siblings,
+                update.witness_len,
+                update.non_interference_digest
+            ));
+        }
+    }
+    out.push('\n');
+
+    out.push_str("## Factory Proof Profiles\n\n");
+    if summary.factory_proof_profiles.is_empty() {
+        out.push_str("No factory proof budget profiles were recorded.\n");
+    } else {
+        out.push_str(
+            "| Check | Kind | Proof siblings | Witness bytes | Cycles | Tx bytes | Evidence |\n",
+        );
+        out.push_str("| --- | --- | ---: | ---: | ---: | ---: | --- |\n");
+        for profile in &summary.factory_proof_profiles {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                table_cell(&profile.check),
+                table_cell(&profile.proof_kind),
+                profile.proof_siblings,
+                profile.witness_len,
+                profile.estimated_cycles,
+                profile.tx_size_bytes,
+                table_cell(&profile.evidence_path)
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Factory Reduced Exits\n\n");
     if summary.factory_reduced_exits.is_empty() {
         out.push_str("No factory reduced-exit evidence was recorded.\n");
@@ -1441,6 +1597,7 @@ struct SmokeCollections<'a> {
     deployed_scripts: &'a mut Vec<DeployedScriptSummary>,
     watchtower_services: &'a mut Vec<WatchtowerServiceSummary>,
     factory_reduced_rights_updates: &'a mut Vec<FactoryReducedRightsEvidenceSummary>,
+    factory_merkle_updates: &'a mut Vec<FactoryMerkleUpdateEvidenceSummary>,
     factory_reduced_exits: &'a mut Vec<FactoryReducedExitEvidenceSummary>,
     factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
 }
@@ -1533,6 +1690,38 @@ fn collect_from_value(
                 old_access_manifest_root: summary.old_access_manifest_root,
                 new_access_manifest_root: summary.new_access_manifest_root,
                 non_interference_digest: summary.non_interference_digest,
+            });
+    }
+
+    if object.get("schema").and_then(Value::as_str)
+        == Some("morph.factory_merkle_update_state_package.v1")
+    {
+        let package: StoredFactoryMerkleUpdateStatePackage =
+            serde_json::from_value(Value::Object(object.clone())).with_context(|| {
+                format!("failed to decode factory Merkle update package at {path}")
+            })?;
+        let summary = package
+            .summary()
+            .with_context(|| format!("invalid factory Merkle update package at {path}"))?;
+        collections
+            .factory_merkle_updates
+            .push(FactoryMerkleUpdateEvidenceSummary {
+                check: check.to_string(),
+                path: path.to_string(),
+                factory_id: summary.factory_id,
+                old_update_number: summary.old_update_number,
+                new_update_number: summary.new_update_number,
+                signing_digest: summary.signing_digest,
+                old_state_root: summary.old_state_root,
+                new_state_root: summary.new_state_root,
+                old_access_manifest_root: summary.old_access_manifest_root,
+                new_access_manifest_root: summary.new_access_manifest_root,
+                non_interference_digest: summary.non_interference_digest,
+                changed_participant: summary.changed_participant,
+                quantity_before: summary.quantity_before,
+                quantity_after: summary.quantity_after,
+                proof_siblings: summary.proof_siblings,
+                witness_len: summary.witness_len,
             });
     }
 
@@ -1654,6 +1843,30 @@ fn string_field(object: &serde_json::Map<String, Value>, key: &str) -> Option<St
 
 fn value_as_u128(value: &Value) -> Option<u128> {
     value.as_u64().map(u128::from)
+}
+
+fn factory_proof_profiles(
+    merkle_updates: &[FactoryMerkleUpdateEvidenceSummary],
+    transactions: &[TransactionSummary],
+) -> Vec<FactoryProofProfileSummary> {
+    merkle_updates
+        .iter()
+        .filter_map(|update| {
+            transactions
+                .iter()
+                .find(|tx| tx.check == update.check && tx.path == "$.update")
+                .map(|tx| FactoryProofProfileSummary {
+                    check: update.check.clone(),
+                    transaction_path: tx.path.clone(),
+                    evidence_path: update.path.clone(),
+                    proof_kind: "factory_sparse_merkle_update_v1".to_string(),
+                    proof_siblings: update.proof_siblings,
+                    witness_len: update.witness_len,
+                    estimated_cycles: tx.estimated_cycles,
+                    tx_size_bytes: tx.tx_size_bytes,
+                })
+        })
+        .collect()
 }
 
 fn summarise_totals(transactions: &[TransactionSummary]) -> MetricTotals {
@@ -1799,6 +2012,28 @@ mod tests {
             format!(r#"{{"package": {reduced_package}}}"#),
         )
         .unwrap();
+        let merkle_package = serde_json::to_string(
+            &crate::packages::fixture_factory_merkle_update_package().unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("factory-merkle.json"),
+            format!(
+                r#"{{
+                  "package": {merkle_package},
+                  "update": {{
+                    "tx_hash": "0xfeed",
+                    "status": "Committed",
+                    "block_number": 9,
+                    "metrics": {{
+                      "estimated_cycles": 55,
+                      "tx_size_bytes": 66
+                    }}
+                  }}
+                }}"#
+            ),
+        )
+        .unwrap();
         fs::write(
             dir.join("deploy.json"),
             r#"{
@@ -1863,8 +2098,8 @@ mod tests {
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 7);
-        assert_eq!(summary.transactions.len(), 2);
+        assert_eq!(summary.json_files, 8);
+        assert_eq!(summary.transactions.len(), 3);
         assert_eq!(summary.script_failures.len(), 1);
         assert_eq!(summary.deployed_scripts.len(), 1);
         assert_eq!(summary.deployed_scripts[0].name, "morph-state-lock");
@@ -1875,6 +2110,12 @@ mod tests {
         );
         assert_eq!(summary.factory_reduced_rights_updates.len(), 1);
         assert_eq!(summary.factory_reduced_rights_updates[0].path, "$.package");
+        assert_eq!(summary.factory_merkle_updates.len(), 1);
+        assert_eq!(summary.factory_merkle_updates[0].path, "$.package");
+        assert_eq!(summary.factory_merkle_updates[0].proof_siblings, 256);
+        assert_eq!(summary.factory_proof_profiles.len(), 1);
+        assert_eq!(summary.factory_proof_profiles[0].proof_siblings, 256);
+        assert_eq!(summary.factory_proof_profiles[0].estimated_cycles, 55);
         assert_eq!(summary.factory_reduced_exits.len(), 1);
         assert_eq!(summary.factory_reduced_exits[0].witness_len, 3122);
         assert_eq!(
@@ -1896,8 +2137,8 @@ mod tests {
                 .iter()
                 .any(|service| service.schema == "morph.watchtower_health.v1")
         );
-        assert_eq!(summary.totals.total_estimated_cycles, 44);
-        assert_eq!(summary.totals.total_tx_size_bytes, 66);
+        assert_eq!(summary.totals.total_estimated_cycles, 99);
+        assert_eq!(summary.totals.total_tx_size_bytes, 132);
 
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("StateSinceNotMature"));
@@ -1906,6 +2147,8 @@ mod tests {
         assert!(markdown.contains("Watchtower Alerts"));
         assert!(markdown.contains("Watchtower Service"));
         assert!(markdown.contains("Factory Reduced-Rights Updates"));
+        assert!(markdown.contains("Factory Merkle Updates"));
+        assert!(markdown.contains("Factory Proof Profiles"));
         assert!(markdown.contains("Factory Local Exits"));
 
         fs::remove_dir_all(&dir).ok();
@@ -2095,6 +2338,9 @@ mod tests {
         assert!(profile.transactions.iter().any(|limit| {
             limit.check == "factory-reduced-rights-smoke" && limit.path == "$.update"
         }));
+        assert!(profile.transactions.iter().any(|limit| {
+            limit.check == "factory-merkle-update-smoke" && limit.path == "$.update"
+        }));
     }
 
     #[test]
@@ -2194,6 +2440,8 @@ mod tests {
             watchtower_alerts: Vec::new(),
             watchtower_services: Vec::new(),
             factory_reduced_rights_updates: Vec::new(),
+            factory_merkle_updates: Vec::new(),
+            factory_proof_profiles: Vec::new(),
             factory_reduced_exits: Vec::new(),
             factory_local_exits: Vec::new(),
             totals: MetricTotals::default(),
@@ -2240,6 +2488,7 @@ mod tests {
             json_files: 36,
             transactions: vec![
                 transaction("factory-reduced-rights-smoke", "$.update", "Committed"),
+                transaction("factory-merkle-update-smoke", "$.update", "Committed"),
                 transaction("factory-reduced-exit-smoke", "$.exit", "Committed"),
                 transaction("factory-reduced-xudt-exit-smoke", "$.exit", "Committed"),
             ],
@@ -2261,6 +2510,8 @@ mod tests {
             watchtower_alerts: watchtower_alerts(),
             watchtower_services: watchtower_services(),
             factory_reduced_rights_updates: vec![factory_reduced_rights_update()],
+            factory_merkle_updates: vec![factory_merkle_update()],
+            factory_proof_profiles: vec![factory_proof_profile()],
             factory_reduced_exits: vec![
                 factory_reduced_exit("factory-reduced-exit-smoke", None),
                 factory_reduced_exit("factory-reduced-xudt-exit-smoke", Some(1_000_000)),
@@ -2275,8 +2526,8 @@ mod tests {
             ],
             deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
-                transaction_count: 54,
-                committed_count: 53,
+                transaction_count: 55,
+                committed_count: 54,
                 pending_count: 1,
                 total_estimated_cycles: 1,
                 max_estimated_cycles: 1,
@@ -2321,6 +2572,40 @@ mod tests {
             old_access_manifest_root: "0x44".to_string(),
             new_access_manifest_root: "0x55".to_string(),
             non_interference_digest: "0x66".to_string(),
+        }
+    }
+
+    fn factory_merkle_update() -> FactoryMerkleUpdateEvidenceSummary {
+        FactoryMerkleUpdateEvidenceSummary {
+            check: "factory-merkle-update-smoke".to_string(),
+            path: "$.package.package".to_string(),
+            factory_id: "0x00".to_string(),
+            old_update_number: 0,
+            new_update_number: 1,
+            signing_digest: "0x11".to_string(),
+            old_state_root: "0x22".to_string(),
+            new_state_root: "0x33".to_string(),
+            old_access_manifest_root: "0x44".to_string(),
+            new_access_manifest_root: "0x44".to_string(),
+            non_interference_digest: "0x66".to_string(),
+            changed_participant: "0x77".to_string(),
+            quantity_before: 1000,
+            quantity_after: 900,
+            proof_siblings: 256,
+            witness_len: 8718,
+        }
+    }
+
+    fn factory_proof_profile() -> FactoryProofProfileSummary {
+        FactoryProofProfileSummary {
+            check: "factory-merkle-update-smoke".to_string(),
+            transaction_path: "$.update".to_string(),
+            evidence_path: "$.package.package".to_string(),
+            proof_kind: "factory_sparse_merkle_update_v1".to_string(),
+            proof_siblings: 256,
+            witness_len: 8718,
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
         }
     }
 

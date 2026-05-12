@@ -85,8 +85,8 @@ Acceptance criteria:
 - JSON devnet reports expose `estimated_cycles` and `tx_size_bytes` for every
   lifecycle transaction.
 - completed smoke directories can be summarised into `summary.md` and
-  `summary.json`, including deployed script records, watchtower alerts, and
-  factory local-exit evidence.
+  `summary.json`, including deployed script records, watchtower alerts,
+  factory local-exit evidence, and factory proof-shape budget profiles.
 - completed smoke directories can be compared with optional regression gates
   for transaction set, status, cycles, and byte size.
 - completed smoke directories can be checked against absolute cycle and byte
@@ -201,9 +201,19 @@ Implemented:
   typed amount/type mismatch rejection;
 - devnet smoke coverage for CKB and CKB+xUDT reserve-claim reduced-exit
   publication, child-state publication, and child-vault finalisation;
+- host-level sparse Merkle update package for a single-right transition inside
+  an arbitrary factory rights tree, including CLI fixture and validation;
+- script-level fixed-width sparse Merkle update witness for the same
+  single-right transition, including CKB-VM accept/reject coverage;
+- devnet smoke coverage for the sparse Merkle factory update witness, including
+  smoke-summary evidence and per-transaction budget profile entry;
+- smoke-summary proof profile binding for the sparse Merkle update proof shape,
+  including proof sibling count, witness length, node-estimated cycles, and
+  transaction byte size;
 - absolute smoke budget gates for cycle and transaction-size ceilings;
 - per-transaction smoke budget profiles for critical proof paths, including
-  bounded reduced-rights publication;
+  bounded reduced-rights publication and sparse Merkle factory update
+  publication;
 - rejection of touched-right inflation and unrelated participant mutation in
   CKB-VM tests.
 
@@ -211,5 +221,5 @@ Still open:
 
 - additional typed reduced-exit variants beyond the fixed-width CKB+xUDT
   reserve-claim smoke;
-- general Merkle proof bundles for larger factories;
-- empirical budget profiles for larger proof shapes.
+- empirical budget profiles for proof shapes beyond the current fixed
+  256-sibling sparse Merkle update.

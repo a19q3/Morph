@@ -143,8 +143,11 @@ make smoke-assert-budget
 ```
 
 The profile can set global ceilings and per-transaction ceilings keyed by the
-summary `check` and JSON `path`. For quick local experiments, the same limits
-can be supplied directly:
+summary `check` and JSON `path`. The generated `summary.md` and `summary.json`
+also include factory proof profiles that bind a proof kind such as
+`factory_sparse_merkle_update_v1` to its proof sibling count, witness length,
+node-estimated cycles, and transaction bytes. For quick local experiments, the
+same limits can be supplied directly:
 
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-assert \
@@ -255,6 +258,16 @@ the live factory cell, and publishes the update through the ordinary
 ```sh
 cargo run -q -p morph-cli -- devnet factory-reduced-rights-smoke --json \
   > target/factory-reduced-rights-smoke.json
+```
+
+The sparse Merkle update path uses a larger rights tree and carries only the
+single changed right plus the fixed 256-sibling proof. It stores the package
+used by `update-factory`, validates the live old header, and publishes the
+new FactoryStateCell with the Merkle witness:
+
+```sh
+cargo run -q -p morph-cli -- devnet factory-merkle-update-smoke --json \
+  > target/factory-merkle-update-smoke.json
 ```
 
 The reduced-exit factory path has a separate smoke command. It opens a factory
@@ -943,6 +956,11 @@ cargo run -q -p morph-cli -- print-factory-reduced-exit-fixture \
 cargo run -q -p morph-cli -- validate-factory-reduced-exit-package \
   target/factory-reduced-exit.json \
   --json
+cargo run -q -p morph-cli -- print-factory-merkle-update-fixture \
+  > target/factory-merkle-update.json
+cargo run -q -p morph-cli -- validate-factory-merkle-update-package \
+  target/factory-merkle-update.json \
+  --json
 cargo run -q -p morph-cli -- print-factory-local-exit-fixture \
   > target/factory-local-exit.json
 cargo run -q -p morph-cli -- validate-factory-local-exit-package \
@@ -950,23 +968,30 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
   --json
 ```
 
-That host-side command checks canonical roots, canonical participant sets,
+Those host-side commands check canonical roots, canonical participant sets,
 `non_interference_digest`, the rights-dependency predicate, and conservative
 participant-id/public-key bindings with all-participant signatures over a
-domain-separated factory-state digest. The local-exit package validator checks
-the embedded factory signatures, child state number and phase, settlement
-descriptor commitment, output indices, script hashes, and the digest bound into
-the updated FactoryStateHeader.
+domain-separated factory-state digest. The Merkle update package proves a
+single right transition inside an arbitrary sparse rights tree and requires the
+same sibling frontier before and after, so the package can show a larger
+factory root transition without carrying the full rights set. The local-exit
+package validator checks the embedded factory signatures, child state number
+and phase, settlement descriptor commitment, output indices, script hashes, and
+the digest bound into the updated FactoryStateHeader.
 
-The `morph-factory-type` script is one step closer than the host package: it
-already executes in CKB-VM tests, accepts a canonical initial FactoryStateCell,
-accepts a signed monotonic factory update, and rejects equal update numbers or
-invalid participant signatures. It also accepts a bounded reduced-rights
-witness that proves old/new rights roots, access roots, non-interference
-digest, and one authorised signature for a claim-reducing update; attempted
-claim inflation is rejected in CKB-VM tests. In the conservative local-exit
-path it verifies the child channel evidence committed by the factory header,
-including xUDT child-vault type and amount checks, while
-`morph-factory-vault-lock` enforces reserve conservation. The devnet CLI now
-also publishes the bounded reserve-claim reduced-exit witnesses in
-`factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke`.
+The `morph-factory-type` script executes in CKB-VM tests, accepts a canonical
+initial FactoryStateCell, accepts a signed monotonic factory update, and
+rejects equal update numbers or invalid participant signatures. It also accepts
+a bounded reduced-rights witness that proves old/new rights roots, access
+roots, non-interference digest, and one authorised signature for a
+claim-reducing update; attempted claim inflation is rejected in CKB-VM tests.
+For larger factories it accepts `FactoryMerkleUpdateWitnessV1`, a fixed
+256-sibling sparse Merkle proof for one authorised right transition, and
+rejects sibling tampering. In the conservative local-exit path it verifies the
+child channel evidence committed by the factory header, including xUDT
+child-vault type and amount checks, while `morph-factory-vault-lock` enforces
+reserve conservation. The devnet CLI now also publishes the bounded
+reserve-claim reduced-exit witnesses in `factory-reduced-exit-smoke` and
+`factory-reduced-xudt-exit-smoke`, publishes the sparse Merkle update witness
+in `factory-merkle-update-smoke`, and records the sparse Merkle proof shape in
+the smoke summary's factory proof profile table.

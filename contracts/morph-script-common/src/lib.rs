@@ -21,10 +21,17 @@ pub const FACTORY_RIGHT_V1_LEN: usize = BYTE32_LEN + BYTE32_LEN + 1 + 1 + BYTE32
 pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN: usize =
     BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1 + ECDSA_SIGNATURE_LEN;
 pub const FACTORY_REDUCED_RIGHTS_COUNT_V1: u8 = 10;
+pub const FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1: u8 = 1;
+pub const FACTORY_SPARSE_MERKLE_DEPTH_V1: usize = 256;
 pub const FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN: usize = 8
     + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
     + BYTE32_LEN
     + 2 * FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN;
+pub const FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN: usize = 8
+    + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    + BYTE32_LEN
+    + 2 * FACTORY_RIGHT_V1_LEN
+    + FACTORY_SPARSE_MERKLE_DEPTH_V1 * BYTE32_LEN;
 pub const FACTORY_REDUCED_EXIT_COMMON_V1_LEN: usize = 8
     + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
     + BYTE32_LEN
@@ -74,6 +81,7 @@ pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1: u8 = 2;
 pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1: u8 = 2;
 pub const FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1: u8 = 1;
 pub const FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1: u16 = 3;
+pub const FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1: u16 = 4;
 pub const FACTORY_RIGHT_KIND_RESERVE_CLAIM: u8 = 1;
 pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1: u16 = 1;
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
@@ -85,6 +93,10 @@ pub const FACTORY_ACCESS_MANIFEST_ROOT_DOMAIN_V1: &[u8] =
     b"CKB_MORPH_FACTORY_ACCESS_MANIFEST_ROOT_V1";
 pub const FACTORY_REDUCED_RIGHTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_REDUCED_RIGHTS_V1";
 pub const FACTORY_REDUCED_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_REDUCED_EXIT_V1";
+pub const FACTORY_MERKLE_UPDATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_MERKLE_UPDATE_V1";
+pub const FACTORY_RIGHT_KEY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY_V1";
+pub const FACTORY_RIGHT_LEAF_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF_V1";
+pub const FACTORY_RIGHT_NODE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE_V1";
 pub const FACTORY_LOCAL_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_LOCAL_EXIT_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
@@ -789,6 +801,244 @@ fn validate_reduced_rights_non_interference(witness: &FactoryReducedRightsWitnes
 fn verify_reduced_rights_signature(
     header: &FactoryStateHeaderV1,
     witness: &FactoryReducedRightsWitnessV1,
+) -> Result<()> {
+    let digest = header.signing_digest();
+    let mut matched = false;
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+        if witness.signed_flag(index) == 0 {
+            continue;
+        }
+        if witness.participant(index) != witness.touched_participant() {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        let verifying_key = VerifyingKey::from_sec1_bytes(witness.pubkey(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        let signature = Signature::try_from(witness.signature(index))
+            .map_err(|_| ScriptError::ParticipantWitnessEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| ScriptError::InvalidParticipantSignature)?;
+        matched = true;
+    }
+    if matched {
+        Ok(())
+    } else {
+        Err(ScriptError::FactoryReducedProofMismatch)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactoryMerkleUpdateWitnessV1<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactoryMerkleUpdateWitnessV1<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1
+            || witness.participant_threshold() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1
+            || witness.participant_count() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1
+            || witness.authorised_count() != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1
+            || witness.right_count() != FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1
+            || read_u16(raw, 6) != 0
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        if witness.participant(0) >= witness.participant(1)
+            || witness.pubkey(0) == witness.pubkey(1)
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        if witness.signed_count() != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1 {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        let before = witness.right_before()?;
+        let after = witness.right_after()?;
+        if !before.same_id(&after) || before.quantity() == after.quantity() {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        if before.participant() != witness.touched_participant() {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn participant_threshold(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn participant_count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn authorised_count(&self) -> u8 {
+        self.raw[4]
+    }
+
+    pub fn right_count(&self) -> u8 {
+        self.raw[5]
+    }
+
+    pub fn participant(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_merkle_participant_offset(index),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn pubkey(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_merkle_participant_offset(index) + BYTE32_LEN,
+            COMPRESSED_SECP256K1_PUBKEY_LEN,
+        )
+    }
+
+    pub fn signed_flag(&self, index: usize) -> u8 {
+        self.raw[factory_merkle_participant_offset(index)
+            + BYTE32_LEN
+            + COMPRESSED_SECP256K1_PUBKEY_LEN]
+    }
+
+    pub fn signature(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_merkle_participant_offset(index)
+                + BYTE32_LEN
+                + COMPRESSED_SECP256K1_PUBKEY_LEN
+                + 1,
+            ECDSA_SIGNATURE_LEN,
+        )
+    }
+
+    pub fn touched_participant(&self) -> &'a [u8] {
+        field(self.raw, factory_merkle_touched_offset(), BYTE32_LEN)
+    }
+
+    pub fn right_before(&self) -> Result<FactoryRightV1<'a>> {
+        FactoryRightV1::parse(field(
+            self.raw,
+            factory_merkle_right_offset(false),
+            FACTORY_RIGHT_V1_LEN,
+        ))
+    }
+
+    pub fn right_after(&self) -> Result<FactoryRightV1<'a>> {
+        FactoryRightV1::parse(field(
+            self.raw,
+            factory_merkle_right_offset(true),
+            FACTORY_RIGHT_V1_LEN,
+        ))
+    }
+
+    pub fn sibling_hash(&self, depth: usize) -> &'a [u8] {
+        field(self.raw, factory_merkle_sibling_offset(depth), BYTE32_LEN)
+    }
+
+    pub fn participants_commitment(&self) -> [u8; 32] {
+        factory_participants_commitment_v1(
+            self.participant_threshold(),
+            &[
+                (self.participant(0), self.pubkey(0)),
+                (self.participant(1), self.pubkey(1)),
+            ],
+        )
+    }
+
+    pub fn rights_root(&self, after: bool) -> Result<[u8; 32]> {
+        let right = if after {
+            self.right_after()?
+        } else {
+            self.right_before()?
+        };
+        let key = factory_right_key(&right);
+        let mut current = factory_right_leaf_hash(&right);
+        for depth in (0..FACTORY_SPARSE_MERKLE_DEPTH_V1).rev() {
+            current = if factory_key_bit(&key, depth) {
+                factory_right_node_hash(depth, self.sibling_hash(depth), &current)
+            } else {
+                factory_right_node_hash(depth, &current, self.sibling_hash(depth))
+            };
+        }
+        Ok(current)
+    }
+
+    pub fn non_interference_digest(
+        &self,
+        old_header: &FactoryStateHeaderV1,
+        new_header: &FactoryStateHeaderV1,
+    ) -> Result<[u8; 32]> {
+        let old_update_number = old_header.update_number().to_le_bytes();
+        let new_update_number = new_header.update_number().to_le_bytes();
+        Ok(blake2b256(&[
+            FACTORY_MERKLE_UPDATE_DOMAIN_V1,
+            old_header.factory_id(),
+            &old_update_number,
+            &new_update_number,
+            old_header.state_root(),
+            new_header.state_root(),
+            old_header.access_manifest_root(),
+            new_header.access_manifest_root(),
+            self.touched_participant(),
+            self.right_before()?.raw(),
+            self.right_after()?.raw(),
+        ]))
+    }
+
+    fn signed_count(&self) -> u8 {
+        let mut count = 0u8;
+        for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+            match self.signed_flag(index) {
+                0 => {}
+                1 => count = count.saturating_add(1),
+                _ => return u8::MAX,
+            }
+        }
+        count
+    }
+}
+
+pub fn verify_factory_merkle_update(
+    old_header: &FactoryStateHeaderV1,
+    new_header: &FactoryStateHeaderV1,
+    witness: &FactoryMerkleUpdateWitnessV1,
+) -> Result<()> {
+    if new_header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1 {
+        return Err(ScriptError::FactoryReducedProofEncoding);
+    }
+    if new_header.participants_commitment() != witness.participants_commitment().as_slice() {
+        return Err(ScriptError::ParticipantCommitmentMismatch);
+    }
+    if old_header.access_manifest_root() != new_header.access_manifest_root() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+
+    let before_root = witness.rights_root(false)?;
+    let after_root = witness.rights_root(true)?;
+    if old_header.state_root() != before_root.as_slice()
+        || new_header.state_root() != after_root.as_slice()
+    {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    let digest = witness.non_interference_digest(old_header, new_header)?;
+    if new_header.non_interference_digest() != digest.as_slice() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+
+    verify_merkle_update_signature(new_header, witness)
+}
+
+fn verify_merkle_update_signature(
+    header: &FactoryStateHeaderV1,
+    witness: &FactoryMerkleUpdateWitnessV1,
 ) -> Result<()> {
     let digest = header.signing_digest();
     let mut matched = false;
@@ -1654,6 +1904,28 @@ fn factory_reduced_right_offset(after: bool, index: usize) -> usize {
     }
 }
 
+fn factory_merkle_participant_offset(index: usize) -> usize {
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn factory_merkle_touched_offset() -> usize {
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+}
+
+fn factory_merkle_right_offset(after: bool) -> usize {
+    let before_offset = factory_merkle_touched_offset() + BYTE32_LEN;
+    if after {
+        before_offset + FACTORY_RIGHT_V1_LEN
+    } else {
+        before_offset
+    }
+}
+
+fn factory_merkle_sibling_offset(depth: usize) -> usize {
+    factory_merkle_right_offset(true) + FACTORY_RIGHT_V1_LEN + depth * BYTE32_LEN
+}
+
 fn factory_reduced_exit_participant_offset(index: usize) -> usize {
     8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
 }
@@ -1712,6 +1984,37 @@ fn descriptor_output_offset(index: usize) -> usize {
 
 fn ckb_xudt_descriptor_output_offset(index: usize) -> usize {
     4 + BYTE32_LEN + index * (BYTE32_LEN + 8 + 16)
+}
+
+fn factory_right_key(right: &FactoryRightV1) -> [u8; 32] {
+    blake2b256(&[
+        FACTORY_RIGHT_KEY_DOMAIN_V1,
+        right.participant(),
+        right.subchannel(),
+        &[right.kind()],
+        &[right.asset_present()],
+        right.asset_type(),
+    ])
+}
+
+fn factory_right_leaf_hash(right: &FactoryRightV1) -> [u8; 32] {
+    let key = factory_right_key(right);
+    blake2b256(&[FACTORY_RIGHT_LEAF_DOMAIN_V1, &key, right.raw()])
+}
+
+fn factory_right_node_hash(depth: usize, left: &[u8], right: &[u8]) -> [u8; 32] {
+    blake2b256(&[
+        FACTORY_RIGHT_NODE_DOMAIN_V1,
+        &(depth as u16).to_le_bytes(),
+        left,
+        right,
+    ])
+}
+
+fn factory_key_bit(key: &[u8; 32], depth: usize) -> bool {
+    let byte = key[depth / 8];
+    let mask = 0x80u8 >> (depth % 8);
+    byte & mask != 0
 }
 
 #[cfg(test)]
@@ -1886,6 +2189,112 @@ mod tests {
                 raw[offset..offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&sig);
             }
         }
+    }
+
+    fn merkle_update_witness_raw(
+        touched_after_balance: u128,
+    ) -> (
+        [u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN],
+        SigningKey,
+        SigningKey,
+    ) {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut raw = [0u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN];
+        put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
+        raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+        raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+        raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+        raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1;
+        for (index, (participant, pubkey)) in entries.iter().enumerate() {
+            let offset = factory_merkle_participant_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(pubkey);
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+                u8::from(participant == &[1u8; BYTE32_LEN]);
+        }
+        raw[factory_merkle_touched_offset()..factory_merkle_touched_offset() + BYTE32_LEN]
+            .copy_from_slice(&[1u8; BYTE32_LEN]);
+        raw[factory_merkle_right_offset(false)
+            ..factory_merkle_right_offset(false) + FACTORY_RIGHT_V1_LEN]
+            .copy_from_slice(&factory_right_bytes(1, 10, 0, 100));
+        raw[factory_merkle_right_offset(true)
+            ..factory_merkle_right_offset(true) + FACTORY_RIGHT_V1_LEN]
+            .copy_from_slice(&factory_right_bytes(1, 10, 0, touched_after_balance));
+        for depth in 0..FACTORY_SPARSE_MERKLE_DEPTH_V1 {
+            let offset = factory_merkle_sibling_offset(depth);
+            raw[offset..offset + BYTE32_LEN].fill(depth as u8);
+        }
+
+        (raw, key0, key1)
+    }
+
+    fn sign_merkle_update_witness(
+        raw: &mut [u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN],
+        participant: [u8; BYTE32_LEN],
+        key: &SigningKey,
+        digest: &[u8; 32],
+    ) {
+        let sig = signature(key, digest);
+        for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+            if field(raw, factory_merkle_participant_offset(index), BYTE32_LEN)
+                == participant.as_slice()
+            {
+                let offset = factory_merkle_participant_offset(index)
+                    + BYTE32_LEN
+                    + COMPRESSED_SECP256K1_PUBKEY_LEN
+                    + 1;
+                raw[offset..offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&sig);
+            }
+        }
+    }
+
+    fn merkle_update_headers_and_witness(
+        after_balance: u128,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN],
+    ) {
+        let (mut witness_raw, key0, key1) = merkle_update_witness_raw(after_balance);
+        let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let participants_commitment = factory_participants_commitment_v1(
+            2,
+            &[
+                (entries[0].0.as_slice(), entries[0].1.as_slice()),
+                (entries[1].0.as_slice(), entries[1].1.as_slice()),
+            ],
+        );
+        let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+
+        let mut old_raw = factory_header_bytes(1);
+        old_raw[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
+        old_raw[108..140].copy_from_slice(&participants_commitment);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+
+        let mut new_raw = factory_header_bytes(2);
+        new_raw[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
+        new_raw[108..140].copy_from_slice(&participants_commitment);
+        new_raw[140..172].copy_from_slice(old_header.access_manifest_root());
+        let preliminary_new = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let digest = witness
+            .non_interference_digest(&old_header, &preliminary_new)
+            .unwrap();
+        new_raw[172..204].copy_from_slice(&digest);
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        sign_merkle_update_witness(
+            &mut witness_raw,
+            [1u8; 32],
+            &key0,
+            &new_header.signing_digest(),
+        );
+
+        (old_raw, new_raw, witness_raw)
     }
 
     fn reduced_rights_headers_and_witness(
@@ -2364,6 +2773,7 @@ mod tests {
             "FactorySignatureWitnessV1: 262 bytes",
             "FactoryRightV1: 114 bytes",
             "FactoryReducedRightsWitnessV1: 2580 bytes",
+            "FactoryMerkleUpdateWitnessV1: 8718 bytes",
             "FactoryReducedExitWitnessV1: 3058 bytes",
             "FactoryReducedExitXudtWitnessV1: 3122 bytes",
             "FactoryLocalExitWitnessV1: 726 bytes",
@@ -2373,6 +2783,7 @@ mod tests {
             "struct BilateralSignatureWitnessV1",
             "struct FactorySignatureWitnessV1",
             "struct FactoryReducedRightsWitnessV1",
+            "struct FactoryMerkleUpdateWitnessV1",
             "struct FactoryReducedExitWitnessV1",
             "struct FactoryReducedExitXudtWitnessV1",
             "struct FactoryLocalExitWitnessV1",
@@ -2389,6 +2800,7 @@ mod tests {
             "participant_0_id: Byte32",
             "non_interference_digest: Byte32",
             "release_quantity: uint128",
+            "proof_siblings: FactoryMerkleProofSiblingsV1",
         ] {
             assert!(
                 schema.contains(expected),
@@ -2527,6 +2939,62 @@ mod tests {
         assert_eq!(
             verify_reduced_factory_rights_update(&old_header, &new_header, &witness).unwrap_err(),
             ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn factory_merkle_update_witness_fields_are_fixed_width() {
+        let (_, _, witness_raw) = merkle_update_headers_and_witness(90);
+        let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(witness.version(), FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
+        assert_eq!(witness.right_count(), FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1);
+        assert_eq!(witness.touched_participant(), &[1u8; 32]);
+        assert_eq!(witness.right_before().unwrap().quantity(), 100);
+        assert_eq!(witness.right_after().unwrap().quantity(), 90);
+        assert_eq!(witness.sibling_hash(255), &[255u8; 32]);
+    }
+
+    #[test]
+    fn verifies_factory_merkle_update_single_right_transition() {
+        let (old_raw, new_raw, witness_raw) = merkle_update_headers_and_witness(90);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+
+        verify_factory_merkle_update(&old_header, &new_header, &witness).unwrap();
+    }
+
+    #[test]
+    fn rejects_factory_merkle_update_sibling_tamper() {
+        let (old_raw, new_raw, mut witness_raw) = merkle_update_headers_and_witness(90);
+        witness_raw[factory_merkle_sibling_offset(120)] ^= 1;
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_merkle_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_factory_merkle_update_unauthorised_signer() {
+        let (old_raw, new_raw, mut witness_raw) = merkle_update_headers_and_witness(90);
+        let signer_0_flag =
+            factory_merkle_participant_offset(0) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN;
+        let signer_1_flag =
+            factory_merkle_participant_offset(1) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN;
+        witness_raw[signer_0_flag] = 0;
+        witness_raw[signer_1_flag] = 1;
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_merkle_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
         );
     }
 
