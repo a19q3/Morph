@@ -88,10 +88,10 @@ Implemented devnet-level checks:
   local-exit evidence through `devnet-smoke-assert`;
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
-- absolute smoke budget gates for total and per-transaction cycle/byte ceilings
-  through `devnet-smoke-assert`;
-- JSON smoke budget profiles for named critical transactions, such as
-  `factory-reduced-rights-smoke $.update`;
+- absolute smoke budget gates for total, per-transaction, and proof-profile
+  cycle/byte ceilings through `devnet-smoke-assert`;
+- JSON smoke budget profiles for named critical transactions and proof shapes,
+  such as `factory-reduced-rights-smoke $.update`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
   state packages, reduced host-side factory packages, reduced-rights factory
   packages, reduced-exit host packages, local-exit evidence, watchtower policy
@@ -105,10 +105,17 @@ Implemented devnet-level checks:
 - bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`
   and `factory-reduced-xudt-exit-smoke`, followed by ordinary child-channel
   publication and finalisation in `scripts/devnet-smoke.sh`.
+- surplus-preserving typed reduced factory exit coverage where a CKB+xUDT child
+  vault is released and remaining xUDT stays in factory-vault change.
+- one-sided typed reduced factory exit coverage where one participant receives
+  all child xUDT and the other receives zero tokens.
+- reduced typed factory exit negative coverage where the child vault xUDT
+  amount is tampered while total xUDT supply remains conserved.
 
-Missing devnet-level checks:
+Deferred devnet-level checks:
 
-- additional typed reduced-exit variants beyond the fixed-width CKB+xUDT
+- generalized typed reduced-exit variants beyond the current fixed-width
+  balanced, one-sided, typed-change, and tampered-amount negative CKB+xUDT
   reserve-claim smokes.
 
 Implemented factory checks:
@@ -132,6 +139,9 @@ Implemented factory checks:
 - devnet smoke coverage for the sparse Merkle factory update witness, including
   package evidence and proof-shape budget profile evidence in the smoke
   summary assertion.
+- smoke-summary proof profile coverage for the bounded reduced-rights update,
+  sparse Merkle update, CKB reduced-exit, and balanced, one-sided, and
+  typed-change CKB+xUDT reduced-exit proof shapes.
 - script-level reduced factory-exit validation for the same reserve-claim
   release predicate, with factory type and factory vault lock CKB-VM coverage.
 - serialisable factory update package with canonical roots, canonical

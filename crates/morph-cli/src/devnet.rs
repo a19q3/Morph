@@ -242,6 +242,26 @@ pub struct FactoryReducedXudtExitSmokeOptions {
     pub bob_capacity: Option<u64>,
     pub alice_xudt_amount: u128,
     pub bob_xudt_amount: u128,
+    pub factory_vault_xudt_surplus: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactoryReducedXudtNegativeExitSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
     pub sponsor_capacity: u64,
     pub fee: u64,
     pub finalise_since: u64,
@@ -639,6 +659,8 @@ pub struct FactoryExitChannelReport {
     pub state_capacity: u64,
     pub vault_capacity: u64,
     pub child_xudt_amount: Option<u128>,
+    pub alice_xudt_amount: Option<u128>,
+    pub bob_xudt_amount: Option<u128>,
     pub factory_vault_input_capacity: u64,
     pub factory_vault_change_capacity: u64,
     pub factory_vault_input_xudt_amount: Option<u128>,
@@ -745,6 +767,15 @@ pub struct FactoryReducedXudtExitSmokeReport {
     pub exit: FactoryExitChannelReport,
     pub publish: PublishStateReport,
     pub finalise: XudtFinaliseReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedXudtNegativeExitSmokeReport {
+    pub open: OpenFactoryReport,
+    pub expected_child_xudt_amount: u128,
+    pub rejected_child_xudt_amount: u128,
+    pub rejection: String,
+    pub script_failure: ScriptFailureReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -2293,6 +2324,9 @@ pub fn factory_reduced_xudt_exit_smoke(
         .alice_xudt_amount
         .checked_add(options.bob_xudt_amount)
         .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
+    let factory_vault_xudt_amount = total_xudt_amount
+        .checked_add(options.factory_vault_xudt_surplus)
+        .ok_or_else(|| anyhow!("factory reduced xUDT factory vault amount overflow"))?;
     ensure!(
         total_xudt_amount > 0,
         "factory reduced xUDT amount must be non-zero"
@@ -2313,7 +2347,7 @@ pub fn factory_reduced_xudt_exit_smoke(
             bob_private_key: options.bob_private_key.clone(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
-            factory_vault_xudt_amount: Some(total_xudt_amount),
+            factory_vault_xudt_amount: Some(factory_vault_xudt_amount),
             state_root: Some(hex32(&old_state_root)),
             access_manifest_root: Some(hex32(&old_access_manifest_root)),
             non_interference_digest: None,
@@ -2388,6 +2422,100 @@ pub fn factory_reduced_xudt_exit_smoke(
         exit,
         publish,
         finalise,
+    })
+}
+
+pub fn factory_reduced_xudt_negative_exit_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryReducedXudtNegativeExitSmokeOptions,
+) -> Result<FactoryReducedXudtNegativeExitSmokeReport> {
+    ensure!(
+        options.child_vault_capacity > 0,
+        "child xUDT vault capacity must be non-zero"
+    );
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
+    ensure!(
+        total_xudt_amount > 1,
+        "factory reduced xUDT negative smoke needs at least two units"
+    );
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let (old_state_root, old_access_manifest_root) =
+        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
+
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(total_xudt_amount),
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: Some(hex32(&old_access_manifest_root)),
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let rejected_child_xudt_amount = total_xudt_amount
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("factory reduced xUDT negative smoke underflow"))?;
+
+    let rejection = match factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(options.alice_xudt_amount),
+            bob_xudt_amount: Some(options.bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: 0,
+            tamper: FactoryExitChannelTamper::ChildXudtAmountMinusOnePreserveFactoryChange,
+            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
+        },
+    ) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "factory reduced xUDT exit unexpectedly accepted tampered child vault amount in tx {}",
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::SettlementOutputMismatch as i16),
+        "expected SettlementOutputMismatch from factory reduced xUDT exit, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
+
+    Ok(FactoryReducedXudtNegativeExitSmokeReport {
+        open,
+        expected_child_xudt_amount: total_xudt_amount,
+        rejected_child_xudt_amount,
+        rejection,
+        script_failure,
     })
 }
 
@@ -3116,10 +3244,6 @@ pub fn factory_exit_channel(
                 )
             }
             FactoryExitAuthorisation::ReducedReserveClaim => {
-                ensure!(
-                    matches!(options.tamper, FactoryExitChannelTamper::None),
-                    "reduced factory exit does not support tampered child vault construction"
-                );
                 let alice_factory_key = k256_signing_key(&options.alice_private_key)
                     .with_context(|| "invalid Alice factory private key")?;
                 let bob_factory_key = k256_signing_key(&options.bob_private_key)
@@ -3249,6 +3373,12 @@ pub fn factory_exit_channel(
         child_xudt_amount: child_xudt
             .as_ref()
             .map(|(_, _, _, _, _, child_amount)| *child_amount),
+        alice_xudt_amount: child_xudt
+            .as_ref()
+            .map(|(_, _, _, alice_amount, _, _)| *alice_amount),
+        bob_xudt_amount: child_xudt
+            .as_ref()
+            .map(|(_, _, _, _, bob_amount, _)| *bob_amount),
         factory_vault_input_capacity: factory_vault_cell.capacity,
         factory_vault_change_capacity,
         factory_vault_input_xudt_amount: factory_vault_xudt_amount,

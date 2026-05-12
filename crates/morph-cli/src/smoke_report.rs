@@ -145,6 +145,7 @@ pub struct FactoryReducedRightsEvidenceSummary {
     pub old_access_manifest_root: String,
     pub new_access_manifest_root: String,
     pub non_interference_digest: String,
+    pub witness_len: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,7 +190,10 @@ pub struct FactoryReducedExitEvidenceSummary {
     pub local_exit_digest: String,
     pub non_interference_digest: String,
     pub child_xudt_amount: Option<u128>,
+    pub alice_xudt_amount: Option<u128>,
+    pub bob_xudt_amount: Option<u128>,
     pub xudt_type_hash: Option<String>,
+    pub factory_vault_change_xudt_amount: Option<u128>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -222,6 +226,7 @@ pub struct DevnetSmokeBudgetLimits {
     pub max_total_bytes: Option<usize>,
     pub max_tx_bytes: Option<usize>,
     pub transactions: Vec<DevnetSmokeTransactionBudgetLimit>,
+    pub proof_profiles: Vec<DevnetSmokeProofProfileBudgetLimit>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,6 +240,7 @@ pub struct DevnetSmokeBudgetReport {
     pub max_total_bytes: Option<usize>,
     pub max_tx_bytes: Option<usize>,
     pub transactions: Vec<DevnetSmokeTransactionBudgetReport>,
+    pub proof_profiles: Vec<DevnetSmokeProofProfileBudgetReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -255,6 +261,32 @@ pub struct DevnetSmokeTransactionBudgetReport {
     pub max_bytes: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DevnetSmokeProofProfileBudgetLimit {
+    pub check: String,
+    pub transaction_path: String,
+    pub proof_kind: String,
+    pub proof_siblings: Option<usize>,
+    pub max_witness_len: Option<usize>,
+    pub max_cycles: Option<u64>,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DevnetSmokeProofProfileBudgetReport {
+    pub check: String,
+    pub transaction_path: String,
+    pub proof_kind: String,
+    pub proof_siblings: usize,
+    pub witness_len: usize,
+    pub estimated_cycles: u64,
+    pub tx_size_bytes: usize,
+    pub expected_proof_siblings: Option<usize>,
+    pub max_witness_len: Option<usize>,
+    pub max_cycles: Option<u64>,
+    pub max_bytes: Option<usize>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct DevnetSmokeBudgetProfile {
     schema: String,
@@ -264,6 +296,8 @@ struct DevnetSmokeBudgetProfile {
     max_tx_bytes: Option<usize>,
     #[serde(default)]
     transactions: Vec<DevnetSmokeTransactionBudgetLimit>,
+    #[serde(default)]
+    proof_profiles: Vec<DevnetSmokeProofProfileBudgetLimit>,
 }
 
 impl DevnetSmokeBudgetLimits {
@@ -273,6 +307,7 @@ impl DevnetSmokeBudgetLimits {
             || self.max_total_bytes.is_some()
             || self.max_tx_bytes.is_some()
             || !self.transactions.is_empty()
+            || !self.proof_profiles.is_empty()
     }
 }
 
@@ -346,7 +381,12 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         collect_watchtower_alerts(dir, path, &mut watchtower_alerts)?;
     }
 
-    let factory_proof_profiles = factory_proof_profiles(&factory_merkle_updates, &transactions);
+    let factory_proof_profiles = factory_proof_profiles(
+        &factory_reduced_rights_updates,
+        &factory_merkle_updates,
+        &factory_reduced_exits,
+        &transactions,
+    );
     let totals = summarise_totals(&transactions);
     Ok(DevnetSmokeSummary {
         directory: dir.display().to_string(),
@@ -392,6 +432,7 @@ pub fn read_smoke_budget_profile(path: &Path) -> Result<DevnetSmokeBudgetLimits>
         max_total_bytes: profile.max_total_bytes,
         max_tx_bytes: profile.max_tx_bytes,
         transactions: profile.transactions,
+        proof_profiles: profile.proof_profiles,
     })
 }
 
@@ -577,6 +618,11 @@ fn assert_factory_reduced_rights_coverage(summary: &DevnetSmokeSummary) -> Resul
                 "factory reduced-rights update must include signing and non-interference digests"
             ));
         }
+        if update.witness_len == 0 {
+            return Err(anyhow!(
+                "factory reduced-rights update must include witness length"
+            ));
+        }
     }
     Ok(())
 }
@@ -620,24 +666,74 @@ fn assert_factory_merkle_update_coverage(summary: &DevnetSmokeSummary) -> Result
 }
 
 fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
-    let Some(profile) = summary
-        .factory_proof_profiles
-        .iter()
-        .find(|profile| profile.check == "factory-merkle-update-smoke")
-    else {
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-rights-smoke",
+        "factory_reduced_rights_bounded_claim_decrease_v1",
+        "$.update",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-merkle-update-smoke",
+        "factory_sparse_merkle_update_v1",
+        "$.update",
+        Some(256),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-exit-smoke",
+        "factory_reduced_exit_ckb_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-xudt-exit-smoke",
+        "factory_reduced_exit_xudt_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-xudt-one-sided-exit-smoke",
+        "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-xudt-change-exit-smoke",
+        "factory_reduced_exit_xudt_change_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    Ok(())
+}
+
+fn assert_factory_proof_profile(
+    summary: &DevnetSmokeSummary,
+    check: &str,
+    proof_kind: &str,
+    transaction_path: &str,
+    proof_siblings: Option<usize>,
+) -> Result<()> {
+    let Some(profile) = summary.factory_proof_profiles.iter().find(|profile| {
+        profile.check == check
+            && profile.proof_kind == proof_kind
+            && profile.transaction_path == transaction_path
+    }) else {
         return Err(anyhow!(
-            "missing factory Merkle proof budget profile evidence"
+            "missing factory proof budget profile evidence for {check} {proof_kind}"
         ));
     };
-    if profile.proof_kind != "factory_sparse_merkle_update_v1"
-        || profile.transaction_path != "$.update"
-        || profile.proof_siblings != 256
+    if proof_siblings.is_some_and(|siblings| profile.proof_siblings != siblings)
         || profile.witness_len == 0
         || profile.estimated_cycles == 0
         || profile.tx_size_bytes == 0
     {
         return Err(anyhow!(
-            "factory Merkle proof budget profile must bind proof shape to non-zero transaction metrics"
+            "factory proof budget profile for {check} must bind proof shape to non-zero transaction metrics"
         ));
     }
     Ok(())
@@ -664,6 +760,26 @@ fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<
             "missing committed factory-reduced-xudt-exit smoke transaction"
         ));
     }
+    let xudt_one_sided_exit_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-reduced-xudt-one-sided-exit-smoke"
+            && tx.path == "$.exit"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !xudt_one_sided_exit_committed {
+        return Err(anyhow!(
+            "missing committed factory-reduced-xudt-one-sided-exit smoke transaction"
+        ));
+    }
+    let xudt_change_exit_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "factory-reduced-xudt-change-exit-smoke"
+            && tx.path == "$.exit"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !xudt_change_exit_committed {
+        return Err(anyhow!(
+            "missing committed factory-reduced-xudt-change-exit smoke transaction"
+        ));
+    }
     if summary.factory_reduced_exits.len() != EXPECTED_FACTORY_REDUCED_EXITS {
         return Err(anyhow!(
             "unexpected factory reduced-exit evidence count: got {}, expected {}",
@@ -681,15 +797,41 @@ fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<
         .iter()
         .filter(|exit| exit.xudt_type_hash.is_some() && exit.child_xudt_amount.is_some())
         .count();
+    let xudt_change_exits = summary
+        .factory_reduced_exits
+        .iter()
+        .filter(|exit| {
+            exit.xudt_type_hash.is_some()
+                && exit.factory_vault_change_xudt_amount.unwrap_or_default() > 0
+        })
+        .count();
+    let xudt_one_sided_exits = summary
+        .factory_reduced_exits
+        .iter()
+        .filter(|exit| {
+            exit.xudt_type_hash.is_some()
+                && exit.child_xudt_amount.is_some()
+                && matches!(
+                    (exit.alice_xudt_amount, exit.bob_xudt_amount),
+                    (Some(0), Some(amount)) | (Some(amount), Some(0)) if amount > 0
+                )
+        })
+        .count();
     if ckb_exits != EXPECTED_FACTORY_REDUCED_CKB_EXITS
         || xudt_exits != EXPECTED_FACTORY_REDUCED_XUDT_EXITS
+        || xudt_change_exits != EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS
+        || xudt_one_sided_exits != EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS
     {
         return Err(anyhow!(
-            "unexpected factory reduced-exit descriptor coverage: got CKB {}, xUDT {}; expected CKB {}, xUDT {}",
+            "unexpected factory reduced-exit descriptor coverage: got CKB {}, xUDT {}, xUDT-change {}, xUDT-one-sided {}; expected CKB {}, xUDT {}, xUDT-change {}, xUDT-one-sided {}",
             ckb_exits,
             xudt_exits,
+            xudt_change_exits,
+            xudt_one_sided_exits,
             EXPECTED_FACTORY_REDUCED_CKB_EXITS,
-            EXPECTED_FACTORY_REDUCED_XUDT_EXITS
+            EXPECTED_FACTORY_REDUCED_XUDT_EXITS,
+            EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS,
+            EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS
         ));
     }
     if summary.factory_reduced_exits.iter().any(|exit| {
@@ -1063,6 +1205,87 @@ pub fn assert_smoke_budget(
         });
     }
 
+    let mut proof_profile_reports = Vec::new();
+    for limit in &limits.proof_profiles {
+        let profile = summary
+            .factory_proof_profiles
+            .iter()
+            .find(|profile| {
+                profile.check == limit.check
+                    && profile.transaction_path == limit.transaction_path
+                    && profile.proof_kind == limit.proof_kind
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "budgeted proof profile {} {} {} is missing from smoke summary",
+                    limit.check,
+                    limit.transaction_path,
+                    limit.proof_kind
+                )
+            })?;
+        if let Some(proof_siblings) = limit.proof_siblings
+            && profile.proof_siblings != proof_siblings
+        {
+            return Err(anyhow!(
+                "proof profile {} {} {} siblings {} differs from expected {}",
+                limit.check,
+                limit.transaction_path,
+                limit.proof_kind,
+                profile.proof_siblings,
+                proof_siblings
+            ));
+        }
+        if let Some(max_witness_len) = limit.max_witness_len
+            && profile.witness_len > max_witness_len
+        {
+            return Err(anyhow!(
+                "proof profile {} {} {} witness length {} exceeds budget {}",
+                limit.check,
+                limit.transaction_path,
+                limit.proof_kind,
+                profile.witness_len,
+                max_witness_len
+            ));
+        }
+        if let Some(max_cycles) = limit.max_cycles
+            && profile.estimated_cycles > max_cycles
+        {
+            return Err(anyhow!(
+                "proof profile {} {} {} estimated cycles {} exceeds budget {}",
+                limit.check,
+                limit.transaction_path,
+                limit.proof_kind,
+                profile.estimated_cycles,
+                max_cycles
+            ));
+        }
+        if let Some(max_bytes) = limit.max_bytes
+            && profile.tx_size_bytes > max_bytes
+        {
+            return Err(anyhow!(
+                "proof profile {} {} {} bytes {} exceeds budget {}",
+                limit.check,
+                limit.transaction_path,
+                limit.proof_kind,
+                profile.tx_size_bytes,
+                max_bytes
+            ));
+        }
+        proof_profile_reports.push(DevnetSmokeProofProfileBudgetReport {
+            check: limit.check.clone(),
+            transaction_path: limit.transaction_path.clone(),
+            proof_kind: limit.proof_kind.clone(),
+            proof_siblings: profile.proof_siblings,
+            witness_len: profile.witness_len,
+            estimated_cycles: profile.estimated_cycles,
+            tx_size_bytes: profile.tx_size_bytes,
+            expected_proof_siblings: limit.proof_siblings,
+            max_witness_len: limit.max_witness_len,
+            max_cycles: limit.max_cycles,
+            max_bytes: limit.max_bytes,
+        });
+    }
+
     Ok(DevnetSmokeBudgetReport {
         total_estimated_cycles: summary.totals.total_estimated_cycles,
         max_estimated_cycles: summary.totals.max_estimated_cycles,
@@ -1073,6 +1296,7 @@ pub fn assert_smoke_budget(
         max_total_bytes: limits.max_total_bytes,
         max_tx_bytes: limits.max_tx_bytes,
         transactions: transaction_reports,
+        proof_profiles: proof_profile_reports,
     })
 }
 
@@ -1229,15 +1453,16 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     if summary.factory_reduced_rights_updates.is_empty() {
         out.push_str("No factory reduced-rights packages were recorded.\n");
     } else {
-        out.push_str("| Check | Path | Old update | New update | Signing digest | Non-interference digest |\n");
-        out.push_str("| --- | --- | ---: | ---: | --- | --- |\n");
+        out.push_str("| Check | Path | Old update | New update | Witness bytes | Signing digest | Non-interference digest |\n");
+        out.push_str("| --- | --- | ---: | ---: | ---: | --- | --- |\n");
         for update in &summary.factory_reduced_rights_updates {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | `{}` | `{}` |\n",
+                "| {} | {} | {} | {} | {} | `{}` | `{}` |\n",
                 table_cell(&update.check),
                 table_cell(&update.path),
                 update.old_update_number,
                 update.new_update_number,
+                update.witness_len,
                 update.signing_digest,
                 update.non_interference_digest
             ));
@@ -1295,17 +1520,26 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     if summary.factory_reduced_exits.is_empty() {
         out.push_str("No factory reduced-exit evidence was recorded.\n");
     } else {
-        out.push_str("| Check | Path | Auth | Release | Witness bytes | xUDT amount | Non-interference digest |\n");
-        out.push_str("| --- | --- | --- | ---: | ---: | ---: | --- |\n");
+        out.push_str("| Check | Path | Auth | Release | Witness bytes | xUDT amount | Alice xUDT | Bob xUDT | xUDT change | Non-interference digest |\n");
+        out.push_str("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n");
         for exit in &summary.factory_reduced_exits {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {} | {} | `{}` |\n",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
                 table_cell(&exit.check),
                 table_cell(&exit.path),
                 table_cell(&exit.authorisation),
                 exit.release_quantity,
                 exit.witness_len,
                 exit.child_xudt_amount
+                    .map(|amount| amount.to_string())
+                    .unwrap_or_default(),
+                exit.alice_xudt_amount
+                    .map(|amount| amount.to_string())
+                    .unwrap_or_default(),
+                exit.bob_xudt_amount
+                    .map(|amount| amount.to_string())
+                    .unwrap_or_default(),
+                exit.factory_vault_change_xudt_amount
                     .map(|amount| amount.to_string())
                     .unwrap_or_default(),
                 exit.non_interference_digest
@@ -1416,6 +1650,11 @@ const EXPECTED_SCRIPT_FAILURES: &[ExpectedScriptFailure] = &[
         error_code: 28,
     },
     ExpectedScriptFailure {
+        check: "factory-reduced-xudt-negative-exit-smoke",
+        morph_error: "SettlementOutputMismatch",
+        error_code: 28,
+    },
+    ExpectedScriptFailure {
         check: "finalise-since-negative-smoke",
         morph_error: "StateSinceNotMature",
         error_code: 16,
@@ -1448,9 +1687,11 @@ const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
 const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
 const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
 const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
-const EXPECTED_FACTORY_REDUCED_EXITS: usize = 2;
+const EXPECTED_FACTORY_REDUCED_EXITS: usize = 4;
 const EXPECTED_FACTORY_REDUCED_CKB_EXITS: usize = 1;
-const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 1;
+const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 3;
+const EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS: usize = 1;
+const EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS: usize = 1;
 const EXPECTED_WATCHTOWER_ALERTS: usize = 2;
 const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &["older_state_detected", "publication_submitted"];
 const EXPECTED_WATCHTOWER_SERVICE_RECORDS: usize = 2;
@@ -1690,6 +1931,7 @@ fn collect_from_value(
                 old_access_manifest_root: summary.old_access_manifest_root,
                 new_access_manifest_root: summary.new_access_manifest_root,
                 non_interference_digest: summary.non_interference_digest,
+                witness_len: summary.witness_len,
             });
     }
 
@@ -1745,7 +1987,12 @@ fn collect_from_value(
                 non_interference_digest: string_field(reduced_exit, "non_interference_digest")
                     .unwrap_or_default(),
                 child_xudt_amount: object.get("child_xudt_amount").and_then(value_as_u128),
+                alice_xudt_amount: object.get("alice_xudt_amount").and_then(value_as_u128),
+                bob_xudt_amount: object.get("bob_xudt_amount").and_then(value_as_u128),
                 xudt_type_hash: string_field(object, "xudt_type_hash"),
+                factory_vault_change_xudt_amount: object
+                    .get("factory_vault_change_xudt_amount")
+                    .and_then(value_as_u128),
             });
     }
 
@@ -1846,10 +2093,12 @@ fn value_as_u128(value: &Value) -> Option<u128> {
 }
 
 fn factory_proof_profiles(
+    reduced_rights_updates: &[FactoryReducedRightsEvidenceSummary],
     merkle_updates: &[FactoryMerkleUpdateEvidenceSummary],
+    reduced_exits: &[FactoryReducedExitEvidenceSummary],
     transactions: &[TransactionSummary],
 ) -> Vec<FactoryProofProfileSummary> {
-    merkle_updates
+    let mut profiles = reduced_rights_updates
         .iter()
         .filter_map(|update| {
             transactions
@@ -1859,14 +2108,64 @@ fn factory_proof_profiles(
                     check: update.check.clone(),
                     transaction_path: tx.path.clone(),
                     evidence_path: update.path.clone(),
-                    proof_kind: "factory_sparse_merkle_update_v1".to_string(),
-                    proof_siblings: update.proof_siblings,
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_siblings: 0,
                     witness_len: update.witness_len,
                     estimated_cycles: tx.estimated_cycles,
                     tx_size_bytes: tx.tx_size_bytes,
                 })
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    profiles.extend(merkle_updates.iter().filter_map(|update| {
+        transactions
+            .iter()
+            .find(|tx| tx.check == update.check && tx.path == "$.update")
+            .map(|tx| FactoryProofProfileSummary {
+                check: update.check.clone(),
+                transaction_path: tx.path.clone(),
+                evidence_path: update.path.clone(),
+                proof_kind: "factory_sparse_merkle_update_v1".to_string(),
+                proof_siblings: update.proof_siblings,
+                witness_len: update.witness_len,
+                estimated_cycles: tx.estimated_cycles,
+                tx_size_bytes: tx.tx_size_bytes,
+            })
+    }));
+
+    profiles.extend(reduced_exits.iter().filter_map(|exit| {
+        transactions
+            .iter()
+            .find(|tx| tx.check == exit.check && tx.path == "$.exit")
+            .map(|tx| FactoryProofProfileSummary {
+                check: exit.check.clone(),
+                transaction_path: tx.path.clone(),
+                evidence_path: exit.path.clone(),
+                proof_kind: if exit.xudt_type_hash.is_some()
+                    && exit.factory_vault_change_xudt_amount.unwrap_or_default() > 0
+                {
+                    "factory_reduced_exit_xudt_change_reserve_claim_v1"
+                } else if exit.xudt_type_hash.is_some()
+                    && matches!(
+                        (exit.alice_xudt_amount, exit.bob_xudt_amount),
+                        (Some(0), Some(amount)) | (Some(amount), Some(0)) if amount > 0
+                    )
+                {
+                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
+                } else if exit.xudt_type_hash.is_some() {
+                    "factory_reduced_exit_xudt_reserve_claim_v1"
+                } else {
+                    "factory_reduced_exit_ckb_reserve_claim_v1"
+                }
+                .to_string(),
+                proof_siblings: 0,
+                witness_len: exit.witness_len,
+                estimated_cycles: tx.estimated_cycles,
+                tx_size_bytes: tx.tx_size_bytes,
+            })
+    }));
+
+    profiles
 }
 
 fn summarise_totals(transactions: &[TransactionSummary]) -> MetricTotals {
@@ -1988,8 +2287,18 @@ mod tests {
             format!(
                 r#"{{
                   "exit": {{
+                    "tx_hash": "0xbeef",
+                    "status": "Committed",
+                    "block_number": 10,
+                    "metrics": {{
+                      "estimated_cycles": 77,
+                      "tx_size_bytes": 88
+                    }},
                     "authorisation": "reduced-reserve-claim",
                     "child_xudt_amount": 100,
+                    "alice_xudt_amount": 60,
+                    "bob_xudt_amount": 40,
+                    "factory_vault_change_xudt_amount": 50,
                     "xudt_type_hash": "0x1234",
                     "local_exit_package": {local_exit_package},
                     "reduced_exit": {{
@@ -2099,7 +2408,7 @@ mod tests {
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
         assert_eq!(summary.json_files, 8);
-        assert_eq!(summary.transactions.len(), 3);
+        assert_eq!(summary.transactions.len(), 4);
         assert_eq!(summary.script_failures.len(), 1);
         assert_eq!(summary.deployed_scripts.len(), 1);
         assert_eq!(summary.deployed_scripts[0].name, "morph-state-lock");
@@ -2113,14 +2422,28 @@ mod tests {
         assert_eq!(summary.factory_merkle_updates.len(), 1);
         assert_eq!(summary.factory_merkle_updates[0].path, "$.package");
         assert_eq!(summary.factory_merkle_updates[0].proof_siblings, 256);
-        assert_eq!(summary.factory_proof_profiles.len(), 1);
+        assert_eq!(summary.factory_proof_profiles.len(), 2);
         assert_eq!(summary.factory_proof_profiles[0].proof_siblings, 256);
         assert_eq!(summary.factory_proof_profiles[0].estimated_cycles, 55);
+        assert!(
+            summary
+                .factory_proof_profiles
+                .iter()
+                .any(|profile| profile.proof_kind
+                    == "factory_reduced_exit_xudt_change_reserve_claim_v1"
+                    && profile.estimated_cycles == 77)
+        );
         assert_eq!(summary.factory_reduced_exits.len(), 1);
         assert_eq!(summary.factory_reduced_exits[0].witness_len, 3122);
         assert_eq!(
             summary.factory_reduced_exits[0].child_xudt_amount,
             Some(100)
+        );
+        assert_eq!(summary.factory_reduced_exits[0].alice_xudt_amount, Some(60));
+        assert_eq!(summary.factory_reduced_exits[0].bob_xudt_amount, Some(40));
+        assert_eq!(
+            summary.factory_reduced_exits[0].factory_vault_change_xudt_amount,
+            Some(50)
         );
         assert_eq!(summary.watchtower_alerts.len(), 2);
         assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
@@ -2137,8 +2460,8 @@ mod tests {
                 .iter()
                 .any(|service| service.schema == "morph.watchtower_health.v1")
         );
-        assert_eq!(summary.totals.total_estimated_cycles, 99);
-        assert_eq!(summary.totals.total_tx_size_bytes, 132);
+        assert_eq!(summary.totals.total_estimated_cycles, 176);
+        assert_eq!(summary.totals.total_tx_size_bytes, 220);
 
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("StateSinceNotMature"));
@@ -2243,12 +2566,22 @@ mod tests {
                     max_cycles: Some(1),
                     max_bytes: Some(1),
                 }],
+                proof_profiles: vec![DevnetSmokeProofProfileBudgetLimit {
+                    check: "factory-reduced-rights-smoke".to_string(),
+                    transaction_path: "$.update".to_string(),
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_siblings: Some(0),
+                    max_witness_len: Some(2_580),
+                    max_cycles: Some(1),
+                    max_bytes: Some(1),
+                }],
             },
         )
         .unwrap();
         assert_eq!(report.total_estimated_cycles, 100);
         assert_eq!(report.max_estimated_cycles, 80);
         assert_eq!(report.transactions.len(), 1);
+        assert_eq!(report.proof_profiles.len(), 1);
     }
 
     #[test]
@@ -2288,6 +2621,29 @@ mod tests {
     }
 
     #[test]
+    fn smoke_budget_rejects_named_proof_profile_budget() {
+        let summary = passing_assertion_summary();
+
+        let err = assert_smoke_budget(
+            &summary,
+            &DevnetSmokeBudgetLimits {
+                proof_profiles: vec![DevnetSmokeProofProfileBudgetLimit {
+                    check: "factory-reduced-rights-smoke".to_string(),
+                    transaction_path: "$.update".to_string(),
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_siblings: Some(0),
+                    max_witness_len: Some(1),
+                    max_cycles: None,
+                    max_bytes: None,
+                }],
+                ..DevnetSmokeBudgetLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("witness length"));
+    }
+
+    #[test]
     fn reads_smoke_budget_profile() {
         let dir = temp_report_dir();
         fs::create_dir_all(&dir).unwrap();
@@ -2305,6 +2661,15 @@ mod tests {
                 "path": "$.update",
                 "max_cycles": 1,
                 "max_bytes": 1
+              }],
+              "proof_profiles": [{
+                "check": "factory-reduced-rights-smoke",
+                "transaction_path": "$.update",
+                "proof_kind": "factory_reduced_rights_bounded_claim_decrease_v1",
+                "proof_siblings": 0,
+                "max_witness_len": 2580,
+                "max_cycles": 1,
+                "max_bytes": 1
               }]
             }"#,
         )
@@ -2314,6 +2679,8 @@ mod tests {
         assert_eq!(profile.max_total_cycles, Some(100));
         assert_eq!(profile.transactions.len(), 1);
         assert_eq!(profile.transactions[0].path, "$.update");
+        assert_eq!(profile.proof_profiles.len(), 1);
+        assert_eq!(profile.proof_profiles[0].proof_siblings, Some(0));
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -2340,6 +2707,20 @@ mod tests {
         }));
         assert!(profile.transactions.iter().any(|limit| {
             limit.check == "factory-merkle-update-smoke" && limit.path == "$.update"
+        }));
+        assert!(profile.transactions.iter().any(|limit| {
+            limit.check == "factory-reduced-xudt-change-exit-smoke" && limit.path == "$.exit"
+        }));
+        assert!(profile.transactions.iter().any(|limit| {
+            limit.check == "factory-reduced-xudt-one-sided-exit-smoke" && limit.path == "$.exit"
+        }));
+        assert!(profile.proof_profiles.iter().any(|limit| {
+            limit.check == "factory-reduced-xudt-change-exit-smoke"
+                && limit.proof_kind == "factory_reduced_exit_xudt_change_reserve_claim_v1"
+        }));
+        assert!(profile.proof_profiles.iter().any(|limit| {
+            limit.check == "factory-reduced-xudt-one-sided-exit-smoke"
+                && limit.proof_kind == "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
         }));
     }
 
@@ -2491,10 +2872,25 @@ mod tests {
                 transaction("factory-merkle-update-smoke", "$.update", "Committed"),
                 transaction("factory-reduced-exit-smoke", "$.exit", "Committed"),
                 transaction("factory-reduced-xudt-exit-smoke", "$.exit", "Committed"),
+                transaction(
+                    "factory-reduced-xudt-one-sided-exit-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-change-exit-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
             ],
             script_failures: vec![
                 failure(
                     "factory-xudt-negative/smoke",
+                    "SettlementOutputMismatch",
+                    28,
+                ),
+                failure(
+                    "factory-reduced-xudt-negative-exit-smoke",
                     "SettlementOutputMismatch",
                     28,
                 ),
@@ -2511,10 +2907,38 @@ mod tests {
             watchtower_services: watchtower_services(),
             factory_reduced_rights_updates: vec![factory_reduced_rights_update()],
             factory_merkle_updates: vec![factory_merkle_update()],
-            factory_proof_profiles: vec![factory_proof_profile()],
+            factory_proof_profiles: vec![
+                factory_reduced_rights_proof_profile(),
+                factory_proof_profile(),
+                factory_reduced_exit_proof_profile(
+                    "factory-reduced-exit-smoke",
+                    "factory_reduced_exit_ckb_reserve_claim_v1",
+                ),
+                factory_reduced_exit_proof_profile(
+                    "factory-reduced-xudt-exit-smoke",
+                    "factory_reduced_exit_xudt_reserve_claim_v1",
+                ),
+                factory_reduced_exit_proof_profile(
+                    "factory-reduced-xudt-one-sided-exit-smoke",
+                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+                ),
+                factory_reduced_exit_proof_profile(
+                    "factory-reduced-xudt-change-exit-smoke",
+                    "factory_reduced_exit_xudt_change_reserve_claim_v1",
+                ),
+            ],
             factory_reduced_exits: vec![
                 factory_reduced_exit("factory-reduced-exit-smoke", None),
                 factory_reduced_exit("factory-reduced-xudt-exit-smoke", Some(1_000_000)),
+                factory_reduced_exit_one_sided(
+                    "factory-reduced-xudt-one-sided-exit-smoke",
+                    1_000_000,
+                ),
+                factory_reduced_exit_with_change(
+                    "factory-reduced-xudt-change-exit-smoke",
+                    1_000_000,
+                    100_000,
+                ),
             ],
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
@@ -2526,8 +2950,8 @@ mod tests {
             ],
             deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
-                transaction_count: 55,
-                committed_count: 54,
+                transaction_count: 57,
+                committed_count: 56,
                 pending_count: 1,
                 total_estimated_cycles: 1,
                 max_estimated_cycles: 1,
@@ -2572,6 +2996,7 @@ mod tests {
             old_access_manifest_root: "0x44".to_string(),
             new_access_manifest_root: "0x55".to_string(),
             non_interference_digest: "0x66".to_string(),
+            witness_len: 2580,
         }
     }
 
@@ -2609,6 +3034,35 @@ mod tests {
         }
     }
 
+    fn factory_reduced_rights_proof_profile() -> FactoryProofProfileSummary {
+        FactoryProofProfileSummary {
+            check: "factory-reduced-rights-smoke".to_string(),
+            transaction_path: "$.update".to_string(),
+            evidence_path: "$.package.package".to_string(),
+            proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+            proof_siblings: 0,
+            witness_len: 2580,
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
+        }
+    }
+
+    fn factory_reduced_exit_proof_profile(
+        check: &str,
+        proof_kind: &str,
+    ) -> FactoryProofProfileSummary {
+        FactoryProofProfileSummary {
+            check: check.to_string(),
+            transaction_path: "$.exit".to_string(),
+            evidence_path: "$.exit.reduced_exit".to_string(),
+            proof_kind: proof_kind.to_string(),
+            proof_siblings: 0,
+            witness_len: 1,
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
+        }
+    }
+
     fn factory_reduced_exit(
         check: &str,
         child_xudt_amount: Option<u128>,
@@ -2622,7 +3076,51 @@ mod tests {
             local_exit_digest: "0x77".to_string(),
             non_interference_digest: "0x88".to_string(),
             child_xudt_amount,
+            alice_xudt_amount: child_xudt_amount.map(|amount| amount / 2),
+            bob_xudt_amount: child_xudt_amount.map(|amount| amount - (amount / 2)),
             xudt_type_hash: child_xudt_amount.map(|_| "0x99".to_string()),
+            factory_vault_change_xudt_amount: None,
+        }
+    }
+
+    fn factory_reduced_exit_one_sided(
+        check: &str,
+        child_xudt_amount: u128,
+    ) -> FactoryReducedExitEvidenceSummary {
+        FactoryReducedExitEvidenceSummary {
+            check: check.to_string(),
+            path: "$.exit.reduced_exit".to_string(),
+            authorisation: "reduced-reserve-claim".to_string(),
+            release_quantity: 1,
+            witness_len: 1,
+            local_exit_digest: "0x77".to_string(),
+            non_interference_digest: "0x88".to_string(),
+            child_xudt_amount: Some(child_xudt_amount),
+            alice_xudt_amount: Some(child_xudt_amount),
+            bob_xudt_amount: Some(0),
+            xudt_type_hash: Some("0x99".to_string()),
+            factory_vault_change_xudt_amount: None,
+        }
+    }
+
+    fn factory_reduced_exit_with_change(
+        check: &str,
+        child_xudt_amount: u128,
+        factory_vault_change_xudt_amount: u128,
+    ) -> FactoryReducedExitEvidenceSummary {
+        FactoryReducedExitEvidenceSummary {
+            check: check.to_string(),
+            path: "$.exit.reduced_exit".to_string(),
+            authorisation: "reduced-reserve-claim".to_string(),
+            release_quantity: 1,
+            witness_len: 1,
+            local_exit_digest: "0x77".to_string(),
+            non_interference_digest: "0x88".to_string(),
+            child_xudt_amount: Some(child_xudt_amount),
+            alice_xudt_amount: Some(child_xudt_amount / 2),
+            bob_xudt_amount: Some(child_xudt_amount - (child_xudt_amount / 2)),
+            xudt_type_hash: Some("0x99".to_string()),
+            factory_vault_change_xudt_amount: Some(factory_vault_change_xudt_amount),
         }
     }
 

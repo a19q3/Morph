@@ -79,6 +79,11 @@ run_json factory-merkle-update-smoke devnet --rpc-url "$RPC_URL" factory-merkle-
 
 run_json factory-reduced-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-exit-smoke
 run_json factory-reduced-xudt-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke
+run_json factory-reduced-xudt-one-sided-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke \
+  --alice-xudt-amount 1000000 --bob-xudt-amount 0
+run_json factory-reduced-xudt-change-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke \
+  --factory-vault-xudt-surplus 100000
+run_json factory-reduced-xudt-negative-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-negative-exit-smoke
 
 FACTORY_DIR="$OUT_DIR/factory"
 mkdir -p "$FACTORY_DIR"

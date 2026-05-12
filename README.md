@@ -67,8 +67,13 @@ rights updates and fixed-width reserve-claim reduced exits, including a
 CKB+xUDT child vault. Sparse Merkle update packages and a fixed-width no-std
 Merkle witness now cover the first general proof-bundle step for larger
 factories, including a devnet smoke path that updates one right through the
-256-sibling proof. The remaining gaps are empirical budgets for larger proof
-profiles and additional typed reduced-exit variants.
+256-sibling proof. Smoke summaries bind the current bounded reduced-rights,
+sparse Merkle, and reduced-exit proof shapes to their witness sizes and
+node-estimated transaction budgets, including the surplus-preserving typed
+factory-vault change branch, one-sided typed settlement branch, and reduced
+xUDT tampered-amount negative path. Larger, multi-right, variable-depth proof
+profiles and generalized typed reduced-exit variants are deferred beyond this
+roadmap slice.
 
 ## Repository Layout
 
@@ -110,6 +115,7 @@ cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
 cargo run -p morph-cli -- devnet factory-merkle-update-smoke
 cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
 cargo run -p morph-cli -- devnet factory-reduced-xudt-exit-smoke
+cargo run -p morph-cli -- devnet factory-reduced-xudt-negative-exit-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 make devnet-smoke
 ```
@@ -130,8 +136,9 @@ proof-shape budget profiles, and records watchtower JSONL alerts. The script
 asserts that the expected negative-path failures, deployed scripts, local
 contract binary hashes, watchtower alert events, and factory update/exit
 evidence are present. `devnet-smoke-assert` can also enforce absolute
-cycle/byte budgets for completed smoke runs, including per-transaction budgets
-from [docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
+cycle/byte budgets for completed smoke runs, including per-transaction and
+proof-profile budgets from
+[docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
 To rebuild or assert a previous run:
 
 ```sh

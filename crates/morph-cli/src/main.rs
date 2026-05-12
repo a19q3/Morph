@@ -10,14 +10,14 @@ use devnet::{
     DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitAuthorisation,
     FactoryExitChannelOptions, FactoryExitChannelTamper, FactoryMerkleUpdateSmokeOptions,
     FactoryReducedExitSmokeOptions, FactoryReducedRightsSmokeOptions,
-    FactoryReducedXudtExitSmokeOptions, FactorySmokeOptions, FactoryXudtNegativeSmokeOptions,
-    FactoryXudtSmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
-    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
-    PublishStateOptions, SaveFactoryMerkleUpdatePackageOptions,
-    SaveFactoryReducedRightsPackageOptions, SaveFactoryStatePackageOptions,
-    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
-    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
-    XudtNegativeSmokeOptions, XudtSmokeOptions,
+    FactoryReducedXudtExitSmokeOptions, FactoryReducedXudtNegativeExitSmokeOptions,
+    FactorySmokeOptions, FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions,
+    FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions, FundSponsorOptions,
+    OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions, PublishStateOptions,
+    SaveFactoryMerkleUpdatePackageOptions, SaveFactoryReducedRightsPackageOptions,
+    SaveFactoryStatePackageOptions, SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions,
+    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
+    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -730,6 +730,9 @@ enum DevnetCommand {
         /// Bob's final xUDT settlement amount.
         #[arg(long, default_value_t = 400_000u128)]
         bob_xudt_amount: u128,
+        /// Extra xUDT kept in the factory vault change after the child vault release.
+        #[arg(long, default_value_t = 0u128)]
+        factory_vault_xudt_surplus: u128,
         /// Capacity placed under the child channel sponsor lock.
         #[arg(long, default_value_t = 50_000_000_000)]
         sponsor_capacity: u64,
@@ -740,6 +743,61 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove devnet rejects a reduced CKB+xUDT exit with a tampered child vault amount.
+    FactoryReducedXudtNegativeExitSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Capacity released from the factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's final xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's final xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Raw relative-since value required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after accepted broadcasts. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Emit machine-readable JSON.
@@ -1753,6 +1811,7 @@ fn main() -> Result<()> {
                     "non_interference_digest={}",
                     summary.non_interference_digest
                 );
+                println!("witness_len={}", summary.witness_len);
             }
             Ok(())
         }
@@ -1925,6 +1984,18 @@ fn main() -> Result<()> {
                             transaction.path,
                             transaction.estimated_cycles,
                             transaction.tx_size_bytes
+                        );
+                    }
+                    for profile in &budget.proof_profiles {
+                        println!(
+                            "budget_proof={} {} {} siblings={} witness_len={} cycles={} bytes={}",
+                            profile.check,
+                            profile.transaction_path,
+                            profile.proof_kind,
+                            profile.proof_siblings,
+                            profile.witness_len,
+                            profile.estimated_cycles,
+                            profile.tx_size_bytes
                         );
                     }
                 }
@@ -2784,6 +2855,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             bob_capacity,
             alice_xudt_amount,
             bob_xudt_amount,
+            factory_vault_xudt_surplus,
             sponsor_capacity,
             fee,
             finalise_since,
@@ -2793,6 +2865,85 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             let report = devnet::factory_reduced_xudt_exit_smoke(
                 &rpc,
                 FactoryReducedXudtExitSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    factory_vault_xudt_surplus,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!(
+                    "xudt_type_hash={}",
+                    report.exit.xudt_type_hash.as_deref().unwrap_or_default()
+                );
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("publish_tx_hash={}", report.publish.tx_hash);
+                println!("finalise_tx_hash={}", report.finalise.tx_hash);
+                println!(
+                    "factory_vault_change_xudt_amount={}",
+                    report
+                        .exit
+                        .factory_vault_change_xudt_amount
+                        .unwrap_or_default()
+                );
+                println!(
+                    "alice_xudt_amount={}",
+                    report.exit.alice_xudt_amount.unwrap_or_default()
+                );
+                println!(
+                    "bob_xudt_amount={}",
+                    report.exit.bob_xudt_amount.unwrap_or_default()
+                );
+                if let Some(reduced) = &report.exit.reduced_exit {
+                    println!("release_quantity={}", reduced.release_quantity);
+                    println!("witness_len={}", reduced.witness_len);
+                    println!(
+                        "non_interference_digest={}",
+                        reduced.non_interference_digest
+                    );
+                }
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.exit.metrics);
+                print_metrics(&report.finalise.metrics);
+            }
+        }
+        DevnetCommand::FactoryReducedXudtNegativeExitSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::factory_reduced_xudt_negative_exit_smoke(
+                &rpc,
+                FactoryReducedXudtNegativeExitSmokeOptions {
                     contracts_dir,
                     private_key,
                     alice_private_key,
@@ -2814,25 +2965,25 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("factory_id={}", report.open.factory_id);
-                println!(
-                    "xudt_type_hash={}",
-                    report.exit.xudt_type_hash.as_deref().unwrap_or_default()
-                );
                 println!("open_tx_hash={}", report.open.tx_hash);
-                println!("exit_tx_hash={}", report.exit.tx_hash);
-                println!("publish_tx_hash={}", report.publish.tx_hash);
-                println!("finalise_tx_hash={}", report.finalise.tx_hash);
-                if let Some(reduced) = &report.exit.reduced_exit {
-                    println!("release_quantity={}", reduced.release_quantity);
-                    println!("witness_len={}", reduced.witness_len);
-                    println!(
-                        "non_interference_digest={}",
-                        reduced.non_interference_digest
-                    );
-                }
+                println!(
+                    "expected_child_xudt_amount={}",
+                    report.expected_child_xudt_amount
+                );
+                println!(
+                    "rejected_child_xudt_amount={}",
+                    report.rejected_child_xudt_amount
+                );
+                println!(
+                    "script_failure={}",
+                    report
+                        .script_failure
+                        .morph_error
+                        .as_deref()
+                        .unwrap_or("unknown")
+                );
+                println!("rejection={}", report.rejection);
                 print_metrics(&report.open.metrics);
-                print_metrics(&report.exit.metrics);
-                print_metrics(&report.finalise.metrics);
             }
         }
         DevnetCommand::FactoryXudtSmoke {

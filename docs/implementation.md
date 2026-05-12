@@ -100,7 +100,12 @@ CKB-VM tests cover both the CKB and CKB+xUDT reduced-exit child-vault shapes,
 including typed amount and type mismatch rejection.
 `factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke` publish
 this path on devnet, then use the ordinary child-channel publication and
-finalisation flow.
+finalisation flow. The xUDT smoke can also exercise a one-sided token
+settlement, or open the factory vault with surplus tokens, release only the
+child settlement amount, and keep the remaining xUDT typed under the recreated
+FactoryVaultCell. `factory-reduced-xudt-negative-exit-smoke` submits a
+tampered reduced exit where total xUDT is conserved but the child vault is one
+token short; the expected live rejection is `SettlementOutputMismatch`.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -186,9 +191,10 @@ process manager rather than becoming its own process manager.
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
-- No multi-right or variable-depth reduced-signature proof bundle yet. The
-  implemented on-chain paths are fixed-width: CKB/CKB+xUDT reserve-claim
-  reduced exits and a single-right 256-sibling sparse Merkle update.
+- Multi-right and variable-depth reduced-signature proof bundles are deferred
+  beyond the current roadmap. The implemented on-chain paths are fixed-width:
+  CKB/CKB+xUDT reserve-claim reduced exits and a single-right 256-sibling
+  sparse Merkle update.
 - No generic descriptor runtime.
 - No base-layer CKB change.
 
@@ -246,10 +252,13 @@ A devnet demonstration is acceptable only when it includes:
   through the fixed 256-sibling proof witness;
 - a smoke summary report that preserves cycle, size, status, deployed script
   hashes, deployed script outpoints, watchtower alert events, proof-shape
-  budget profiles, and expected script-error evidence for review;
+  budget profiles for reduced-rights, sparse Merkle, and reduced-exit
+  witnesses, and expected script-error evidence for review;
 - smoke assertions that compare deployed script hashes with the local RISC-V
   contract binaries and require the watchtower older-state/publication alerts
   before accepting a run as current evidence;
+- smoke budget assertions that can gate factory proof-profile sibling count,
+  witness length, node-estimated cycles, and transaction byte size;
 - smoke comparison gates for transaction-set, status, cycle, and byte-size
   regressions between completed devnet runs;
 - CI fixture checks for bilateral state fixtures, factory update/state/local

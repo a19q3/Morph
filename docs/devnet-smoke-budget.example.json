@@ -36,6 +36,18 @@
       "max_bytes": 9500
     },
     {
+      "check": "factory-reduced-xudt-one-sided-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 10000000,
+      "max_bytes": 9500
+    },
+    {
+      "check": "factory-reduced-xudt-change-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 10000000,
+      "max_bytes": 9500
+    },
+    {
       "check": "factory/exit-channel",
       "path": "$",
       "max_cycles": 9000000,
@@ -52,6 +64,62 @@
       "path": "$.exit",
       "max_cycles": 9000000,
       "max_bytes": 4500
+    }
+  ],
+  "proof_profiles": [
+    {
+      "check": "factory-reduced-rights-smoke",
+      "transaction_path": "$.update",
+      "proof_kind": "factory_reduced_rights_bounded_claim_decrease_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3000,
+      "max_cycles": 6000000,
+      "max_bytes": 4000
+    },
+    {
+      "check": "factory-merkle-update-smoke",
+      "transaction_path": "$.update",
+      "proof_kind": "factory_sparse_merkle_update_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 9000,
+      "max_cycles": 30000000,
+      "max_bytes": 20000
+    },
+    {
+      "check": "factory-reduced-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_ckb_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3100,
+      "max_cycles": 10000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3200,
+      "max_cycles": 10000000,
+      "max_bytes": 9500
+    },
+    {
+      "check": "factory-reduced-xudt-one-sided-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3200,
+      "max_cycles": 10000000,
+      "max_bytes": 9500
+    },
+    {
+      "check": "factory-reduced-xudt-change-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3200,
+      "max_cycles": 10000000,
+      "max_bytes": 9500
     }
   ]
 }

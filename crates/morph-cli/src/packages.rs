@@ -140,6 +140,7 @@ pub struct FactoryReducedRightsPackageSummary {
     pub old_access_manifest_root: String,
     pub new_access_manifest_root: String,
     pub non_interference_digest: String,
+    pub witness_len: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,6 +628,7 @@ impl StoredFactoryReducedRightsPackage {
             old_access_manifest_root: self.old_access_manifest_root.clone(),
             new_access_manifest_root: self.new_access_manifest_root.clone(),
             non_interference_digest: self.non_interference_digest.clone(),
+            witness_len: self.witness_bytes()?.len(),
         })
     }
 
@@ -2377,6 +2379,7 @@ mod tests {
         let summary = loaded.summary().unwrap();
         assert_eq!(summary.old_update_number, 1);
         assert_eq!(summary.new_update_number, 2);
+        assert_eq!(summary.witness_len, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN);
 
         let update_package = read_factory_state_cell_update_package(&path).unwrap();
         assert_eq!(update_package.update_number(), 2);
