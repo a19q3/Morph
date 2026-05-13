@@ -7,6 +7,10 @@ pub mod hash;
 pub mod types;
 pub mod validation;
 
-pub use hash::{SigningBytes, blake2b256, participants_commitment};
+pub use hash::{
+    SigningBytes, blake2b256, factory_vault_delta_commitment_v1,
+    factory_vault_descriptor_commitment_v1, participants_commitment,
+    splice_asset_delta_commitment_v1, vault_descriptor_commitment_v2,
+};
 pub use types::*;
 pub use validation::*;

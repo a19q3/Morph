@@ -1,6 +1,6 @@
 {
   "schema": "morph.devnet_smoke_budget.v1",
-  "max_total_cycles": 200000000,
+  "max_total_cycles": 1200000000,
   "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
   "max_tx_bytes": 500000,
@@ -46,6 +46,54 @@
       "path": "$.exit",
       "max_cycles": 10000000,
       "max_bytes": 9500
+    },
+    {
+      "check": "factory-splice-in-smoke",
+      "path": "$.apply",
+      "max_cycles": 16000000,
+      "max_bytes": 12000
+    },
+    {
+      "check": "factory-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 16000000,
+      "max_bytes": 12000
+    },
+    {
+      "check": "factory-reduced-splice-in-smoke",
+      "path": "$.apply",
+      "max_cycles": 18000000,
+      "max_bytes": 22000
+    },
+    {
+      "check": "factory-reduced-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 18000000,
+      "max_bytes": 22000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-in-smoke",
+      "path": "$.apply",
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    },
+    {
+      "check": "factory-xudt-splice-in-smoke",
+      "path": "$.apply",
+      "max_cycles": 16000000,
+      "max_bytes": 13000
+    },
+    {
+      "check": "factory-xudt-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 16000000,
+      "max_bytes": 13000
     },
     {
       "check": "factory/exit-channel",
@@ -120,6 +168,78 @@
       "max_witness_len": 3200,
       "max_cycles": 10000000,
       "max_bytes": 9500
+    },
+    {
+      "check": "factory-splice-in-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_splice_all_participants_ckb_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 1200,
+      "max_cycles": 16000000,
+      "max_bytes": 12000
+    },
+    {
+      "check": "factory-splice-out-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_splice_all_participants_ckb_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 1200,
+      "max_cycles": 16000000,
+      "max_bytes": 12000
+    },
+    {
+      "check": "factory-reduced-splice-in-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 10000,
+      "max_cycles": 18000000,
+      "max_bytes": 22000
+    },
+    {
+      "check": "factory-reduced-splice-out-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 10000,
+      "max_cycles": 18000000,
+      "max_bytes": 22000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-in-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 10000,
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-out-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 10000,
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    },
+    {
+      "check": "factory-xudt-splice-in-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_splice_all_participants_xudt_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 1200,
+      "max_cycles": 16000000,
+      "max_bytes": 13000
+    },
+    {
+      "check": "factory-xudt-splice-out-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_splice_all_participants_xudt_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 1200,
+      "max_cycles": 16000000,
+      "max_bytes": 13000
     }
   ]
 }

@@ -55,6 +55,47 @@ The default dev block assembler arg is:
 It is suitable for isolated local devnet mining only. Production deployments
 must replace it with an operator-controlled lock.
 
+## Real Chain E2E
+
+For release closeout, use the one-command real devnet runner instead of
+`cargo test`:
+
+```sh
+scripts/devnet-e2e.sh
+```
+
+The runner expects the CKB source tree in the parent folder by default
+(`../ckb`). It resolves `../ckb/target/release/ckb` or
+`../ckb/target/debug/ckb`, builds CKB from `../ckb` if no binary exists,
+starts a fresh isolated dev chain under `target/devnet-e2e/<timestamp>/node`,
+builds the current RISC-V contract binaries, waits for JSON-RPC, runs the
+on-chain smoke suite against that node, and then checks the resulting smoke
+summary against
+`docs/devnet-smoke-budget.example.json`. It sets
+`MORPH_DEVNET_SMOKE_SKIP_LOCAL_CHECKS=1`, so this path does not use
+workspace `cargo test` or offline `ckb-testtool` as evidence.
+
+Useful overrides:
+
+```sh
+CKB_SOURCE_DIR=../ckb scripts/devnet-e2e.sh
+CKB_BIN=../ckb/target/debug/ckb scripts/devnet-e2e.sh
+RPC_PORT=18124 P2P_PORT=18125 RUN_ID=m6-closeout scripts/devnet-e2e.sh
+BUILD_CONTRACTS=0 scripts/devnet-e2e.sh
+KEEP_NODE=1 scripts/devnet-e2e.sh
+```
+
+The important artefacts are:
+
+```text
+target/devnet-e2e/<timestamp>/manifest.txt
+target/devnet-e2e/<timestamp>/logs/ckb-node.log
+target/devnet-e2e/<timestamp>/logs/build-contracts.log
+target/devnet-e2e/<timestamp>/logs/devnet-smoke.log
+target/devnet-e2e/<timestamp>/smoke/summary.json
+target/devnet-e2e/<timestamp>/smoke/summary-budget-check.json
+```
+
 ## Current Smoke Checks
 
 ```sh
@@ -89,12 +130,16 @@ make devnet-smoke
 ```
 
 This script runs the real workspace tests, RISC-V contract tests, devnet RPC
-check, contract deployment, supersession smoke, sponsor-policy negative smoke,
-finalise-since negative smoke, sponsor-budget negative smoke, competing-spend
-smoke, CKB+xUDT settlement smoke, CKB+xUDT negative settlement smoke, bounded
-reduced-rights factory update smoke, and the watchtower auto-sponsor path. It
-expects the node and `jq` to be available, and writes logs plus JSON reports
-under
+check, tip/wait-tip, contract deployment, supersession, finalise-since,
+sponsor-policy, sponsor-budget, and competing-spend smoke paths. It also runs a
+business matrix for manual state package list/latest/publish-latest,
+independent fund-sponsor, CKB+xUDT settlement, asymmetric CKB splits, one-sided
+xUDT splits, CKB and xUDT splice-in/splice-out, conservative and reduced
+factory updates, factory local exits, reduced reserve exits, factory splice
+in/out, factory xUDT splice in/out, watchtower auto-sponsor, direct sponsor
+watching, config-loop watching, and the stale-package guard after splice. It
+expects the node and `jq` to be
+available, and writes logs plus JSON reports under
 `target/devnet-smoke/<timestamp>/`. Override `MORPH_CKB_RPC`, `OUT_DIR`, or
 `MINE_BLOCKS` when needed; the default is four blocks to avoid proposal-window
 flakiness on local devnet. On success it also refreshes the
@@ -149,8 +194,11 @@ The profile can set global ceilings, per-transaction ceilings keyed by summary
 `factory_reduced_rights_bounded_claim_decrease_v1`,
 `factory_sparse_merkle_update_v1`,
 `factory_reduced_exit_ckb_reserve_claim_v1`, or
-`factory_reduced_exit_xudt_one_sided_reserve_claim_v1` to proof shape
-metadata, witness length, node-estimated cycles, and transaction bytes. For
+`factory_reduced_exit_xudt_one_sided_reserve_claim_v1`. Factory splice apply
+transactions are also budgeted with `factory_splice_all_participants_ckb_v1`
+and `factory_splice_all_participants_xudt_v1`, binding
+`FactorySpliceWitnessV1` length to node-estimated cycles and transaction bytes.
+For
 quick local experiments, the same limits can be supplied directly:
 
 ```sh
@@ -381,6 +429,60 @@ keys, consumes the SponsorCell, and returns sponsor change to the opener's
 wallet lock. `finalise-channel` consumes the settling StateCell and VaultCell,
 materialises the descriptor outputs, and returns the StateCell carrier capacity
 minus fee to the opener's wallet lock.
+
+The first CKB splice flow saves a live-matching package from an active
+StateCell/VaultCell pair, then applies it by recreating the StateCell and
+VaultCell under the package's new funding anchor:
+
+```sh
+cargo run -q -p morph-cli -- devnet save-splice-package \
+  --state-out-point "$STATE_OUT_POINT" \
+  --vault-out-point "$VAULT_OUT_POINT" \
+  --kind splice-in \
+  --ckb-amount 1000000000 \
+  --json
+
+cargo run -q -p morph-cli -- devnet apply-splice \
+  --state-out-point "$STATE_OUT_POINT" \
+  --vault-out-point "$VAULT_OUT_POINT" \
+  --splice-package "$SPLICE_PACKAGE" \
+  --json
+```
+
+`save-splice-package` supports CKB splice-in/splice-out packages and live xUDT
+splice-in/splice-out packages via `--asset xudt --xudt-amount <amount>`. It
+records the live StateCell and VaultCell out points, signs the splice header
+with Alice/Bob, and writes the package under `target/morph-splice-packages` by
+default. `apply-splice` expects that package to match the live current
+StateHeader bytes and old VaultCell capacity. It inserts the fixed-width
+`SpliceStateTransitionWitnessV1`, pays CKB splice-in deltas, typed withdrawal
+cell capacity, typed external-input carrier accounting, and transaction fees
+from an opener-controlled fee cell. CKB splice-out withdrawals go to a
+participant-derived secp256k1 lock, xUDT splice-out withdrawals go to a typed
+participant-owned output, and xUDT splice-in uses `--xudt-input-out-point` to
+consume an owner-controlled typed input.
+`validate-splice-package --json` reports the package payout rule as
+`withdrawal_payout_policy`; V1 splice-out packages use
+`participant_signature_pubkey`. Live `apply-splice --json` reports the exact
+`withdrawal_participant_pubkey_sec1` and `withdrawal_lock_hash` used for the
+on-chain withdrawal output, so a smoke artifact can be audited without
+reconstructing the transaction by hand. `make smoke-assert` requires this
+evidence for splice apply artifacts and rejects splice-out reports that do not
+use the V1 participant-signature payout rule.
+
+For a one-command live path, use the splice smokes:
+
+```sh
+cargo run -q -p morph-cli -- devnet splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet splice-out-smoke --json
+cargo run -q -p morph-cli -- devnet xudt-splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet xudt-splice-out-smoke --json
+```
+
+Each smoke opens a channel, saves a live splice package, applies it, funds a
+new SponsorCell bound to the post-splice StateCell type hash, publishes a
+descriptor-updated post-splice settling state, and finalises the post-splice
+vault.
 
 The CKB+xUDT smoke path exercises the same open, publish, and finalise shape,
 but the vault carries a devnet-only xUDT type script. The xUDT script allows
@@ -695,7 +797,9 @@ When `--alert-file` is provided, the watcher appends JSON Lines events for
 operator review. When `--alert-webhook-url` is provided, the same structured
 event is also POSTed as JSON to that URL. Alerts record older-state detection
 before sponsor work begins, successful publication after the transaction is
-submitted, and idle scans that reach the timeout without publishing.
+submitted, funding-anchor changes after a confirmed splice, stale saved
+packages for the observed anchor, splice-aware publication, and idle scans that
+reach the timeout without publishing.
 
 The automatically funded SponsorCell is deliberately narrow: it is bound to the
 selected latest package's state number and carries a fee budget of twice the
@@ -711,15 +815,20 @@ target/morph-state-packages/watch-cursor-<channel-id>.json
 
 On the next run it resumes from the saved cursor, unless `--ignore-cursor` is
 passed. Use `--cursor-file <path>` when a deployment keeps watchtower runtime
-state somewhere other than the package directory. The report includes
-`effective_from_block`, `scanned_to_block`, and `next_from_block` so an operator
-can audit what was actually covered.
+state somewhere other than the package directory. The cursor also records the
+last observed funding anchor, state number, and outpoint, which lets a watcher
+notice confirmed splices and avoid replaying packages from the wrong funding
+anchor. The report includes `effective_from_block`, `scanned_to_block`, and
+`next_from_block` so an operator can audit what was actually covered.
 
 This scanner is intentionally confirmation-based. It does not assume mempool
 replacement behaviour, and it does not scan with an indexer. It reads canonical
 blocks through CKB JSON-RPC, recognises Morph `StateHeader` outputs for the
 channel, and rebuilds a fresh publication transaction once an older confirmed
-StateCell is actionable.
+StateCell is actionable. If multiple saved packages exist for the channel, it
+publishes only the newest package whose funding anchor matches the confirmed
+StateCell; a newer package for another anchor is reported as stale rather than
+used.
 
 When `--state-package` is used, the publication transaction is rebuilt against
 the currently live StateCell and SponsorCell. Alice and Bob do not need to sign
@@ -956,7 +1065,8 @@ the reduced xUDT reserve-claim path.
 `local_exit_package` while building the summary, so a malformed package fails
 the report rather than being silently displayed. It also parses watchtower
 JSONL alerts, and `devnet-smoke-assert` requires the default smoke run to show
-both an `older_state_detected` alert and a `publication_submitted` alert.
+`older_state_detected`, `publication_submitted`, `splice_detected`, and
+`splice_package_stale` alerts.
 
 ## Remaining Devnet Gap
 
@@ -1005,6 +1115,26 @@ cargo run -q -p morph-cli -- print-factory-local-exit-fixture \
 cargo run -q -p morph-cli -- validate-factory-local-exit-package \
   target/factory-local-exit.json \
   --json
+cargo run -q -p morph-cli -- print-factory-splice-fixture --kind splice-in \
+  > target/factory-splice-in.json
+cargo run -q -p morph-cli -- validate-factory-splice-package \
+  target/factory-splice-in.json \
+  --json
+cargo run -q -p morph-cli -- print-factory-splice-fixture --kind xudt-splice-out \
+  > target/factory-xudt-splice-out.json
+cargo run -q -p morph-cli -- validate-factory-splice-package \
+  target/factory-xudt-splice-out.json \
+  --json
+cargo run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind splice-in \
+  > target/factory-reduced-splice-in.json
+cargo run -q -p morph-cli -- validate-factory-reduced-splice-package \
+  target/factory-reduced-splice-in.json \
+  --json
+cargo run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind xudt-splice-out \
+  > target/factory-reduced-xudt-splice-out.json
+cargo run -q -p morph-cli -- validate-factory-reduced-splice-package \
+  target/factory-reduced-xudt-splice-out.json \
+  --json
 ```
 
 Those host-side commands check canonical roots, canonical participant sets,
@@ -1016,7 +1146,80 @@ same sibling frontier before and after, so the package can show a larger
 factory root transition without carrying the full rights set. The local-exit
 package validator checks the embedded factory signatures, child state number
 and phase, settlement descriptor commitment, output indices, script hashes, and
-the digest bound into the updated FactoryStateHeader.
+the digest bound into the updated FactoryStateHeader. The factory-splice
+package validator checks the M6 reserve-repartition rule: one participant
+reserve claim must increase or decrease by exactly the CKB/xUDT factory-vault
+delta signed into the package. `validate-factory-splice-package` also reports
+the fixed-width `FactorySpliceWitnessV1` as `contract_witness_hex`.
+The reduced factory-splice package validator keeps the same reserve/vault delta
+rule but replaces the full rights set with one sparse-Merkle reserve-claim proof
+and requires exactly the authorised participant signature over the factory
+splice header. It also emits fixed-width `FactoryReducedSpliceWitnessV1` bytes
+as `contract_witness_hex`; this reduced contract path keeps the access manifest
+root unchanged because the sparse proof only proves the rights-root transition.
+
+A live FactoryStateCell/FactoryVaultCell pair can now be captured into the same
+package format and then applied with the contract-facing witness:
+
+```sh
+cargo run -q -p morph-cli -- devnet save-factory-splice-package \
+  --factory-out-point <factory-tx>:0 \
+  --factory-vault-out-point <factory-tx>:1 \
+  --kind splice-in \
+  --asset ckb \
+  --ckb-amount 1000000000 \
+  --store-dir target/morph-factory-splice-packages \
+  --json
+
+cargo run -q -p morph-cli -- devnet apply-factory-splice \
+  --factory-out-point <factory-tx>:0 \
+  --factory-vault-out-point <factory-tx>:1 \
+  --factory-splice-package target/morph-factory-splice-packages/<package>.json \
+  --json
+
+cargo run -q -p morph-cli -- devnet save-factory-reduced-splice-package \
+  --factory-out-point <factory-tx>:0 \
+  --factory-vault-out-point <factory-tx>:1 \
+  --kind splice-in \
+  --asset ckb \
+  --ckb-amount 1000000000 \
+  --store-dir target/morph-factory-splice-packages \
+  --json
+
+cargo run -q -p morph-cli -- devnet apply-factory-reduced-splice \
+  --factory-out-point <factory-tx>:0 \
+  --factory-vault-out-point <factory-tx>:1 \
+  --factory-reduced-splice-package target/morph-factory-splice-packages/<reduced-package>.json \
+  --json
+
+cargo run -q -p morph-cli -- devnet factory-splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet factory-splice-out-smoke --json
+cargo run -q -p morph-cli -- devnet factory-reduced-splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet factory-reduced-splice-out-smoke --json
+cargo run -q -p morph-cli -- devnet factory-reduced-xudt-splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet factory-reduced-xudt-splice-out-smoke --json
+cargo run -q -p morph-cli -- devnet factory-xudt-splice-in-smoke --json
+cargo run -q -p morph-cli -- devnet factory-xudt-splice-out-smoke --json
+```
+
+The live builder is deliberately narrow: the current FactoryStateCell root must
+match the conservative V1 reserve-claim shape for Alice and Bob. The apply
+command consumes the FactoryStateCell, FactoryVaultCell, an owner fee cell, and
+an optional xUDT external input for xUDT splice-in. Splice-out withdrawal
+outputs are derived from the touched participant's signed secp256k1 key. The
+reduced save/apply commands use the same live transaction shape but feed
+`FactoryReducedSpliceWitnessV1` to both factory scripts, keeping the access
+manifest root unchanged and proving only the touched reserve claim through the
+sparse Merkle witness.
+
+The CKB and xUDT smoke wrappers open a factory, capture a live factory splice
+package, apply the splice, and then materialise a child channel from the
+post-splice FactoryVaultCell with full-participant authorisation. The reduced
+CKB and xUDT smoke wrappers run the same lifecycle with the sparse-Merkle
+splice witness.
+The xUDT splice-in wrapper mints a participant-owned external xUDT cell before
+applying the package, while xUDT splice-out derives the participant-owned
+withdrawal output from the signed package participant key.
 
 The `morph-factory-type` script executes in CKB-VM tests, accepts a canonical
 initial FactoryStateCell, accepts a signed monotonic factory update, and
@@ -1035,6 +1238,8 @@ reserve-claim reduced-exit witnesses in `factory-reduced-exit-smoke` and
 `factory-reduced-xudt-exit-smoke`, including the one-sided typed settlement
 and surplus-preserving typed factory-vault change branches plus the reduced
 xUDT tampered-amount negative path, publishes the sparse Merkle update witness
-in `factory-merkle-update-smoke`, and records the reduced-rights, sparse
-Merkle, and reduced-exit proof shapes in the smoke summary's factory proof
-profile table.
+in `factory-merkle-update-smoke`, publishes reduced CKB/xUDT splice witnesses
+in `factory-reduced-splice-*-smoke` and
+`factory-reduced-xudt-splice-*-smoke`, and records the reduced-rights, sparse
+Merkle, reduced-exit, and reduced-splice proof shapes in the smoke summary's
+factory proof profile table.

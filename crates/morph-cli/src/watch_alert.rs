@@ -20,6 +20,9 @@ pub enum WatchAlertSeverity {
 pub enum WatchAlertEvent {
     OlderStateDetected,
     PublicationSubmitted,
+    SpliceDetected,
+    SplicePackageStale,
+    SplicePublicationSubmitted,
     ScanIdle,
 }
 
@@ -35,6 +38,10 @@ pub struct WatchtowerAlert {
     pub observed_state_number: Option<u64>,
     pub observed_out_point: Option<String>,
     pub publication_tx_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_funding_anchor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_funding_anchor: Option<String>,
     pub scanned_to_block: u64,
     pub next_from_block: u64,
 }
@@ -60,6 +67,8 @@ impl WatchtowerAlert {
             observed_state_number: None,
             observed_out_point: None,
             publication_tx_hash: None,
+            selected_funding_anchor: None,
+            observed_funding_anchor: None,
             scanned_to_block,
             next_from_block,
         })
@@ -73,6 +82,12 @@ impl WatchtowerAlert {
 
     pub fn with_publication(mut self, tx_hash: String) -> Self {
         self.publication_tx_hash = Some(tx_hash);
+        self
+    }
+
+    pub fn with_funding_anchors(mut self, selected: String, observed: String) -> Self {
+        self.selected_funding_anchor = Some(selected);
+        self.observed_funding_anchor = Some(observed);
         self
     }
 }

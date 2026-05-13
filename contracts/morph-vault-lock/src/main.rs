@@ -9,16 +9,18 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_cell_type_hash, load_input,
-    load_script, load_witness_args,
+    load_cell_capacity, load_cell_data, load_cell_lock, load_cell_lock_hash, load_cell_type,
+    load_cell_type_hash, load_input, load_script, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
-    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_SETTLING,
-    Result, ScriptError, StateHeaderV1, read_u64, read_u128,
+    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_ACTIVE,
+    PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitnessV1, SpliceVaultDescriptorV2,
+    StateHeaderV1, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u64, read_u128,
+    verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -49,6 +51,10 @@ fn main() -> Result<()> {
 
     let (state_index, state_data) = find_unique_state_input(expected_funding_anchor)?;
     let header = StateHeaderV1::parse(&state_data)?;
+    if header.phase() == PHASE_ACTIVE {
+        validate_splice_vault_spend(&script, state_index, &header, expected_funding_anchor)?;
+        return Ok(());
+    }
     if header.phase() != PHASE_SETTLING {
         return Err(ScriptError::NewStateNotSettling);
     }
@@ -197,14 +203,12 @@ fn sum_outputs_xudt_by_lock_hash(expected_lock: &[u8], expected_type_hash: &[u8]
     loop {
         match load_cell_lock_hash(index, Source::Output) {
             Ok(lock_hash) => {
-                if lock_hash.as_slice() == expected_lock {
-                    if let Some(type_hash) = load_cell_type_hash(index, Source::Output)
+                if lock_hash.as_slice() == expected_lock
+                    && let Some(type_hash) = load_cell_type_hash(index, Source::Output)
                         .map_err(|_| ScriptError::Encoding)?
-                    {
-                        if type_hash.as_slice() == expected_type_hash {
-                            sum = sum.saturating_add(load_xudt_amount(index, Source::Output)?);
-                        }
-                    }
+                    && type_hash.as_slice() == expected_type_hash
+                {
+                    sum = sum.saturating_add(load_xudt_amount(index, Source::Output)?);
                 }
                 index += 1;
             }
@@ -231,13 +235,13 @@ fn find_unique_state_input(expected_funding_anchor: &[u8]) -> Result<(usize, all
     loop {
         match load_cell_data(index, Source::Input) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV1::parse(&data) {
-                    if header.funding_anchor() == expected_funding_anchor {
-                        if found.is_some() {
-                            return Err(ScriptError::StateCellAmbiguous);
-                        }
-                        found = Some((index, data));
+                if let Ok(header) = StateHeaderV1::parse(&data)
+                    && header.funding_anchor() == expected_funding_anchor
+                {
+                    if found.is_some() {
+                        return Err(ScriptError::StateCellAmbiguous);
                     }
+                    found = Some((index, data));
                 }
                 index += 1;
             }
@@ -246,4 +250,349 @@ fn find_unique_state_input(expected_funding_anchor: &[u8]) -> Result<(usize, all
         }
     }
     found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_vault_spend(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    state_index: usize,
+    old_header: &StateHeaderV1,
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
+    let witness_raw = find_splice_witness_raw(expected_funding_anchor)?;
+    let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
+        .map_err(|_| ScriptError::SpliceProofEncoding)?;
+    let splice_header = witness.header()?;
+    let new_data =
+        find_unique_state_output_for_splice(state_index, splice_header.new_funding_anchor())?;
+    let new_header = StateHeaderV1::parse(&new_data)?;
+    verify_splice_state_transition_bundle(old_header, &new_header, &witness)?;
+
+    let old_vault = witness.old_vault()?;
+    let new_vault = witness.new_vault()?;
+    validate_old_vault_inputs(&old_vault)?;
+    validate_new_vault_outputs(current_script, &new_vault)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_splice_witness_raw(expected_old_funding_anchor: &[u8]) -> Result<alloc::vec::Vec<u8>> {
+    let mut found: Option<alloc::vec::Vec<u8>> = None;
+    let mut index = 0;
+    loop {
+        match load_witness_args(index, Source::Input) {
+            Ok(witness_args) => {
+                if let Some(input_type) = witness_args.input_type().to_opt() {
+                    let raw = input_type.raw_data();
+                    if let Ok(witness) = SpliceStateTransitionWitnessV1::parse(raw.as_ref()) {
+                        let header = witness.header()?;
+                        if header.old_funding_anchor() == expected_old_funding_anchor {
+                            if found.is_some() {
+                                return Err(ScriptError::SpliceProofEncoding);
+                            }
+                            found = Some(raw.as_ref().to_vec());
+                        }
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::SpliceProofEncoding)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_state_output_for_splice(
+    state_input_index: usize,
+    expected_funding_anchor: &[u8],
+) -> Result<alloc::vec::Vec<u8>> {
+    let Some(base_type) =
+        load_cell_type(state_input_index, Source::Input).map_err(|_| ScriptError::Encoding)?
+    else {
+        return Err(ScriptError::StateTypeMismatch);
+    };
+
+    let mut found: Option<alloc::vec::Vec<u8>> = None;
+    let mut index = 0;
+    loop {
+        match load_cell_data(index, Source::Output) {
+            Ok(data) => {
+                if let Ok(header) = StateHeaderV1::parse(&data)
+                    && header.funding_anchor() == expected_funding_anchor
+                    && state_type_script_matches_anchor(
+                        &base_type,
+                        index,
+                        Source::Output,
+                        expected_funding_anchor,
+                    )?
+                {
+                    if found.is_some() {
+                        return Err(ScriptError::StateCellAmbiguous);
+                    }
+                    found = Some(data);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn state_type_script_matches_anchor(
+    base_script: &ckb_std::ckb_types::packed::Script,
+    index: usize,
+    source: Source,
+    expected_funding_anchor: &[u8],
+) -> Result<bool> {
+    let Some(candidate) = load_cell_type(index, source).map_err(|_| ScriptError::Encoding)? else {
+        return Ok(false);
+    };
+    script_matches_anchor(base_script, &candidate, expected_funding_anchor)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn lock_script_matches_anchor(
+    base_script: &ckb_std::ckb_types::packed::Script,
+    index: usize,
+    source: Source,
+    expected_funding_anchor: &[u8],
+) -> Result<bool> {
+    let candidate = load_cell_lock(index, source).map_err(|_| ScriptError::Encoding)?;
+    script_matches_anchor(base_script, &candidate, expected_funding_anchor)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn script_matches_anchor(
+    base_script: &ckb_std::ckb_types::packed::Script,
+    candidate: &ckb_std::ckb_types::packed::Script,
+    expected_funding_anchor: &[u8],
+) -> Result<bool> {
+    if candidate.code_hash() != base_script.code_hash()
+        || candidate.hash_type() != base_script.hash_type()
+    {
+        return Ok(false);
+    }
+    let base_args = base_script.args().raw_data();
+    let candidate_args = candidate.args().raw_data();
+    if candidate_args.len() != base_args.len() || candidate_args.len() < BYTE32_LEN {
+        return Ok(false);
+    }
+    if &candidate_args.as_ref()[..BYTE32_LEN] != expected_funding_anchor {
+        return Ok(false);
+    }
+    Ok(candidate_args.as_ref()[BYTE32_LEN..] == base_args.as_ref()[BYTE32_LEN..])
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_old_vault_inputs(descriptor: &SpliceVaultDescriptorV2) -> Result<()> {
+    let assets = descriptor_assets(descriptor)?;
+    let capacity = sum_group_capacity(Source::GroupInput)? as u128;
+    if capacity != assets.ckb_amount {
+        return Err(ScriptError::SpliceProofMismatch);
+    }
+
+    match assets.xudt {
+        Some((type_hash, amount)) => {
+            if sum_group_xudt_amount_for_type(Source::GroupInput, type_hash)? != amount {
+                return Err(ScriptError::SpliceProofMismatch);
+            }
+        }
+        None => ensure_no_group_xudt(Source::GroupInput)?,
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_new_vault_outputs(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    descriptor: &SpliceVaultDescriptorV2,
+) -> Result<()> {
+    let assets = descriptor_assets(descriptor)?;
+    let capacity = sum_outputs_by_vault_lock(current_script, descriptor.funding_anchor())? as u128;
+    if capacity != assets.ckb_amount {
+        return Err(ScriptError::SpliceProofMismatch);
+    }
+
+    match assets.xudt {
+        Some((type_hash, amount)) => {
+            let actual = sum_outputs_xudt_by_vault_lock(
+                current_script,
+                descriptor.funding_anchor(),
+                type_hash,
+            )?;
+            if actual != amount {
+                return Err(ScriptError::SpliceProofMismatch);
+            }
+        }
+        None => ensure_no_outputs_xudt_by_vault_lock(current_script, descriptor.funding_anchor())?,
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+struct DescriptorAssets<'a> {
+    ckb_amount: u128,
+    xudt: Option<(&'a [u8], u128)>,
+}
+
+#[cfg(target_arch = "riscv64")]
+fn descriptor_assets<'a>(descriptor: &SpliceVaultDescriptorV2<'a>) -> Result<DescriptorAssets<'a>> {
+    let mut ckb_amount: Option<u128> = None;
+    let mut xudt: Option<(&'a [u8], u128)> = None;
+
+    for index in 0..descriptor.asset_count() as usize {
+        let asset = descriptor.asset(index)?;
+        match asset.asset_kind() {
+            VAULT_ASSET_KIND_CKB_V1 => {
+                if ckb_amount.is_some() {
+                    return Err(ScriptError::SpliceProofMismatch);
+                }
+                ckb_amount = Some(asset.amount());
+            }
+            VAULT_ASSET_KIND_XUDT_V1 => {
+                if xudt.is_some() {
+                    return Err(ScriptError::SpliceProofMismatch);
+                }
+                xudt = Some((asset.asset_type(), asset.amount()));
+            }
+            _ => return Err(ScriptError::SpliceProofEncoding),
+        }
+    }
+
+    Ok(DescriptorAssets {
+        ckb_amount: ckb_amount.ok_or(ScriptError::SpliceProofMismatch)?,
+        xudt,
+    })
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_outputs_by_vault_lock(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    expected_funding_anchor: &[u8],
+) -> Result<u64> {
+    let mut sum = 0u64;
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, Source::Output) {
+            Ok(capacity) => {
+                if lock_script_matches_anchor(
+                    current_script,
+                    index,
+                    Source::Output,
+                    expected_funding_anchor,
+                )? {
+                    sum = sum.saturating_add(capacity);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_group_xudt_amount_for_type(source: Source, expected_type_hash: &[u8]) -> Result<u128> {
+    let mut sum = 0u128;
+    let mut index = 0;
+    loop {
+        match load_cell_type_hash(index, source) {
+            Ok(Some(type_hash)) => {
+                if type_hash.as_slice() != expected_type_hash {
+                    return Err(ScriptError::XudtTypeMismatch);
+                }
+                sum = sum.saturating_add(load_xudt_amount(index, source)?);
+                index += 1;
+            }
+            Ok(None) => {
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn ensure_no_group_xudt(source: Source) -> Result<()> {
+    let mut index = 0;
+    loop {
+        match load_cell_type_hash(index, source) {
+            Ok(Some(_)) => return Err(ScriptError::XudtTypeMismatch),
+            Ok(None) => index += 1,
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn sum_outputs_xudt_by_vault_lock(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    expected_funding_anchor: &[u8],
+    expected_type_hash: &[u8],
+) -> Result<u128> {
+    let mut sum = 0u128;
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, Source::Output) {
+            Ok(_) => {
+                if lock_script_matches_anchor(
+                    current_script,
+                    index,
+                    Source::Output,
+                    expected_funding_anchor,
+                )? && let Some(type_hash) =
+                    load_cell_type_hash(index, Source::Output).map_err(|_| ScriptError::Encoding)?
+                {
+                    if type_hash.as_slice() != expected_type_hash {
+                        return Err(ScriptError::XudtTypeMismatch);
+                    }
+                    sum = sum.saturating_add(load_xudt_amount(index, Source::Output)?);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(sum)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn ensure_no_outputs_xudt_by_vault_lock(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, Source::Output) {
+            Ok(_) => {
+                if lock_script_matches_anchor(
+                    current_script,
+                    index,
+                    Source::Output,
+                    expected_funding_anchor,
+                )? && load_cell_type_hash(index, Source::Output)
+                    .map_err(|_| ScriptError::Encoding)?
+                    .is_some()
+                {
+                    return Err(ScriptError::XudtTypeMismatch);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    Ok(())
 }

@@ -22,12 +22,14 @@ use morph_script_common::{
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
     FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
     FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
-    FACTORY_SIGNATURE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1,
-    FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
-    FactoryStateHeaderV1, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError,
-    StateHeaderV1, blake2b256, read_u128, verify_factory_merkle_update,
-    verify_factory_state_signatures, verify_reduced_factory_exit_update,
-    verify_reduced_factory_rights_update,
+    FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FACTORY_SPLICE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1,
+    FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1,
+    FactorySignatureWitnessV1, FactorySpliceWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
+    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV1, blake2b256, read_u128,
+    verify_factory_merkle_update, verify_factory_reduced_splice_update,
+    verify_factory_splice_update, verify_factory_state_signatures,
+    verify_reduced_factory_exit_update, verify_reduced_factory_rights_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -135,6 +137,12 @@ fn validate_participant_authorisation(
         let witness = FactoryReducedExitWitnessV1::parse(raw.as_ref())?;
         verify_reduced_factory_exit_update(old_header, header, &witness)?;
         validate_reduced_exit(header, &witness)
+    } else if raw.len() == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN {
+        let witness = FactoryReducedSpliceWitnessV1::parse(raw.as_ref())?;
+        verify_factory_reduced_splice_update(old_header, header, &witness)
+    } else if raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
+        let witness = FactorySpliceWitnessV1::parse(raw.as_ref())?;
+        verify_factory_splice_update(old_header, header, &witness)
     } else {
         let witness = FactoryLocalExitWitnessV1::parse(raw.as_ref())?;
         let signatures = witness.factory_signature()?;

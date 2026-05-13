@@ -56,6 +56,44 @@ pub struct StateHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StateHeaderV2 {
+    pub protocol_version: u16,
+    pub chain_id: Bytes32,
+    pub signature_scheme_id: u16,
+    pub channel_id: Bytes32,
+    pub funding_epoch: u64,
+    pub funding_anchor: Bytes32,
+    pub vault_set_commitment: Bytes32,
+    pub state_number: u64,
+    pub mode: Mode,
+    pub phase: Phase,
+    pub participants_commitment: Bytes32,
+    pub asset_registry_commitment: Bytes32,
+    pub settlement_descriptor_commitment: Bytes32,
+    pub descriptor_version: u16,
+    pub payload_commitment: Bytes32,
+    pub challenge_policy_commitment: Bytes32,
+    pub state_layout_version: u16,
+}
+
+impl StateHeaderV2 {
+    pub fn same_context_except_progress(&self, next: &Self) -> bool {
+        self.protocol_version == next.protocol_version
+            && self.chain_id == next.chain_id
+            && self.signature_scheme_id == next.signature_scheme_id
+            && self.channel_id == next.channel_id
+            && self.funding_epoch == next.funding_epoch
+            && self.funding_anchor == next.funding_anchor
+            && self.vault_set_commitment == next.vault_set_commitment
+            && self.mode == next.mode
+            && self.participants_commitment == next.participants_commitment
+            && self.asset_registry_commitment == next.asset_registry_commitment
+            && self.challenge_policy_commitment == next.challenge_policy_commitment
+            && self.state_layout_version == next.state_layout_version
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateCell {
     pub header: StateHeader,
     pub capacity: Capacity,
@@ -186,6 +224,85 @@ pub struct FactorySingleRightMerkleUpdate {
     pub authorised_participants: BTreeSet<Bytes32>,
     pub before: FactoryRightMerkleProof,
     pub after: FactoryRightMerkleProof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FactorySpliceKind {
+    In,
+    Out,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryVaultDescriptorV1 {
+    pub factory_id: Bytes32,
+    pub assets: Vec<VaultAssetAmount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryVaultDelta {
+    pub asset: VaultAsset,
+    pub old_amount: Amount,
+    pub new_amount: Amount,
+    pub external_input: Amount,
+    pub withdrawal: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactorySpliceHeader {
+    pub protocol_version: u16,
+    pub factory_id: Bytes32,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_state_root: Bytes32,
+    pub new_state_root: Bytes32,
+    pub old_access_manifest_root: Bytes32,
+    pub new_access_manifest_root: Bytes32,
+    pub kind: FactorySpliceKind,
+    pub vault_delta_commitment: Bytes32,
+    pub non_interference_digest: Bytes32,
+    pub participants_commitment: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactorySpliceTransition {
+    pub header: FactorySpliceHeader,
+    pub witness: SpliceWitness,
+    pub update: FactoryUpdate,
+    pub old_vault: FactoryVaultDescriptorV1,
+    pub new_vault: FactoryVaultDescriptorV1,
+    pub deltas: Vec<FactoryVaultDelta>,
+    pub asset_registry: AssetRegistry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryParticipantKey {
+    pub participant: Bytes32,
+    pub pubkey_sec1: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryParticipantSignature {
+    pub participant: Bytes32,
+    pub pubkey_sec1: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedSpliceWitness {
+    pub participant_threshold: u8,
+    pub participant_keys: Vec<FactoryParticipantKey>,
+    pub signatures: Vec<FactoryParticipantSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedSpliceTransition {
+    pub header: FactorySpliceHeader,
+    pub witness: FactoryReducedSpliceWitness,
+    pub update: FactorySingleRightMerkleUpdate,
+    pub old_vault: FactoryVaultDescriptorV1,
+    pub new_vault: FactoryVaultDescriptorV1,
+    pub deltas: Vec<FactoryVaultDelta>,
+    pub asset_registry: AssetRegistry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -344,6 +461,79 @@ pub struct VaultSpend {
     pub descriptor_outputs_match: bool,
     pub asset_registry: AssetRegistry,
     pub partition: PartitionedTransaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpliceKind {
+    In,
+    Out,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum VaultAsset {
+    Ckb,
+    Xudt(Bytes32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultAssetAmount {
+    pub asset: VaultAsset,
+    pub amount: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VaultDescriptorV2 {
+    pub funding_anchor: Bytes32,
+    pub assets: Vec<VaultAssetAmount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpliceAssetDelta {
+    pub asset: VaultAsset,
+    pub old_amount: Amount,
+    pub new_amount: Amount,
+    pub external_input: Amount,
+    pub withdrawal: Amount,
+    pub signed_fee: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpliceHeader {
+    pub protocol_version: u16,
+    pub chain_id: Bytes32,
+    pub signature_scheme_id: u16,
+    pub channel_id: Bytes32,
+    pub old_funding_anchor: Bytes32,
+    pub new_funding_anchor: Bytes32,
+    pub old_funding_epoch: u64,
+    pub new_funding_epoch: u64,
+    pub base_state_number: u64,
+    pub splice_number: u64,
+    pub kind: SpliceKind,
+    pub old_vault_commitment: Bytes32,
+    pub new_vault_commitment: Bytes32,
+    pub asset_delta_commitment: Bytes32,
+    pub participants_commitment: Bytes32,
+    pub challenge_policy_commitment: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpliceWitness {
+    pub threshold: u8,
+    pub signatures: Vec<ParticipantSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpliceTransition {
+    pub current_state: StateCell,
+    pub header: SpliceHeader,
+    pub witness: SpliceWitness,
+    pub old_vault: VaultDescriptorV2,
+    pub new_vault: VaultDescriptorV2,
+    pub deltas: Vec<SpliceAssetDelta>,
+    pub withdrawals: Vec<VaultAssetAmount>,
+    pub remaining_settlement: Vec<VaultAssetAmount>,
+    pub asset_registry: AssetRegistry,
 }
 
 pub fn bytes32(tag: u8) -> Bytes32 {

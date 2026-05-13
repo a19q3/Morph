@@ -1,9 +1,20 @@
 use blake2b_rs::Blake2bBuilder;
 
-use crate::types::{Bytes32, Mode, Phase, StateHeader};
+use crate::types::{
+    Bytes32, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptorV1,
+    Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, StateHeaderV2,
+    VaultAsset, VaultDescriptorV2,
+};
 
 pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
+pub const STATE_DOMAIN_V2: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V2";
 pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
+pub const SPLICE_HEADER_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_HEADER_V1";
+pub const SPLICE_DELTA_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_DELTA_V1";
+pub const VAULT_DESCRIPTOR_DOMAIN_V2: &[u8] = b"CKB_MORPH_VAULT_DESCRIPTOR_V2";
+pub const FACTORY_SPLICE_HEADER_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_SPLICE_HEADER_V1";
+pub const FACTORY_VAULT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DESCRIPTOR_V1";
+pub const FACTORY_VAULT_DELTA_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DELTA_V1";
 
 pub trait SigningBytes {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>);
@@ -63,6 +74,146 @@ impl StateHeader {
     }
 }
 
+impl SigningBytes for StateHeaderV2 {
+    fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(STATE_DOMAIN_V2);
+        out.extend_from_slice(&self.protocol_version.to_le_bytes());
+        out.extend_from_slice(&self.chain_id);
+        out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
+        out.extend_from_slice(&self.channel_id);
+        out.extend_from_slice(&self.funding_epoch.to_le_bytes());
+        out.extend_from_slice(&self.funding_anchor);
+        out.extend_from_slice(&self.vault_set_commitment);
+        out.extend_from_slice(&self.state_number.to_le_bytes());
+        out.push(self.mode.as_u8());
+        out.push(self.phase.as_u8());
+        out.extend_from_slice(&self.participants_commitment);
+        out.extend_from_slice(&self.asset_registry_commitment);
+        out.extend_from_slice(&self.settlement_descriptor_commitment);
+        out.extend_from_slice(&self.descriptor_version.to_le_bytes());
+        out.extend_from_slice(&self.payload_commitment);
+        out.extend_from_slice(&self.challenge_policy_commitment);
+        out.extend_from_slice(&self.state_layout_version.to_le_bytes());
+    }
+}
+
+impl StateHeaderV2 {
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let mut bytes = Vec::with_capacity(384);
+        self.encode_signing_bytes(&mut bytes);
+        blake2b256(&bytes)
+    }
+}
+
+impl SigningBytes for SpliceHeader {
+    fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(SPLICE_HEADER_DOMAIN_V1);
+        out.extend_from_slice(&self.protocol_version.to_le_bytes());
+        out.extend_from_slice(&self.chain_id);
+        out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
+        out.extend_from_slice(&self.channel_id);
+        out.extend_from_slice(&self.old_funding_anchor);
+        out.extend_from_slice(&self.new_funding_anchor);
+        out.extend_from_slice(&self.old_funding_epoch.to_le_bytes());
+        out.extend_from_slice(&self.new_funding_epoch.to_le_bytes());
+        out.extend_from_slice(&self.base_state_number.to_le_bytes());
+        out.extend_from_slice(&self.splice_number.to_le_bytes());
+        out.push(self.kind.as_u8());
+        out.extend_from_slice(&self.old_vault_commitment);
+        out.extend_from_slice(&self.new_vault_commitment);
+        out.extend_from_slice(&self.asset_delta_commitment);
+        out.extend_from_slice(&self.participants_commitment);
+        out.extend_from_slice(&self.challenge_policy_commitment);
+    }
+}
+
+impl SpliceHeader {
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let mut bytes = Vec::with_capacity(320);
+        self.encode_signing_bytes(&mut bytes);
+        blake2b256(&bytes)
+    }
+}
+
+impl SigningBytes for FactorySpliceHeader {
+    fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(FACTORY_SPLICE_HEADER_DOMAIN_V1);
+        out.extend_from_slice(&self.protocol_version.to_le_bytes());
+        out.extend_from_slice(&self.factory_id);
+        out.extend_from_slice(&self.old_update_number.to_le_bytes());
+        out.extend_from_slice(&self.new_update_number.to_le_bytes());
+        out.extend_from_slice(&self.old_state_root);
+        out.extend_from_slice(&self.new_state_root);
+        out.extend_from_slice(&self.old_access_manifest_root);
+        out.extend_from_slice(&self.new_access_manifest_root);
+        out.push(self.kind.as_u8());
+        out.extend_from_slice(&self.vault_delta_commitment);
+        out.extend_from_slice(&self.non_interference_digest);
+        out.extend_from_slice(&self.participants_commitment);
+    }
+}
+
+impl FactorySpliceHeader {
+    pub fn signing_digest(&self) -> [u8; 32] {
+        let mut bytes = Vec::with_capacity(320);
+        self.encode_signing_bytes(&mut bytes);
+        blake2b256(&bytes)
+    }
+}
+
+pub fn vault_descriptor_commitment_v2(descriptor: &VaultDescriptorV2) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(64 + descriptor.assets.len() * 49);
+    bytes.extend_from_slice(VAULT_DESCRIPTOR_DOMAIN_V2);
+    bytes.extend_from_slice(&descriptor.funding_anchor);
+    bytes.extend_from_slice(&(descriptor.assets.len() as u16).to_le_bytes());
+    for amount in &descriptor.assets {
+        encode_vault_asset(&amount.asset, &mut bytes);
+        bytes.extend_from_slice(&amount.amount.to_le_bytes());
+    }
+    blake2b256(&bytes)
+}
+
+pub fn factory_vault_descriptor_commitment_v1(descriptor: &FactoryVaultDescriptorV1) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(64 + descriptor.assets.len() * 49);
+    bytes.extend_from_slice(FACTORY_VAULT_DESCRIPTOR_DOMAIN_V1);
+    bytes.extend_from_slice(&descriptor.factory_id);
+    bytes.extend_from_slice(&(descriptor.assets.len() as u16).to_le_bytes());
+    for amount in &descriptor.assets {
+        encode_vault_asset(&amount.asset, &mut bytes);
+        bytes.extend_from_slice(&amount.amount.to_le_bytes());
+    }
+    blake2b256(&bytes)
+}
+
+pub fn splice_asset_delta_commitment_v1(deltas: &[SpliceAssetDelta]) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(64 + deltas.len() * 113);
+    bytes.extend_from_slice(SPLICE_DELTA_DOMAIN_V1);
+    bytes.extend_from_slice(&(deltas.len() as u16).to_le_bytes());
+    for delta in deltas {
+        encode_vault_asset(&delta.asset, &mut bytes);
+        bytes.extend_from_slice(&delta.old_amount.to_le_bytes());
+        bytes.extend_from_slice(&delta.new_amount.to_le_bytes());
+        bytes.extend_from_slice(&delta.external_input.to_le_bytes());
+        bytes.extend_from_slice(&delta.withdrawal.to_le_bytes());
+        bytes.extend_from_slice(&delta.signed_fee.to_le_bytes());
+    }
+    blake2b256(&bytes)
+}
+
+pub fn factory_vault_delta_commitment_v1(deltas: &[FactoryVaultDelta]) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(64 + deltas.len() * 97);
+    bytes.extend_from_slice(FACTORY_VAULT_DELTA_DOMAIN_V1);
+    bytes.extend_from_slice(&(deltas.len() as u16).to_le_bytes());
+    for delta in deltas {
+        encode_vault_asset(&delta.asset, &mut bytes);
+        bytes.extend_from_slice(&delta.old_amount.to_le_bytes());
+        bytes.extend_from_slice(&delta.new_amount.to_le_bytes());
+        bytes.extend_from_slice(&delta.external_input.to_le_bytes());
+        bytes.extend_from_slice(&delta.withdrawal.to_le_bytes());
+    }
+    blake2b256(&bytes)
+}
+
 impl Mode {
     pub const fn as_u8(self) -> u8 {
         match self {
@@ -79,6 +230,37 @@ impl Phase {
             Self::Active => 1,
             Self::Settling => 2,
             Self::Closed => 3,
+        }
+    }
+}
+
+impl SpliceKind {
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::In => 0,
+            Self::Out => 1,
+        }
+    }
+}
+
+impl FactorySpliceKind {
+    pub const fn as_u8(self) -> u8 {
+        match self {
+            Self::In => 0,
+            Self::Out => 1,
+        }
+    }
+}
+
+fn encode_vault_asset(asset: &VaultAsset, out: &mut Vec<u8>) {
+    match asset {
+        VaultAsset::Ckb => {
+            out.push(0);
+            out.extend_from_slice(&[0u8; 32]);
+        }
+        VaultAsset::Xudt(type_hash) => {
+            out.push(1);
+            out.extend_from_slice(type_hash);
         }
     }
 }

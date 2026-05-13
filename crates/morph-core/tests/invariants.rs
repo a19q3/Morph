@@ -24,6 +24,28 @@ fn header(n: u64, phase: Phase) -> StateHeader {
     }
 }
 
+fn header_v2(n: u64, phase: Phase, funding_epoch: u64) -> StateHeaderV2 {
+    StateHeaderV2 {
+        protocol_version: 1,
+        chain_id: bytes32(1),
+        signature_scheme_id: 1,
+        channel_id: bytes32(2),
+        funding_epoch,
+        funding_anchor: bytes32(3),
+        vault_set_commitment: bytes32(33),
+        state_number: n,
+        mode: Mode::BilateralPlain,
+        phase,
+        participants_commitment: bytes32(4),
+        asset_registry_commitment: bytes32(5),
+        settlement_descriptor_commitment: bytes32(6),
+        descriptor_version: 1,
+        payload_commitment: bytes32(7),
+        challenge_policy_commitment: bytes32(8),
+        state_layout_version: 2,
+    }
+}
+
 fn signing_key(byte: u8) -> SigningKey {
     SigningKey::from_slice(&[byte; 32]).unwrap()
 }
@@ -58,6 +80,79 @@ fn authorization_for(header: &mut StateHeader) -> StateAuthorization {
                 signature: signature(key, &digest),
             })
             .collect(),
+    }
+}
+
+fn splice_witness_for(header: &mut SpliceHeader) -> SpliceWitness {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
+    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let digest = header.signing_digest();
+    SpliceWitness {
+        threshold: 2,
+        signatures: entries
+            .iter()
+            .map(|(pubkey, key)| ParticipantSignature {
+                pubkey_sec1: pubkey.clone(),
+                signature: signature(key, &digest),
+            })
+            .collect(),
+    }
+}
+
+fn factory_splice_witness_for(header: &mut FactorySpliceHeader) -> SpliceWitness {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
+    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let digest = header.signing_digest();
+    SpliceWitness {
+        threshold: 2,
+        signatures: entries
+            .iter()
+            .map(|(pubkey, key)| ParticipantSignature {
+                pubkey_sec1: pubkey.clone(),
+                signature: signature(key, &digest),
+            })
+            .collect(),
+    }
+}
+
+fn factory_reduced_splice_witness_for(
+    header: &mut FactorySpliceHeader,
+) -> FactoryReducedSpliceWitness {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        (bytes32(1), pubkey(&key0), key0),
+        (bytes32(2), pubkey(&key1), key1),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let pubkeys = [entries[0].1.as_slice(), entries[1].1.as_slice()];
+    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let digest = header.signing_digest();
+    FactoryReducedSpliceWitness {
+        participant_threshold: 2,
+        participant_keys: entries
+            .iter()
+            .map(|(participant, pubkey, _)| FactoryParticipantKey {
+                participant: *participant,
+                pubkey_sec1: pubkey.clone(),
+            })
+            .collect(),
+        signatures: vec![FactoryParticipantSignature {
+            participant: bytes32(1),
+            pubkey_sec1: entries[0].1.clone(),
+            signature: signature(&entries[0].2, &digest),
+        }],
     }
 }
 
@@ -115,6 +210,158 @@ fn good_partition() -> PartitionedTransaction {
     }
 }
 
+fn vault_descriptor(
+    funding_anchor: Bytes32,
+    ckb: Amount,
+    xudt: Option<Amount>,
+) -> VaultDescriptorV2 {
+    let mut assets = vec![VaultAssetAmount {
+        asset: VaultAsset::Ckb,
+        amount: ckb,
+    }];
+    if let Some(amount) = xudt {
+        assets.push(VaultAssetAmount {
+            asset: VaultAsset::Xudt(bytes32(42)),
+            amount,
+        });
+    }
+    VaultDescriptorV2 {
+        funding_anchor,
+        assets,
+    }
+}
+
+fn splice_transition(kind: SpliceKind) -> SpliceTransition {
+    let mut current_state = state(5, Phase::Active);
+    let (old_vault, new_vault, deltas, withdrawals, remaining_settlement) = match kind {
+        SpliceKind::In => {
+            let old_vault = vault_descriptor(bytes32(3), 10_000, Some(50));
+            let new_vault = vault_descriptor(bytes32(33), 14_900, Some(60));
+            (
+                old_vault,
+                new_vault,
+                vec![
+                    SpliceAssetDelta {
+                        asset: VaultAsset::Ckb,
+                        old_amount: 10_000,
+                        new_amount: 14_900,
+                        external_input: 5_000,
+                        withdrawal: 0,
+                        signed_fee: 100,
+                    },
+                    SpliceAssetDelta {
+                        asset: VaultAsset::Xudt(bytes32(42)),
+                        old_amount: 50,
+                        new_amount: 60,
+                        external_input: 10,
+                        withdrawal: 0,
+                        signed_fee: 0,
+                    },
+                ],
+                Vec::new(),
+                vec![
+                    VaultAssetAmount {
+                        asset: VaultAsset::Ckb,
+                        amount: 12_000,
+                    },
+                    VaultAssetAmount {
+                        asset: VaultAsset::Xudt(bytes32(42)),
+                        amount: 60,
+                    },
+                ],
+            )
+        }
+        SpliceKind::Out => {
+            let old_vault = vault_descriptor(bytes32(3), 10_000, None);
+            let new_vault = vault_descriptor(bytes32(33), 7_000, None);
+            (
+                old_vault,
+                new_vault,
+                vec![SpliceAssetDelta {
+                    asset: VaultAsset::Ckb,
+                    old_amount: 10_000,
+                    new_amount: 7_000,
+                    external_input: 0,
+                    withdrawal: 3_000,
+                    signed_fee: 0,
+                }],
+                vec![VaultAssetAmount {
+                    asset: VaultAsset::Ckb,
+                    amount: 3_000,
+                }],
+                vec![VaultAssetAmount {
+                    asset: VaultAsset::Ckb,
+                    amount: 6_500,
+                }],
+            )
+        }
+    };
+    let mut header = SpliceHeader {
+        protocol_version: 1,
+        chain_id: current_state.header.chain_id,
+        signature_scheme_id: current_state.header.signature_scheme_id,
+        channel_id: current_state.header.channel_id,
+        old_funding_anchor: current_state.header.funding_anchor,
+        new_funding_anchor: bytes32(33),
+        old_funding_epoch: 0,
+        new_funding_epoch: 1,
+        base_state_number: current_state.header.state_number,
+        splice_number: 1,
+        kind,
+        old_vault_commitment: vault_descriptor_commitment_v2(&old_vault),
+        new_vault_commitment: vault_descriptor_commitment_v2(&new_vault),
+        asset_delta_commitment: splice_asset_delta_commitment_v1(&deltas),
+        participants_commitment: current_state.header.participants_commitment,
+        challenge_policy_commitment: current_state.header.challenge_policy_commitment,
+    };
+    let witness = splice_witness_for(&mut header);
+    current_state.header.participants_commitment = header.participants_commitment;
+    SpliceTransition {
+        current_state,
+        header,
+        witness,
+        old_vault,
+        new_vault,
+        deltas,
+        withdrawals,
+        remaining_settlement,
+        asset_registry: registry(),
+    }
+}
+
+fn xudt_splice_out_transition() -> SpliceTransition {
+    let mut splice = splice_transition(SpliceKind::Out);
+    splice.old_vault = vault_descriptor(bytes32(3), 10_000, Some(100));
+    splice.new_vault = vault_descriptor(bytes32(33), 10_000, Some(70));
+    splice.deltas = vec![SpliceAssetDelta {
+        asset: VaultAsset::Xudt(bytes32(42)),
+        old_amount: 100,
+        new_amount: 70,
+        external_input: 0,
+        withdrawal: 30,
+        signed_fee: 0,
+    }];
+    splice.withdrawals = vec![VaultAssetAmount {
+        asset: VaultAsset::Xudt(bytes32(42)),
+        amount: 30,
+    }];
+    splice.remaining_settlement = vec![
+        VaultAssetAmount {
+            asset: VaultAsset::Ckb,
+            amount: 8_000,
+        },
+        VaultAssetAmount {
+            asset: VaultAsset::Xudt(bytes32(42)),
+            amount: 70,
+        },
+    ];
+    splice.header.old_vault_commitment = vault_descriptor_commitment_v2(&splice.old_vault);
+    splice.header.new_vault_commitment = vault_descriptor_commitment_v2(&splice.new_vault);
+    splice.header.asset_delta_commitment = splice_asset_delta_commitment_v1(&splice.deltas);
+    splice.witness = splice_witness_for(&mut splice.header);
+    splice
+}
+
 fn factory_right(
     participant: u8,
     subchannel: u8,
@@ -151,6 +398,127 @@ fn factory_update() -> FactoryUpdate {
         before,
         touched_participants: BTreeSet::from([bytes32(1)]),
         authorised_participants: BTreeSet::from([bytes32(1)]),
+    }
+}
+
+fn factory_splice_transition(
+    kind: FactorySpliceKind,
+    asset: VaultAsset,
+) -> FactorySpliceTransition {
+    let participant = bytes32(1);
+    let subchannel = bytes32(10);
+    let asset_type = match asset {
+        VaultAsset::Ckb => None,
+        VaultAsset::Xudt(type_hash) => Some(type_hash),
+    };
+    let mut before = vec![
+        factory_right(1, 10, FactoryRightKind::Balance, None, 100),
+        factory_right(1, 10, FactoryRightKind::ReserveClaim, None, 50),
+        factory_right(1, 10, FactoryRightKind::Membership, None, 1),
+        factory_right(2, 10, FactoryRightKind::Balance, None, 100),
+        factory_right(2, 10, FactoryRightKind::ReserveClaim, None, 50),
+    ];
+    if asset_type.is_some() {
+        before[1].id.asset_type = asset_type;
+    }
+    let mut after = before.clone();
+    let claim = after
+        .iter_mut()
+        .find(|right| {
+            right.id.participant == participant
+                && right.id.subchannel == subchannel
+                && right.id.kind == FactoryRightKind::ReserveClaim
+                && right.id.asset_type == asset_type
+        })
+        .expect("reserve claim");
+
+    let (old_amount, new_amount, external_input, withdrawal) = match kind {
+        FactorySpliceKind::In => {
+            claim.quantity += 20;
+            (50, 70, 20, 0)
+        }
+        FactorySpliceKind::Out => {
+            claim.quantity -= 20;
+            (50, 30, 0, 20)
+        }
+    };
+    let update = FactoryUpdate {
+        before,
+        after,
+        touched_participants: BTreeSet::from([participant]),
+        authorised_participants: BTreeSet::from([participant]),
+    };
+    let old_vault = FactoryVaultDescriptorV1 {
+        factory_id: bytes32(90),
+        assets: vec![VaultAssetAmount {
+            asset: asset.clone(),
+            amount: old_amount,
+        }],
+    };
+    let new_vault = FactoryVaultDescriptorV1 {
+        factory_id: bytes32(90),
+        assets: vec![VaultAssetAmount {
+            asset: asset.clone(),
+            amount: new_amount,
+        }],
+    };
+    let deltas = vec![FactoryVaultDelta {
+        asset,
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    }];
+    let mut header = FactorySpliceHeader {
+        protocol_version: 1,
+        factory_id: bytes32(90),
+        old_update_number: 1,
+        new_update_number: 2,
+        old_state_root: factory_right_sparse_root(&update.before).unwrap(),
+        new_state_root: factory_right_sparse_root(&update.after).unwrap(),
+        old_access_manifest_root: bytes32(91),
+        new_access_manifest_root: bytes32(92),
+        kind,
+        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        non_interference_digest: blake2b256(b"factory splice fixture"),
+        participants_commitment: bytes32(0),
+    };
+    let witness = factory_splice_witness_for(&mut header);
+    FactorySpliceTransition {
+        header,
+        witness,
+        update,
+        old_vault,
+        new_vault,
+        deltas,
+        asset_registry: registry(),
+    }
+}
+
+fn factory_reduced_splice_transition(
+    kind: FactorySpliceKind,
+    asset: VaultAsset,
+) -> FactoryReducedSpliceTransition {
+    let full = factory_splice_transition(kind, asset);
+    let changed_id = full.update.before[1].id.clone();
+    let update = FactorySingleRightMerkleUpdate {
+        before_root: full.header.old_state_root,
+        after_root: full.header.new_state_root,
+        touched_participants: full.update.touched_participants.clone(),
+        authorised_participants: full.update.authorised_participants.clone(),
+        before: factory_right_sparse_proof(&full.update.before, &changed_id).unwrap(),
+        after: factory_right_sparse_proof(&full.update.after, &changed_id).unwrap(),
+    };
+    let mut header = full.header.clone();
+    let witness = factory_reduced_splice_witness_for(&mut header);
+    FactoryReducedSpliceTransition {
+        header,
+        witness,
+        update,
+        old_vault: full.old_vault,
+        new_vault: full.new_vault,
+        deltas: full.deltas,
+        asset_registry: full.asset_registry,
     }
 }
 
@@ -209,6 +577,234 @@ fn signing_digest_is_domain_separated_and_state_sensitive() {
 
     assert_ne!(h1.signing_digest(), h2.signing_digest());
     assert_eq!(h1.signing_digest(), h1.signing_digest());
+}
+
+#[test]
+fn state_header_v2_digest_binds_epoch_and_vault_set() {
+    let h1 = header_v2(1, Phase::Settling, 3);
+    let mut h2 = h1.clone();
+    h2.funding_epoch = 4;
+
+    let mut h3 = h1.clone();
+    h3.vault_set_commitment = bytes32(34);
+
+    assert_ne!(h1.signing_digest(), h2.signing_digest());
+    assert_ne!(h1.signing_digest(), h3.signing_digest());
+    assert_ne!(
+        h1.signing_digest(),
+        header(1, Phase::Settling).signing_digest()
+    );
+}
+
+#[test]
+fn state_header_v2_context_rejects_epoch_and_vault_set_changes() {
+    let old = header_v2(1, Phase::Active, 3);
+    let mut new = header_v2(9, Phase::Settling, 3);
+    new.payload_commitment = bytes32(9);
+    new.settlement_descriptor_commitment = bytes32(10);
+
+    assert!(old.same_context_except_progress(&new));
+
+    new.funding_epoch = 4;
+    assert!(!old.same_context_except_progress(&new));
+
+    let mut changed_vault_set = header_v2(9, Phase::Settling, 3);
+    changed_vault_set.vault_set_commitment = bytes32(34);
+    assert!(!old.same_context_except_progress(&changed_vault_set));
+}
+
+#[test]
+fn splice_signing_digest_is_state_and_vault_sensitive() {
+    let splice = splice_transition(SpliceKind::In);
+    let mut changed = splice.header.clone();
+    changed.new_funding_epoch += 1;
+
+    assert_ne!(splice.header.signing_digest(), changed.signing_digest());
+    assert_ne!(
+        splice.header.old_vault_commitment,
+        splice.header.new_vault_commitment
+    );
+}
+
+#[test]
+fn accepts_valid_splice_in_transition() {
+    let splice = splice_transition(SpliceKind::In);
+
+    validate_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn accepts_valid_splice_out_transition() {
+    let splice = splice_transition(SpliceKind::Out);
+
+    validate_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn accepts_valid_xudt_splice_out_transition() {
+    let splice = xudt_splice_out_transition();
+
+    validate_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn splice_rejects_stale_base_state_number() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.header.base_state_number -= 1;
+    let witness = splice_witness_for(&mut splice.header);
+    splice.witness = witness;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceBaseStateMismatch);
+}
+
+#[test]
+fn splice_rejects_wrong_channel_header() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.header.channel_id = bytes32(99);
+    let witness = splice_witness_for(&mut splice.header);
+    splice.witness = witness;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceHeaderContextMismatch);
+}
+
+#[test]
+fn splice_rejects_tampered_asset_delta_commitment() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.deltas[0].new_amount -= 1;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceDeltaCommitmentMismatch);
+}
+
+#[test]
+fn splice_rejects_same_supply_wrong_xudt_recipient_amount() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.deltas[1].new_amount = 59;
+    splice.header.asset_delta_commitment = splice_asset_delta_commitment_v1(&splice.deltas);
+    let witness = splice_witness_for(&mut splice.header);
+    splice.witness = witness;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceVaultDeltaMismatch);
+}
+
+#[test]
+fn splice_rejects_unsigned_withdrawal_output_change() {
+    let mut splice = splice_transition(SpliceKind::Out);
+    splice.withdrawals[0].amount = 2_999;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceWithdrawalMismatch);
+}
+
+#[test]
+fn splice_rejects_remaining_settlement_shortfall() {
+    let mut splice = splice_transition(SpliceKind::Out);
+    splice.remaining_settlement[0].amount = 7_001;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceRemainingValueInsufficient);
+}
+
+#[test]
+fn splice_rejects_unregistered_xudt_asset() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.asset_registry.xudt_types.clear();
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::UnregisteredXudtType);
+}
+
+#[test]
+fn splice_rejects_invalid_signature() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.witness.signatures[0].signature[0] ^= 1;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::InvalidSpliceSignatures);
+}
+
+#[test]
+fn accepts_valid_factory_splice_in_transition() {
+    let splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+
+    validate_factory_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn accepts_valid_factory_xudt_splice_out_transition() {
+    let splice = factory_splice_transition(FactorySpliceKind::Out, VaultAsset::Xudt(bytes32(42)));
+
+    validate_factory_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn factory_splice_rejects_reserve_claim_without_vault_input() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.deltas[0].external_input = 19;
+    splice.deltas[0].new_amount = 69;
+    splice.header.vault_delta_commitment = factory_vault_delta_commitment_v1(&splice.deltas);
+    splice.witness = factory_splice_witness_for(&mut splice.header);
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceVaultDeltaMismatch);
+}
+
+#[test]
+fn factory_splice_rejects_vault_release_without_rights_decrease() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::Out, VaultAsset::Ckb);
+    splice.update.after[1].quantity = splice.update.before[1].quantity;
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceReserveClaimInvalid);
+}
+
+#[test]
+fn factory_splice_rejects_xudt_type_mismatch() {
+    let mut splice =
+        factory_splice_transition(FactorySpliceKind::In, VaultAsset::Xudt(bytes32(42)));
+    splice.deltas[0].asset = VaultAsset::Xudt(bytes32(43));
+    splice.header.vault_delta_commitment = factory_vault_delta_commitment_v1(&splice.deltas);
+    splice.witness = factory_splice_witness_for(&mut splice.header);
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::UnregisteredXudtType);
+}
+
+#[test]
+fn factory_splice_rejects_invalid_signature() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness.signatures[0].signature[0] ^= 1;
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::InvalidFactorySpliceSignatures);
+}
+
+#[test]
+fn accepts_valid_reduced_factory_splice_transition() {
+    let splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+
+    validate_factory_reduced_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn reduced_factory_splice_rejects_merkle_sibling_tamper() {
+    let mut splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.update.before.siblings[0].hash[0] ^= 1;
+
+    let err = validate_factory_reduced_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMerkleProofInvalid);
+}
+
+#[test]
+fn reduced_factory_splice_rejects_unsigned_participant() {
+    let mut splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness.signatures[0].participant = bytes32(2);
+
+    let err = validate_factory_reduced_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceParticipantSetMismatch);
 }
 
 #[test]
@@ -318,6 +914,16 @@ fn accepts_valid_state_supersession() {
 }
 
 #[test]
+fn accepts_signed_settlement_descriptor_update() {
+    let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.header.settlement_descriptor_commitment = bytes32(77);
+    new.header.descriptor_version = 2;
+    ctx.authorization = authorization_for(&mut new.header);
+
+    validate_state_transition(&old, &new, &ctx).unwrap();
+}
+
+#[test]
 fn rejects_stale_or_equal_state_number() {
     let (old, new, ctx) = signed_cells(2, Phase::Settling, 2, Phase::Settling);
 
@@ -337,7 +943,7 @@ fn rejects_wrong_funding_anchor_reference() {
 #[test]
 fn rejects_changed_header_context() {
     let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
-    new.header.descriptor_version = 2;
+    new.header.challenge_policy_commitment = bytes32(99);
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::HeaderContextChanged);

@@ -1,10 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use thiserror::Error;
 
-use crate::hash::{blake2b256, participants_commitment};
+use crate::hash::{
+    blake2b256, factory_vault_delta_commitment_v1, participants_commitment,
+    splice_asset_delta_commitment_v1, vault_descriptor_commitment_v2,
+};
 use crate::types::*;
 
 const FACTORY_RIGHT_KEY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY_V1";
@@ -89,6 +92,46 @@ pub enum MorphError {
     FactoryMerkleProofInvalid,
     #[error("factory Merkle proof changes data outside the proved right")]
     FactoryMerkleProofInterference,
+    #[error("splice must be based on an active current state")]
+    SpliceStateNotActive,
+    #[error("splice header does not match the current channel context")]
+    SpliceHeaderContextMismatch,
+    #[error("splice base state number does not match the current state")]
+    SpliceBaseStateMismatch,
+    #[error("splice funding epoch must advance")]
+    SpliceEpochNotAdvanced,
+    #[error("splice vault commitment mismatch")]
+    SpliceVaultCommitmentMismatch,
+    #[error("splice asset delta commitment mismatch")]
+    SpliceDeltaCommitmentMismatch,
+    #[error("splice participant signatures are invalid")]
+    InvalidSpliceSignatures,
+    #[error("splice participant set does not match the header")]
+    SpliceParticipantSetMismatch,
+    #[error("splice asset delta is invalid")]
+    SpliceAssetDeltaInvalid,
+    #[error("splice vault descriptor does not match the signed asset deltas")]
+    SpliceVaultDeltaMismatch,
+    #[error("splice withdrawal descriptor does not match the signed deltas")]
+    SpliceWithdrawalMismatch,
+    #[error("post-splice vault does not cover the latest settlement descriptor")]
+    SpliceRemainingValueInsufficient,
+    #[error("factory splice update number must advance")]
+    FactorySpliceUpdateNotAdvanced,
+    #[error("factory splice header does not match the factory update")]
+    FactorySpliceHeaderMismatch,
+    #[error("factory splice participant signatures are invalid")]
+    InvalidFactorySpliceSignatures,
+    #[error("factory splice participant set does not match the header")]
+    FactorySpliceParticipantSetMismatch,
+    #[error("factory splice vault delta commitment mismatch")]
+    FactorySpliceDeltaCommitmentMismatch,
+    #[error("factory splice reserve claim delta is invalid")]
+    FactorySpliceReserveClaimInvalid,
+    #[error("factory splice vault delta does not match reserve claim delta")]
+    FactorySpliceVaultDeltaMismatch,
+    #[error("factory splice asset delta is invalid")]
+    FactorySpliceAssetDeltaInvalid,
 }
 
 pub type Result<T> = std::result::Result<T, MorphError>;
@@ -153,6 +196,126 @@ pub fn validate_state_authorization(
     }
     if valid < authorization.threshold as usize {
         return Err(MorphError::InvalidStateSignatures);
+    }
+    Ok(())
+}
+
+pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
+    let current = &splice.current_state.header;
+    if !splice.current_state.capacity_sufficient() {
+        return Err(MorphError::StateCapacityInsufficient);
+    }
+    if current.phase != Phase::Active {
+        return Err(MorphError::SpliceStateNotActive);
+    }
+    if splice.header.chain_id != current.chain_id
+        || splice.header.signature_scheme_id != current.signature_scheme_id
+        || splice.header.channel_id != current.channel_id
+        || splice.header.old_funding_anchor != current.funding_anchor
+        || splice.header.participants_commitment != current.participants_commitment
+        || splice.header.challenge_policy_commitment != current.challenge_policy_commitment
+    {
+        return Err(MorphError::SpliceHeaderContextMismatch);
+    }
+    if splice.header.base_state_number != current.state_number {
+        return Err(MorphError::SpliceBaseStateMismatch);
+    }
+    if splice.header.new_funding_epoch <= splice.header.old_funding_epoch
+        || splice.header.new_funding_anchor == splice.header.old_funding_anchor
+    {
+        return Err(MorphError::SpliceEpochNotAdvanced);
+    }
+    if splice.old_vault.funding_anchor != splice.header.old_funding_anchor
+        || splice.new_vault.funding_anchor != splice.header.new_funding_anchor
+        || vault_descriptor_commitment_v2(&splice.old_vault) != splice.header.old_vault_commitment
+        || vault_descriptor_commitment_v2(&splice.new_vault) != splice.header.new_vault_commitment
+    {
+        return Err(MorphError::SpliceVaultCommitmentMismatch);
+    }
+    if splice_asset_delta_commitment_v1(&splice.deltas) != splice.header.asset_delta_commitment {
+        return Err(MorphError::SpliceDeltaCommitmentMismatch);
+    }
+
+    validate_splice_authorization(&splice.header, &splice.witness)?;
+    validate_splice_assets_registered(splice)?;
+
+    let old_assets = vault_amount_map(&splice.old_vault.assets)?;
+    let new_assets = vault_amount_map(&splice.new_vault.assets)?;
+    let withdrawals = vault_amount_map(&splice.withdrawals)?;
+    let remaining_settlement = vault_amount_map(&splice.remaining_settlement)?;
+    let deltas = splice_delta_map(&splice.deltas)?;
+
+    for (asset, delta) in &deltas {
+        if old_assets.get(asset).copied().unwrap_or_default() != delta.old_amount
+            || new_assets.get(asset).copied().unwrap_or_default() != delta.new_amount
+        {
+            return Err(MorphError::SpliceVaultDeltaMismatch);
+        }
+        if withdrawals.get(asset).copied().unwrap_or_default() != delta.withdrawal {
+            return Err(MorphError::SpliceWithdrawalMismatch);
+        }
+        validate_splice_delta(splice.header.kind, delta)?;
+    }
+
+    for (asset, old_amount) in &old_assets {
+        if !deltas.contains_key(asset)
+            && new_assets.get(asset).copied().unwrap_or_default() != *old_amount
+        {
+            return Err(MorphError::SpliceVaultDeltaMismatch);
+        }
+    }
+    for (asset, new_amount) in &new_assets {
+        if !deltas.contains_key(asset)
+            && old_assets.get(asset).copied().unwrap_or_default() != *new_amount
+        {
+            return Err(MorphError::SpliceVaultDeltaMismatch);
+        }
+    }
+    for (asset, withdrawal) in &withdrawals {
+        if *withdrawal != 0 && !deltas.contains_key(asset) {
+            return Err(MorphError::SpliceWithdrawalMismatch);
+        }
+    }
+    for (asset, required) in &remaining_settlement {
+        if new_assets.get(asset).copied().unwrap_or_default() < *required {
+            return Err(MorphError::SpliceRemainingValueInsufficient);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_splice_authorization(header: &SpliceHeader, witness: &SpliceWitness) -> Result<()> {
+    if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
+        return Err(MorphError::SpliceParticipantSetMismatch);
+    }
+
+    let pubkeys: Vec<&[u8]> = witness
+        .signatures
+        .iter()
+        .map(|signature| signature.pubkey_sec1.as_slice())
+        .collect();
+    if !pubkeys.windows(2).all(|window| window[0] < window[1]) {
+        return Err(MorphError::SpliceParticipantSetMismatch);
+    }
+    if participants_commitment(witness.threshold, &pubkeys) != header.participants_commitment {
+        return Err(MorphError::SpliceParticipantSetMismatch);
+    }
+
+    let digest = header.signing_digest();
+    let mut valid = 0usize;
+    for participant_signature in &witness.signatures {
+        let verifying_key = VerifyingKey::from_sec1_bytes(&participant_signature.pubkey_sec1)
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        let signature = Signature::try_from(participant_signature.signature.as_slice())
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| MorphError::InvalidSpliceSignatures)?;
+        valid += 1;
+    }
+    if valid < witness.threshold as usize {
+        return Err(MorphError::InvalidSpliceSignatures);
     }
     Ok(())
 }
@@ -287,6 +450,276 @@ pub fn validate_factory_single_right_merkle_update(
         return Err(MorphError::FactoryMissingAuthorisation);
     }
 
+    Ok(())
+}
+
+pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> Result<()> {
+    validate_factory_non_interference(&splice.update)?;
+    validate_factory_splice_authorization(&splice.header, &splice.witness)?;
+    validate_factory_splice_assets_registered(splice)?;
+
+    if splice.header.new_update_number <= splice.header.old_update_number {
+        return Err(MorphError::FactorySpliceUpdateNotAdvanced);
+    }
+    if splice.old_vault.factory_id != splice.header.factory_id
+        || splice.new_vault.factory_id != splice.header.factory_id
+    {
+        return Err(MorphError::FactorySpliceHeaderMismatch);
+    }
+    if factory_vault_delta_commitment_v1(&splice.deltas) != splice.header.vault_delta_commitment {
+        return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
+    }
+    if splice.update.touched_participants.len() != 1
+        || splice.update.authorised_participants.len() != 1
+    {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+
+    let old_assets = vault_amount_map(&splice.old_vault.assets)?;
+    let new_assets = vault_amount_map(&splice.new_vault.assets)?;
+    let deltas = factory_delta_map(&splice.deltas)?;
+    let claim_delta = factory_splice_reserve_claim_delta(&splice.update)?;
+
+    if !splice
+        .update
+        .touched_participants
+        .contains(&claim_delta.participant)
+        || !splice
+            .update
+            .authorised_participants
+            .contains(&claim_delta.participant)
+    {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+
+    let claim_asset = reserve_claim_asset(&claim_delta.asset_type);
+    let Some(delta) = deltas.get(&claim_asset) else {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    };
+    if old_assets.get(&claim_asset).copied().unwrap_or_default() != delta.old_amount
+        || new_assets.get(&claim_asset).copied().unwrap_or_default() != delta.new_amount
+    {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    }
+
+    validate_factory_vault_delta(splice.header.kind, delta)?;
+    let claim_change = match splice.header.kind {
+        FactorySpliceKind::In => claim_delta
+            .new_quantity
+            .checked_sub(claim_delta.old_quantity)
+            .ok_or(MorphError::FactorySpliceReserveClaimInvalid)?,
+        FactorySpliceKind::Out => claim_delta
+            .old_quantity
+            .checked_sub(claim_delta.new_quantity)
+            .ok_or(MorphError::FactorySpliceReserveClaimInvalid)?,
+    };
+    let vault_change = match splice.header.kind {
+        FactorySpliceKind::In => delta.external_input,
+        FactorySpliceKind::Out => delta.withdrawal,
+    };
+    if claim_change == 0 || claim_change != vault_change {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    }
+
+    for (asset, old_amount) in &old_assets {
+        if !deltas.contains_key(asset)
+            && new_assets.get(asset).copied().unwrap_or_default() != *old_amount
+        {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+    for (asset, new_amount) in &new_assets {
+        if !deltas.contains_key(asset)
+            && old_assets.get(asset).copied().unwrap_or_default() != *new_amount
+        {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+    for asset in deltas.keys() {
+        if asset != &claim_asset {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_factory_reduced_splice_transition(
+    splice: &FactoryReducedSpliceTransition,
+) -> Result<()> {
+    validate_factory_single_right_merkle_update(&splice.update)?;
+    validate_factory_reduced_splice_authorization(&splice.header, &splice.update, &splice.witness)?;
+    validate_factory_reduced_splice_assets_registered(splice)?;
+
+    if splice.header.new_update_number <= splice.header.old_update_number {
+        return Err(MorphError::FactorySpliceUpdateNotAdvanced);
+    }
+    if splice.header.old_state_root != splice.update.before_root
+        || splice.header.new_state_root != splice.update.after_root
+    {
+        return Err(MorphError::FactorySpliceHeaderMismatch);
+    }
+    if splice.old_vault.factory_id != splice.header.factory_id
+        || splice.new_vault.factory_id != splice.header.factory_id
+    {
+        return Err(MorphError::FactorySpliceHeaderMismatch);
+    }
+    if factory_vault_delta_commitment_v1(&splice.deltas) != splice.header.vault_delta_commitment {
+        return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
+    }
+
+    let old_assets = vault_amount_map(&splice.old_vault.assets)?;
+    let new_assets = vault_amount_map(&splice.new_vault.assets)?;
+    let deltas = factory_delta_map(&splice.deltas)?;
+    let claim_delta = factory_reduced_splice_reserve_claim_delta(&splice.update)?;
+
+    let claim_asset = reserve_claim_asset(&claim_delta.asset_type);
+    let Some(delta) = deltas.get(&claim_asset) else {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    };
+    if old_assets.get(&claim_asset).copied().unwrap_or_default() != delta.old_amount
+        || new_assets.get(&claim_asset).copied().unwrap_or_default() != delta.new_amount
+    {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    }
+
+    validate_factory_vault_delta(splice.header.kind, delta)?;
+    let claim_change = match splice.header.kind {
+        FactorySpliceKind::In => claim_delta
+            .new_quantity
+            .checked_sub(claim_delta.old_quantity)
+            .ok_or(MorphError::FactorySpliceReserveClaimInvalid)?,
+        FactorySpliceKind::Out => claim_delta
+            .old_quantity
+            .checked_sub(claim_delta.new_quantity)
+            .ok_or(MorphError::FactorySpliceReserveClaimInvalid)?,
+    };
+    let vault_change = match splice.header.kind {
+        FactorySpliceKind::In => delta.external_input,
+        FactorySpliceKind::Out => delta.withdrawal,
+    };
+    if claim_change == 0 || claim_change != vault_change {
+        return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+    }
+
+    for (asset, old_amount) in &old_assets {
+        if !deltas.contains_key(asset)
+            && new_assets.get(asset).copied().unwrap_or_default() != *old_amount
+        {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+    for (asset, new_amount) in &new_assets {
+        if !deltas.contains_key(asset)
+            && old_assets.get(asset).copied().unwrap_or_default() != *new_amount
+        {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+    for asset in deltas.keys() {
+        if asset != &claim_asset {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_factory_reduced_splice_authorization(
+    header: &FactorySpliceHeader,
+    update: &FactorySingleRightMerkleUpdate,
+    witness: &FactoryReducedSpliceWitness,
+) -> Result<()> {
+    if witness.participant_threshold == 0
+        || witness.participant_keys.len() < witness.participant_threshold as usize
+        || witness.signatures.is_empty()
+    {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
+
+    let mut participants = BTreeSet::new();
+    let mut pubkeys = BTreeSet::new();
+    let mut key_map = BTreeMap::new();
+    for key in &witness.participant_keys {
+        if !participants.insert(key.participant) || !pubkeys.insert(key.pubkey_sec1.clone()) {
+            return Err(MorphError::FactorySpliceParticipantSetMismatch);
+        }
+        key_map.insert(key.participant, key.pubkey_sec1.as_slice());
+    }
+    let pubkey_refs = witness
+        .participant_keys
+        .iter()
+        .map(|key| key.pubkey_sec1.as_slice())
+        .collect::<Vec<_>>();
+    if participants_commitment(witness.participant_threshold, &pubkey_refs)
+        != header.participants_commitment
+    {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
+
+    let authorised = &update.authorised_participants;
+    if witness.signatures.len() != authorised.len() {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
+
+    let digest = header.signing_digest();
+    let mut signed_participants = BTreeSet::new();
+    for participant_signature in &witness.signatures {
+        if !authorised.contains(&participant_signature.participant)
+            || !signed_participants.insert(participant_signature.participant)
+        {
+            return Err(MorphError::FactorySpliceParticipantSetMismatch);
+        }
+        let Some(expected_pubkey) = key_map.get(&participant_signature.participant) else {
+            return Err(MorphError::FactorySpliceParticipantSetMismatch);
+        };
+        if *expected_pubkey != participant_signature.pubkey_sec1.as_slice() {
+            return Err(MorphError::FactorySpliceParticipantSetMismatch);
+        }
+        let verifying_key = VerifyingKey::from_sec1_bytes(&participant_signature.pubkey_sec1)
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        let signature = Signature::try_from(participant_signature.signature.as_slice())
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| MorphError::InvalidFactorySpliceSignatures)?;
+    }
+
+    Ok(())
+}
+
+pub fn validate_factory_splice_authorization(
+    header: &FactorySpliceHeader,
+    witness: &SpliceWitness,
+) -> Result<()> {
+    if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
+
+    let pubkeys: Vec<&[u8]> = witness
+        .signatures
+        .iter()
+        .map(|signature| signature.pubkey_sec1.as_slice())
+        .collect();
+    if participants_commitment(witness.threshold, &pubkeys) != header.participants_commitment {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
+
+    let digest = header.signing_digest();
+    let mut valid = 0usize;
+    for participant_signature in &witness.signatures {
+        let verifying_key = VerifyingKey::from_sec1_bytes(&participant_signature.pubkey_sec1)
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        let signature = Signature::try_from(participant_signature.signature.as_slice())
+            .map_err(|_| MorphError::ParticipantSignatureEncoding)?;
+        verifying_key
+            .verify_prehash(&digest, &signature)
+            .map_err(|_| MorphError::InvalidFactorySpliceSignatures)?;
+        valid += 1;
+    }
+    if valid < witness.threshold as usize {
+        return Err(MorphError::InvalidFactorySpliceSignatures);
+    }
     Ok(())
 }
 
@@ -602,6 +1035,297 @@ fn require_factory_right_change_authorised(
     Ok(())
 }
 
+fn validate_splice_delta(kind: SpliceKind, delta: &SpliceAssetDelta) -> Result<()> {
+    if matches!(delta.asset, VaultAsset::Xudt(_)) && delta.signed_fee != 0 {
+        return Err(MorphError::SpliceAssetDeltaInvalid);
+    }
+    let debits = checked_add3(delta.new_amount, delta.withdrawal, delta.signed_fee)?;
+    let credits = delta
+        .old_amount
+        .checked_add(delta.external_input)
+        .ok_or(MorphError::SpliceAssetDeltaInvalid)?;
+    if debits != credits {
+        return Err(MorphError::SpliceAssetDeltaInvalid);
+    }
+
+    match kind {
+        SpliceKind::In => {
+            if delta.external_input == 0
+                || delta.withdrawal != 0
+                || delta.new_amount <= delta.old_amount
+            {
+                return Err(MorphError::SpliceAssetDeltaInvalid);
+            }
+        }
+        SpliceKind::Out => {
+            if delta.external_input != 0 || delta.withdrawal == 0 || delta.signed_fee != 0 {
+                return Err(MorphError::SpliceAssetDeltaInvalid);
+            }
+            if delta.new_amount >= delta.old_amount {
+                return Err(MorphError::SpliceAssetDeltaInvalid);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_factory_vault_delta(kind: FactorySpliceKind, delta: &FactoryVaultDelta) -> Result<()> {
+    let debits = delta
+        .new_amount
+        .checked_add(delta.withdrawal)
+        .ok_or(MorphError::FactorySpliceAssetDeltaInvalid)?;
+    let credits = delta
+        .old_amount
+        .checked_add(delta.external_input)
+        .ok_or(MorphError::FactorySpliceAssetDeltaInvalid)?;
+    if debits != credits {
+        return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+    }
+
+    match kind {
+        FactorySpliceKind::In => {
+            if delta.external_input == 0
+                || delta.withdrawal != 0
+                || delta.new_amount <= delta.old_amount
+            {
+                return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+            }
+        }
+        FactorySpliceKind::Out => {
+            if delta.external_input != 0
+                || delta.withdrawal == 0
+                || delta.new_amount >= delta.old_amount
+            {
+                return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn checked_add3(left: Amount, middle: Amount, right: Amount) -> Result<Amount> {
+    left.checked_add(middle)
+        .and_then(|value| value.checked_add(right))
+        .ok_or(MorphError::SpliceAssetDeltaInvalid)
+}
+
+fn validate_splice_assets_registered(splice: &SpliceTransition) -> Result<()> {
+    for asset in splice
+        .old_vault
+        .assets
+        .iter()
+        .map(|amount| &amount.asset)
+        .chain(splice.new_vault.assets.iter().map(|amount| &amount.asset))
+        .chain(splice.deltas.iter().map(|delta| &delta.asset))
+        .chain(splice.withdrawals.iter().map(|amount| &amount.asset))
+        .chain(
+            splice
+                .remaining_settlement
+                .iter()
+                .map(|amount| &amount.asset),
+        )
+    {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    Ok(())
+}
+
+fn validate_factory_splice_assets_registered(splice: &FactorySpliceTransition) -> Result<()> {
+    for asset in splice.old_vault.assets.iter().map(|amount| &amount.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in splice.new_vault.assets.iter().map(|amount| &amount.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in splice.deltas.iter().map(|delta| &delta.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in splice
+        .update
+        .before
+        .iter()
+        .chain(splice.update.after.iter())
+        .map(|right| reserve_claim_asset(&right.id.asset_type))
+    {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(&type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    Ok(())
+}
+
+fn validate_factory_reduced_splice_assets_registered(
+    splice: &FactoryReducedSpliceTransition,
+) -> Result<()> {
+    for asset in splice.old_vault.assets.iter().map(|amount| &amount.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in splice.new_vault.assets.iter().map(|amount| &amount.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in splice.deltas.iter().map(|delta| &delta.asset) {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    for asset in [
+        reserve_claim_asset(&splice.update.before.right.id.asset_type),
+        reserve_claim_asset(&splice.update.after.right.id.asset_type),
+    ] {
+        if let VaultAsset::Xudt(type_hash) = asset
+            && !splice.asset_registry.contains(&type_hash)
+        {
+            return Err(MorphError::UnregisteredXudtType);
+        }
+    }
+    Ok(())
+}
+
+fn vault_amount_map(amounts: &[VaultAssetAmount]) -> Result<BTreeMap<VaultAsset, Amount>> {
+    let mut map = BTreeMap::new();
+    for amount in amounts {
+        if map.insert(amount.asset.clone(), amount.amount).is_some() {
+            return Err(MorphError::SpliceAssetDeltaInvalid);
+        }
+    }
+    Ok(map)
+}
+
+fn factory_delta_map(
+    deltas: &[FactoryVaultDelta],
+) -> Result<BTreeMap<VaultAsset, &FactoryVaultDelta>> {
+    let mut map = BTreeMap::new();
+    for delta in deltas {
+        if map.insert(delta.asset.clone(), delta).is_some() {
+            return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+        }
+    }
+    Ok(map)
+}
+
+fn splice_delta_map(
+    deltas: &[SpliceAssetDelta],
+) -> Result<BTreeMap<VaultAsset, &SpliceAssetDelta>> {
+    let mut map = BTreeMap::new();
+    for delta in deltas {
+        if map.insert(delta.asset.clone(), delta).is_some() {
+            return Err(MorphError::SpliceAssetDeltaInvalid);
+        }
+    }
+    Ok(map)
+}
+
+struct FactoryReserveClaimDelta {
+    participant: Bytes32,
+    asset_type: Option<Bytes32>,
+    old_quantity: Amount,
+    new_quantity: Amount,
+}
+
+fn factory_splice_reserve_claim_delta(update: &FactoryUpdate) -> Result<FactoryReserveClaimDelta> {
+    let before = factory_right_map(&update.before)?;
+    let after = factory_right_map(&update.after)?;
+    let mut found: Option<FactoryReserveClaimDelta> = None;
+
+    for (id, before_right) in &before {
+        let after_quantity = after
+            .get(id)
+            .map(|right| right.quantity)
+            .unwrap_or_default();
+        if after_quantity == before_right.quantity {
+            continue;
+        }
+        if id.kind != FactoryRightKind::ReserveClaim || found.is_some() {
+            return Err(MorphError::FactorySpliceReserveClaimInvalid);
+        }
+        found = Some(FactoryReserveClaimDelta {
+            participant: id.participant,
+            asset_type: id.asset_type,
+            old_quantity: before_right.quantity,
+            new_quantity: after_quantity,
+        });
+    }
+
+    for (id, after_right) in &after {
+        if before.contains_key(id) {
+            continue;
+        }
+        if id.kind != FactoryRightKind::ReserveClaim || found.is_some() {
+            return Err(MorphError::FactorySpliceReserveClaimInvalid);
+        }
+        found = Some(FactoryReserveClaimDelta {
+            participant: id.participant,
+            asset_type: id.asset_type,
+            old_quantity: 0,
+            new_quantity: after_right.quantity,
+        });
+    }
+
+    found.ok_or(MorphError::FactorySpliceReserveClaimInvalid)
+}
+
+fn factory_reduced_splice_reserve_claim_delta(
+    update: &FactorySingleRightMerkleUpdate,
+) -> Result<FactoryReserveClaimDelta> {
+    let before = &update.before.right;
+    let after = &update.after.right;
+    if before.id != after.id
+        || before.id.kind != FactoryRightKind::ReserveClaim
+        || before.quantity == after.quantity
+        || update.touched_participants.len() != 1
+        || update.authorised_participants.len() != 1
+        || !update.touched_participants.contains(&before.id.participant)
+        || !update
+            .authorised_participants
+            .contains(&before.id.participant)
+    {
+        return Err(MorphError::FactorySpliceReserveClaimInvalid);
+    }
+    Ok(FactoryReserveClaimDelta {
+        participant: before.id.participant,
+        asset_type: before.id.asset_type,
+        old_quantity: before.quantity,
+        new_quantity: after.quantity,
+    })
+}
+
+fn reserve_claim_asset(asset_type: &Option<Bytes32>) -> VaultAsset {
+    match asset_type {
+        Some(asset_type) => VaultAsset::Xudt(*asset_type),
+        None => VaultAsset::Ckb,
+    }
+}
+
 fn require_same_header_context(old: &StateHeader, new: &StateHeader) -> Result<()> {
     let same = old.protocol_version == new.protocol_version
         && old.chain_id == new.chain_id
@@ -611,8 +1335,6 @@ fn require_same_header_context(old: &StateHeader, new: &StateHeader) -> Result<(
         && old.mode == new.mode
         && old.participants_commitment == new.participants_commitment
         && old.asset_registry_commitment == new.asset_registry_commitment
-        && old.settlement_descriptor_commitment == new.settlement_descriptor_commitment
-        && old.descriptor_version == new.descriptor_version
         && old.challenge_policy_commitment == new.challenge_policy_commitment
         && old.state_layout_version == new.state_layout_version;
     if same {

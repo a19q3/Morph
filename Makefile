@@ -1,7 +1,7 @@
 CARGO ?= cargo
 CONTRACT_CARGO ?= $(CARGO)
 
-.PHONY: ci test lint fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke smoke-report smoke-assert smoke-assert-budget
+.PHONY: ci test lint fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e smoke-report smoke-assert smoke-assert-budget
 
 ci: fmt-check lint test fixture-checks contract-tests
 
@@ -38,6 +38,14 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-factory-merkle-update-package target/fixture-checks/factory-merkle-update.json --json > target/fixture-checks/factory-merkle-update-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-splice-fixture --kind splice-in > target/fixture-checks/factory-splice-in.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-splice-package target/fixture-checks/factory-splice-in.json --json > target/fixture-checks/factory-splice-in-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-splice-fixture --kind xudt-splice-out > target/fixture-checks/factory-xudt-splice-out.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-splice-package target/fixture-checks/factory-xudt-splice-out.json --json > target/fixture-checks/factory-xudt-splice-out-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind splice-in > target/fixture-checks/factory-reduced-splice-in.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-splice-package target/fixture-checks/factory-reduced-splice-in.json --json > target/fixture-checks/factory-reduced-splice-in-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind xudt-splice-out > target/fixture-checks/factory-reduced-xudt-splice-out.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-splice-package target/fixture-checks/factory-reduced-xudt-splice-out.json --json > target/fixture-checks/factory-reduced-xudt-splice-out-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
@@ -51,6 +59,9 @@ contract-tests: build-contracts
 
 devnet-smoke:
 	scripts/devnet-smoke.sh
+
+devnet-e2e:
+	scripts/devnet-e2e.sh
 
 smoke-report:
 	$(CARGO) run -p morph-cli -- devnet-smoke-report

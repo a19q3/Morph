@@ -6,13 +6,17 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | --- | --- |
 | One live State Cell controls the channel pointer | `accepts_valid_state_supersession`, `rejects_stale_or_equal_state_number` |
 | Funding anchor identity is canonical | `rejects_wrong_funding_anchor_reference`, `rejects_changed_header_context` |
+| StateHeaderV2 funding epoch and vault-set commitments are signed state semantics | `state_header_v2_digest_binds_epoch_and_vault_set`, `state_header_v2_context_rejects_epoch_and_vault_set_changes`, `state_header_v2_fields_are_fixed_width`, `verifies_splice_state_transition_v2_epoch_bridge` |
 | State numbers are strictly monotonic | `rejects_stale_or_equal_state_number` |
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
 | Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
 | Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch` |
+| Factory splice reserve claims match exact vault deltas | `accepts_valid_factory_splice_in_transition`, `accepts_valid_factory_xudt_splice_out_transition`, `factory_splice_rejects_reserve_claim_without_vault_input`, `factory_splice_rejects_vault_release_without_rights_decrease`, `factory_splice_rejects_xudt_type_mismatch`, `factory_splice_rejects_invalid_signature`, `validates_factory_splice_package`, `validates_factory_xudt_splice_out_package`, `writes_reads_and_validates_factory_splice_package`, `rejects_factory_splice_vault_delta_mismatch`, `factory_splice_witness_fields_are_fixed_width`, `verifies_factory_splice_update`, `rejects_factory_splice_vault_delta_tamper`, `factory_type_and_vault_accept_factory_splice_in`, `factory_vault_rejects_factory_splice_capacity_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
-| Vault outputs match the signed settlement descriptor | `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
+| Vault outputs match the signed settlement descriptor | `accepts_signed_settlement_descriptor_update`, `state_type_accepts_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
+| Splice transitions preserve StateCell/VaultCell funding epochs | `state_and_vault_accept_splice_in_bridge`, `state_and_vault_accept_splice_out_bridge`, `state_and_vault_reject_splice_wrong_channel_header`, `vault_lock_rejects_splice_new_vault_capacity_mismatch` |
+| Splice-out payouts stay participant-owned in V1 | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
 | Reserve and business CKB are not confused | `rejects_business_ckb_confusion` |
 | xUDT value is conserved by canonical type script | `rejects_xudt_type_mismatch`, `rejects_xudt_amount_mismatch` |
@@ -76,9 +80,17 @@ Implemented devnet-level checks:
 - foreground watchtower service mode with health-file output, stop-file
   shutdown, error backoff, and consecutive-error limits;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
-  submitted publication, and idle scans;
-- smoke assertions that require older-state detection and publication-submitted
-  watchtower alert evidence in the default smoke run;
+  submitted publication, confirmed splice detection, stale splice package
+  selection, splice-aware publication, and idle scans;
+- splice negative smoke coverage for stale funding epoch, wrong channel id,
+  wrong vault type, insufficient remaining vault value, tampered xUDT delta, and
+  signed-fee leakage rejections;
+- conservative splice V1 policy: quiescent base state number, explicit
+  funding-epoch semantics, fixed-width typed deltas, and participant-owned
+  splice-out payouts;
+- smoke assertions that require older-state detection, publication-submitted,
+  splice-detected, and stale splice-package watchtower alert evidence in the
+  default smoke run;
 - smoke assertions that require watchtower service and health-file evidence for
   the bounded stop-file path in the default smoke run;
 - node-reported cycle measurement and transaction size reporting, summarised by

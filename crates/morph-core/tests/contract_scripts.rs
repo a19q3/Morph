@@ -23,12 +23,23 @@ use morph_script_common::{
     FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_COUNT_V1,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
-    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
+    FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
     FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1, FACTORY_SIGNATURE_THRESHOLD_V1,
     FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
-    FACTORY_SPARSE_MERKLE_DEPTH_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryMerkleUpdateWitnessV1,
-    FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE,
-    PHASE_SETTLING, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN, StateHeaderV1, blake2b256,
+    FACTORY_SPARSE_MERKLE_DEPTH_V1, FACTORY_SPLICE_HEADER_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN,
+    FACTORY_SPLICE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN,
+    FACTORY_VAULT_ASSET_AMOUNT_V1_LEN, FACTORY_VAULT_DELTA_V1_LEN, FACTORY_VAULT_DELTAS_V1_LEN,
+    FACTORY_VAULT_DESCRIPTOR_V1_LEN, FactoryMerkleUpdateWitnessV1, FactoryReducedExitWitnessV1,
+    FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1, FactorySpliceHeaderV1,
+    FactoryStateHeaderV1, FactoryVaultDeltasV1, PHASE_ACTIVE, PHASE_SETTLING,
+    SPLICE_ASSET_DELTA_V1_LEN, SPLICE_ASSET_DELTAS_V1_LEN, SPLICE_HEADER_V1_LEN, SPLICE_KIND_IN_V1,
+    SPLICE_KIND_OUT_V1, SPLICE_SIGNATURE_COUNT_V1, SPLICE_SIGNATURE_THRESHOLD_V1,
+    SPLICE_SIGNATURE_WITNESS_V1_LEN, SPLICE_SIGNATURE_WITNESS_VERSION_V1,
+    SPLICE_STATE_TRANSITION_WITNESS_V1_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1,
+    SPLICE_VAULT_ASSET_AMOUNT_V2_LEN, SPLICE_VAULT_DESCRIPTOR_V2_LEN, SPONSOR_POLICY_V1_LEN,
+    STATE_HEADER_V1_LEN, SpliceAssetDeltasV1, SpliceHeaderV1, SpliceStateTransitionWitnessV1,
+    SpliceVaultDescriptorV2, StateHeaderV1, VAULT_ASSET_KIND_CKB_V1, blake2b256,
     factory_local_exit_digest_v1, factory_participants_commitment_v1, participants_commitment_v1,
     settlement_descriptor_commitment_v1,
 };
@@ -40,6 +51,7 @@ const CELL_CAPACITY: u64 = 100_000_000_000;
 const ALICE_CAPACITY: u64 = 60_000_000_000;
 const BOB_CAPACITY: u64 = 40_000_000_000;
 const FUNDING_ANCHOR: [u8; 32] = [4u8; 32];
+const NEW_FUNDING_ANCHOR: [u8; 32] = [10u8; 32];
 const FACTORY_ID: [u8; 32] = [7u8; 32];
 const ALICE_XUDT_AMOUNT: u128 = 70;
 const BOB_XUDT_AMOUNT: u128 = 30;
@@ -252,6 +264,322 @@ fn signed_state_pair(
     )
 }
 
+fn signed_state_pair_with_new_descriptor(
+    old_number: u64,
+    old_phase: u8,
+    new_number: u64,
+    new_phase: u8,
+    descriptor_commitment: [u8; BYTE32_LEN],
+    descriptor_version: u16,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+    let mut old = header_raw(old_number, old_phase);
+    old[110..142].copy_from_slice(&commitment);
+    let mut new = header_raw(new_number, new_phase);
+    new[110..142].copy_from_slice(&commitment);
+    new[174..206].copy_from_slice(&descriptor_commitment);
+    put_u16(&mut new, 206, descriptor_version);
+
+    let header = StateHeaderV1::parse(&new).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = BILATERAL_SIGNATURE_THRESHOLD_V1;
+    witness[3] = BILATERAL_SIGNATURE_COUNT_V1;
+    for (index, (pubkey, key)) in entries.iter().enumerate() {
+        let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
+        witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn signed_splice_out_bundle(
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    state_number: u64,
+    old_capacity: u64,
+    new_capacity: u64,
+) -> (Bytes, Bytes, Bytes) {
+    signed_splice_ckb_bundle(
+        SPLICE_KIND_OUT_V1,
+        old_anchor,
+        new_anchor,
+        state_number,
+        old_capacity,
+        new_capacity,
+        None,
+    )
+}
+
+fn signed_splice_in_bundle(
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    state_number: u64,
+    old_capacity: u64,
+    new_capacity: u64,
+) -> (Bytes, Bytes, Bytes) {
+    signed_splice_ckb_bundle(
+        SPLICE_KIND_IN_V1,
+        old_anchor,
+        new_anchor,
+        state_number,
+        old_capacity,
+        new_capacity,
+        None,
+    )
+}
+
+fn signed_splice_out_bundle_with_channel(
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    state_number: u64,
+    old_capacity: u64,
+    new_capacity: u64,
+    header_channel_id: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
+    signed_splice_ckb_bundle(
+        SPLICE_KIND_OUT_V1,
+        old_anchor,
+        new_anchor,
+        state_number,
+        old_capacity,
+        new_capacity,
+        Some(header_channel_id),
+    )
+}
+
+fn signed_splice_ckb_bundle(
+    kind: u8,
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    state_number: u64,
+    old_capacity: u64,
+    new_capacity: u64,
+    header_channel_id: Option<[u8; BYTE32_LEN]>,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let participants = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+
+    let old_asset = splice_vault_asset_bytes(
+        VAULT_ASSET_KIND_CKB_V1,
+        &[0u8; BYTE32_LEN],
+        old_capacity as u128,
+    );
+    let old_vault_raw = splice_vault_descriptor_bytes(old_anchor, 1, &old_asset, None);
+    let old_vault = SpliceVaultDescriptorV2::parse(&old_vault_raw).unwrap();
+
+    let new_asset = splice_vault_asset_bytes(
+        VAULT_ASSET_KIND_CKB_V1,
+        &[0u8; BYTE32_LEN],
+        new_capacity as u128,
+    );
+    let new_vault_raw = splice_vault_descriptor_bytes(new_anchor, 1, &new_asset, None);
+    let new_vault = SpliceVaultDescriptorV2::parse(&new_vault_raw).unwrap();
+
+    let (external_input, withdrawal) = match kind {
+        SPLICE_KIND_IN_V1 => (new_capacity - old_capacity, 0),
+        SPLICE_KIND_OUT_V1 => (0, old_capacity - new_capacity),
+        _ => unreachable!("test fixture only builds known splice kinds"),
+    };
+    let delta = splice_asset_delta_bytes(
+        VAULT_ASSET_KIND_CKB_V1,
+        &[0u8; BYTE32_LEN],
+        old_capacity as u128,
+        new_capacity as u128,
+        external_input as u128,
+        withdrawal as u128,
+        0,
+    );
+    let deltas_raw = splice_asset_deltas_bytes(1, &delta, None);
+    let deltas = SpliceAssetDeltasV1::parse(&deltas_raw).unwrap();
+
+    let mut splice_header_raw = splice_header_bytes(
+        kind,
+        old_anchor,
+        new_anchor,
+        state_number,
+        &participants,
+        (
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+        ),
+    );
+    if let Some(channel_id) = header_channel_id {
+        splice_header_raw[36..68].copy_from_slice(&channel_id);
+    }
+    let splice_header = SpliceHeaderV1::parse(&splice_header_raw).unwrap();
+    let signature_witness =
+        signed_splice_signature_witness(&entries, &splice_header.signing_digest());
+    let bundle_raw = splice_state_transition_witness_bytes(
+        &splice_header_raw,
+        &signature_witness,
+        &old_vault_raw,
+        &new_vault_raw,
+        &deltas_raw,
+    );
+    SpliceStateTransitionWitnessV1::parse(&bundle_raw).unwrap();
+
+    let mut old_state = header_raw_with_anchor(state_number, PHASE_ACTIVE, old_anchor);
+    old_state[110..142].copy_from_slice(&participants);
+    let mut new_state = header_raw_with_anchor(state_number, PHASE_ACTIVE, new_anchor);
+    new_state[110..142].copy_from_slice(&participants);
+
+    (
+        old_state.to_vec().into(),
+        new_state.to_vec().into(),
+        bundle_raw.to_vec().into(),
+    )
+}
+
+fn signed_splice_signature_witness(
+    entries: &[([u8; COMPRESSED_SECP256K1_PUBKEY_LEN], SigningKey); 2],
+    digest: &[u8; BYTE32_LEN],
+) -> [u8; SPLICE_SIGNATURE_WITNESS_V1_LEN] {
+    let mut witness = [0u8; SPLICE_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, SPLICE_SIGNATURE_WITNESS_VERSION_V1);
+    witness[2] = SPLICE_SIGNATURE_THRESHOLD_V1;
+    witness[3] = SPLICE_SIGNATURE_COUNT_V1;
+    for (index, (pubkey, key)) in entries.iter().enumerate() {
+        let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
+        witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, digest));
+    }
+    witness
+}
+
+fn splice_header_bytes(
+    kind: u8,
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    base_state_number: u64,
+    participants: &[u8; BYTE32_LEN],
+    commitments: (&[u8; BYTE32_LEN], &[u8; BYTE32_LEN], &[u8; BYTE32_LEN]),
+) -> [u8; SPLICE_HEADER_V1_LEN] {
+    let mut raw = [0u8; SPLICE_HEADER_V1_LEN];
+    put_u16(&mut raw, 0, 1);
+    raw[2..34].fill(2);
+    put_u16(&mut raw, 34, 1);
+    raw[36..68].fill(3);
+    raw[68..100].copy_from_slice(&old_anchor);
+    raw[100..132].copy_from_slice(&new_anchor);
+    put_u64(&mut raw, 132, 0);
+    put_u64(&mut raw, 140, 1);
+    put_u64(&mut raw, 148, base_state_number);
+    put_u64(&mut raw, 156, 1);
+    raw[164] = kind;
+    raw[165..197].copy_from_slice(commitments.0);
+    raw[197..229].copy_from_slice(commitments.1);
+    raw[229..261].copy_from_slice(commitments.2);
+    raw[261..293].copy_from_slice(participants);
+    raw[293..325].fill(9);
+    raw
+}
+
+fn splice_vault_asset_bytes(
+    kind: u8,
+    type_hash: &[u8; BYTE32_LEN],
+    amount: u128,
+) -> [u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN] {
+    let mut raw = [0u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN];
+    raw[0] = kind;
+    raw[1..33].copy_from_slice(type_hash);
+    put_u128(&mut raw, 33, amount);
+    raw
+}
+
+fn splice_vault_descriptor_bytes(
+    funding_anchor: [u8; BYTE32_LEN],
+    count: u16,
+    asset_0: &[u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN],
+    asset_1: Option<&[u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN]>,
+) -> [u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN] {
+    let mut raw = [0u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN];
+    raw[0..32].copy_from_slice(&funding_anchor);
+    put_u16(&mut raw, 32, count);
+    raw[34..34 + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN].copy_from_slice(asset_0);
+    if let Some(asset) = asset_1 {
+        let offset = 34 + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN;
+        raw[offset..offset + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN].copy_from_slice(asset);
+    }
+    raw
+}
+
+fn splice_asset_delta_bytes(
+    kind: u8,
+    type_hash: &[u8; BYTE32_LEN],
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+    signed_fee: u128,
+) -> [u8; SPLICE_ASSET_DELTA_V1_LEN] {
+    let mut raw = [0u8; SPLICE_ASSET_DELTA_V1_LEN];
+    raw[0] = kind;
+    raw[1..33].copy_from_slice(type_hash);
+    put_u128(&mut raw, 33, old_amount);
+    put_u128(&mut raw, 49, new_amount);
+    put_u128(&mut raw, 65, external_input);
+    put_u128(&mut raw, 81, withdrawal);
+    put_u128(&mut raw, 97, signed_fee);
+    raw
+}
+
+fn splice_asset_deltas_bytes(
+    count: u16,
+    delta_0: &[u8; SPLICE_ASSET_DELTA_V1_LEN],
+    delta_1: Option<&[u8; SPLICE_ASSET_DELTA_V1_LEN]>,
+) -> [u8; SPLICE_ASSET_DELTAS_V1_LEN] {
+    let mut raw = [0u8; SPLICE_ASSET_DELTAS_V1_LEN];
+    put_u16(&mut raw, 0, count);
+    raw[2..2 + SPLICE_ASSET_DELTA_V1_LEN].copy_from_slice(delta_0);
+    if let Some(delta) = delta_1 {
+        let offset = 2 + SPLICE_ASSET_DELTA_V1_LEN;
+        raw[offset..offset + SPLICE_ASSET_DELTA_V1_LEN].copy_from_slice(delta);
+    }
+    raw
+}
+
+fn splice_state_transition_witness_bytes(
+    header: &[u8; SPLICE_HEADER_V1_LEN],
+    signatures: &[u8; SPLICE_SIGNATURE_WITNESS_V1_LEN],
+    old_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN],
+    new_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN],
+    deltas: &[u8; SPLICE_ASSET_DELTAS_V1_LEN],
+) -> [u8; SPLICE_STATE_TRANSITION_WITNESS_V1_LEN] {
+    let mut raw = [0u8; SPLICE_STATE_TRANSITION_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    raw[offset..offset + SPLICE_HEADER_V1_LEN].copy_from_slice(header);
+    offset += SPLICE_HEADER_V1_LEN;
+    raw[offset..offset + SPLICE_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(signatures);
+    offset += SPLICE_SIGNATURE_WITNESS_V1_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(old_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(new_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
+    raw[offset..offset + SPLICE_ASSET_DELTAS_V1_LEN].copy_from_slice(deltas);
+    raw
+}
+
 fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -298,6 +626,305 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
         new.to_vec().into(),
         witness.to_vec().into(),
     )
+}
+
+fn factory_splice_signature_witness(
+    key0: &SigningKey,
+    key1: &SigningKey,
+    digest: &[u8; 32],
+) -> [u8; FACTORY_SIGNATURE_WITNESS_V1_LEN] {
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(key0), signature(key0, digest)),
+        ([2u8; BYTE32_LEN], pubkey(key1), signature(key1, digest)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, pubkey, sig)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(sig);
+    }
+    raw
+}
+
+fn factory_vault_asset_bytes(kind: u8, amount: u128) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN];
+    raw[0] = kind;
+    put_u128(&mut raw, 1 + BYTE32_LEN, amount);
+    raw
+}
+
+fn factory_vault_descriptor_bytes(
+    factory_id: [u8; BYTE32_LEN],
+    asset: &[u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN],
+) -> [u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN];
+    raw[0..BYTE32_LEN].copy_from_slice(&factory_id);
+    put_u16(&mut raw, BYTE32_LEN, 1);
+    raw[BYTE32_LEN + 2..BYTE32_LEN + 2 + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN].copy_from_slice(asset);
+    raw
+}
+
+fn factory_vault_delta_bytes(
+    kind: u8,
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+) -> [u8; FACTORY_VAULT_DELTA_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTA_V1_LEN];
+    raw[0] = kind;
+    put_u128(&mut raw, 1 + BYTE32_LEN, old_amount);
+    put_u128(&mut raw, 1 + BYTE32_LEN + 16, new_amount);
+    put_u128(&mut raw, 1 + BYTE32_LEN + 32, external_input);
+    put_u128(&mut raw, 1 + BYTE32_LEN + 48, withdrawal);
+    raw
+}
+
+fn factory_vault_deltas_bytes(
+    delta: &[u8; FACTORY_VAULT_DELTA_V1_LEN],
+) -> [u8; FACTORY_VAULT_DELTAS_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTAS_V1_LEN];
+    put_u16(&mut raw, 0, 1);
+    raw[2..2 + FACTORY_VAULT_DELTA_V1_LEN].copy_from_slice(delta);
+    raw
+}
+
+fn signed_factory_splice_pair(
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let factory_participants = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let splice_participants =
+        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+
+    let mut old = factory_header_raw(1);
+    old[108..140].copy_from_slice(&factory_participants);
+    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let mut new = factory_header_raw(2);
+    new[76..108].fill(9);
+    new[108..140].copy_from_slice(&factory_participants);
+    new[140..172].fill(10);
+    new[172..204].fill(11);
+    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+
+    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, old_amount);
+    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, new_amount);
+    let old_vault = factory_vault_descriptor_bytes(FACTORY_ID, &old_asset);
+    let new_vault = factory_vault_descriptor_bytes(FACTORY_ID, &new_asset);
+    let delta = factory_vault_delta_bytes(
+        VAULT_ASSET_KIND_CKB_V1,
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    );
+    let deltas = factory_vault_deltas_bytes(&delta);
+    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+        .unwrap()
+        .commitment()
+        .unwrap();
+
+    let kind = if external_input > 0 {
+        SPLICE_KIND_IN_V1
+    } else {
+        SPLICE_KIND_OUT_V1
+    };
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    put_u16(&mut header, 0, 1);
+    header[2..34].copy_from_slice(old_header.factory_id());
+    put_u64(&mut header, 34, old_header.update_number());
+    put_u64(&mut header, 42, new_header.update_number());
+    header[50..82].copy_from_slice(old_header.state_root());
+    header[82..114].copy_from_slice(new_header.state_root());
+    header[114..146].copy_from_slice(old_header.access_manifest_root());
+    header[146..178].copy_from_slice(new_header.access_manifest_root());
+    header[178] = kind;
+    header[179..211].copy_from_slice(&vault_delta_commitment);
+    header[211..243].copy_from_slice(new_header.non_interference_digest());
+    header[243..275].copy_from_slice(&splice_participants);
+    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    let signatures =
+        factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
+
+    let mut witness = [0u8; FACTORY_SPLICE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_SPLICE_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_V1_LEN;
+    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
+    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn signed_factory_reduced_splice_pair(
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let factory_participants = factory_participants_commitment_v1(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let splice_participants =
+        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+
+    let mut before = large_factory_rights();
+    let mut after = before.clone();
+    let changed_index = before
+        .iter()
+        .position(|right| {
+            right.id.participant == [1u8; BYTE32_LEN]
+                && right.id.subchannel == [10u8; BYTE32_LEN]
+                && right.id.kind == FactoryRightKind::ReserveClaim
+                && right.id.asset_type.is_none()
+        })
+        .expect("fixture reserve claim");
+    before[changed_index].quantity = old_amount;
+    after[changed_index].quantity = new_amount;
+    let changed_id = before[changed_index].id.clone();
+    let before_root = factory_right_sparse_root(&before).unwrap();
+    let after_root = factory_right_sparse_root(&after).unwrap();
+    let before_proof = factory_right_sparse_proof(&before, &changed_id).unwrap();
+    let after_proof = factory_right_sparse_proof(&after, &changed_id).unwrap();
+    assert_eq!(before_proof.siblings, after_proof.siblings);
+
+    let (mut merkle_witness, _, _) = merkle_update_witness_raw(
+        &before_proof.right,
+        &after_proof.right,
+        &before_proof.siblings,
+    );
+    let merkle = FactoryMerkleUpdateWitnessV1::parse(&merkle_witness).unwrap();
+    assert_eq!(merkle.rights_root(false).unwrap(), before_root);
+    assert_eq!(merkle.rights_root(true).unwrap(), after_root);
+
+    let mut old = factory_header_raw(1);
+    old[76..108].copy_from_slice(&before_root);
+    old[108..140].copy_from_slice(&factory_participants);
+    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+
+    let mut new = factory_header_raw(2);
+    new[76..108].copy_from_slice(&after_root);
+    new[108..140].copy_from_slice(&factory_participants);
+    new[140..172].copy_from_slice(old_header.access_manifest_root());
+    let preliminary_new = FactoryStateHeaderV1::parse(&new).unwrap();
+    let digest = merkle
+        .non_interference_digest(&old_header, &preliminary_new)
+        .unwrap();
+    new[172..204].copy_from_slice(&digest);
+    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+
+    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, old_amount);
+    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, new_amount);
+    let old_vault = factory_vault_descriptor_bytes(FACTORY_ID, &old_asset);
+    let new_vault = factory_vault_descriptor_bytes(FACTORY_ID, &new_asset);
+    let delta = factory_vault_delta_bytes(
+        VAULT_ASSET_KIND_CKB_V1,
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    );
+    let deltas = factory_vault_deltas_bytes(&delta);
+    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+        .unwrap()
+        .commitment()
+        .unwrap();
+
+    let kind = if external_input > 0 {
+        SPLICE_KIND_IN_V1
+    } else {
+        SPLICE_KIND_OUT_V1
+    };
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    put_u16(&mut header, 0, 1);
+    header[2..34].copy_from_slice(old_header.factory_id());
+    put_u64(&mut header, 34, old_header.update_number());
+    put_u64(&mut header, 42, new_header.update_number());
+    header[50..82].copy_from_slice(old_header.state_root());
+    header[82..114].copy_from_slice(new_header.state_root());
+    header[114..146].copy_from_slice(old_header.access_manifest_root());
+    header[146..178].copy_from_slice(new_header.access_manifest_root());
+    header[178] = kind;
+    header[179..211].copy_from_slice(&vault_delta_commitment);
+    header[211..243].copy_from_slice(new_header.non_interference_digest());
+    header[243..275].copy_from_slice(&splice_participants);
+    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    sign_merkle_update_witness(
+        &mut merkle_witness,
+        [1u8; BYTE32_LEN],
+        &key0,
+        &splice_header.signing_digest(),
+    );
+
+    let mut witness = [0u8; FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN];
+    put_u16(&mut witness, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_V1_LEN;
+    witness[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN].copy_from_slice(&merkle_witness);
+    offset += FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    FactoryReducedSpliceWitnessV1::parse(&witness).unwrap();
+
+    (
+        old.to_vec().into(),
+        new.to_vec().into(),
+        witness.to_vec().into(),
+    )
+}
+
+fn reduced_splice_merkle_offset() -> usize {
+    2 + FACTORY_SPLICE_HEADER_V1_LEN
 }
 
 fn reduced_participant_offset(index: usize) -> usize {
@@ -1088,6 +1715,13 @@ enum FactoryXudtExitTamper {
     ChildTypeMismatchWithAuthorisedMint,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReducedFactorySpliceTamper {
+    None,
+    VaultCapacity,
+    SparseMerkleSibling,
+}
+
 fn sponsor_policy(
     change_lock_hash: &[u8; 32],
     publication_state_type_hash: &[u8; 32],
@@ -1362,6 +1996,51 @@ fn factory_type_accepts_signed_factory_update() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn factory_type_and_vault_accept_factory_splice_in() {
+    let (context, tx) = factory_splice_ckb_tx(false);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_vault_rejects_factory_splice_capacity_mismatch() {
+    let (context, tx) = factory_splice_ckb_tx(true);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_reduced_factory_splice_in() {
+    let (context, tx) = factory_reduced_splice_ckb_tx(ReducedFactorySpliceTamper::None);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("reduced factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_factory_splice_sparse_merkle_tamper() {
+    let (context, tx) =
+        factory_reduced_splice_ckb_tx(ReducedFactorySpliceTamper::SparseMerkleSibling);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_vault_rejects_reduced_factory_splice_capacity_mismatch() {
+    let (context, tx) = factory_reduced_splice_ckb_tx(ReducedFactorySpliceTamper::VaultCapacity);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_accepts_reduced_rights_update() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
@@ -1583,6 +2262,201 @@ fn factory_type_rejects_invalid_participant_signature() {
     let tx = context.complete_tx(tx);
 
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let external_input_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+
+    let old_reserve = 200_000_000_000u64;
+    let splice_amount = 20_000_000_000u64;
+    let new_reserve = old_reserve + splice_amount;
+    let (old_factory_data, new_factory_data, splice_witness) = signed_factory_splice_pair(
+        old_reserve as u128,
+        new_reserve as u128,
+        splice_amount as u128,
+        0,
+    );
+
+    let factory_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data,
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(factory_input_out_point)
+        .build();
+    let factory_vault_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(old_reserve)
+            .lock(factory_vault_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let reserve_input = CellInput::new_builder()
+        .previous_output(factory_vault_input_out_point)
+        .build();
+    let external_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(external_input_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let output_reserve = if tamper_capacity {
+        new_reserve - 1
+    } else {
+        new_reserve
+    };
+    let change_capacity = CELL_CAPACITY - splice_amount;
+    let tx = TransactionBuilder::default()
+        .input(factory_input)
+        .input(reserve_input)
+        .input(
+            CellInput::new_builder()
+                .previous_output(external_input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(output_reserve)
+                .lock(factory_vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(change_capacity)
+                .lock(external_input_lock)
+                .build(),
+        )
+        .output_data(new_factory_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness.clone()))
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let external_input_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+
+    let old_reserve = 200_000_000_000u64;
+    let splice_amount = 20_000_000_000u64;
+    let new_reserve = old_reserve + splice_amount;
+    let (old_factory_data, new_factory_data, splice_witness) = signed_factory_reduced_splice_pair(
+        old_reserve as u128,
+        new_reserve as u128,
+        splice_amount as u128,
+        0,
+    );
+    let mut splice_witness = splice_witness.to_vec();
+    if tamper == ReducedFactorySpliceTamper::SparseMerkleSibling {
+        splice_witness[reduced_splice_merkle_offset() + merkle_sibling_offset(42)] ^= 1;
+    }
+    let splice_witness: Bytes = splice_witness.into();
+
+    let factory_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data,
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(factory_input_out_point)
+        .build();
+    let factory_vault_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(old_reserve)
+            .lock(factory_vault_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let reserve_input = CellInput::new_builder()
+        .previous_output(factory_vault_input_out_point)
+        .build();
+    let external_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(external_input_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+
+    let output_reserve = if tamper == ReducedFactorySpliceTamper::VaultCapacity {
+        new_reserve - 1
+    } else {
+        new_reserve
+    };
+    let change_capacity = CELL_CAPACITY - splice_amount;
+    let tx = TransactionBuilder::default()
+        .input(factory_input)
+        .input(reserve_input)
+        .input(
+            CellInput::new_builder()
+                .previous_output(external_input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(output_reserve)
+                .lock(factory_vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(change_capacity)
+                .lock(external_input_lock)
+                .build(),
+        )
+        .output_data(new_factory_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness.clone()))
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -2593,6 +3467,53 @@ fn state_type_accepts_newer_settling_state() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn state_type_accepts_signed_descriptor_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let descriptor = descriptor_bytes([1u8; 32], ALICE_CAPACITY, [2u8; 32], BOB_CAPACITY);
+    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let (old_data, new_data, sig_witness) = signed_state_pair_with_new_descriptor(
+        1,
+        PHASE_ACTIVE,
+        2,
+        PHASE_SETTLING,
+        descriptor_commitment,
+        BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+    );
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("signed descriptor update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn state_type_rejects_equal_state_number() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
@@ -2796,6 +3717,418 @@ fn vault_lock_rejects_descriptor_output_mismatch() {
         .output_data(Bytes::new().pack())
         .witness(empty_witness())
         .witness(witness_with_input_type(descriptor))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_and_vault_accept_splice_out_bridge() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let withdrawal_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+
+    let state_code = context.deploy_cell(contract_bin("morph-state-type"));
+    let old_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old state type script");
+    let new_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new state type script");
+
+    let vault_code = context.deploy_cell(contract_bin("morph-vault-lock"));
+    let old_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old vault lock script");
+    let new_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new vault lock script");
+
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle(
+        FUNDING_ANCHOR,
+        NEW_FUNDING_ANCHOR,
+        7,
+        CELL_CAPACITY,
+        ALICE_CAPACITY,
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock.clone())
+            .type_(Some(old_state_type).pack())
+            .build(),
+        old_state_data,
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(old_vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_refund_lock)
+                .type_(Some(new_state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY)
+                .lock(new_vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(withdrawal_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("state and vault splice bridge should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_and_vault_accept_splice_in_bridge() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let external_funding_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![8]));
+
+    let state_code = context.deploy_cell(contract_bin("morph-state-type"));
+    let old_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old state type script");
+    let new_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new state type script");
+
+    let vault_code = context.deploy_cell(contract_bin("morph-vault-lock"));
+    let old_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old vault lock script");
+    let new_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new vault lock script");
+
+    let new_vault_capacity = CELL_CAPACITY + BOB_CAPACITY;
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_in_bundle(
+        FUNDING_ANCHOR,
+        NEW_FUNDING_ANCHOR,
+        7,
+        CELL_CAPACITY,
+        new_vault_capacity,
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock.clone())
+            .type_(Some(old_state_type).pack())
+            .build(),
+        old_state_data,
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(old_vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let external_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(BOB_CAPACITY)
+            .lock(external_funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(external_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_refund_lock)
+                .type_(Some(new_state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(new_vault_capacity)
+                .lock(new_vault_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("state and vault splice-in bridge should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_and_vault_reject_splice_wrong_channel_header() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let withdrawal_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+
+    let state_code = context.deploy_cell(contract_bin("morph-state-type"));
+    let old_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old state type script");
+    let new_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new state type script");
+
+    let vault_code = context.deploy_cell(contract_bin("morph-vault-lock"));
+    let old_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old vault lock script");
+    let new_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new vault lock script");
+
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_channel(
+        FUNDING_ANCHOR,
+        NEW_FUNDING_ANCHOR,
+        7,
+        CELL_CAPACITY,
+        ALICE_CAPACITY,
+        [99u8; BYTE32_LEN],
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock.clone())
+            .type_(Some(old_state_type).pack())
+            .build(),
+        old_state_data,
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(old_vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_refund_lock)
+                .type_(Some(new_state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY)
+                .lock(new_vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(withdrawal_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_splice_new_vault_capacity_mismatch() {
+    let mut context = Context::default();
+    let state_refund_lock = deploy_always_success(&mut context);
+    let withdrawal_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+
+    let state_code = context.deploy_cell(contract_bin("morph-state-type"));
+    let old_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old state type script");
+    let new_state_type = context
+        .build_script(
+            &state_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new state type script");
+
+    let vault_code = context.deploy_cell(contract_bin("morph-vault-lock"));
+    let old_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("old vault lock script");
+    let new_vault_lock = context
+        .build_script(
+            &vault_code,
+            state_args_with_anchor(NEW_FUNDING_ANCHOR, 0).into(),
+        )
+        .expect("new vault lock script");
+
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle(
+        FUNDING_ANCHOR,
+        NEW_FUNDING_ANCHOR,
+        7,
+        CELL_CAPACITY,
+        ALICE_CAPACITY,
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_refund_lock.clone())
+            .type_(Some(old_state_type).pack())
+            .build(),
+        old_state_data,
+    );
+    let vault_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(old_vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_refund_lock)
+                .type_(Some(new_state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY - 1)
+                .lock(new_vault_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY + 1)
+                .lock(withdrawal_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(splice_witness))
+        .witness(empty_witness())
         .build();
     let tx = context.complete_tx(tx);
 

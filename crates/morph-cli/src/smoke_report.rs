@@ -7,6 +7,7 @@ use ckb_hash::blake2b_256;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::factory_packages::{StoredFactoryReducedSplicePackage, StoredFactorySplicePackage};
 use crate::packages::{
     StoredFactoryLocalExitPackage, StoredFactoryMerkleUpdateStatePackage,
     StoredFactoryReducedRightsPackage,
@@ -20,6 +21,7 @@ pub struct DevnetSmokeSummary {
     pub directory: String,
     pub manifest: BTreeMap<String, String>,
     pub json_files: usize,
+    pub json_checks: Vec<String>,
     pub transactions: Vec<TransactionSummary>,
     pub script_failures: Vec<ScriptFailureSummary>,
     pub deployed_scripts: Vec<DeployedScriptSummary>,
@@ -30,6 +32,8 @@ pub struct DevnetSmokeSummary {
     pub factory_proof_profiles: Vec<FactoryProofProfileSummary>,
     pub factory_reduced_exits: Vec<FactoryReducedExitEvidenceSummary>,
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
+    pub factory_splices: Vec<FactorySpliceEvidenceSummary>,
+    pub splice_payouts: Vec<SplicePayoutEvidenceSummary>,
     pub totals: MetricTotals,
 }
 
@@ -51,6 +55,8 @@ pub struct DevnetSmokeAssertionReport {
     pub factory_proof_profiles: usize,
     pub factory_reduced_exits: usize,
     pub factory_local_exits: usize,
+    pub factory_splices: usize,
+    pub splice_payouts: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub budget: Option<DevnetSmokeBudgetReport>,
 }
@@ -196,6 +202,39 @@ pub struct FactoryReducedExitEvidenceSummary {
     pub factory_vault_change_xudt_amount: Option<u128>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FactorySpliceEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub factory_id: String,
+    pub kind: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub reserve_claim_asset: String,
+    pub reserve_claim_before: u128,
+    pub reserve_claim_after: u128,
+    pub vault_old_amount: u128,
+    pub vault_new_amount: u128,
+    pub external_input: u128,
+    pub withdrawal: u128,
+    pub proof_siblings: usize,
+    pub signatures: usize,
+    pub signing_digest: String,
+    pub vault_delta_commitment: String,
+    pub non_interference_digest: String,
+    pub witness_len: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SplicePayoutEvidenceSummary {
+    pub check: String,
+    pub path: String,
+    pub withdrawal_payout_policy: String,
+    pub withdrawal_participant_pubkey_sec1: Option<String>,
+    pub withdrawal_lock_hash: Option<String>,
+    pub withdrawal_out_point: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MetricTotals {
     pub transaction_count: usize,
@@ -339,6 +378,17 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let manifest = read_manifest(dir)?;
     let mut json_paths = Vec::new();
     collect_json_files(dir, &mut json_paths)?;
+    let json_checks = json_paths
+        .iter()
+        .map(|path| {
+            path.strip_prefix(dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+                .trim_end_matches(".json")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
     let mut watch_alert_paths = Vec::new();
     collect_watch_alert_files(dir, &mut watch_alert_paths)?;
 
@@ -351,6 +401,8 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut factory_merkle_updates = Vec::new();
     let mut factory_reduced_exits = Vec::new();
     let mut factory_local_exits = Vec::new();
+    let mut factory_splices = Vec::new();
+    let mut splice_payouts = Vec::new();
     {
         let mut collections = SmokeCollections {
             transactions: &mut transactions,
@@ -361,6 +413,8 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             factory_merkle_updates: &mut factory_merkle_updates,
             factory_reduced_exits: &mut factory_reduced_exits,
             factory_local_exits: &mut factory_local_exits,
+            factory_splices: &mut factory_splices,
+            splice_payouts: &mut splice_payouts,
         };
         for path in &json_paths {
             let relative = path
@@ -385,6 +439,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         &factory_reduced_rights_updates,
         &factory_merkle_updates,
         &factory_reduced_exits,
+        &factory_splices,
         &transactions,
     );
     let totals = summarise_totals(&transactions);
@@ -392,6 +447,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         directory: dir.display().to_string(),
         manifest,
         json_files: json_paths.len(),
+        json_checks,
         transactions,
         script_failures,
         deployed_scripts,
@@ -402,6 +458,8 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         factory_proof_profiles,
         factory_reduced_exits,
         factory_local_exits,
+        factory_splices,
+        splice_payouts,
         totals,
     })
 }
@@ -470,7 +528,10 @@ pub fn assert_default_devnet_smoke_with_budget(
         watchtower_publication_alerts: summary
             .watchtower_alerts
             .iter()
-            .filter(|alert| alert.event == "publication_submitted")
+            .filter(|alert| {
+                alert.event == "publication_submitted"
+                    || alert.event == "splice_publication_submitted"
+            })
             .count(),
         watchtower_service_records: summary.watchtower_services.len(),
         factory_reduced_rights_updates: summary.factory_reduced_rights_updates.len(),
@@ -478,6 +539,8 @@ pub fn assert_default_devnet_smoke_with_budget(
         factory_proof_profiles: summary.factory_proof_profiles.len(),
         factory_reduced_exits: summary.factory_reduced_exits.len(),
         factory_local_exits: summary.factory_local_exits.len(),
+        factory_splices: summary.factory_splices.len(),
+        splice_payouts: summary.splice_payouts.len(),
         budget,
     })
 }
@@ -489,6 +552,7 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
     if summary.totals.transaction_count == 0 || summary.totals.committed_count == 0 {
         return Err(anyhow!("smoke summary contains no committed transactions"));
     }
+    assert_business_matrix_coverage(summary)?;
     if summary.script_failures.len() != EXPECTED_SCRIPT_FAILURES.len() {
         return Err(anyhow!(
             "unexpected script failure count: got {}, expected {}",
@@ -546,18 +610,39 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
     }
 
     assert_watchtower_alert_coverage(summary)?;
+    assert_watchtower_splice_guard_coverage(summary)?;
     assert_watchtower_service_coverage(summary)?;
     assert_factory_reduced_rights_coverage(summary)?;
     assert_factory_merkle_update_coverage(summary)?;
     assert_factory_proof_profile_coverage(summary)?;
     assert_factory_reduced_exit_coverage(summary)?;
+    assert_factory_splice_coverage(summary)?;
+    assert_splice_smoke_coverage(summary)?;
 
-    if summary.factory_local_exits.len() != EXPECTED_FACTORY_LOCAL_EXITS {
-        return Err(anyhow!(
-            "unexpected factory local-exit evidence count: got {}, expected {}",
-            summary.factory_local_exits.len(),
-            EXPECTED_FACTORY_LOCAL_EXITS
-        ));
+    let expected_factory_local_exits = [
+        ("factory/exit-channel", 1u16),
+        ("factory/local-exit-package", 1),
+        ("factory-xudt/local-exit-package", 2),
+        ("factory-xudt/smoke", 2),
+        ("factory-xudt-negative/local-exit-package", 2),
+        ("factory-xudt-negative/smoke", 2),
+        ("factory-splice-in-smoke", 1),
+        ("factory-splice-out-smoke", 1),
+        ("factory-reduced-xudt-splice-in-smoke", 2),
+        ("factory-reduced-xudt-splice-out-smoke", 2),
+        ("factory-xudt-splice-in-smoke", 2),
+        ("factory-xudt-splice-out-smoke", 2),
+    ];
+    for (check, descriptor_version) in expected_factory_local_exits.iter().copied() {
+        let found = summary
+            .factory_local_exits
+            .iter()
+            .any(|exit| exit.check == check && exit.descriptor_version == descriptor_version);
+        if !found {
+            return Err(anyhow!(
+                "missing factory local-exit evidence for {check} descriptor {descriptor_version}"
+            ));
+        }
     }
     if summary
         .factory_local_exits
@@ -568,25 +653,142 @@ pub fn assert_devnet_smoke_summary(summary: &DevnetSmokeSummary) -> Result<()> {
             "factory local-exit evidence must create active child state number 0"
         ));
     }
-    let ckb_descriptors = summary
+    let expected_checks = expected_factory_local_exits
+        .iter()
+        .map(|(check, _)| *check)
+        .collect::<BTreeSet<_>>();
+    let matched_exits = summary
         .factory_local_exits
+        .iter()
+        .filter(|exit| expected_checks.contains(exit.check.as_str()))
+        .collect::<Vec<_>>();
+    if matched_exits.len() != expected_factory_local_exits.len() {
+        return Err(anyhow!(
+            "unexpected expected factory local-exit evidence count: got {}, expected {}",
+            matched_exits.len(),
+            expected_factory_local_exits.len()
+        ));
+    }
+    let ckb_descriptors = matched_exits
         .iter()
         .filter(|exit| exit.descriptor_version == 1)
         .count();
-    let xudt_descriptors = summary
-        .factory_local_exits
+    let xudt_descriptors = matched_exits
         .iter()
         .filter(|exit| exit.descriptor_version == 2)
         .count();
-    if ckb_descriptors != EXPECTED_FACTORY_CKB_EXITS
-        || xudt_descriptors != EXPECTED_FACTORY_XUDT_EXITS
+    if ckb_descriptors != 4 || xudt_descriptors != 8 {
+        return Err(anyhow!(
+            "unexpected factory descriptor coverage: got CKB {ckb_descriptors}, xUDT {xudt_descriptors}; expected CKB 4, xUDT 8"
+        ));
+    }
+    Ok(())
+}
+
+fn assert_business_matrix_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let json_checks = summary
+        .json_checks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for expected in EXPECTED_BUSINESS_MATRIX_JSON_CHECKS {
+        if !json_checks.contains(expected) {
+            return Err(anyhow!("missing business matrix JSON check: {expected}"));
+        }
+    }
+
+    for (check, path) in EXPECTED_BUSINESS_MATRIX_TRANSACTIONS {
+        let committed = summary.transactions.iter().any(|tx| {
+            tx.check == *check && tx.path == *path && tx.status.as_deref() == Some("Committed")
+        });
+        if !committed {
+            return Err(anyhow!(
+                "missing committed business matrix transaction {check} {path}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_splice_smoke_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    for (check, payout_policy, requires_withdrawal) in [
+        ("splice-in-smoke", "none", false),
+        ("splice-out-smoke", "participant_signature_pubkey", true),
+        ("xudt-splice-in-smoke", "none", false),
+        (
+            "xudt-splice-out-smoke",
+            "participant_signature_pubkey",
+            true,
+        ),
+    ] {
+        let finalise_path = if check.starts_with("xudt-") {
+            "$.xudt_finalise"
+        } else {
+            "$.finalise"
+        };
+        for path in [
+            "$.apply",
+            "$.post_splice_sponsor",
+            "$.publish",
+            finalise_path,
+        ] {
+            let committed = summary.transactions.iter().any(|tx| {
+                tx.check == check && tx.path == path && tx.status.as_deref() == Some("Committed")
+            });
+            if !committed {
+                return Err(anyhow!(
+                    "missing committed splice smoke transaction {check} {path}"
+                ));
+            }
+        }
+        assert_splice_payout_evidence(summary, check, payout_policy, requires_withdrawal)?;
+    }
+    Ok(())
+}
+
+fn assert_splice_payout_evidence(
+    summary: &DevnetSmokeSummary,
+    check: &str,
+    payout_policy: &str,
+    requires_withdrawal: bool,
+) -> Result<()> {
+    let Some(evidence) = summary
+        .splice_payouts
+        .iter()
+        .find(|evidence| evidence.check == check && evidence.path == "$.apply")
+    else {
+        return Err(anyhow!(
+            "missing splice payout evidence for {check} $.apply"
+        ));
+    };
+    if evidence.withdrawal_payout_policy != payout_policy {
+        return Err(anyhow!(
+            "splice payout policy for {check} was {}, expected {}",
+            evidence.withdrawal_payout_policy,
+            payout_policy
+        ));
+    }
+    if requires_withdrawal {
+        if evidence
+            .withdrawal_participant_pubkey_sec1
+            .as_deref()
+            .is_none_or(|pubkey| !pubkey.starts_with("0x") || pubkey.len() <= 2)
+            || evidence
+                .withdrawal_lock_hash
+                .as_deref()
+                .is_none_or(|hash| !hash.starts_with("0x") || hash.len() != 66)
+            || evidence.withdrawal_out_point.is_none()
+        {
+            return Err(anyhow!(
+                "splice payout evidence for {check} must include participant pubkey, lock hash, and withdrawal out point"
+            ));
+        }
+    } else if evidence.withdrawal_participant_pubkey_sec1.is_some()
+        || evidence.withdrawal_lock_hash.is_some()
+        || evidence.withdrawal_out_point.is_some()
     {
         return Err(anyhow!(
-            "unexpected factory descriptor coverage: got CKB {}, xUDT {}; expected CKB {}, xUDT {}",
-            ckb_descriptors,
-            xudt_descriptors,
-            EXPECTED_FACTORY_CKB_EXITS,
-            EXPECTED_FACTORY_XUDT_EXITS
+            "splice-in payout evidence for {check} must not include withdrawal target fields"
         ));
     }
     Ok(())
@@ -689,6 +891,13 @@ fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result
     )?;
     assert_factory_proof_profile(
         summary,
+        "factory-reduced-exit-asymmetric-smoke",
+        "factory_reduced_exit_ckb_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
         "factory-reduced-xudt-exit-smoke",
         "factory_reduced_exit_xudt_reserve_claim_v1",
         "$.exit",
@@ -703,9 +912,72 @@ fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result
     )?;
     assert_factory_proof_profile(
         summary,
+        "factory-reduced-xudt-bob-only-exit-smoke",
+        "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+        "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
         "factory-reduced-xudt-change-exit-smoke",
         "factory_reduced_exit_xudt_change_reserve_claim_v1",
         "$.exit",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-splice-in-smoke",
+        "factory_splice_all_participants_ckb_v1",
+        "$.apply",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-splice-out-smoke",
+        "factory_splice_all_participants_ckb_v1",
+        "$.apply",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-splice-in-smoke",
+        "factory_reduced_splice_ckb_sparse_merkle_v1",
+        "$.apply",
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-splice-out-smoke",
+        "factory_reduced_splice_ckb_sparse_merkle_v1",
+        "$.apply",
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-xudt-splice-in-smoke",
+        "factory_reduced_splice_xudt_sparse_merkle_v1",
+        "$.apply",
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-reduced-xudt-splice-out-smoke",
+        "factory_reduced_splice_xudt_sparse_merkle_v1",
+        "$.apply",
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-xudt-splice-in-smoke",
+        "factory_splice_all_participants_xudt_v1",
+        "$.apply",
+        Some(0),
+    )?;
+    assert_factory_proof_profile(
+        summary,
+        "factory-xudt-splice-out-smoke",
+        "factory_splice_all_participants_xudt_v1",
+        "$.apply",
         Some(0),
     )?;
     Ok(())
@@ -740,45 +1012,22 @@ fn assert_factory_proof_profile(
 }
 
 fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
-    let ckb_exit_committed = summary.transactions.iter().any(|tx| {
-        tx.check == "factory-reduced-exit-smoke"
-            && tx.path == "$.exit"
-            && tx.status.as_deref() == Some("Committed")
-    });
-    if !ckb_exit_committed {
-        return Err(anyhow!(
-            "missing committed factory-reduced-exit smoke transaction"
-        ));
-    }
-    let xudt_exit_committed = summary.transactions.iter().any(|tx| {
-        tx.check == "factory-reduced-xudt-exit-smoke"
-            && tx.path == "$.exit"
-            && tx.status.as_deref() == Some("Committed")
-    });
-    if !xudt_exit_committed {
-        return Err(anyhow!(
-            "missing committed factory-reduced-xudt-exit smoke transaction"
-        ));
-    }
-    let xudt_one_sided_exit_committed = summary.transactions.iter().any(|tx| {
-        tx.check == "factory-reduced-xudt-one-sided-exit-smoke"
-            && tx.path == "$.exit"
-            && tx.status.as_deref() == Some("Committed")
-    });
-    if !xudt_one_sided_exit_committed {
-        return Err(anyhow!(
-            "missing committed factory-reduced-xudt-one-sided-exit smoke transaction"
-        ));
-    }
-    let xudt_change_exit_committed = summary.transactions.iter().any(|tx| {
-        tx.check == "factory-reduced-xudt-change-exit-smoke"
-            && tx.path == "$.exit"
-            && tx.status.as_deref() == Some("Committed")
-    });
-    if !xudt_change_exit_committed {
-        return Err(anyhow!(
-            "missing committed factory-reduced-xudt-change-exit smoke transaction"
-        ));
+    for check in [
+        "factory-reduced-exit-smoke",
+        "factory-reduced-exit-asymmetric-smoke",
+        "factory-reduced-xudt-exit-smoke",
+        "factory-reduced-xudt-one-sided-exit-smoke",
+        "factory-reduced-xudt-bob-only-exit-smoke",
+        "factory-reduced-xudt-change-exit-smoke",
+    ] {
+        let committed = summary.transactions.iter().any(|tx| {
+            tx.check == check && tx.path == "$.exit" && tx.status.as_deref() == Some("Committed")
+        });
+        if !committed {
+            return Err(anyhow!(
+                "missing committed factory reduced-exit smoke transaction {check}"
+            ));
+        }
     }
     if summary.factory_reduced_exits.len() != EXPECTED_FACTORY_REDUCED_EXITS {
         return Err(anyhow!(
@@ -897,12 +1146,171 @@ fn assert_watchtower_service_coverage(summary: &DevnetSmokeSummary) -> Result<()
     Ok(())
 }
 
-fn assert_watchtower_alert_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
-    if summary.watchtower_alerts.len() != EXPECTED_WATCHTOWER_ALERTS {
+fn assert_factory_splice_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let expected = [
+        ("factory-splice-in-smoke", "splice_in", "ckb", true, false),
+        ("factory-splice-out-smoke", "splice_out", "ckb", false, true),
+        (
+            "factory-reduced-splice-in-smoke",
+            "splice_in",
+            "ckb",
+            true,
+            false,
+        ),
+        (
+            "factory-reduced-splice-out-smoke",
+            "splice_out",
+            "ckb",
+            false,
+            true,
+        ),
+        (
+            "factory-reduced-xudt-splice-in-smoke",
+            "splice_in",
+            "xudt:",
+            true,
+            false,
+        ),
+        (
+            "factory-reduced-xudt-splice-out-smoke",
+            "splice_out",
+            "xudt:",
+            false,
+            true,
+        ),
+        (
+            "factory-xudt-splice-in-smoke",
+            "splice_in",
+            "xudt:",
+            true,
+            false,
+        ),
+        (
+            "factory-xudt-splice-out-smoke",
+            "splice_out",
+            "xudt:",
+            false,
+            true,
+        ),
+    ];
+    for item in expected {
+        assert_factory_splice_smoke(summary, item)?;
+    }
+    let expected_checks = expected
+        .iter()
+        .map(|(check, _, _, _, _)| *check)
+        .collect::<BTreeSet<_>>();
+    let matched_expected = summary
+        .factory_splices
+        .iter()
+        .filter(|splice| expected_checks.contains(splice.check.as_str()))
+        .count();
+    if matched_expected != expected.len() {
         return Err(anyhow!(
-            "unexpected watchtower alert count: got {}, expected {}",
+            "unexpected expected factory splice evidence count: got {}, expected {}",
+            matched_expected,
+            expected.len()
+        ));
+    }
+    Ok(())
+}
+
+fn assert_factory_splice_smoke(
+    summary: &DevnetSmokeSummary,
+    (check, kind, asset_prefix, expects_external, expects_withdrawal): (
+        &str,
+        &str,
+        &str,
+        bool,
+        bool,
+    ),
+) -> Result<()> {
+    for path in ["$.open", "$.apply", "$.exit"] {
+        let committed = summary.transactions.iter().any(|tx| {
+            tx.check == check && tx.path == path && tx.status.as_deref() == Some("Committed")
+        });
+        if !committed {
+            return Err(anyhow!(
+                "missing committed factory splice smoke transaction {check} {path}"
+            ));
+        }
+    }
+    if expects_external && check.contains("xudt") {
+        let committed = summary.transactions.iter().any(|tx| {
+            tx.check == check
+                && tx.path == "$.external_xudt"
+                && tx.status.as_deref() == Some("Committed")
+        });
+        if !committed {
+            return Err(anyhow!(
+                "missing committed factory splice external xUDT transaction {check}"
+            ));
+        }
+    }
+
+    let Some(splice) = summary.factory_splices.iter().find(|splice| {
+        splice.check == check
+            && splice.path == "$.package.package"
+            && splice.kind == kind
+            && splice.reserve_claim_asset.starts_with(asset_prefix)
+    }) else {
+        return Err(anyhow!(
+            "missing factory splice package evidence for {check} {kind} {asset_prefix}"
+        ));
+    };
+    if splice.new_update_number <= splice.old_update_number
+        || splice.signing_digest.is_empty()
+        || splice.vault_delta_commitment.is_empty()
+        || splice.non_interference_digest.is_empty()
+        || splice.witness_len == 0
+    {
+        return Err(anyhow!(
+            "factory splice evidence for {check} must bind monotonic update, signatures, digests, and witness length"
+        ));
+    }
+    let reduced = check.contains("reduced");
+    let expected_min_signatures = if reduced { 1 } else { 2 };
+    let expected_proof_siblings = if reduced {
+        morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1
+    } else {
+        0
+    };
+    if splice.signatures < expected_min_signatures
+        || splice.proof_siblings != expected_proof_siblings
+    {
+        return Err(anyhow!(
+            "factory splice evidence for {check} has unexpected signature/proof shape"
+        ));
+    }
+    if expects_external
+        && (splice.external_input == 0
+            || splice.withdrawal != 0
+            || splice.reserve_claim_after <= splice.reserve_claim_before
+            || splice.vault_new_amount <= splice.vault_old_amount)
+    {
+        return Err(anyhow!(
+            "factory splice-in evidence for {check} has inconsistent reserve/vault direction"
+        ));
+    }
+    if expects_withdrawal
+        && (splice.withdrawal == 0
+            || splice.external_input != 0
+            || splice.reserve_claim_after >= splice.reserve_claim_before
+            || splice.vault_new_amount >= splice.vault_old_amount)
+    {
+        return Err(anyhow!(
+            "factory splice-out evidence for {check} has inconsistent reserve/vault direction"
+        ));
+    }
+    Ok(())
+}
+
+fn assert_watchtower_alert_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    if summary.watchtower_alerts.len() < EXPECTED_WATCHTOWER_EVENTS.len() {
+        return Err(anyhow!(
+            "insufficient watchtower alert count: got {}, expected at least {}",
             summary.watchtower_alerts.len(),
-            EXPECTED_WATCHTOWER_ALERTS
+            EXPECTED_WATCHTOWER_EVENTS.len()
         ));
     }
     for expected in EXPECTED_WATCHTOWER_EVENTS {
@@ -917,15 +1325,21 @@ fn assert_watchtower_alert_coverage(summary: &DevnetSmokeSummary) -> Result<()> 
         }
     }
     for alert in &summary.watchtower_alerts {
-        if alert.severity != "warning" {
-            return Err(anyhow!(
-                "watchtower alert {} must be warning severity",
-                alert.event
-            ));
-        }
         if alert.next_from_block <= alert.scanned_to_block {
             return Err(anyhow!(
                 "watchtower alert {} did not advance the scan cursor",
+                alert.event
+            ));
+        }
+        if alert.event == "scan_idle" {
+            if alert.severity != "info" {
+                return Err(anyhow!("watchtower idle alert must be info severity"));
+            }
+            continue;
+        }
+        if alert.severity != "warning" {
+            return Err(anyhow!(
+                "watchtower alert {} must be warning severity",
                 alert.event
             ));
         }
@@ -941,17 +1355,69 @@ fn assert_watchtower_alert_coverage(summary: &DevnetSmokeSummary) -> Result<()> 
                 alert.event
             ));
         }
-        if alert.selected_state_number <= observed_state_number {
+        let requires_newer_selected_state = matches!(
+            alert.event.as_str(),
+            "older_state_detected" | "publication_submitted" | "splice_publication_submitted"
+        );
+        if requires_newer_selected_state && alert.selected_state_number <= observed_state_number {
             return Err(anyhow!(
                 "watchtower alert {} did not select a newer state",
                 alert.event
             ));
         }
-        if alert.event == "publication_submitted" && alert.publication_tx_hash.is_none() {
+        if (alert.event == "publication_submitted" || alert.event == "splice_publication_submitted")
+            && alert.publication_tx_hash.is_none()
+        {
             return Err(anyhow!(
                 "watchtower publication alert must include publication transaction hash"
             ));
         }
+    }
+    Ok(())
+}
+
+fn assert_watchtower_splice_guard_coverage(summary: &DevnetSmokeSummary) -> Result<()> {
+    let apply_committed = summary.transactions.iter().any(|tx| {
+        tx.check == "watch-splice-stale/apply"
+            && tx.path == "$"
+            && tx.status.as_deref() == Some("Committed")
+    });
+    if !apply_committed {
+        return Err(anyhow!(
+            "missing committed watchtower splice guard transaction"
+        ));
+    }
+
+    for expected in ["splice_detected", "splice_package_stale"] {
+        let found = summary.watchtower_alerts.iter().any(|alert| {
+            alert.check == "watch-splice-stale/watch-alerts" && alert.event == expected
+        });
+        if !found {
+            return Err(anyhow!(
+                "missing watchtower splice guard alert event: {expected}"
+            ));
+        }
+    }
+
+    let stale_publication = summary.watchtower_alerts.iter().any(|alert| {
+        alert.check == "watch-splice-stale/watch-alerts"
+            && (alert.event == "publication_submitted"
+                || alert.event == "splice_publication_submitted")
+    });
+    if stale_publication {
+        return Err(anyhow!(
+            "watchtower splice guard must not publish a stale package"
+        ));
+    }
+
+    let watch_transaction = summary
+        .transactions
+        .iter()
+        .any(|tx| tx.check == "watch-splice-stale/watch");
+    if watch_transaction {
+        return Err(anyhow!(
+            "watchtower splice guard watch report must not include a publication transaction"
+        ));
     }
     Ok(())
 }
@@ -1353,6 +1819,40 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Splice Payouts\n\n");
+    if summary.splice_payouts.is_empty() {
+        out.push_str("No splice payout evidence was recorded.\n");
+    } else {
+        out.push_str(
+            "| Check | Path | Policy | Participant pubkey | Lock hash | Withdrawal out point |\n",
+        );
+        out.push_str("| --- | --- | --- | --- | --- | --- |\n");
+        for payout in &summary.splice_payouts {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} |\n",
+                table_cell(&payout.check),
+                table_cell(&payout.path),
+                table_cell(&payout.withdrawal_payout_policy),
+                payout
+                    .withdrawal_participant_pubkey_sec1
+                    .as_deref()
+                    .map(|pubkey| format!("`{pubkey}`"))
+                    .unwrap_or_default(),
+                payout
+                    .withdrawal_lock_hash
+                    .as_deref()
+                    .map(|hash| format!("`{hash}`"))
+                    .unwrap_or_default(),
+                payout
+                    .withdrawal_out_point
+                    .as_deref()
+                    .map(|out_point| format!("`{out_point}`"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Script Failures\n\n");
     if summary.script_failures.is_empty() {
         out.push_str("No expected script failures were recorded.\n");
@@ -1569,6 +2069,37 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
             ));
         }
     }
+    out.push('\n');
+
+    out.push_str("## Factory Splices\n\n");
+    if summary.factory_splices.is_empty() {
+        out.push_str("No factory splice packages were recorded.\n");
+    } else {
+        out.push_str("| Check | Path | Kind | Update | Asset | Claim | Vault | External | Withdrawal | Signatures | Witness | Digest |\n");
+        out.push_str(
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n",
+        );
+        for splice in &summary.factory_splices {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} -> {} | {} | {} -> {} | {} -> {} | {} | {} | {} | {} | `{}` |\n",
+                table_cell(&splice.check),
+                table_cell(&splice.path),
+                table_cell(&splice.kind),
+                splice.old_update_number,
+                splice.new_update_number,
+                table_cell(&splice.reserve_claim_asset),
+                splice.reserve_claim_before,
+                splice.reserve_claim_after,
+                splice.vault_old_amount,
+                splice.vault_new_amount,
+                splice.external_input,
+                splice.withdrawal,
+                splice.signatures,
+                splice.witness_len,
+                splice.signing_digest
+            ));
+        }
+    }
 
     out
 }
@@ -1684,16 +2215,85 @@ const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
     "morph-sponsor-lock",
     "morph-devnet-xudt",
 ];
-const EXPECTED_FACTORY_LOCAL_EXITS: usize = 6;
-const EXPECTED_FACTORY_CKB_EXITS: usize = 2;
-const EXPECTED_FACTORY_XUDT_EXITS: usize = 4;
-const EXPECTED_FACTORY_REDUCED_EXITS: usize = 4;
-const EXPECTED_FACTORY_REDUCED_CKB_EXITS: usize = 1;
-const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 3;
+const EXPECTED_BUSINESS_MATRIX_JSON_CHECKS: &[&str] = &[
+    "devnet-tip",
+    "devnet-wait-tip",
+    "manual-channel/package",
+    "manual-channel/list-packages",
+    "manual-channel/latest-package",
+    "manual-channel/publish-latest",
+    "manual-sponsor/fund",
+    "xudt-one-sided-smoke",
+    "splice-in-asymmetric-smoke",
+    "splice-out-asymmetric-smoke",
+    "xudt-splice-in-one-sided-smoke",
+    "xudt-splice-out-one-sided-smoke",
+    "factory-smoke",
+    "factory-reduced-rights-tight-smoke",
+    "factory-merkle-update-tight-smoke",
+    "factory-reduced-exit-asymmetric-smoke",
+    "factory-reduced-xudt-bob-only-exit-smoke",
+    "factory-splice-in-asymmetric-smoke",
+    "factory-splice-out-asymmetric-smoke",
+    "factory-reduced-splice-in-asymmetric-smoke",
+    "factory-reduced-splice-out-asymmetric-smoke",
+    "factory-reduced-xudt-splice-in-one-sided-smoke",
+    "factory-reduced-xudt-splice-out-one-sided-smoke",
+    "factory-xudt-splice-in-one-sided-smoke",
+    "factory-xudt-splice-out-one-sided-smoke",
+    "factory/list-packages",
+    "factory-xudt-one-sided/smoke",
+    "factory-xudt-one-sided/local-exit-package-check",
+    "watch-direct-sponsor/watch",
+    "watch-config-loop/loop",
+    "watch-splice-stale/watch",
+];
+const EXPECTED_BUSINESS_MATRIX_TRANSACTIONS: &[(&str, &str)] = &[
+    ("manual-channel/open", "$"),
+    ("manual-channel/publish-latest", "$.publication"),
+    ("manual-channel/finalise", "$"),
+    ("manual-sponsor/fund", "$"),
+    ("manual-sponsor/publish", "$"),
+    ("manual-sponsor/finalise", "$"),
+    ("xudt-one-sided-smoke", "$.finalise"),
+    ("splice-in-asymmetric-smoke", "$.apply"),
+    ("splice-in-asymmetric-smoke", "$.finalise"),
+    ("splice-out-asymmetric-smoke", "$.apply"),
+    ("splice-out-asymmetric-smoke", "$.finalise"),
+    ("xudt-splice-in-one-sided-smoke", "$.apply"),
+    ("xudt-splice-in-one-sided-smoke", "$.xudt_finalise"),
+    ("xudt-splice-out-one-sided-smoke", "$.apply"),
+    ("xudt-splice-out-one-sided-smoke", "$.xudt_finalise"),
+    ("factory-smoke", "$.update"),
+    ("factory-reduced-rights-tight-smoke", "$.update"),
+    ("factory-merkle-update-tight-smoke", "$.update"),
+    ("factory-reduced-exit-asymmetric-smoke", "$.exit"),
+    ("factory-reduced-xudt-bob-only-exit-smoke", "$.exit"),
+    ("factory-splice-in-asymmetric-smoke", "$.apply"),
+    ("factory-splice-out-asymmetric-smoke", "$.apply"),
+    ("factory-reduced-splice-in-asymmetric-smoke", "$.apply"),
+    ("factory-reduced-splice-out-asymmetric-smoke", "$.apply"),
+    ("factory-reduced-xudt-splice-in-one-sided-smoke", "$.apply"),
+    ("factory-reduced-xudt-splice-out-one-sided-smoke", "$.apply"),
+    ("factory-xudt-splice-in-one-sided-smoke", "$.apply"),
+    ("factory-xudt-splice-out-one-sided-smoke", "$.apply"),
+    ("factory-xudt-one-sided/smoke", "$.exit"),
+    ("factory-xudt-one-sided/smoke", "$.finalise"),
+    ("watch-direct-sponsor/watch", "$.publication"),
+    ("watch-direct-sponsor/finalise", "$"),
+    ("watch-config-loop/finalise", "$"),
+];
+const EXPECTED_FACTORY_REDUCED_EXITS: usize = 6;
+const EXPECTED_FACTORY_REDUCED_CKB_EXITS: usize = 2;
+const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 4;
 const EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS: usize = 1;
-const EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS: usize = 1;
-const EXPECTED_WATCHTOWER_ALERTS: usize = 2;
-const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &["older_state_detected", "publication_submitted"];
+const EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS: usize = 2;
+const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &[
+    "older_state_detected",
+    "publication_submitted",
+    "splice_detected",
+    "splice_package_stale",
+];
 const EXPECTED_WATCHTOWER_SERVICE_RECORDS: usize = 2;
 
 fn ensure_directory(dir: &Path) -> Result<()> {
@@ -1736,7 +2336,10 @@ fn collect_json_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             continue;
         }
         let file_name = path.file_name().and_then(|name| name.to_str());
-        if file_name == Some("summary.json") || file_name == Some("summary-check.json") {
+        if matches!(
+            file_name,
+            Some("summary.json" | "summary-check.json" | "summary-budget-check.json")
+        ) {
             continue;
         }
         if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
@@ -1828,6 +2431,9 @@ fn watch_alert_event_name(event: &WatchAlertEvent) -> &'static str {
     match event {
         WatchAlertEvent::OlderStateDetected => "older_state_detected",
         WatchAlertEvent::PublicationSubmitted => "publication_submitted",
+        WatchAlertEvent::SpliceDetected => "splice_detected",
+        WatchAlertEvent::SplicePackageStale => "splice_package_stale",
+        WatchAlertEvent::SplicePublicationSubmitted => "splice_publication_submitted",
         WatchAlertEvent::ScanIdle => "scan_idle",
     }
 }
@@ -1841,6 +2447,8 @@ struct SmokeCollections<'a> {
     factory_merkle_updates: &'a mut Vec<FactoryMerkleUpdateEvidenceSummary>,
     factory_reduced_exits: &'a mut Vec<FactoryReducedExitEvidenceSummary>,
     factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
+    factory_splices: &'a mut Vec<FactorySpliceEvidenceSummary>,
+    splice_payouts: &'a mut Vec<SplicePayoutEvidenceSummary>,
 }
 
 fn collect_from_value(
@@ -1855,6 +2463,10 @@ fn collect_from_value(
 
     if let Some(tx) = transaction_from_object(check, path, object) {
         collections.transactions.push(tx);
+    }
+
+    if let Some(payout) = splice_payout_from_object(check, path, object) {
+        collections.splice_payouts.push(payout);
     }
 
     if let Some(Value::Object(failure)) = object.get("script_failure") {
@@ -1967,6 +2579,73 @@ fn collect_from_value(
             });
     }
 
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_splice_package.v1") {
+        let package: StoredFactorySplicePackage =
+            serde_json::from_value(Value::Object(object.clone()))
+                .with_context(|| format!("failed to decode factory splice package at {path}"))?;
+        let summary = package
+            .summary()
+            .with_context(|| format!("invalid factory splice package at {path}"))?;
+        collections
+            .factory_splices
+            .push(FactorySpliceEvidenceSummary {
+                check: check.to_string(),
+                path: path.to_string(),
+                factory_id: summary.factory_id,
+                kind: summary.kind,
+                old_update_number: summary.old_update_number,
+                new_update_number: summary.new_update_number,
+                reserve_claim_asset: summary.reserve_claim_asset,
+                reserve_claim_before: summary.reserve_claim_before,
+                reserve_claim_after: summary.reserve_claim_after,
+                vault_old_amount: summary.vault_old_amount,
+                vault_new_amount: summary.vault_new_amount,
+                external_input: summary.external_input,
+                withdrawal: summary.withdrawal,
+                proof_siblings: 0,
+                signatures: summary.signatures,
+                signing_digest: summary.signing_digest,
+                vault_delta_commitment: summary.vault_delta_commitment,
+                non_interference_digest: summary.non_interference_digest,
+                witness_len: summary.contract_witness_len,
+            });
+    }
+
+    if object.get("schema").and_then(Value::as_str)
+        == Some("morph.factory_reduced_splice_package.v1")
+    {
+        let package: StoredFactoryReducedSplicePackage =
+            serde_json::from_value(Value::Object(object.clone())).with_context(|| {
+                format!("failed to decode reduced factory splice package at {path}")
+            })?;
+        let summary = package
+            .summary()
+            .with_context(|| format!("invalid reduced factory splice package at {path}"))?;
+        collections
+            .factory_splices
+            .push(FactorySpliceEvidenceSummary {
+                check: check.to_string(),
+                path: path.to_string(),
+                factory_id: summary.factory_id,
+                kind: summary.kind,
+                old_update_number: summary.old_update_number,
+                new_update_number: summary.new_update_number,
+                reserve_claim_asset: summary.reserve_claim_asset,
+                reserve_claim_before: summary.reserve_claim_before,
+                reserve_claim_after: summary.reserve_claim_after,
+                vault_old_amount: summary.vault_old_amount,
+                vault_new_amount: summary.vault_new_amount,
+                external_input: summary.external_input,
+                withdrawal: summary.withdrawal,
+                proof_siblings: summary.proof_siblings,
+                signatures: summary.signatures,
+                signing_digest: summary.signing_digest,
+                vault_delta_commitment: summary.vault_delta_commitment,
+                non_interference_digest: summary.non_interference_digest,
+                witness_len: summary.contract_witness_len,
+            });
+    }
+
     if let Some(Value::Object(reduced_exit)) = object.get("reduced_exit") {
         collections
             .factory_reduced_exits
@@ -2056,6 +2735,34 @@ fn transaction_from_object(
     })
 }
 
+fn splice_payout_from_object(
+    check: &str,
+    path: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Option<SplicePayoutEvidenceSummary> {
+    let withdrawal_payout_policy = string_field(object, "withdrawal_payout_policy")?;
+    Some(SplicePayoutEvidenceSummary {
+        check: check.to_string(),
+        path: path.to_string(),
+        withdrawal_payout_policy,
+        withdrawal_participant_pubkey_sec1: string_field(
+            object,
+            "withdrawal_participant_pubkey_sec1",
+        ),
+        withdrawal_lock_hash: string_field(object, "withdrawal_lock_hash"),
+        withdrawal_out_point: object
+            .get("withdrawal_out_point")
+            .and_then(out_point_string_from_value),
+    })
+}
+
+fn out_point_string_from_value(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    let tx_hash = string_field(object, "tx_hash")?;
+    let index = object.get("index")?.as_u64()?;
+    Some(format!("{tx_hash}:{index}"))
+}
+
 fn deployed_script_from_object(
     check: &str,
     path: &str,
@@ -2096,6 +2803,7 @@ fn factory_proof_profiles(
     reduced_rights_updates: &[FactoryReducedRightsEvidenceSummary],
     merkle_updates: &[FactoryMerkleUpdateEvidenceSummary],
     reduced_exits: &[FactoryReducedExitEvidenceSummary],
+    factory_splices: &[FactorySpliceEvidenceSummary],
     transactions: &[TransactionSummary],
 ) -> Vec<FactoryProofProfileSummary> {
     let mut profiles = reduced_rights_updates
@@ -2160,6 +2868,33 @@ fn factory_proof_profiles(
                 .to_string(),
                 proof_siblings: 0,
                 witness_len: exit.witness_len,
+                estimated_cycles: tx.estimated_cycles,
+                tx_size_bytes: tx.tx_size_bytes,
+            })
+    }));
+
+    profiles.extend(factory_splices.iter().filter_map(|splice| {
+        transactions
+            .iter()
+            .find(|tx| tx.check == splice.check && tx.path == "$.apply")
+            .map(|tx| FactoryProofProfileSummary {
+                check: splice.check.clone(),
+                transaction_path: tx.path.clone(),
+                evidence_path: splice.path.clone(),
+                proof_kind: if splice.reserve_claim_asset.starts_with("xudt:") {
+                    if splice.proof_siblings > 0 {
+                        "factory_reduced_splice_xudt_sparse_merkle_v1"
+                    } else {
+                        "factory_splice_all_participants_xudt_v1"
+                    }
+                } else if splice.proof_siblings > 0 {
+                    "factory_reduced_splice_ckb_sparse_merkle_v1"
+                } else {
+                    "factory_splice_all_participants_ckb_v1"
+                }
+                .to_string(),
+                proof_siblings: splice.proof_siblings,
+                witness_len: splice.witness_len,
                 estimated_cycles: tx.estimated_cycles,
                 tx_size_bytes: tx.tx_size_bytes,
             })
@@ -2344,6 +3079,28 @@ mod tests {
         )
         .unwrap();
         fs::write(
+            dir.join("splice.json"),
+            r#"{
+              "apply": {
+                "tx_hash": "0xsp1",
+                "status": "Committed",
+                "block_number": 11,
+                "withdrawal_payout_policy": "participant_signature_pubkey",
+                "withdrawal_participant_pubkey_sec1": "0x021111111111111111111111111111111111111111111111111111111111111111",
+                "withdrawal_lock_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                "withdrawal_out_point": {
+                  "tx_hash": "0xsp1",
+                  "index": 2
+                },
+                "metrics": {
+                  "estimated_cycles": 11,
+                  "tx_size_bytes": 12
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        fs::write(
             dir.join("deploy.json"),
             r#"{
               "scripts": [{
@@ -2366,6 +3123,12 @@ mod tests {
                 r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":1,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"older_state_detected","message":"old state","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":null,"scanned_to_block":10,"next_from_block":11}"#,
                 "\n",
                 r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":2,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"publication_submitted","message":"published","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":"0xdef","scanned_to_block":10,"next_from_block":11}"#,
+                "\n",
+                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":3,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_detected","message":"splice","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
+                "\n",
+                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":4,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_package_stale","message":"stale","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
+                "\n",
+                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":5,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"info","event":"scan_idle","message":"idle","selected_state_number":1,"observed_state_number":null,"observed_out_point":null,"publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
                 "\n",
             ),
         )
@@ -2404,11 +3167,20 @@ mod tests {
             }"#,
         )
         .unwrap();
+        let factory_splice_package = serde_json::to_string(
+            &crate::factory_packages::fixture_factory_splice_package_with_kind(
+                crate::factory_packages::FixtureFactorySpliceKind::CkbSpliceIn,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(dir.join("factory-splice.json"), factory_splice_package).unwrap();
 
         let summary = summarize_devnet_smoke(&dir).unwrap();
         assert_eq!(summary.manifest.get("status").unwrap(), "passed");
-        assert_eq!(summary.json_files, 8);
-        assert_eq!(summary.transactions.len(), 4);
+        assert_eq!(summary.json_files, 10);
+        assert!(summary.json_checks.contains(&"open".to_string()));
+        assert_eq!(summary.transactions.len(), 5);
         assert_eq!(summary.script_failures.len(), 1);
         assert_eq!(summary.deployed_scripts.len(), 1);
         assert_eq!(summary.deployed_scripts[0].name, "morph-state-lock");
@@ -2445,7 +3217,7 @@ mod tests {
             summary.factory_reduced_exits[0].factory_vault_change_xudt_amount,
             Some(50)
         );
-        assert_eq!(summary.watchtower_alerts.len(), 2);
+        assert!(summary.watchtower_alerts.len() >= EXPECTED_WATCHTOWER_EVENTS.len());
         assert_eq!(summary.watchtower_alerts[1].event, "publication_submitted");
         assert_eq!(summary.watchtower_services.len(), 2);
         assert!(
@@ -2460,19 +3232,34 @@ mod tests {
                 .iter()
                 .any(|service| service.schema == "morph.watchtower_health.v1")
         );
-        assert_eq!(summary.totals.total_estimated_cycles, 176);
-        assert_eq!(summary.totals.total_tx_size_bytes, 220);
+        assert_eq!(summary.factory_splices.len(), 1);
+        assert_eq!(summary.factory_splices[0].kind, "splice_in");
+        assert_eq!(summary.factory_splices[0].external_input, 20);
+        assert_eq!(summary.splice_payouts.len(), 1);
+        assert_eq!(summary.splice_payouts[0].path, "$.apply");
+        assert_eq!(
+            summary.splice_payouts[0].withdrawal_payout_policy,
+            "participant_signature_pubkey"
+        );
+        assert_eq!(
+            summary.splice_payouts[0].withdrawal_out_point.as_deref(),
+            Some("0xsp1:2")
+        );
+        assert_eq!(summary.totals.total_estimated_cycles, 187);
+        assert_eq!(summary.totals.total_tx_size_bytes, 232);
 
         let markdown = render_markdown(&summary);
         assert!(markdown.contains("StateSinceNotMature"));
         assert!(markdown.contains("0xabc"));
         assert!(markdown.contains("Deployed Scripts"));
+        assert!(markdown.contains("Splice Payouts"));
         assert!(markdown.contains("Watchtower Alerts"));
         assert!(markdown.contains("Watchtower Service"));
         assert!(markdown.contains("Factory Reduced-Rights Updates"));
         assert!(markdown.contains("Factory Merkle Updates"));
         assert!(markdown.contains("Factory Proof Profiles"));
         assert!(markdown.contains("Factory Local Exits"));
+        assert!(markdown.contains("Factory Splices"));
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -2498,7 +3285,31 @@ mod tests {
         let err = assert_devnet_smoke_summary(&summary).unwrap_err();
         assert!(
             err.to_string()
-                .contains("unexpected factory descriptor coverage")
+                .contains("missing factory local-exit evidence")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_factory_splice_coverage() {
+        let mut summary = passing_assertion_summary();
+        summary
+            .transactions
+            .retain(|tx| tx.check != "factory-xudt-splice-out-smoke");
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("missing committed factory splice smoke transaction")
+        );
+    }
+
+    #[test]
+    fn rejects_factory_splice_without_contract_witness_evidence() {
+        let mut summary = passing_assertion_summary();
+        summary.factory_splices[0].witness_len = 0;
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("factory splice evidence for factory-splice-in-smoke")
         );
     }
 
@@ -2519,7 +3330,7 @@ mod tests {
         let err = assert_devnet_smoke_summary(&summary).unwrap_err();
         assert!(
             err.to_string()
-                .contains("unexpected watchtower alert count")
+                .contains("missing expected watchtower alert event")
         );
     }
 
@@ -2543,6 +3354,29 @@ mod tests {
             err.to_string()
                 .contains("watchtower health report must show stopped by stop_file")
         );
+    }
+
+    #[test]
+    fn rejects_missing_splice_payout_evidence() {
+        let mut summary = passing_assertion_summary();
+        summary
+            .splice_payouts
+            .retain(|payout| payout.check != "splice-out-smoke");
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(err.to_string().contains("missing splice payout evidence"));
+    }
+
+    #[test]
+    fn rejects_non_participant_splice_out_policy() {
+        let mut summary = passing_assertion_summary();
+        let payout = summary
+            .splice_payouts
+            .iter_mut()
+            .find(|payout| payout.check == "xudt-splice-out-smoke")
+            .unwrap();
+        payout.withdrawal_payout_policy = "arbitrary_signed_payout_lock".to_string();
+        let err = assert_devnet_smoke_summary(&summary).unwrap_err();
+        assert!(err.to_string().contains("splice payout policy"));
     }
 
     #[test]
@@ -2694,7 +3528,7 @@ mod tests {
         let path = repo_root.join("docs/devnet-smoke-budget.example.json");
 
         let profile = read_smoke_budget_profile(&path).unwrap();
-        assert_eq!(profile.max_total_cycles, Some(200_000_000));
+        assert_eq!(profile.max_total_cycles, Some(1_200_000_000));
         assert_eq!(profile.max_tx_bytes, Some(500_000));
         assert!(
             profile
@@ -2714,6 +3548,9 @@ mod tests {
         assert!(profile.transactions.iter().any(|limit| {
             limit.check == "factory-reduced-xudt-one-sided-exit-smoke" && limit.path == "$.exit"
         }));
+        assert!(profile.transactions.iter().any(|limit| {
+            limit.check == "factory-xudt-splice-in-smoke" && limit.path == "$.apply"
+        }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-reduced-xudt-change-exit-smoke"
                 && limit.proof_kind == "factory_reduced_exit_xudt_change_reserve_claim_v1"
@@ -2721,6 +3558,11 @@ mod tests {
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-reduced-xudt-one-sided-exit-smoke"
                 && limit.proof_kind == "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
+        }));
+        assert!(profile.proof_profiles.iter().any(|limit| {
+            limit.check == "factory-xudt-splice-out-smoke"
+                && limit.proof_kind == "factory_splice_all_participants_xudt_v1"
+                && limit.proof_siblings == Some(0)
         }));
     }
 
@@ -2807,6 +3649,7 @@ mod tests {
             directory: "baseline".to_string(),
             manifest: BTreeMap::new(),
             json_files: 1,
+            json_checks: vec!["open".to_string()],
             transactions: vec![TransactionSummary {
                 check: "open".to_string(),
                 path: "$".to_string(),
@@ -2825,6 +3668,8 @@ mod tests {
             factory_proof_profiles: Vec::new(),
             factory_reduced_exits: Vec::new(),
             factory_local_exits: Vec::new(),
+            factory_splices: Vec::new(),
+            splice_payouts: Vec::new(),
             totals: MetricTotals::default(),
         };
         let mut candidate = baseline.clone();
@@ -2866,14 +3711,83 @@ mod tests {
         DevnetSmokeSummary {
             directory: "target/devnet-smoke/test".to_string(),
             manifest,
-            json_files: 36,
+            json_files: 44,
+            json_checks: EXPECTED_BUSINESS_MATRIX_JSON_CHECKS
+                .iter()
+                .map(|check| (*check).to_string())
+                .collect(),
             transactions: vec![
+                transaction("watch-splice-stale/apply", "$", "Committed"),
+                transaction("manual-channel/open", "$", "Committed"),
+                transaction(
+                    "manual-channel/publish-latest",
+                    "$.publication",
+                    "Committed",
+                ),
+                transaction("manual-channel/finalise", "$", "Committed"),
+                transaction("manual-sponsor/fund", "$", "Committed"),
+                transaction("manual-sponsor/publish", "$", "Committed"),
+                transaction("manual-sponsor/finalise", "$", "Committed"),
+                transaction("splice-in-smoke", "$.apply", "Committed"),
+                transaction("splice-in-smoke", "$.post_splice_sponsor", "Committed"),
+                transaction("splice-in-smoke", "$.publish", "Committed"),
+                transaction("splice-in-smoke", "$.finalise", "Committed"),
+                transaction("splice-out-smoke", "$.apply", "Committed"),
+                transaction("splice-out-smoke", "$.post_splice_sponsor", "Committed"),
+                transaction("splice-out-smoke", "$.publish", "Committed"),
+                transaction("splice-out-smoke", "$.finalise", "Committed"),
+                transaction("splice-in-asymmetric-smoke", "$.apply", "Committed"),
+                transaction("splice-in-asymmetric-smoke", "$.finalise", "Committed"),
+                transaction("splice-out-asymmetric-smoke", "$.apply", "Committed"),
+                transaction("splice-out-asymmetric-smoke", "$.finalise", "Committed"),
+                transaction("xudt-one-sided-smoke", "$.finalise", "Committed"),
+                transaction("xudt-splice-in-smoke", "$.apply", "Committed"),
+                transaction("xudt-splice-in-smoke", "$.post_splice_sponsor", "Committed"),
+                transaction("xudt-splice-in-smoke", "$.publish", "Committed"),
+                transaction("xudt-splice-in-smoke", "$.xudt_finalise", "Committed"),
+                transaction("xudt-splice-out-smoke", "$.apply", "Committed"),
+                transaction(
+                    "xudt-splice-out-smoke",
+                    "$.post_splice_sponsor",
+                    "Committed",
+                ),
+                transaction("xudt-splice-out-smoke", "$.publish", "Committed"),
+                transaction("xudt-splice-out-smoke", "$.xudt_finalise", "Committed"),
+                transaction("xudt-splice-in-one-sided-smoke", "$.apply", "Committed"),
+                transaction(
+                    "xudt-splice-in-one-sided-smoke",
+                    "$.xudt_finalise",
+                    "Committed",
+                ),
+                transaction("xudt-splice-out-one-sided-smoke", "$.apply", "Committed"),
+                transaction(
+                    "xudt-splice-out-one-sided-smoke",
+                    "$.xudt_finalise",
+                    "Committed",
+                ),
+                transaction("factory-smoke", "$.update", "Committed"),
                 transaction("factory-reduced-rights-smoke", "$.update", "Committed"),
+                transaction(
+                    "factory-reduced-rights-tight-smoke",
+                    "$.update",
+                    "Committed",
+                ),
                 transaction("factory-merkle-update-smoke", "$.update", "Committed"),
+                transaction("factory-merkle-update-tight-smoke", "$.update", "Committed"),
                 transaction("factory-reduced-exit-smoke", "$.exit", "Committed"),
+                transaction(
+                    "factory-reduced-exit-asymmetric-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
                 transaction("factory-reduced-xudt-exit-smoke", "$.exit", "Committed"),
                 transaction(
                     "factory-reduced-xudt-one-sided-exit-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-bob-only-exit-smoke",
                     "$.exit",
                     "Committed",
                 ),
@@ -2882,6 +3796,105 @@ mod tests {
                     "$.exit",
                     "Committed",
                 ),
+                transaction("factory-splice-in-smoke", "$.open", "Committed"),
+                transaction("factory-splice-in-smoke", "$.apply", "Committed"),
+                transaction("factory-splice-in-smoke", "$.exit", "Committed"),
+                transaction("factory-splice-out-smoke", "$.open", "Committed"),
+                transaction("factory-splice-out-smoke", "$.apply", "Committed"),
+                transaction("factory-splice-out-smoke", "$.exit", "Committed"),
+                transaction("factory-splice-in-asymmetric-smoke", "$.apply", "Committed"),
+                transaction(
+                    "factory-splice-out-asymmetric-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction("factory-reduced-splice-in-smoke", "$.open", "Committed"),
+                transaction("factory-reduced-splice-in-smoke", "$.apply", "Committed"),
+                transaction("factory-reduced-splice-in-smoke", "$.exit", "Committed"),
+                transaction("factory-reduced-splice-out-smoke", "$.open", "Committed"),
+                transaction("factory-reduced-splice-out-smoke", "$.apply", "Committed"),
+                transaction("factory-reduced-splice-out-smoke", "$.exit", "Committed"),
+                transaction(
+                    "factory-reduced-splice-in-asymmetric-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-splice-out-asymmetric-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "$.open",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "$.external_xudt",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-out-smoke",
+                    "$.open",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-out-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-out-smoke",
+                    "$.exit",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-in-one-sided-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-reduced-xudt-splice-out-one-sided-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction("factory-xudt-splice-in-smoke", "$.open", "Committed"),
+                transaction(
+                    "factory-xudt-splice-in-smoke",
+                    "$.external_xudt",
+                    "Committed",
+                ),
+                transaction("factory-xudt-splice-in-smoke", "$.apply", "Committed"),
+                transaction("factory-xudt-splice-in-smoke", "$.exit", "Committed"),
+                transaction("factory-xudt-splice-out-smoke", "$.open", "Committed"),
+                transaction("factory-xudt-splice-out-smoke", "$.apply", "Committed"),
+                transaction("factory-xudt-splice-out-smoke", "$.exit", "Committed"),
+                transaction(
+                    "factory-xudt-splice-in-one-sided-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction(
+                    "factory-xudt-splice-out-one-sided-smoke",
+                    "$.apply",
+                    "Committed",
+                ),
+                transaction("factory-xudt-one-sided/smoke", "$.exit", "Committed"),
+                transaction("factory-xudt-one-sided/smoke", "$.finalise", "Committed"),
+                transaction("watch-direct-sponsor/watch", "$.publication", "Committed"),
+                transaction("watch-direct-sponsor/finalise", "$", "Committed"),
+                transaction("watch-config-loop/finalise", "$", "Committed"),
             ],
             script_failures: vec![
                 failure(
@@ -2915,6 +3928,10 @@ mod tests {
                     "factory_reduced_exit_ckb_reserve_claim_v1",
                 ),
                 factory_reduced_exit_proof_profile(
+                    "factory-reduced-exit-asymmetric-smoke",
+                    "factory_reduced_exit_ckb_reserve_claim_v1",
+                ),
+                factory_reduced_exit_proof_profile(
                     "factory-reduced-xudt-exit-smoke",
                     "factory_reduced_exit_xudt_reserve_claim_v1",
                 ),
@@ -2923,15 +3940,64 @@ mod tests {
                     "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
                 ),
                 factory_reduced_exit_proof_profile(
+                    "factory-reduced-xudt-bob-only-exit-smoke",
+                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+                ),
+                factory_reduced_exit_proof_profile(
                     "factory-reduced-xudt-change-exit-smoke",
                     "factory_reduced_exit_xudt_change_reserve_claim_v1",
+                ),
+                factory_splice_proof_profile(
+                    "factory-splice-in-smoke",
+                    "factory_splice_all_participants_ckb_v1",
+                    0,
+                ),
+                factory_splice_proof_profile(
+                    "factory-splice-out-smoke",
+                    "factory_splice_all_participants_ckb_v1",
+                    0,
+                ),
+                factory_splice_proof_profile(
+                    "factory-reduced-splice-in-smoke",
+                    "factory_reduced_splice_ckb_sparse_merkle_v1",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                ),
+                factory_splice_proof_profile(
+                    "factory-reduced-splice-out-smoke",
+                    "factory_reduced_splice_ckb_sparse_merkle_v1",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                ),
+                factory_splice_proof_profile(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "factory_reduced_splice_xudt_sparse_merkle_v1",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                ),
+                factory_splice_proof_profile(
+                    "factory-reduced-xudt-splice-out-smoke",
+                    "factory_reduced_splice_xudt_sparse_merkle_v1",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                ),
+                factory_splice_proof_profile(
+                    "factory-xudt-splice-in-smoke",
+                    "factory_splice_all_participants_xudt_v1",
+                    0,
+                ),
+                factory_splice_proof_profile(
+                    "factory-xudt-splice-out-smoke",
+                    "factory_splice_all_participants_xudt_v1",
+                    0,
                 ),
             ],
             factory_reduced_exits: vec![
                 factory_reduced_exit("factory-reduced-exit-smoke", None),
+                factory_reduced_exit("factory-reduced-exit-asymmetric-smoke", None),
                 factory_reduced_exit("factory-reduced-xudt-exit-smoke", Some(1_000_000)),
                 factory_reduced_exit_one_sided(
                     "factory-reduced-xudt-one-sided-exit-smoke",
+                    1_000_000,
+                ),
+                factory_reduced_exit_one_sided(
+                    "factory-reduced-xudt-bob-only-exit-smoke",
                     1_000_000,
                 ),
                 factory_reduced_exit_with_change(
@@ -2947,17 +4013,98 @@ mod tests {
                 factory_exit("factory-xudt/smoke", 2),
                 factory_exit("factory-xudt-negative/local-exit-package", 2),
                 factory_exit("factory-xudt-negative/smoke", 2),
+                factory_exit("factory-splice-in-smoke", 1),
+                factory_exit("factory-splice-out-smoke", 1),
+                factory_exit("factory-reduced-xudt-splice-in-smoke", 2),
+                factory_exit("factory-reduced-xudt-splice-out-smoke", 2),
+                factory_exit("factory-xudt-splice-in-smoke", 2),
+                factory_exit("factory-xudt-splice-out-smoke", 2),
+            ],
+            factory_splices: vec![
+                factory_splice("factory-splice-in-smoke", "splice_in", "ckb", 20, 0),
+                factory_splice("factory-splice-out-smoke", "splice_out", "ckb", 0, 20),
+                factory_reduced_splice(
+                    "factory-reduced-splice-in-smoke",
+                    "splice_in",
+                    "ckb",
+                    20,
+                    0,
+                ),
+                factory_reduced_splice(
+                    "factory-reduced-splice-out-smoke",
+                    "splice_out",
+                    "ckb",
+                    0,
+                    20,
+                ),
+                factory_reduced_splice(
+                    "factory-reduced-xudt-splice-in-smoke",
+                    "splice_in",
+                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    20,
+                    0,
+                ),
+                factory_reduced_splice(
+                    "factory-reduced-xudt-splice-out-smoke",
+                    "splice_out",
+                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    0,
+                    20,
+                ),
+                factory_splice(
+                    "factory-xudt-splice-in-smoke",
+                    "splice_in",
+                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    20,
+                    0,
+                ),
+                factory_splice(
+                    "factory-xudt-splice-out-smoke",
+                    "splice_out",
+                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    0,
+                    20,
+                ),
+            ],
+            splice_payouts: vec![
+                splice_payout("splice-in-smoke", "none", false),
+                splice_payout("splice-out-smoke", "participant_signature_pubkey", true),
+                splice_payout("xudt-splice-in-smoke", "none", false),
+                splice_payout(
+                    "xudt-splice-out-smoke",
+                    "participant_signature_pubkey",
+                    true,
+                ),
             ],
             deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
-                transaction_count: 57,
-                committed_count: 56,
+                transaction_count: 70,
+                committed_count: 69,
                 pending_count: 1,
                 total_estimated_cycles: 1,
                 max_estimated_cycles: 1,
                 total_tx_size_bytes: 1,
                 max_tx_size_bytes: 1,
             },
+        }
+    }
+
+    fn splice_payout(
+        check: &str,
+        withdrawal_payout_policy: &str,
+        has_withdrawal: bool,
+    ) -> SplicePayoutEvidenceSummary {
+        SplicePayoutEvidenceSummary {
+            check: check.to_string(),
+            path: "$.apply".to_string(),
+            withdrawal_payout_policy: withdrawal_payout_policy.to_string(),
+            withdrawal_participant_pubkey_sec1: has_withdrawal.then(|| {
+                "0x021111111111111111111111111111111111111111111111111111111111111111".to_string()
+            }),
+            withdrawal_lock_hash: has_withdrawal.then(|| {
+                "0x1111111111111111111111111111111111111111111111111111111111111111".to_string()
+            }),
+            withdrawal_out_point: has_withdrawal.then(|| "0xabc:2".to_string()),
         }
     }
 
@@ -3017,7 +4164,7 @@ mod tests {
             quantity_before: 1000,
             quantity_after: 900,
             proof_siblings: 256,
-            witness_len: 8718,
+            witness_len: 8720,
         }
     }
 
@@ -3028,7 +4175,7 @@ mod tests {
             evidence_path: "$.package.package".to_string(),
             proof_kind: "factory_sparse_merkle_update_v1".to_string(),
             proof_siblings: 256,
-            witness_len: 8718,
+            witness_len: 8720,
             estimated_cycles: 1,
             tx_size_bytes: 1,
         }
@@ -3057,6 +4204,23 @@ mod tests {
             evidence_path: "$.exit.reduced_exit".to_string(),
             proof_kind: proof_kind.to_string(),
             proof_siblings: 0,
+            witness_len: 1,
+            estimated_cycles: 1,
+            tx_size_bytes: 1,
+        }
+    }
+
+    fn factory_splice_proof_profile(
+        check: &str,
+        proof_kind: &str,
+        proof_siblings: usize,
+    ) -> FactoryProofProfileSummary {
+        FactoryProofProfileSummary {
+            check: check.to_string(),
+            transaction_path: "$.apply".to_string(),
+            evidence_path: "$.package.package".to_string(),
+            proof_kind: proof_kind.to_string(),
+            proof_siblings,
             witness_len: 1,
             estimated_cycles: 1,
             tx_size_bytes: 1,
@@ -3140,6 +4304,56 @@ mod tests {
         }
     }
 
+    fn factory_splice(
+        check: &str,
+        kind: &str,
+        reserve_claim_asset: &str,
+        external_input: u128,
+        withdrawal: u128,
+    ) -> FactorySpliceEvidenceSummary {
+        let (before, after) = if kind == "splice_in" {
+            (100, 120)
+        } else {
+            (100, 80)
+        };
+        FactorySpliceEvidenceSummary {
+            check: check.to_string(),
+            path: "$.package.package".to_string(),
+            factory_id: "0x00".to_string(),
+            kind: kind.to_string(),
+            old_update_number: 0,
+            new_update_number: 1,
+            reserve_claim_asset: reserve_claim_asset.to_string(),
+            reserve_claim_before: before,
+            reserve_claim_after: after,
+            vault_old_amount: before,
+            vault_new_amount: after,
+            external_input,
+            withdrawal,
+            proof_siblings: 0,
+            signatures: 2,
+            signing_digest: "0x11".to_string(),
+            vault_delta_commitment: "0x22".to_string(),
+            non_interference_digest: "0x33".to_string(),
+            witness_len: 1,
+        }
+    }
+
+    fn factory_reduced_splice(
+        check: &str,
+        kind: &str,
+        reserve_claim_asset: &str,
+        external_input: u128,
+        withdrawal: u128,
+    ) -> FactorySpliceEvidenceSummary {
+        let mut summary =
+            factory_splice(check, kind, reserve_claim_asset, external_input, withdrawal);
+        summary.proof_siblings = morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1;
+        summary.signatures = 1;
+        summary.witness_len = morph_script_common::FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN;
+        summary
+    }
+
     fn deployed_scripts() -> Vec<DeployedScriptSummary> {
         EXPECTED_DEPLOYED_SCRIPT_NAMES
             .iter()
@@ -3184,6 +4398,45 @@ mod tests {
                 publication_tx_hash: Some("0xdef".to_string()),
                 scanned_to_block: 10,
                 next_from_block: 11,
+            },
+            WatchtowerAlertSummary {
+                check: "watch-splice-stale/watch-alerts".to_string(),
+                path: "line 1".to_string(),
+                channel_id: "0x11".to_string(),
+                severity: "warning".to_string(),
+                event: "splice_detected".to_string(),
+                selected_state_number: 1,
+                observed_state_number: Some(0),
+                observed_out_point: Some("0xdef:0".to_string()),
+                publication_tx_hash: None,
+                scanned_to_block: 20,
+                next_from_block: 21,
+            },
+            WatchtowerAlertSummary {
+                check: "watch-splice-stale/watch-alerts".to_string(),
+                path: "line 2".to_string(),
+                channel_id: "0x11".to_string(),
+                severity: "warning".to_string(),
+                event: "splice_package_stale".to_string(),
+                selected_state_number: 1,
+                observed_state_number: Some(0),
+                observed_out_point: Some("0xdef:0".to_string()),
+                publication_tx_hash: None,
+                scanned_to_block: 20,
+                next_from_block: 21,
+            },
+            WatchtowerAlertSummary {
+                check: "watch-splice-stale/watch-alerts".to_string(),
+                path: "line 3".to_string(),
+                channel_id: "0x11".to_string(),
+                severity: "info".to_string(),
+                event: "scan_idle".to_string(),
+                selected_state_number: 1,
+                observed_state_number: None,
+                observed_out_point: None,
+                publication_tx_hash: None,
+                scanned_to_block: 20,
+                next_from_block: 21,
             },
         ]
     }

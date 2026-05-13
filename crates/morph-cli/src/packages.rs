@@ -51,8 +51,14 @@ pub struct StoredStatePackage {
     pub created_unix_ms: u64,
     pub channel_id: String,
     pub funding_anchor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_epoch: Option<u64>,
     pub state_number: u64,
     pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement_descriptor_commitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub descriptor_version: Option<u16>,
     pub signing_digest: String,
     pub header_hex: String,
     pub witness_hex: String,
@@ -281,6 +287,12 @@ pub struct WatchCursor {
     pub channel_id: String,
     pub next_block: u64,
     pub scanned_to_block: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_funding_anchor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observed_state_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_observed_out_point: Option<String>,
     pub updated_unix_ms: u64,
 }
 
@@ -304,8 +316,13 @@ impl StoredStatePackage {
             created_unix_ms: now_unix_ms()?,
             channel_id: hex_prefixed(header.channel_id()),
             funding_anchor: hex_prefixed(header.funding_anchor()),
+            funding_epoch: None,
             state_number: header.state_number(),
             phase: "settling".to_string(),
+            settlement_descriptor_commitment: Some(hex_prefixed(
+                header.settlement_descriptor_commitment(),
+            )),
+            descriptor_version: Some(header.descriptor_version()),
             signing_digest: hex_prefixed(&header.signing_digest()),
             header_hex: hex_prefixed(header_bytes),
             witness_hex: hex_prefixed(witness_bytes),
@@ -346,6 +363,22 @@ impl StoredStatePackage {
             self.funding_anchor == hex_prefixed(header.funding_anchor()),
             "state package funding_anchor does not match header"
         );
+        if let Some(commitment) = &self.settlement_descriptor_commitment {
+            ensure!(
+                *commitment == canonical_hex32(commitment)?,
+                "state package settlement_descriptor_commitment must be canonical"
+            );
+            ensure!(
+                commitment == &hex_prefixed(header.settlement_descriptor_commitment()),
+                "state package settlement_descriptor_commitment does not match header"
+            );
+        }
+        if let Some(version) = self.descriptor_version {
+            ensure!(
+                version == header.descriptor_version(),
+                "state package descriptor_version does not match header"
+            );
+        }
         ensure!(
             self.state_number == header.state_number(),
             "state package state_number does not match header"
@@ -391,10 +424,26 @@ impl WatchCursor {
             channel_id: canonical_hex32(channel_id)?,
             next_block,
             scanned_to_block,
+            current_funding_anchor: None,
+            last_observed_state_number: None,
+            last_observed_out_point: None,
             updated_unix_ms: now_unix_ms()?,
         };
         cursor.validate()?;
         Ok(cursor)
+    }
+
+    pub fn with_observed_state(
+        mut self,
+        funding_anchor: &str,
+        state_number: u64,
+        out_point: &str,
+    ) -> Result<Self> {
+        self.current_funding_anchor = Some(canonical_hex32(funding_anchor)?);
+        self.last_observed_state_number = Some(state_number);
+        self.last_observed_out_point = Some(out_point.to_string());
+        self.validate()?;
+        Ok(self)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -408,6 +457,12 @@ impl WatchCursor {
             self.channel_id == canonical_channel_id,
             "watch cursor channel_id must be canonical"
         );
+        if let Some(anchor) = &self.current_funding_anchor {
+            ensure!(
+                *anchor == canonical_hex32(anchor)?,
+                "watch cursor current_funding_anchor must be canonical"
+            );
+        }
         ensure!(
             self.scanned_to_block < self.next_block
                 || self.scanned_to_block == 0
@@ -2319,6 +2374,12 @@ mod tests {
         let selected = latest_package(&dir, &first.channel_id).unwrap();
         assert_eq!(selected.package.state_number, 3);
         assert_eq!(selected.path, latest_path);
+        assert_eq!(selected.package.funding_epoch, None);
+        assert_eq!(
+            selected.package.settlement_descriptor_commitment,
+            Some(hex_prefixed(&[0u8; BYTE32_LEN]))
+        );
+        assert_eq!(selected.package.descriptor_version, Some(1));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -2449,8 +2510,12 @@ mod tests {
     fn writes_and_reads_watch_cursor() {
         let dir = temp_dir("cursor");
         let channel_id = format!("0x{}", "11".repeat(BYTE32_LEN));
+        let funding_anchor = format!("0x{}", "22".repeat(BYTE32_LEN));
         let path = default_watch_cursor_path(&dir, &channel_id).unwrap();
-        let cursor = WatchCursor::new(&channel_id, 43, 42).unwrap();
+        let cursor = WatchCursor::new(&channel_id, 43, 42)
+            .unwrap()
+            .with_observed_state(&funding_anchor, 7, "0xabc:0")
+            .unwrap();
 
         assert!(read_watch_cursor(&path).unwrap().is_none());
         write_watch_cursor(&path, &cursor).unwrap();
@@ -2459,6 +2524,12 @@ mod tests {
         assert_eq!(loaded.channel_id, channel_id);
         assert_eq!(loaded.next_block, 43);
         assert_eq!(loaded.scanned_to_block, 42);
+        assert_eq!(
+            loaded.current_funding_anchor.as_deref(),
+            Some(funding_anchor.as_str())
+        );
+        assert_eq!(loaded.last_observed_state_number, Some(7));
+        assert_eq!(loaded.last_observed_out_point.as_deref(), Some("0xabc:0"));
 
         fs::remove_dir_all(dir).unwrap();
     }
