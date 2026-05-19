@@ -190,6 +190,8 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 For community-facing explanations with diagrams and less protocol vocabulary,
 see the [English tutorial](docs/morph-channel-tutorial.md) and
 [Chinese tutorial](docs/morph-channel-tutorial.zh.md).
+The release-blocking production checklist is tracked in
+[docs/mainnet-readiness.md](docs/mainnet-readiness.md).
 
 For watchtower-style deployments, generate an operator policy and pass it to
 the scanner before it publishes any package:
