@@ -32,6 +32,8 @@ evidence from mainnet or a mainnet-like environment.
 
 ### Watchtower Operations
 
+- Pass the devnet stateful production-scenario suite with watchtower restart,
+  cursor, stale-splice-package, and multi-operator-local evidence.
 - Exercise restart and cursor recovery after bilateral splice and factory splice
   transitions.
 - Require funding-anchor-aware package selection, stale pre-splice package

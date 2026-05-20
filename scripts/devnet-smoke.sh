@@ -462,7 +462,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-service \
 
 log "watch-auto-sponsor-depth -> $WATCH_DIR/depth.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" mine \
-  --blocks 3 \
+  --blocks 5 \
   --json >"$WATCH_DIR/depth.json"
 
 log "watch-auto-sponsor-publish -> $WATCH_DIR/watch.json"

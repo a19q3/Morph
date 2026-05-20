@@ -35,6 +35,7 @@ mod packages;
 mod rpc;
 mod smoke_report;
 mod splice_packages;
+mod stateful_report;
 mod watch_alert;
 mod watch_config;
 mod watch_policy;
@@ -271,6 +272,51 @@ enum Command {
         /// Maximum allowed absolute per-transaction transaction-size delta.
         #[arg(long)]
         max_abs_tx_byte_delta: Option<u64>,
+        /// Emit machine-readable JSON instead of Markdown.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Summarise a completed scripts/devnet-stateful-scenarios.sh output directory.
+    DevnetStatefulReport {
+        /// Directory produced by scripts/devnet-stateful-scenarios.sh.
+        #[arg(long, default_value = "target/devnet-stateful-e2e/latest/scenarios")]
+        dir: std::path::PathBuf,
+        /// JSON file defining generalized devnet audit family requirements.
+        #[arg(long, default_value = "docs/devnet-audit-profile.example.json")]
+        audit_profile: std::path::PathBuf,
+        /// Emit machine-readable JSON instead of Markdown.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assert that a completed devnet stateful scenario directory covers required paths.
+    DevnetStatefulAssert {
+        /// Directory produced by scripts/devnet-stateful-scenarios.sh.
+        #[arg(long, default_value = "target/devnet-stateful-e2e/latest/scenarios")]
+        dir: std::path::PathBuf,
+        /// JSON file with absolute stateful budgets for totals and named transactions.
+        #[arg(long)]
+        budget_profile: Option<std::path::PathBuf>,
+        /// JSON file defining generalized devnet audit family requirements.
+        #[arg(long, default_value = "docs/devnet-audit-profile.example.json")]
+        audit_profile: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare two completed devnet stateful scenario directories.
+    DevnetStatefulCompare {
+        /// Baseline directory produced by scripts/devnet-stateful-scenarios.sh.
+        #[arg(long)]
+        baseline: std::path::PathBuf,
+        /// Candidate directory produced by scripts/devnet-stateful-scenarios.sh.
+        #[arg(long)]
+        candidate: std::path::PathBuf,
+        /// Fail if scenario membership or underlying transaction status changed.
+        #[arg(long)]
+        fail_on_status_change: bool,
+        /// JSON file defining generalized devnet audit family requirements.
+        #[arg(long, default_value = "docs/devnet-audit-profile.example.json")]
+        audit_profile: std::path::PathBuf,
         /// Emit machine-readable JSON instead of Markdown.
         #[arg(long)]
         json: bool,
@@ -3243,6 +3289,99 @@ fn main() -> Result<()> {
                 print!("{}", smoke_report::render_comparison_markdown(&comparison));
             }
             smoke_report::assert_comparison_limits(&comparison, &limits)?;
+            Ok(())
+        }
+        Command::DevnetStatefulReport {
+            dir,
+            audit_profile,
+            json,
+        } => {
+            let audit_profile = stateful_report::read_audit_profile(&audit_profile)?;
+            let summary =
+                stateful_report::summarize_devnet_stateful_with_audit(&dir, Some(&audit_profile))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print!("{}", stateful_report::render_markdown(&summary));
+            }
+            Ok(())
+        }
+        Command::DevnetStatefulAssert {
+            dir,
+            budget_profile,
+            audit_profile,
+            json,
+        } => {
+            let budget_limits = budget_profile
+                .as_deref()
+                .map(stateful_report::read_stateful_budget_profile)
+                .transpose()?;
+            let audit_profile = stateful_report::read_audit_profile(&audit_profile)?;
+            let report = stateful_report::assert_default_devnet_stateful(
+                &dir,
+                budget_limits.as_ref(),
+                Some(&audit_profile),
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("devnet stateful assertions ok");
+                println!("directory={}", report.directory);
+                if let Some(git_commit) = &report.git_commit {
+                    println!("git_commit={git_commit}");
+                }
+                if let Some(git_dirty) = &report.git_dirty {
+                    println!("git_dirty={git_dirty}");
+                }
+                println!("scenarios={}", report.scenario_count);
+                println!("required_scenarios={}", report.required_scenarios);
+                println!("audit_families={}", report.audit_families);
+                println!("audit_families_passed={}", report.audit_families_passed);
+                println!("referenced_artifacts={}", report.referenced_artifacts);
+                println!(
+                    "required_committed_checks={}",
+                    report.required_committed_checks
+                );
+                println!("expected_failures={}", report.expected_failures);
+                if let Some(smoke) = &report.smoke {
+                    println!("smoke_transactions={}", smoke.transaction_count);
+                    println!("smoke_committed={}", smoke.committed_count);
+                    println!(
+                        "smoke_expected_script_failures={}",
+                        smoke.expected_script_failures
+                    );
+                    if let Some(budget) = &smoke.budget {
+                        println!("budget_total_cycles={}", budget.total_estimated_cycles);
+                        println!("budget_max_tx_cycles={}", budget.max_estimated_cycles);
+                        println!("budget_total_bytes={}", budget.total_tx_size_bytes);
+                        println!("budget_max_tx_bytes={}", budget.max_tx_size_bytes);
+                    }
+                }
+            }
+            Ok(())
+        }
+        Command::DevnetStatefulCompare {
+            baseline,
+            candidate,
+            fail_on_status_change,
+            audit_profile,
+            json,
+        } => {
+            let audit_profile = stateful_report::read_audit_profile(&audit_profile)?;
+            let comparison = stateful_report::compare_devnet_stateful_with_audit(
+                &baseline,
+                &candidate,
+                Some(&audit_profile),
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&comparison)?);
+            } else {
+                print!(
+                    "{}",
+                    stateful_report::render_comparison_markdown(&comparison)
+                );
+            }
+            stateful_report::assert_stateful_comparison_limits(&comparison, fail_on_status_change)?;
             Ok(())
         }
         Command::Devnet { rpc_url, command } => run_devnet(&rpc_url, command),

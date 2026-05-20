@@ -104,6 +104,16 @@ Implemented devnet-level checks:
   byte-size regressions through `devnet-smoke-compare`;
 - absolute smoke budget gates for total, per-transaction, and proof-profile
   cycle/byte ceilings through `devnet-smoke-assert`;
+- stateful devnet scenario assertions through `devnet-stateful-assert`,
+  grouping the smoke evidence into bilateral lifecycle, sponsor pressure,
+  splice lifecycle, factory lifecycle, watchtower operations, extreme value
+  cases, and negative attack-shaped cases;
+- generalized devnet audit families through
+  `docs/devnet-audit-profile.example.json`, mapping previously found issue
+  classes into required scenario tags, committed checks, exact expected
+  failures, and budget evidence. This devnet acceptance layer complements the
+  unit and CKB-VM invariant rows above; it does not replace exact contract
+  predicate tests;
 - JSON smoke budget profiles for named critical transactions and proof shapes,
   such as `factory-reduced-rights-smoke $.update`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory

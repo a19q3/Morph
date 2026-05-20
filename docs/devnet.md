@@ -1045,6 +1045,20 @@ JSONL alerts, and `devnet-smoke-assert` requires the default smoke run to show
 `older_state_detected`, `publication_submitted`, `splice_detected`, and
 `splice_package_stale` alerts.
 
+For production-shaped devnet acceptance, run `make devnet-stateful-e2e`. This
+starts a fresh local CKB devnet, runs the same on-chain smoke matrix, and then
+records a stateful scenario layer under
+`target/devnet-stateful-e2e/<run>/scenarios/`. The scenario layer groups the
+chain evidence into bilateral lifecycle, sponsor pressure, splice lifecycle,
+factory lifecycle, watchtower operations, extreme value cases, and negative
+attack-shaped cases. It also evaluates the generalized audit profile in
+`docs/devnet-audit-profile.example.json`, which requires each protocol risk
+family to have scenario tags, committed checks, exact expected failures, and
+budget evidence. Use `devnet-stateful-report`,
+`devnet-stateful-assert --audit-profile docs/devnet-audit-profile.example.json --budget-profile docs/devnet-stateful-budget.example.json`,
+and `devnet-stateful-compare --audit-profile docs/devnet-audit-profile.example.json`
+to review, gate, or compare those artifacts.
+
 ## Remaining Devnet Gap
 
 The current vertical slice covers bilateral CKB-only vaults, a devnet CKB+xUDT

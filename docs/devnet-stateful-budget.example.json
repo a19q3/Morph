@@ -1,0 +1,116 @@
+{
+  "schema": "morph.devnet_stateful_budget.v1",
+  "max_total_cycles": 1200000000,
+  "max_tx_cycles": 30000000,
+  "max_total_bytes": 2000000,
+  "max_tx_bytes": 500000,
+  "transactions": [
+    {
+      "check": "supersede-smoke",
+      "path": "$.finalise",
+      "max_cycles": 9000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "manual-channel/finalise",
+      "path": "$",
+      "max_cycles": 9000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "splice-in-smoke",
+      "path": "$.apply",
+      "max_cycles": 27000000,
+      "max_bytes": 12000
+    },
+    {
+      "check": "xudt-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 27000000,
+      "max_bytes": 13000
+    },
+    {
+      "check": "factory-reduced-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 10000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-full-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-one-sided-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-out-smoke",
+      "path": "$.apply",
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    },
+    {
+      "check": "watch-direct-sponsor/watch",
+      "path": "$.publication",
+      "max_cycles": 9000000,
+      "max_bytes": 9000
+    }
+  ],
+  "proof_profiles": [
+    {
+      "check": "factory-reduced-rights-smoke",
+      "transaction_path": "$.update",
+      "proof_kind": "factory_reduced_rights_bounded_claim_decrease_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3000,
+      "max_cycles": 6000000,
+      "max_bytes": 4000
+    },
+    {
+      "check": "factory-merkle-update-smoke",
+      "transaction_path": "$.update",
+      "proof_kind": "factory_sparse_merkle_update_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 9000,
+      "max_cycles": 30000000,
+      "max_bytes": 20000
+    },
+    {
+      "check": "factory-reduced-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_ckb_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 3100,
+      "max_cycles": 10000000,
+      "max_bytes": 9000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 4000,
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-splice-out-smoke",
+      "transaction_path": "$.apply",
+      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle_v1",
+      "proof_siblings": 256,
+      "max_witness_len": 10000,
+      "max_cycles": 20000000,
+      "max_bytes": 23000
+    }
+  ]
+}

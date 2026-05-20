@@ -171,6 +171,16 @@ For release closeout, `scripts/devnet-e2e.sh` starts a fresh real CKB devnet
 from the parent `../ckb` tree, runs only the on-chain smoke path with local
 `cargo test`/testtool checks skipped, and applies the smoke budget profile to
 the resulting chain artefacts.
+`scripts/devnet-stateful-e2e.sh` runs the production-scenario acceptance layer
+on a fresh devnet. It writes scenario records under
+`target/devnet-stateful-e2e/<run>/scenarios/`, keeps the underlying smoke tree
+as `scenarios/smoke/`, and asserts long-lifecycle channel, splice, factory,
+watchtower, sponsor, xUDT, and negative attack-shaped paths through
+`devnet-stateful-assert`. The stateful assertion layer also loads the
+generalized audit profile in
+[docs/devnet-audit-profile.example.json](docs/devnet-audit-profile.example.json)
+so each protocol risk family has required scenario tags, committed transaction
+evidence, exact negative-path failures, and budget coverage.
 To rebuild or assert a previous run:
 
 ```sh
@@ -186,6 +196,14 @@ cargo run -p morph-cli -- devnet-smoke-compare \
   --fail-on-status-change \
   --max-abs-total-byte-delta 0 \
   --max-abs-tx-byte-delta 0
+make devnet-stateful-e2e
+cargo run -p morph-cli -- devnet-stateful-report \
+  --dir target/devnet-stateful-e2e/latest/scenarios \
+  --audit-profile docs/devnet-audit-profile.example.json
+cargo run -p morph-cli -- devnet-stateful-assert \
+  --dir target/devnet-stateful-e2e/latest/scenarios \
+  --audit-profile docs/devnet-audit-profile.example.json \
+  --budget-profile docs/devnet-stateful-budget.example.json
 ```
 
 For community-facing explanations with diagrams and less protocol vocabulary,

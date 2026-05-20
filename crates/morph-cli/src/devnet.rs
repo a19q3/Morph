@@ -10012,20 +10012,24 @@ fn send_and_mine(
         H256::from(tx_hash)
     );
 
-    let mut mined_blocks = Vec::new();
-    for _ in 0..mine_blocks {
-        mined_blocks.push(rpc.generate_block()?);
-        let status = rpc.transaction(sent_hash.clone())?;
-        if status.tx_status.status == Status::Committed {
-            break;
-        }
-    }
     let status = if mine_blocks > 0 {
-        rpc.wait_transaction_committed(
-            sent_hash.clone(),
-            Duration::from_secs(30),
-            Duration::from_millis(500),
-        )?
+        let mined = mine_blocks_until_committed(rpc, sent_hash.clone(), mine_blocks)?;
+        return Ok(SentTransactionReport {
+            tx_hash: format!("{sent_hash:#x}"),
+            status: format!("{:?}", mined.status.tx_status.status),
+            block_number: mined
+                .status
+                .tx_status
+                .block_number
+                .map(|number| number.value()),
+            block_hash: mined
+                .status
+                .tx_status
+                .block_hash
+                .map(|hash| format!("{hash:#x}")),
+            metrics,
+            mined_blocks: mined.blocks,
+        });
     } else {
         rpc.transaction(sent_hash.clone())?
     };
@@ -10036,7 +10040,7 @@ fn send_and_mine(
         block_number: status.tx_status.block_number.map(|number| number.value()),
         block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
         metrics,
-        mined_blocks,
+        mined_blocks: Vec::new(),
     })
 }
 
@@ -10053,26 +10057,66 @@ fn mine_pending_transaction(
     mine_blocks: u64,
 ) -> Result<PendingCommitReport> {
     let parsed = parse_h256(tx_hash)?;
-    let mut mined_blocks = Vec::new();
-    for _ in 0..mine_blocks {
-        mined_blocks.push(rpc.generate_block()?);
-        let status = rpc.transaction(parsed.clone())?;
-        if status.tx_status.status == Status::Committed {
-            break;
-        }
-    }
-    let status = rpc.wait_transaction_committed(
-        parsed,
-        Duration::from_secs(30),
-        Duration::from_millis(500),
-    )?;
+    let mined = mine_blocks_until_committed(rpc, parsed, mine_blocks)?;
     Ok(PendingCommitReport {
         tx_hash: tx_hash.to_string(),
-        status: format!("{:?}", status.tx_status.status),
-        block_number: status.tx_status.block_number.map(|number| number.value()),
-        block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
-        mined_blocks,
+        status: format!("{:?}", mined.status.tx_status.status),
+        block_number: mined
+            .status
+            .tx_status
+            .block_number
+            .map(|number| number.value()),
+        block_hash: mined
+            .status
+            .tx_status
+            .block_hash
+            .map(|hash| format!("{hash:#x}")),
+        mined_blocks: mined.blocks,
     })
+}
+
+struct MinedTransactionStatus {
+    status: ckb_jsonrpc_types::TransactionWithStatusResponse,
+    blocks: Vec<String>,
+}
+
+fn mine_blocks_until_committed(
+    rpc: &CkbRpcClient,
+    tx_hash: H256,
+    mine_blocks: u64,
+) -> Result<MinedTransactionStatus> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(60);
+    let batch = mine_blocks.max(1);
+    let mut blocks = Vec::new();
+    loop {
+        for _ in 0..batch {
+            blocks.push(rpc.generate_block()?);
+            let status = rpc.transaction(tx_hash.clone())?;
+            match status.tx_status.status {
+                Status::Committed => return Ok(MinedTransactionStatus { status, blocks }),
+                Status::Rejected => {
+                    return Err(anyhow!(
+                        "transaction {tx_hash:#x} rejected: {}",
+                        status
+                            .tx_status
+                            .reason
+                            .as_deref()
+                            .unwrap_or("node did not report a rejection reason")
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if started.elapsed() >= timeout {
+            let status = rpc.transaction(tx_hash.clone())?;
+            return Err(anyhow!(
+                "timed out mining transaction {tx_hash:#x}; current status is {:?}",
+                status.tx_status.status
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
 }
 
 fn transaction_metrics(

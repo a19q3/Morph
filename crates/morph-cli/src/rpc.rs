@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use ckb_jsonrpc_types::{
-    BlockView, CellWithStatus, EstimateCycles, OutPoint as JsonOutPoint, Status, Transaction,
+    BlockView, CellWithStatus, EstimateCycles, OutPoint as JsonOutPoint, Transaction,
     TransactionWithStatusResponse,
 };
 use ckb_types::H256;
@@ -120,38 +120,6 @@ impl CkbRpcClient {
             "get_transaction",
             json!([tx_hash, format_quantity(2), null]),
         )
-    }
-
-    pub fn wait_transaction_committed(
-        &self,
-        tx_hash: H256,
-        timeout: Duration,
-        poll_interval: Duration,
-    ) -> Result<TransactionWithStatusResponse> {
-        let started = Instant::now();
-        loop {
-            let tx = self.transaction(tx_hash.clone())?;
-            match tx.tx_status.status {
-                Status::Committed => return Ok(tx),
-                Status::Rejected => {
-                    bail!(
-                        "transaction {tx_hash:#x} rejected: {}",
-                        tx.tx_status
-                            .reason
-                            .as_deref()
-                            .unwrap_or("node did not report a rejection reason")
-                    );
-                }
-                _ => {}
-            }
-            if started.elapsed() >= timeout {
-                bail!(
-                    "timed out waiting for transaction {tx_hash:#x}; current status is {:?}",
-                    tx.tx_status.status
-                );
-            }
-            std::thread::sleep(poll_interval);
-        }
     }
 
     pub fn wait_for_tip(
