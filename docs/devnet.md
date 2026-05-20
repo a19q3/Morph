@@ -499,6 +499,10 @@ The sponsor script does not treat arbitrary output data as a publication. The
 policy binds the expected Morph StateType hash, and the sponsor lock rejects a
 fee spend unless the settling StateHeader appears in an output carrying that
 exact type.
+V1 does not have script-verifiable clock evidence for "not after" expiry
+windows, so the sponsor lock rejects finite `expiry` values and only accepts the
+unbounded sentinel `u64::MAX`. Operational expiry windows belong in the
+watchtower policy.
 
 For watchtower-style runs, use tighter policy bounds:
 
@@ -517,7 +521,8 @@ The CLI reports the policy in JSON and in the non-JSON output. The contract
 checks the same fields on-chain: the publication must create a settling
 StateHeader for the channel, its state number must fall inside the policy
 range, the fee must not exceed `max_fee_per_tx`, and the remaining sponsor
-capacity must return to the authorised change lock.
+capacity must return to the authorised change lock. Finite `expiry` values are
+rejected rather than treated as script-enforced deadlines.
 
 To exercise the newer-state-wins path, top up a fresh SponsorCell against the
 currently live settling StateCell and publish a higher state number:

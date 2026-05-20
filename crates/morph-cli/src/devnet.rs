@@ -12303,6 +12303,9 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
         value if value == ScriptError::FactoryReducedProofMismatch as i16 => {
             Some("FactoryReducedProofMismatch")
         }
+        value if value == ScriptError::SponsorPolicyUnsupported as i16 => {
+            Some("SponsorPolicyUnsupported")
+        }
         _ => None,
     }
 }

@@ -202,6 +202,7 @@ pub enum ScriptError {
     SpliceProofMismatch = 41,
     FactorySpliceProofEncoding = 42,
     FactorySpliceProofMismatch = 43,
+    SponsorPolicyUnsupported = 44,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;

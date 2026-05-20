@@ -247,9 +247,10 @@ StateCell, emitting splice-specific alerts when a saved package belongs to a
 different anchor.
 The sponsor lock's V1 script-enforced boundary is intentionally narrower than
 the watchtower operator policy. On chain it checks state type, channel/state
-number range, fee caps, and clean sponsor change. Runtime fields such as
-expiry, sponsor source, cadence, and webhook policy are operator/watchtower
-policy until a future script-verifiable design exists.
+number range, fee caps, clean sponsor change, and rejects finite script-level
+expiry values. Runtime fields such as expiry windows, sponsor source, cadence,
+and webhook policy are operator/watchtower policy until a future
+script-verifiable design exists.
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package, its conservative all-participant signed
