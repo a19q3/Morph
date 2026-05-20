@@ -317,6 +317,9 @@ process manager rather than becoming its own process manager.
 
 ## Current Non-Goals
 
+These are intentional V1 scope boundaries, not stale implementation gaps.
+Changing them requires a separate protocol or proof-shape update.
+
 - No routing, gossip, path finding, or liquidity discovery.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
   beyond the current roadmap. The implemented on-chain paths are fixed-width:
