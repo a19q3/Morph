@@ -70,13 +70,17 @@ Current implementation stage:
 - `contracts/morph-devnet-xudt`: no-std devnet xUDT script used to test
   token-bearing vault settlement without depending on an external issuer.
 
-This is not mainnet software. It is a production-oriented implementation
-repository with tests that turn the paper's audit matrix into executable
-checks. Participant state signatures are verified in both host-side invariants
-and the `morph-state-type` CKB script; conservative factory state signatures
-are verified by `morph-factory-type`. The current devnet path opens a channel,
-publishes a signed settling state using sponsor capacity, supersedes it with a
-higher signed state, and finalises the vault without modifying CKB consensus.
+This is not mainnet software. The current baseline is a V1 safety-kernel audit
+candidate: known local P0/P1 safety-boundary blockers are addressed, but value
+limits still require external diff review, mainnet-like evidence, supply-chain
+gates, and operational readiness sign-off. It is a production-oriented
+implementation repository with tests that turn the paper's audit matrix into
+executable checks. Participant state signatures are verified in both host-side
+invariants and the `morph-state-type` CKB script; conservative factory state
+signatures are verified by `morph-factory-type`. The current devnet path opens
+a channel, publishes a signed settling state using sponsor capacity, supersedes
+it with a higher signed state, and finalises the vault without modifying CKB
+consensus.
 It also opens a conservative factory, advances its state, materialises plain
 CKB and CKB+xUDT child bilateral channels from the factory reserve, and then
 publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
@@ -241,6 +245,11 @@ stop file appears. Watch cursors remember the last observed funding anchor, and
 the scanner only publishes packages whose funding anchor matches the confirmed
 StateCell, emitting splice-specific alerts when a saved package belongs to a
 different anchor.
+The sponsor lock's V1 script-enforced boundary is intentionally narrower than
+the watchtower operator policy. On chain it checks state type, channel/state
+number range, fee caps, and clean sponsor change. Runtime fields such as
+expiry, sponsor source, cadence, and webhook policy are operator/watchtower
+policy until a future script-verifiable design exists.
 
 For the factory research track, the CLI can also print and validate a
 host-side non-interference package, its conservative all-participant signed

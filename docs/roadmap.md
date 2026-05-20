@@ -7,7 +7,8 @@ Status: implemented.
 - State header signing domain.
 - State transition monotonicity.
 - Funding-anchor binding.
-- Sponsor policy bounds.
+- Script-enforced sponsor fee/state bounds plus operator/watchtower policy
+  bounds.
 - Vault finalisation conditions.
 - Partition conservation across reserve, business CKB, xUDT, and sponsor cells.
 

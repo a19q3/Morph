@@ -25,7 +25,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Unrelated Cells cannot influence channel validity | `rejects_unrelated_cell_used_for_channel_semantics` |
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a real Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication`, `sponsor_lock_rejects_fake_state_header_without_state_type` |
-| Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
+| Sponsor fee/state bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
 | Watchtower runtime key material stays outside the config | `resolves_private_key_from_file`, `rejects_ambiguous_private_key_sources`, `rejects_multi_token_private_key_file`, `falls_back_to_devnet_key_for_local_watchers` |
@@ -123,6 +123,9 @@ Implemented devnet-level checks:
   executable checks are
   `factory_type_rejects_reduced_exit_typed_claim_for_ckb_release` and
   `factory_type_rejects_reduced_exit_xudt_reserve_release_v1_disabled`.
+- Sponsor expiry, sponsor source, scan cadence, and webhook policy are
+  operator/watchtower policy in V1. They are covered by host/operator policy
+  checks, not by sponsor-lock script claims.
 
 Deferred devnet-level checks:
 

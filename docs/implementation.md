@@ -288,6 +288,12 @@ confirmation depth, runtime window, polling interval, fee, explicit sponsor
 usage, auto-funded sponsor rotation, auto-sponsor capacity, and devnet mining
 requirements. This keeps deployment assumptions in an auditable file rather
 than relying only on command-line convention.
+This operator policy is distinct from the V1 sponsor lock's script-enforced
+boundary. On chain, sponsor spending is bounded by expected state type,
+channel/state-number range, fee caps, and clean sponsor change. Runtime fields
+such as expiry, sponsor source, scan cadence, and webhook policy are
+watchtower/operator policy until a future design gives the script verifiable
+evidence for them.
 The same scanner can append JSONL alerts for older-state detection,
 publication submission, confirmed splice detection, stale splice-package
 selection, splice-aware publication, and idle scans. It can also POST the same
