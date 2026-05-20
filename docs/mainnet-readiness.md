@@ -60,7 +60,8 @@ evidence from mainnet or a mainnet-like environment.
   OpenSSL dependencies through `deny.toml`.
 - Current `cargo audit` ignores are limited to transitive CKB dependency
   warnings for `paste` (`RUSTSEC-2024-0436`) and `rand 0.7`
-  (`RUSTSEC-2026-0097`); remove them when upstream CKB crates update.
+  (`RUSTSEC-2026-0097`, the current rand advisory; `RUSTSEC-2020-0097` is an
+  unrelated xcb advisory); remove them when upstream CKB crates update.
 - New advisory ignores require a documented reason in the Makefile or
   `deny.toml`.
 
