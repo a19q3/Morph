@@ -332,47 +332,10 @@ cargo run -q -p morph-cli -- devnet factory-reduced-exit-smoke --json \
   > target/factory-reduced-exit-smoke.json
 ```
 
-The typed variant exercises the same reduced signature path, but the released
-child vault carries the devnet xUDT type and commits exact Alice/Bob token
-amounts in the child settlement descriptor:
-
-```sh
-cargo run -q -p morph-cli -- devnet factory-reduced-xudt-exit-smoke --json \
-  > target/factory-reduced-xudt-exit-smoke.json
-```
-
-To exercise the one-sided typed settlement branch, keep the child xUDT total
-non-zero while assigning one participant zero tokens:
-
-```sh
-cargo run -q -p morph-cli -- devnet factory-reduced-xudt-exit-smoke \
-  --alice-xudt-amount 1000000 \
-  --bob-xudt-amount 0 \
-  --json \
-  > target/factory-reduced-xudt-one-sided-exit-smoke.json
-```
-
-To exercise the typed factory-vault change branch, run the same command with a
-surplus xUDT amount. The child vault still receives only the Alice/Bob
-settlement amount, while the remaining tokens stay in a typed FactoryVaultCell
-change output:
-
-```sh
-cargo run -q -p morph-cli -- devnet factory-reduced-xudt-exit-smoke \
-  --factory-vault-xudt-surplus 100000 \
-  --json \
-  > target/factory-reduced-xudt-change-exit-smoke.json
-```
-
-The reduced typed negative smoke proves that xUDT conservation alone is not
-enough: it submits a reduced exit whose child vault is one token short while
-factory-vault typed change preserves total supply. The expected rejection is
-`SettlementOutputMismatch`.
-
-```sh
-cargo run -q -p morph-cli -- devnet factory-reduced-xudt-negative-exit-smoke --json \
-  > target/factory-reduced-xudt-negative-exit-smoke.json
-```
+The typed xUDT reduced-exit commands are intentionally disabled in the V1
+safety-kernel candidate. They remain in the CLI as target coverage, but active
+acceptance is blocked until typed release binding covers the child-vault type
+hash, child amount, settlement descriptor, and FactoryVault typed change.
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
 default local endpoint:
@@ -848,13 +811,16 @@ BilateralSignatureWitnessV1
 FactorySignatureWitnessV1
 FactoryReducedRightsWitnessV1
 FactoryReducedExitWitnessV1
-FactoryReducedExitXudtWitnessV1
 FactoryLocalExitWitnessV1
 FactoryLocalExitXudtWitnessV1
 SponsorPolicyV1
 BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
 ```
+
+`FactoryReducedExitXudtWitnessV1` is intentionally absent from the active
+contract milestone. The typed reduced-exit shape is disabled until its typed
+release binding is complete.
 
 The draft Molecule schema in `schemas/morph.mol` records these active wire
 objects and their fixed byte lengths. The devnet contracts still parse the
@@ -1060,7 +1026,7 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 The repository-level `scripts/devnet-smoke.sh` includes the additional
 factory-local exit, reduced-exit, child publication, child finalisation, and
 factory xUDT child-channel steps, including the factory xUDT negative path and
-the reduced xUDT reserve-claim path.
+the active CKB reduced reserve-claim path.
 `devnet-smoke-report` validates any embedded
 `local_exit_package` while building the summary, so a malformed package fails
 the report rather than being silently displayed. It also parses watchtower
@@ -1076,12 +1042,12 @@ script, a factory reserve lock, devnet factory open/update transactions,
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
 child bilateral channels, a bounded reduced-rights proof for claim-reducing
 factory updates, and a bounded reduced-exit path that releases a reserve claim
-into child CKB and CKB+xUDT channels.
+into a child CKB channel. xUDT reduced-exit V1 is disabled pending complete
+typed release binding.
 The current devnet roadmap covers the fixed-width reduced-rights,
-sparse-Merkle, and reduced-exit smoke paths. General proof paths for larger
-factories and generalized typed reduced-exit variants beyond the balanced,
-one-sided, typed-change, and tampered-amount negative reserve-claim smokes are
-deferred beyond this slice.
+sparse-Merkle, and CKB reduced-exit smoke paths. General proof paths for
+larger factories and typed reduced-exit variants are deferred beyond this
+slice.
 
 The factory research track has a host-side package format that can be exercised
 without a node:
@@ -1234,12 +1200,9 @@ child channel evidence committed by the factory header, including xUDT
 child-vault type and amount checks, while `morph-factory-vault-lock` enforces
 reserve conservation. The devnet CLI now also publishes the bounded
 reduced-rights update witness in `factory-reduced-rights-smoke`, publishes the
-reserve-claim reduced-exit witnesses in `factory-reduced-exit-smoke` and
-`factory-reduced-xudt-exit-smoke`, including the one-sided typed settlement
-and surplus-preserving typed factory-vault change branches plus the reduced
-xUDT tampered-amount negative path, publishes the sparse Merkle update witness
-in `factory-merkle-update-smoke`, publishes reduced CKB/xUDT splice witnesses
-in `factory-reduced-splice-*-smoke` and
+reserve-claim reduced-exit witness in `factory-reduced-exit-smoke`, publishes
+the sparse Merkle update witness in `factory-merkle-update-smoke`, publishes
+reduced CKB/xUDT splice witnesses in `factory-reduced-splice-*-smoke` and
 `factory-reduced-xudt-splice-*-smoke`, and records the reduced-rights, sparse
 Merkle, reduced-exit, and reduced-splice proof shapes in the smoke summary's
 factory proof profile table.

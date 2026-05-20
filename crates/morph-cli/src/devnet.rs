@@ -52,8 +52,8 @@ use morph_script_common::{
     FactoryReducedExitWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
     SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
     ScriptError, StateHeaderV1, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
-    factory_participants_commitment_v1, participants_commitment_v1,
-    settlement_descriptor_commitment_v1, verify_factory_merkle_update,
+    factory_participants_commitment_v1, participants_commitment_v1, relative_block_since,
+    settlement_descriptor_commitment_v1, vault_cell_commitment_v1, verify_factory_merkle_update,
     verify_reduced_factory_exit_update,
 };
 use serde::Serialize;
@@ -1530,6 +1530,12 @@ struct ResolvedContract {
     cell_dep: CellDep,
 }
 
+#[derive(Debug, Clone)]
+struct StateCellDetectionFilter {
+    state_type_code_hash: H256,
+    state_lock_code_hash: H256,
+}
+
 pub fn deploy_contracts(
     rpc: &CkbRpcClient,
     options: DeployContractsOptions,
@@ -1691,18 +1697,21 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, 0);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut script_args = funding_anchor.to_vec();
-    script_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(script_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(state_type.calc_script_hash().as_slice()),
     );
 
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
 
     let change_lock_hash = owner_lock.calc_script_hash();
     let sponsor_policy_settings = sponsor_policy_settings(
@@ -1758,9 +1767,9 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -1786,6 +1795,10 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .lock(vault_lock)
         .build();
     ensure_output_capacity("vault", &vault_output, 0)?;
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, &[]),
+    );
 
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
@@ -5274,25 +5287,33 @@ pub fn factory_exit_channel(
     } else {
         None
     };
+    ensure!(
+        child_xudt.is_none()
+            || options.authorisation != FactoryExitAuthorisation::ReducedReserveClaim,
+        "reduced factory reserve exits are currently limited to CKB child vaults"
+    );
 
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
     let channel_input = CellInput::new(factory_out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, state_output_index as u64);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut state_args = funding_anchor.to_vec();
-    state_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(state_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(&state_type_hash),
     );
     let state_lock_hash: [u8; BYTE32_LEN] = state_lock.calc_script_hash().unpack();
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
     let vault_lock_hash: [u8; BYTE32_LEN] = vault_lock.calc_script_hash().unpack();
 
     let owner_lock_hash = owner_lock.calc_script_hash();
@@ -5380,9 +5401,9 @@ pub fn factory_exit_channel(
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -5439,6 +5460,10 @@ pub fn factory_exit_channel(
         .type_(child_vault_type.pack())
         .build();
     ensure_output_capacity("child vault", &vault_output, child_vault_data.len())?;
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, child_vault_data.as_ref()),
+    );
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
         .lock(sponsor_lock)
@@ -5745,18 +5770,21 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, 0);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut script_args = funding_anchor.to_vec();
-    script_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(script_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(state_type.calc_script_hash().as_slice()),
     );
 
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
 
     let owner_lock_hash = owner_lock.calc_script_hash();
     let xudt_type = data1_script(
@@ -5822,9 +5850,9 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -5851,6 +5879,11 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .type_(Some(xudt_type).pack())
         .build();
     ensure_output_capacity("xUDT vault", &vault_output, 16)?;
+    let vault_data = xudt_amount_bytes(total_xudt_amount);
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, vault_data.as_ref()),
+    );
 
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
@@ -5895,7 +5928,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .output(sponsor_output.clone())
         .output(change_output.clone())
         .output_data(Bytes::copy_from_slice(&state_header).pack())
-        .output_data(xudt_amount_bytes(total_xudt_amount).pack())
+        .output_data(vault_data.pack())
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
@@ -6674,6 +6707,7 @@ pub fn watch_latest_state_package(
     let selected_package = latest_state_package_record(&package_records)
         .ok_or_else(|| anyhow!("no state package found for channel {channel_id}"))?;
     let selected_state_number = selected_package.package.state_number;
+    let state_cell_filter = state_cell_detection_filter(&options.contracts_dir)?;
     let cursor_file = options
         .cursor_file
         .clone()
@@ -6718,7 +6752,9 @@ pub fn watch_latest_state_package(
                 let current_block = next_block;
                 if let Some(block) = rpc.block_by_number(next_block)? {
                     scanned_to_block = current_block;
-                    for observed in observed_state_cells(&block, &channel_id, tip_number)? {
+                    for observed in
+                        observed_state_cells(&block, &channel_id, tip_number, &state_cell_filter)?
+                    {
                         let previous_funding_anchor = current_funding_anchor.clone();
                         let splice_detected = previous_funding_anchor
                             .as_ref()
@@ -7254,6 +7290,11 @@ pub fn finalise_channel(
             == header.settlement_descriptor_commitment(),
         "reconstructed settlement descriptor does not match the state commitment"
     );
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == header.payload_commitment(),
+        "StateHeader payload commitment does not match the live VaultCell"
+    );
 
     let state_refund_capacity = state_cell
         .capacity
@@ -7271,11 +7312,12 @@ pub fn finalise_channel(
         .capacity(state_refund_capacity)
         .lock(owner_lock)
         .build();
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
     let tx = TransactionBuilder::default()
         .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(state_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
-        .input(CellInput::new(state_out_point, options.finalise_since))
+        .input(CellInput::new(state_out_point, finalise_since))
         .input(CellInput::new(vault_out_point, 0))
         .output(
             CellOutput::new_builder()
@@ -7348,7 +7390,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     let transition = package.validate()?;
     let splice_assets = splice_application_assets(&transition)?;
     let current_state_header = package.current_state_header_bytes()?;
-    let next_state_header = package.next_state_header_bytes()?;
+    let mut next_state_header = package.next_state_header_bytes()?;
     let splice_witness = package.contract_witness_bytes()?;
     let participant_withdrawal_target = splice_participant_withdrawal_target(&transition)?;
 
@@ -7546,6 +7588,10 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     };
     let new_vault_output = new_vault_builder.build();
     ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
+    set_state_payload_commitment(
+        &mut next_state_header,
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref()),
+    );
 
     let signed_fee = splice_assets
         .ckb_delta
@@ -8862,6 +8908,11 @@ fn build_xudt_finalise_transaction(
             == header.settlement_descriptor_commitment(),
         "reconstructed xUDT settlement descriptor does not match the state commitment"
     );
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == header.payload_commitment(),
+        "StateHeader payload commitment does not match the live xUDT VaultCell"
+    );
 
     let state_refund_capacity = state_cell
         .capacity
@@ -8890,12 +8941,13 @@ fn build_xudt_finalise_transaction(
         .capacity(state_refund_capacity)
         .lock(owner_lock)
         .build();
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
     let tx = TransactionBuilder::default()
         .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(state_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
         .cell_dep(xudt_contract.cell_dep)
-        .input(CellInput::new(state_out_point, options.finalise_since))
+        .input(CellInput::new(state_out_point, finalise_since))
         .input(CellInput::new(vault_out_point, 0))
         .output(alice_output.clone())
         .output(bob_output.clone())
@@ -9261,7 +9313,7 @@ pub fn finalise_since_negative_smoke(
     )?;
     let settling_state_out_point = printable_out_point_string(&publish.state_out_point);
 
-    let rejected_input_since = 0;
+    let rejected_input_since = options.finalise_since - 1;
     let rejection = match finalise_channel(
         rpc,
         FinaliseChannelOptions {
@@ -10005,6 +10057,7 @@ fn observed_state_cells(
     block: &ckb_jsonrpc_types::BlockView,
     channel_id: &str,
     tip_number: u64,
+    filter: &StateCellDetectionFilter,
 ) -> Result<Vec<ObservedStateCellReport>> {
     let block_number = block.header.inner.number.value();
     let block_hash = format!("{:#x}", block.header.hash);
@@ -10016,6 +10069,13 @@ fn observed_state_cells(
                 continue;
             };
             if hex32(header.channel_id()) != channel_id {
+                continue;
+            }
+            let Some(output) = tx.inner.outputs.get(index) else {
+                continue;
+            };
+            let output: CellOutput = output.clone().into();
+            if !is_authentic_observed_state_cell(&output, &header, filter) {
                 continue;
             }
             let tx_hash = format!("{:#x}", tx.hash);
@@ -10035,6 +10095,36 @@ fn observed_state_cells(
         }
     }
     Ok(observed)
+}
+
+fn is_authentic_observed_state_cell(
+    output: &CellOutput,
+    header: &StateHeaderV1,
+    filter: &StateCellDetectionFilter,
+) -> bool {
+    let Some(type_script) = output.type_().to_opt() else {
+        return false;
+    };
+    if !script_uses_data1_code_hash(&type_script, &filter.state_type_code_hash) {
+        return false;
+    }
+    let type_args = type_script.args().raw_data();
+    if type_args.len() < BYTE32_LEN || &type_args.as_ref()[..BYTE32_LEN] != header.funding_anchor()
+    {
+        return false;
+    }
+
+    let lock = output.lock();
+    if !script_uses_data1_code_hash(&lock, &filter.state_lock_code_hash) {
+        return false;
+    }
+    let expected_lock_args: [u8; BYTE32_LEN] = type_script.calc_script_hash().unpack();
+    lock.args().raw_data().as_ref() == expected_lock_args.as_slice()
+}
+
+fn script_uses_data1_code_hash(script: &Script, code_hash: &H256) -> bool {
+    byte32_to_h256(script.code_hash()) == *code_hash
+        && script.hash_type() == ScriptHashType::Data1.into()
 }
 
 fn phase_label(phase: u8) -> &'static str {
@@ -10174,6 +10264,22 @@ fn contract_by_name(contracts: &[ResolvedContract], name: &str) -> Result<Resolv
         .find(|contract| contract.name == name)
         .cloned()
         .ok_or_else(|| anyhow!("resolved contract {name} is missing"))
+}
+
+fn state_cell_detection_filter(contracts_dir: &Path) -> Result<StateCellDetectionFilter> {
+    let targets = load_contract_targets(contracts_dir)?;
+    Ok(StateCellDetectionFilter {
+        state_type_code_hash: contract_target_hash_by_name(&targets, "morph-state-type")?,
+        state_lock_code_hash: contract_target_hash_by_name(&targets, "morph-state-lock")?,
+    })
+}
+
+fn contract_target_hash_by_name(targets: &[ContractTarget], name: &str) -> Result<H256> {
+    targets
+        .iter()
+        .find(|target| target.name == name)
+        .map(|target| target.data_hash.clone())
+        .ok_or_else(|| anyhow!("contract target {name} is missing"))
 }
 
 fn ensure_change_capacity(owner_lock: &Script, change_capacity: u64) -> Result<()> {
@@ -11178,6 +11284,49 @@ fn data1_script(code_hash: H256, args: Bytes) -> Script {
         .build()
 }
 
+fn relative_block_since_arg(blocks: u64) -> Result<u64> {
+    relative_block_since(blocks)
+        .map_err(|_| anyhow!("finalise_since must fit in the CKB since 56-bit value field"))
+}
+
+fn state_type_args(funding_anchor: &[u8; BYTE32_LEN], finalise_since: u64) -> Bytes {
+    let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    Bytes::from(args)
+}
+
+fn vault_lock_args(
+    funding_anchor: &[u8; BYTE32_LEN],
+    finalise_since: u64,
+    state_type: &Script,
+    state_lock: &Script,
+) -> Bytes {
+    let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    args.extend_from_slice(state_type.code_hash().as_slice());
+    args.push(state_type.hash_type().as_slice()[0]);
+    args.extend_from_slice(state_lock.code_hash().as_slice());
+    args.push(state_lock.hash_type().as_slice()[0]);
+    Bytes::from(args)
+}
+
+fn set_state_payload_commitment(state_header: &mut [u8], commitment: [u8; BYTE32_LEN]) {
+    state_header[208..240].copy_from_slice(&commitment);
+}
+
+fn vault_cell_commitment_from_output(output: &CellOutput, data: &[u8]) -> [u8; BYTE32_LEN] {
+    let type_hash = output.type_().to_opt().map(|script| {
+        let hash: [u8; BYTE32_LEN] = script.calc_script_hash().unpack();
+        hash
+    });
+    vault_cell_commitment_v1(
+        output.lock().calc_script_hash().as_slice(),
+        output.capacity().unpack(),
+        type_hash.as_ref().map(|hash| hash.as_slice()),
+        data,
+    )
+}
+
 fn derive_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
     script_blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
 }
@@ -12175,6 +12324,91 @@ mod tests {
         );
         assert_eq!(cursor.last_observed_state_number, Some(5));
         assert_eq!(cursor.last_observed_out_point.as_deref(), Some("0xabc:0"));
+    }
+
+    #[test]
+    fn watchtower_state_detection_requires_authentic_state_scripts() {
+        let filter = StateCellDetectionFilter {
+            state_type_code_hash: H256::from([0x11; BYTE32_LEN]),
+            state_lock_code_hash: H256::from([0x22; BYTE32_LEN]),
+        };
+        let funding_anchor = [0x33; BYTE32_LEN];
+        let header_bytes = initial_state_header(InitialStateHeader {
+            chain_id: [0x44; BYTE32_LEN],
+            channel_id: [0x55; BYTE32_LEN],
+            funding_anchor,
+            participants_commitment: [0x66; BYTE32_LEN],
+            settlement_descriptor_commitment: [0x77; BYTE32_LEN],
+            descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+            challenge_policy_commitment: [0x88; BYTE32_LEN],
+        });
+        let header = StateHeaderV1::parse(&header_bytes).unwrap();
+        let state_type = data1_script(
+            filter.state_type_code_hash.clone(),
+            state_type_args(&funding_anchor, relative_block_since_arg(4).unwrap()),
+        );
+        let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
+        let state_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&state_type_hash),
+        );
+        let state_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build();
+
+        assert!(is_authentic_observed_state_cell(
+            &state_output,
+            &header,
+            &filter
+        ));
+
+        let fake_data_only_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(state_lock.clone())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &fake_data_only_output,
+            &header,
+            &filter
+        ));
+
+        let mismatched_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&[0xff; BYTE32_LEN]),
+        );
+        let mismatched_lock_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(mismatched_lock)
+            .type_(Some(state_type.clone()).pack())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &mismatched_lock_output,
+            &header,
+            &filter
+        ));
+
+        let wrong_anchor_type = data1_script(
+            filter.state_type_code_hash.clone(),
+            state_type_args(&[0x99; BYTE32_LEN], relative_block_since_arg(4).unwrap()),
+        );
+        let wrong_anchor_type_hash: [u8; BYTE32_LEN] =
+            wrong_anchor_type.calc_script_hash().unpack();
+        let wrong_anchor_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&wrong_anchor_type_hash),
+        );
+        let wrong_anchor_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(wrong_anchor_lock)
+            .type_(Some(wrong_anchor_type).pack())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &wrong_anchor_output,
+            &header,
+            &filter
+        ));
     }
 
     fn state_package_record(

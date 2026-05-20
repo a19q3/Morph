@@ -20,8 +20,11 @@ use morph_script_common::{
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_ACTIVE,
     PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitnessV1, SpliceVaultDescriptorV2,
     StateHeaderV1, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u64, read_u128,
-    verify_splice_state_transition_bundle,
+    validate_relative_block_since, vault_cell_commitment_v1, verify_splice_state_transition_bundle,
 };
+
+#[cfg(target_arch = "riscv64")]
+const VAULT_ARGS_V2_LEN: usize = BYTE32_LEN + 8 + BYTE32_LEN + 1 + BYTE32_LEN + 1;
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -43,16 +46,35 @@ fn main() {}
 fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
-    if args.len() != BYTE32_LEN + 8 {
+    if args.len() != VAULT_ARGS_V2_LEN {
         return Err(ScriptError::WrongArgsLength);
     }
     let expected_funding_anchor = &args.as_ref()[..BYTE32_LEN];
     let min_since = read_u64(args.as_ref(), BYTE32_LEN);
+    let state_type_code_hash = &args.as_ref()[BYTE32_LEN + 8..BYTE32_LEN + 8 + BYTE32_LEN];
+    let state_type_hash_type = args.as_ref()[BYTE32_LEN + 8 + BYTE32_LEN];
+    let state_lock_code_hash =
+        &args.as_ref()[BYTE32_LEN + 8 + BYTE32_LEN + 1..BYTE32_LEN + 8 + 2 * BYTE32_LEN + 1];
+    let state_lock_hash_type = args.as_ref()[BYTE32_LEN + 8 + 2 * BYTE32_LEN + 1];
 
-    let (state_index, state_data) = find_unique_state_input(expected_funding_anchor)?;
+    let (state_index, state_data) = find_unique_state_input(
+        expected_funding_anchor,
+        min_since,
+        state_type_code_hash,
+        state_type_hash_type,
+        state_lock_code_hash,
+        state_lock_hash_type,
+    )?;
     let header = StateHeaderV1::parse(&state_data)?;
     if header.phase() == PHASE_ACTIVE {
-        validate_splice_vault_spend(&script, state_index, &header, expected_funding_anchor)?;
+        validate_splice_vault_spend(
+            &script,
+            state_index,
+            &header,
+            expected_funding_anchor,
+            state_lock_code_hash,
+            state_lock_hash_type,
+        )?;
         return Ok(());
     }
     if header.phase() != PHASE_SETTLING {
@@ -61,9 +83,8 @@ fn main() -> Result<()> {
 
     let input = load_input(state_index, Source::Input).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
-    if since < min_since {
-        return Err(ScriptError::StateSinceNotMature);
-    }
+    validate_relative_block_since(since, min_since)?;
+    validate_current_vault_commitment(header.payload_commitment())?;
 
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::SettlementWitnessMissing)?;
@@ -229,7 +250,39 @@ fn load_xudt_amount(index: usize, source: Source) -> Result<u128> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn find_unique_state_input(expected_funding_anchor: &[u8]) -> Result<(usize, alloc::vec::Vec<u8>)> {
+fn validate_current_vault_commitment(expected: &[u8]) -> Result<()> {
+    let capacity = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    match load_cell_capacity(1, Source::GroupInput) {
+        Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => {}
+        Err(_) => return Err(ScriptError::Encoding),
+        Ok(_) => return Err(ScriptError::WrongGroupShape),
+    }
+    let lock_hash =
+        load_cell_lock_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let type_hash =
+        load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let commitment = vault_cell_commitment_v1(
+        lock_hash.as_slice(),
+        capacity,
+        type_hash.as_ref().map(|hash| hash.as_slice()),
+        data.as_slice(),
+    );
+    if commitment.as_slice() != expected {
+        return Err(ScriptError::SettlementDescriptorMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_state_input(
+    expected_funding_anchor: &[u8],
+    expected_min_since: u64,
+    expected_type_code_hash: &[u8],
+    expected_type_hash_type: u8,
+    expected_lock_code_hash: &[u8],
+    expected_lock_hash_type: u8,
+) -> Result<(usize, alloc::vec::Vec<u8>)> {
     let mut found: Option<(usize, alloc::vec::Vec<u8>)> = None;
     let mut index = 0;
     loop {
@@ -237,6 +290,16 @@ fn find_unique_state_input(expected_funding_anchor: &[u8]) -> Result<(usize, all
             Ok(data) => {
                 if let Ok(header) = StateHeaderV1::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
+                    && state_cell_scripts_match(
+                        index,
+                        Source::Input,
+                        expected_funding_anchor,
+                        expected_min_since,
+                        expected_type_code_hash,
+                        expected_type_hash_type,
+                        expected_lock_code_hash,
+                        expected_lock_hash_type,
+                    )?
                 {
                     if found.is_some() {
                         return Err(ScriptError::StateCellAmbiguous);
@@ -258,13 +321,19 @@ fn validate_splice_vault_spend(
     state_index: usize,
     old_header: &StateHeaderV1,
     expected_funding_anchor: &[u8],
+    expected_lock_code_hash: &[u8],
+    expected_lock_hash_type: u8,
 ) -> Result<()> {
     let witness_raw = find_splice_witness_raw(expected_funding_anchor)?;
     let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
         .map_err(|_| ScriptError::SpliceProofEncoding)?;
     let splice_header = witness.header()?;
-    let new_data =
-        find_unique_state_output_for_splice(state_index, splice_header.new_funding_anchor())?;
+    let new_data = find_unique_state_output_for_splice(
+        state_index,
+        splice_header.new_funding_anchor(),
+        expected_lock_code_hash,
+        expected_lock_hash_type,
+    )?;
     let new_header = StateHeaderV1::parse(&new_data)?;
     verify_splice_state_transition_bundle(old_header, &new_header, &witness)?;
 
@@ -306,6 +375,8 @@ fn find_splice_witness_raw(expected_old_funding_anchor: &[u8]) -> Result<alloc::
 fn find_unique_state_output_for_splice(
     state_input_index: usize,
     expected_funding_anchor: &[u8],
+    expected_lock_code_hash: &[u8],
+    expected_lock_hash_type: u8,
 ) -> Result<alloc::vec::Vec<u8>> {
     let Some(base_type) =
         load_cell_type(state_input_index, Source::Input).map_err(|_| ScriptError::Encoding)?
@@ -326,6 +397,12 @@ fn find_unique_state_output_for_splice(
                         Source::Output,
                         expected_funding_anchor,
                     )?
+                    && state_lock_script_matches_type(
+                        index,
+                        Source::Output,
+                        expected_lock_code_hash,
+                        expected_lock_hash_type,
+                    )?
                 {
                     if found.is_some() {
                         return Err(ScriptError::StateCellAmbiguous);
@@ -339,6 +416,64 @@ fn find_unique_state_output_for_splice(
         }
     }
     found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn state_cell_scripts_match(
+    index: usize,
+    source: Source,
+    expected_funding_anchor: &[u8],
+    expected_min_since: u64,
+    expected_type_code_hash: &[u8],
+    expected_type_hash_type: u8,
+    expected_lock_code_hash: &[u8],
+    expected_lock_hash_type: u8,
+) -> Result<bool> {
+    let Some(state_type) = load_cell_type(index, source).map_err(|_| ScriptError::Encoding)? else {
+        return Ok(false);
+    };
+    if state_type.code_hash().as_slice() != expected_type_code_hash
+        || state_type.hash_type().as_slice()[0] != expected_type_hash_type
+    {
+        return Ok(false);
+    }
+    let type_args = state_type.args().raw_data();
+    if type_args.len() != BYTE32_LEN + 8
+        || &type_args.as_ref()[..BYTE32_LEN] != expected_funding_anchor
+    {
+        return Ok(false);
+    }
+    let expected_since = expected_min_since.to_le_bytes();
+    if type_args.as_ref()[BYTE32_LEN..] != expected_since {
+        return Ok(false);
+    }
+    state_lock_script_matches_type(
+        index,
+        source,
+        expected_lock_code_hash,
+        expected_lock_hash_type,
+    )
+}
+
+#[cfg(target_arch = "riscv64")]
+fn state_lock_script_matches_type(
+    index: usize,
+    source: Source,
+    expected_lock_code_hash: &[u8],
+    expected_lock_hash_type: u8,
+) -> Result<bool> {
+    let state_type_hash = load_cell_type_hash(index, source).map_err(|_| ScriptError::Encoding)?;
+    let Some(state_type_hash) = state_type_hash else {
+        return Ok(false);
+    };
+    let lock = load_cell_lock(index, source).map_err(|_| ScriptError::Encoding)?;
+    if lock.code_hash().as_slice() != expected_lock_code_hash
+        || lock.hash_type().as_slice()[0] != expected_lock_hash_type
+    {
+        return Ok(false);
+    }
+    let lock_args = lock.args().raw_data();
+    Ok(lock_args.as_ref() == state_type_hash.as_slice())
 }
 
 #[cfg(target_arch = "riscv64")]

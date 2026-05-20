@@ -146,6 +146,20 @@ state-number interval, and expected StateType hash. Arbitrary output data that
 looks like a StateHeader is not enough. This keeps sponsor capacity out of
 arbitrary transfers and out of fake-publication fee drains.
 
+The current safety-kernel candidate closes the local P0/P1 boundary gaps that
+were previously documented as target properties. Vault finalisation is
+authorised by an authentic current Morph StateCell with the expected StateType
+and StateLock identity, not by bytes that decode as a `StateHeader`. State
+finalisation and active splice retirement require an input whose VaultCell
+commitment matches the retiring StateHeader payload commitment, so StateCells
+cannot be retired while orphaning channel value. Finalisation maturity uses
+canonical relative-block CKB `since`; CLI options are relative block counts and
+are encoded before transaction construction. A single-right sparse Merkle proof
+proves locality only, so the plain reduced Merkle update path accepts
+value-right decreases; value-right increases need full consent or a
+vault-delta-bound splice path. See [`../SECURITY-FIXES.md`](../SECURITY-FIXES.md)
+for the closeout matrix and negative tests.
+
 Factory mode now has both a host-side predicate and a conservative devnet state
 track. A factory-local update is described as changes to a set of participant
 rights: balance, reserve claim, membership, exit path, and sponsor budget
@@ -173,16 +187,13 @@ one-signer reduced signature, the local child StateCell evidence, the
 settlement descriptor, and the factory vault release. `morph-factory-type`
 checks the FactoryStateHeader transition and child materialisation, while
 `morph-factory-vault-lock` enforces reserve conservation.
-CKB-VM tests cover both the CKB and CKB+xUDT reduced-exit child-vault shapes,
-including typed amount and type mismatch rejection.
-`factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke` publish
-this path on devnet, then use the ordinary child-channel publication and
-finalisation flow. The xUDT smoke can also exercise a one-sided token
-settlement, or open the factory vault with surplus tokens, release only the
-child settlement amount, and keep the remaining xUDT typed under the recreated
-FactoryVaultCell. `factory-reduced-xudt-negative-exit-smoke` submits a
-tampered reduced exit where total xUDT is conserved but the child vault is one
-token short; the expected live rejection is `SettlementOutputMismatch`.
+CKB-VM tests cover the active CKB reduced-exit child-vault shape, the
+release-quantity binding, and rejection of typed ReserveClaim releases through
+the CKB-only path. The xUDT reduced-exit V1 path is disabled pending complete
+typed release binding across child-vault type hash, child amount, settlement
+descriptor, and FactoryVault typed change. `factory-reduced-exit-smoke`
+publishes the active CKB path on devnet, then uses the ordinary child-channel
+publication and finalisation flow.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -301,8 +312,9 @@ process manager rather than becoming its own process manager.
 - No routing, gossip, path finding, or liquidity discovery.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
   beyond the current roadmap. The implemented on-chain paths are fixed-width:
-  CKB/CKB+xUDT reserve-claim reduced exits and a single-right 256-sibling
-  sparse Merkle update.
+  CKB reserve-claim reduced exits and a single-right 256-sibling sparse Merkle
+  update. xUDT reduced-exit V1 is disabled until typed release binding is
+  restored.
 - No generic descriptor runtime.
 - No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
   state number; concurrent splice/off-chain-update interleaving is deferred.

@@ -27,9 +27,10 @@ use morph_script_common::{
     FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1,
     FactorySignatureWitnessV1, FactorySpliceWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
     SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV1, blake2b256, read_u128,
-    verify_factory_merkle_update, verify_factory_reduced_splice_update,
-    verify_factory_splice_update, verify_factory_state_signatures,
-    verify_reduced_factory_exit_update, verify_reduced_factory_rights_update,
+    validate_factory_merkle_update_local_predicate, verify_factory_merkle_update,
+    verify_factory_reduced_splice_update, verify_factory_splice_update,
+    verify_factory_state_signatures, verify_reduced_factory_exit_update,
+    verify_reduced_factory_rights_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -130,7 +131,8 @@ fn validate_participant_authorisation(
         verify_reduced_factory_rights_update(old_header, header, &witness)
     } else if raw.len() == FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN {
         let witness = FactoryMerkleUpdateWitnessV1::parse(raw.as_ref())?;
-        verify_factory_merkle_update(old_header, header, &witness)
+        verify_factory_merkle_update(old_header, header, &witness)?;
+        validate_factory_merkle_update_local_predicate(&witness)
     } else if raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
         || raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
     {

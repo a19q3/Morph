@@ -898,34 +898,6 @@ fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result
     )?;
     assert_factory_proof_profile(
         summary,
-        "factory-reduced-xudt-exit-smoke",
-        "factory_reduced_exit_xudt_reserve_claim_v1",
-        "$.exit",
-        Some(0),
-    )?;
-    assert_factory_proof_profile(
-        summary,
-        "factory-reduced-xudt-one-sided-exit-smoke",
-        "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
-        "$.exit",
-        Some(0),
-    )?;
-    assert_factory_proof_profile(
-        summary,
-        "factory-reduced-xudt-bob-only-exit-smoke",
-        "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
-        "$.exit",
-        Some(0),
-    )?;
-    assert_factory_proof_profile(
-        summary,
-        "factory-reduced-xudt-change-exit-smoke",
-        "factory_reduced_exit_xudt_change_reserve_claim_v1",
-        "$.exit",
-        Some(0),
-    )?;
-    assert_factory_proof_profile(
-        summary,
         "factory-splice-in-smoke",
         "factory_splice_all_participants_ckb_v1",
         "$.apply",
@@ -1015,10 +987,6 @@ fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<
     for check in [
         "factory-reduced-exit-smoke",
         "factory-reduced-exit-asymmetric-smoke",
-        "factory-reduced-xudt-exit-smoke",
-        "factory-reduced-xudt-one-sided-exit-smoke",
-        "factory-reduced-xudt-bob-only-exit-smoke",
-        "factory-reduced-xudt-change-exit-smoke",
     ] {
         let committed = summary.transactions.iter().any(|tx| {
             tx.check == check && tx.path == "$.exit" && tx.status.as_deref() == Some("Committed")
@@ -1041,46 +1009,11 @@ fn assert_factory_reduced_exit_coverage(summary: &DevnetSmokeSummary) -> Result<
         .iter()
         .filter(|exit| exit.xudt_type_hash.is_none())
         .count();
-    let xudt_exits = summary
-        .factory_reduced_exits
-        .iter()
-        .filter(|exit| exit.xudt_type_hash.is_some() && exit.child_xudt_amount.is_some())
-        .count();
-    let xudt_change_exits = summary
-        .factory_reduced_exits
-        .iter()
-        .filter(|exit| {
-            exit.xudt_type_hash.is_some()
-                && exit.factory_vault_change_xudt_amount.unwrap_or_default() > 0
-        })
-        .count();
-    let xudt_one_sided_exits = summary
-        .factory_reduced_exits
-        .iter()
-        .filter(|exit| {
-            exit.xudt_type_hash.is_some()
-                && exit.child_xudt_amount.is_some()
-                && matches!(
-                    (exit.alice_xudt_amount, exit.bob_xudt_amount),
-                    (Some(0), Some(amount)) | (Some(amount), Some(0)) if amount > 0
-                )
-        })
-        .count();
-    if ckb_exits != EXPECTED_FACTORY_REDUCED_CKB_EXITS
-        || xudt_exits != EXPECTED_FACTORY_REDUCED_XUDT_EXITS
-        || xudt_change_exits != EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS
-        || xudt_one_sided_exits != EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS
-    {
+    if ckb_exits != EXPECTED_FACTORY_REDUCED_CKB_EXITS {
         return Err(anyhow!(
-            "unexpected factory reduced-exit descriptor coverage: got CKB {}, xUDT {}, xUDT-change {}, xUDT-one-sided {}; expected CKB {}, xUDT {}, xUDT-change {}, xUDT-one-sided {}",
+            "unexpected factory reduced-exit descriptor coverage: got CKB {}, expected CKB {}",
             ckb_exits,
-            xudt_exits,
-            xudt_change_exits,
-            xudt_one_sided_exits,
             EXPECTED_FACTORY_REDUCED_CKB_EXITS,
-            EXPECTED_FACTORY_REDUCED_XUDT_EXITS,
-            EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS,
-            EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS
         ));
     }
     if summary.factory_reduced_exits.iter().any(|exit| {
@@ -2181,11 +2114,6 @@ const EXPECTED_SCRIPT_FAILURES: &[ExpectedScriptFailure] = &[
         error_code: 28,
     },
     ExpectedScriptFailure {
-        check: "factory-reduced-xudt-negative-exit-smoke",
-        morph_error: "SettlementOutputMismatch",
-        error_code: 28,
-    },
-    ExpectedScriptFailure {
         check: "finalise-since-negative-smoke",
         morph_error: "StateSinceNotMature",
         error_code: 16,
@@ -2232,7 +2160,6 @@ const EXPECTED_BUSINESS_MATRIX_JSON_CHECKS: &[&str] = &[
     "factory-reduced-rights-tight-smoke",
     "factory-merkle-update-tight-smoke",
     "factory-reduced-exit-asymmetric-smoke",
-    "factory-reduced-xudt-bob-only-exit-smoke",
     "factory-splice-in-asymmetric-smoke",
     "factory-splice-out-asymmetric-smoke",
     "factory-reduced-splice-in-asymmetric-smoke",
@@ -2268,7 +2195,6 @@ const EXPECTED_BUSINESS_MATRIX_TRANSACTIONS: &[(&str, &str)] = &[
     ("factory-reduced-rights-tight-smoke", "$.update"),
     ("factory-merkle-update-tight-smoke", "$.update"),
     ("factory-reduced-exit-asymmetric-smoke", "$.exit"),
-    ("factory-reduced-xudt-bob-only-exit-smoke", "$.exit"),
     ("factory-splice-in-asymmetric-smoke", "$.apply"),
     ("factory-splice-out-asymmetric-smoke", "$.apply"),
     ("factory-reduced-splice-in-asymmetric-smoke", "$.apply"),
@@ -2283,11 +2209,8 @@ const EXPECTED_BUSINESS_MATRIX_TRANSACTIONS: &[(&str, &str)] = &[
     ("watch-direct-sponsor/finalise", "$"),
     ("watch-config-loop/finalise", "$"),
 ];
-const EXPECTED_FACTORY_REDUCED_EXITS: usize = 6;
+const EXPECTED_FACTORY_REDUCED_EXITS: usize = 2;
 const EXPECTED_FACTORY_REDUCED_CKB_EXITS: usize = 2;
-const EXPECTED_FACTORY_REDUCED_XUDT_EXITS: usize = 4;
-const EXPECTED_FACTORY_REDUCED_XUDT_CHANGE_EXITS: usize = 1;
-const EXPECTED_FACTORY_REDUCED_XUDT_ONE_SIDED_EXITS: usize = 2;
 const EXPECTED_WATCHTOWER_EVENTS: &[&str] = &[
     "older_state_detected",
     "publication_submitted",
@@ -3543,21 +3466,14 @@ mod tests {
             limit.check == "factory-merkle-update-smoke" && limit.path == "$.update"
         }));
         assert!(profile.transactions.iter().any(|limit| {
-            limit.check == "factory-reduced-xudt-change-exit-smoke" && limit.path == "$.exit"
-        }));
-        assert!(profile.transactions.iter().any(|limit| {
-            limit.check == "factory-reduced-xudt-one-sided-exit-smoke" && limit.path == "$.exit"
+            limit.check == "factory-reduced-exit-smoke" && limit.path == "$.exit"
         }));
         assert!(profile.transactions.iter().any(|limit| {
             limit.check == "factory-xudt-splice-in-smoke" && limit.path == "$.apply"
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
-            limit.check == "factory-reduced-xudt-change-exit-smoke"
-                && limit.proof_kind == "factory_reduced_exit_xudt_change_reserve_claim_v1"
-        }));
-        assert!(profile.proof_profiles.iter().any(|limit| {
-            limit.check == "factory-reduced-xudt-one-sided-exit-smoke"
-                && limit.proof_kind == "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
+            limit.check == "factory-reduced-exit-smoke"
+                && limit.proof_kind == "factory_reduced_exit_ckb_reserve_claim_v1"
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-xudt-splice-out-smoke"
@@ -3780,22 +3696,6 @@ mod tests {
                     "$.exit",
                     "Committed",
                 ),
-                transaction("factory-reduced-xudt-exit-smoke", "$.exit", "Committed"),
-                transaction(
-                    "factory-reduced-xudt-one-sided-exit-smoke",
-                    "$.exit",
-                    "Committed",
-                ),
-                transaction(
-                    "factory-reduced-xudt-bob-only-exit-smoke",
-                    "$.exit",
-                    "Committed",
-                ),
-                transaction(
-                    "factory-reduced-xudt-change-exit-smoke",
-                    "$.exit",
-                    "Committed",
-                ),
                 transaction("factory-splice-in-smoke", "$.open", "Committed"),
                 transaction("factory-splice-in-smoke", "$.apply", "Committed"),
                 transaction("factory-splice-in-smoke", "$.exit", "Committed"),
@@ -3902,11 +3802,6 @@ mod tests {
                     "SettlementOutputMismatch",
                     28,
                 ),
-                failure(
-                    "factory-reduced-xudt-negative-exit-smoke",
-                    "SettlementOutputMismatch",
-                    28,
-                ),
                 failure("finalise-since-negative-smoke", "StateSinceNotMature", 16),
                 failure("sponsor-budget-negative-smoke", "SponsorFeeTooHigh", 17),
                 failure(
@@ -3930,22 +3825,6 @@ mod tests {
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-exit-asymmetric-smoke",
                     "factory_reduced_exit_ckb_reserve_claim_v1",
-                ),
-                factory_reduced_exit_proof_profile(
-                    "factory-reduced-xudt-exit-smoke",
-                    "factory_reduced_exit_xudt_reserve_claim_v1",
-                ),
-                factory_reduced_exit_proof_profile(
-                    "factory-reduced-xudt-one-sided-exit-smoke",
-                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
-                ),
-                factory_reduced_exit_proof_profile(
-                    "factory-reduced-xudt-bob-only-exit-smoke",
-                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
-                ),
-                factory_reduced_exit_proof_profile(
-                    "factory-reduced-xudt-change-exit-smoke",
-                    "factory_reduced_exit_xudt_change_reserve_claim_v1",
                 ),
                 factory_splice_proof_profile(
                     "factory-splice-in-smoke",
@@ -3991,20 +3870,6 @@ mod tests {
             factory_reduced_exits: vec![
                 factory_reduced_exit("factory-reduced-exit-smoke", None),
                 factory_reduced_exit("factory-reduced-exit-asymmetric-smoke", None),
-                factory_reduced_exit("factory-reduced-xudt-exit-smoke", Some(1_000_000)),
-                factory_reduced_exit_one_sided(
-                    "factory-reduced-xudt-one-sided-exit-smoke",
-                    1_000_000,
-                ),
-                factory_reduced_exit_one_sided(
-                    "factory-reduced-xudt-bob-only-exit-smoke",
-                    1_000_000,
-                ),
-                factory_reduced_exit_with_change(
-                    "factory-reduced-xudt-change-exit-smoke",
-                    1_000_000,
-                    100_000,
-                ),
             ],
             factory_local_exits: vec![
                 factory_exit("factory/exit-channel", 1),
@@ -4244,47 +4109,6 @@ mod tests {
             bob_xudt_amount: child_xudt_amount.map(|amount| amount - (amount / 2)),
             xudt_type_hash: child_xudt_amount.map(|_| "0x99".to_string()),
             factory_vault_change_xudt_amount: None,
-        }
-    }
-
-    fn factory_reduced_exit_one_sided(
-        check: &str,
-        child_xudt_amount: u128,
-    ) -> FactoryReducedExitEvidenceSummary {
-        FactoryReducedExitEvidenceSummary {
-            check: check.to_string(),
-            path: "$.exit.reduced_exit".to_string(),
-            authorisation: "reduced-reserve-claim".to_string(),
-            release_quantity: 1,
-            witness_len: 1,
-            local_exit_digest: "0x77".to_string(),
-            non_interference_digest: "0x88".to_string(),
-            child_xudt_amount: Some(child_xudt_amount),
-            alice_xudt_amount: Some(child_xudt_amount),
-            bob_xudt_amount: Some(0),
-            xudt_type_hash: Some("0x99".to_string()),
-            factory_vault_change_xudt_amount: None,
-        }
-    }
-
-    fn factory_reduced_exit_with_change(
-        check: &str,
-        child_xudt_amount: u128,
-        factory_vault_change_xudt_amount: u128,
-    ) -> FactoryReducedExitEvidenceSummary {
-        FactoryReducedExitEvidenceSummary {
-            check: check.to_string(),
-            path: "$.exit.reduced_exit".to_string(),
-            authorisation: "reduced-reserve-claim".to_string(),
-            release_quantity: 1,
-            witness_len: 1,
-            local_exit_digest: "0x77".to_string(),
-            non_interference_digest: "0x88".to_string(),
-            child_xudt_amount: Some(child_xudt_amount),
-            alice_xudt_amount: Some(child_xudt_amount / 2),
-            bob_xudt_amount: Some(child_xudt_amount - (child_xudt_amount / 2)),
-            xudt_type_hash: Some("0x99".to_string()),
-            factory_vault_change_xudt_amount: Some(factory_vault_change_xudt_amount),
         }
     }
 

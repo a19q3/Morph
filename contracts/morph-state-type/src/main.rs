@@ -9,8 +9,9 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    QueryIter, load_cell_capacity, load_cell_data, load_cell_occupied_capacity, load_cell_type,
-    load_cell_type_hash, load_input, load_script, load_script_hash, load_witness_args,
+    QueryIter, load_cell_capacity, load_cell_data, load_cell_lock_hash,
+    load_cell_occupied_capacity, load_cell_type, load_cell_type_hash, load_input, load_script,
+    load_script_hash, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
@@ -18,7 +19,8 @@ use ckb_std::{default_alloc, entry};
 use morph_script_common::{
     BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
     SpliceStateTransitionWitnessV1, StateHeaderV1, blake2b256, read_u64,
-    verify_bilateral_state_signatures, verify_splice_state_transition_bundle,
+    validate_relative_block_since, vault_cell_commitment_v1, verify_bilateral_state_signatures,
+    verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -148,6 +150,7 @@ fn validate_splice_retire(
     old_header: &StateHeaderV1,
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
+    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
     let witness_raw = find_splice_witness_raw(expected_funding_anchor, true)?;
     let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
         .map_err(|_| ScriptError::SpliceProofEncoding)?;
@@ -236,11 +239,44 @@ fn validate_finalise(old_header: &StateHeaderV1, finalise_since: Option<u64>) ->
     let required_since = finalise_since.ok_or(ScriptError::StateSinceNotMature)?;
     let input = load_input(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
-    if since < required_since {
-        return Err(ScriptError::StateSinceNotMature);
-    }
+    validate_relative_block_since(since, required_since)?;
+    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
 
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
+    let mut found = None;
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, Source::Input) {
+            Ok(capacity) => {
+                let lock_hash =
+                    load_cell_lock_hash(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let type_hash =
+                    load_cell_type_hash(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let data =
+                    load_cell_data(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let commitment = vault_cell_commitment_v1(
+                    lock_hash.as_slice(),
+                    capacity,
+                    type_hash.as_ref().map(|hash| hash.as_slice()),
+                    data.as_slice(),
+                );
+                if commitment.as_slice() == expected {
+                    if found.is_some() {
+                        return Err(ScriptError::StateCellAmbiguous);
+                    }
+                    found = Some(index);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::StateCellMissing)
 }
 
 #[cfg(target_arch = "riscv64")]

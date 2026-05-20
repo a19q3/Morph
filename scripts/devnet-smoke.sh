@@ -226,14 +226,6 @@ run_json factory-reduced-exit-asymmetric-smoke devnet --rpc-url "$RPC_URL" facto
   --child-vault-capacity 24000000000 \
   --alice-capacity 15000000000 \
   --bob-capacity 9000000000
-run_json factory-reduced-xudt-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke
-run_json factory-reduced-xudt-one-sided-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke \
-  --alice-xudt-amount 1000000 --bob-xudt-amount 0
-run_json factory-reduced-xudt-bob-only-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke \
-  --alice-xudt-amount 0 --bob-xudt-amount 1000000
-run_json factory-reduced-xudt-change-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-exit-smoke \
-  --factory-vault-xudt-surplus 100000
-run_json factory-reduced-xudt-negative-exit-smoke devnet --rpc-url "$RPC_URL" factory-reduced-xudt-negative-exit-smoke
 mkdir -p "$OUT_DIR/factory-splice-packages"
 run_json factory-splice-in-smoke devnet --rpc-url "$RPC_URL" factory-splice-in-smoke \
   --store-dir "$OUT_DIR/factory-splice-packages"

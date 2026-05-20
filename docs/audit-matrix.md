@@ -11,11 +11,12 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
 | Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
-| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch` |
+| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_rejects_reduced_exit_xudt_reserve_release_v1_disabled`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch` |
 | Factory splice reserve claims match exact vault deltas | `accepts_valid_factory_splice_in_transition`, `accepts_valid_factory_xudt_splice_out_transition`, `factory_splice_rejects_reserve_claim_without_vault_input`, `factory_splice_rejects_vault_release_without_rights_decrease`, `factory_splice_rejects_xudt_type_mismatch`, `factory_splice_rejects_invalid_signature`, `validates_factory_splice_package`, `validates_factory_xudt_splice_out_package`, `writes_reads_and_validates_factory_splice_package`, `rejects_factory_splice_vault_delta_mismatch`, `factory_splice_witness_fields_are_fixed_width`, `verifies_factory_splice_update`, `rejects_factory_splice_vault_delta_tamper`, `factory_type_and_vault_accept_factory_splice_in`, `factory_vault_rejects_factory_splice_capacity_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
 | Vault outputs match the signed settlement descriptor | `accepts_signed_settlement_descriptor_update`, `state_type_accepts_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Splice transitions preserve StateCell/VaultCell funding epochs | `state_and_vault_accept_splice_in_bridge`, `state_and_vault_accept_splice_out_bridge`, `state_and_vault_reject_splice_wrong_channel_header`, `vault_lock_rejects_splice_new_vault_capacity_mismatch` |
+| Authentic StateCell authority gates value and monitoring | `vault_lock_rejects_fake_state_header_without_state_type`, `state_type_rejects_standalone_settling_close_without_matching_vault`, `state_type_rejects_standalone_active_splice_retire_without_matching_vault`, `watchtower_state_detection_requires_authentic_state_scripts` |
 | Splice-out payouts stay participant-owned in V1 | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
 | Reserve and business CKB are not confused | `rejects_business_ckb_confusion` |
@@ -53,8 +54,9 @@ Implemented devnet-level checks:
 - CKB-VM factory local-exit execution with a FactoryVaultCell, committed
   child-channel evidence, reserve conservation, and CKB+xUDT child-vault
   materialisation;
-- CKB-VM reduced factory-exit execution for CKB and CKB+xUDT child vaults,
-  including xUDT child-vault amount and type mismatch rejection;
+- CKB-VM reduced factory-exit execution for the active CKB child-vault path,
+  typed ReserveClaim rejection on that CKB-only path, plus disabled-path
+  rejection for xUDT reduced-exit V1;
 - finalise-since rejection and maturity-block finalisation through
   `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through
@@ -114,21 +116,18 @@ Implemented devnet-level checks:
 - conservative factory local exit on devnet through `factory-exit-channel`,
   followed by ordinary child-channel publication and finalisation in
   `scripts/devnet-smoke.sh`.
-- bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`
-  and `factory-reduced-xudt-exit-smoke`, followed by ordinary child-channel
-  publication and finalisation in `scripts/devnet-smoke.sh`.
-- surplus-preserving typed reduced factory exit coverage where a CKB+xUDT child
-  vault is released and remaining xUDT stays in factory-vault change.
-- one-sided typed reduced factory exit coverage where one participant receives
-  all child xUDT and the other receives zero tokens.
-- reduced typed factory exit negative coverage where the child vault xUDT
-  amount is tampered while total xUDT supply remains conserved.
+- bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`,
+  followed by ordinary child-channel publication and finalisation in
+  `scripts/devnet-smoke.sh`.
+- xUDT reduced-exit V1 is disabled pending typed release binding; the active
+  executable checks are
+  `factory_type_rejects_reduced_exit_typed_claim_for_ckb_release` and
+  `factory_type_rejects_reduced_exit_xudt_reserve_release_v1_disabled`.
 
 Deferred devnet-level checks:
 
-- generalized typed reduced-exit variants beyond the current fixed-width
-  balanced, one-sided, typed-change, and tampered-amount negative CKB+xUDT
-  reserve-claim smokes.
+- typed reduced-exit variants pending complete child-vault type hash, amount,
+  settlement descriptor, and FactoryVault typed-change binding.
 
 Implemented factory checks:
 
@@ -152,8 +151,7 @@ Implemented factory checks:
   package evidence and proof-shape budget profile evidence in the smoke
   summary assertion.
 - smoke-summary proof profile coverage for the bounded reduced-rights update,
-  sparse Merkle update, CKB reduced-exit, and balanced, one-sided, and
-  typed-change CKB+xUDT reduced-exit proof shapes.
+  sparse Merkle update, and CKB reduced-exit proof shapes.
 - script-level reduced factory-exit validation for the same reserve-claim
   release predicate, with factory type and factory vault lock CKB-VM coverage.
 - serialisable factory update package with canonical roots, canonical

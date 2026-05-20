@@ -15,8 +15,9 @@ use morph_core::{
     FactoryVaultDescriptorV1, ParticipantSignature, SpliceWitness, VaultAsset, VaultAssetAmount,
     blake2b256, bytes32, factory_right_sparse_proof, factory_right_sparse_root,
     factory_vault_delta_commitment_v1, participants_commitment, validate_factory_non_interference,
-    validate_factory_reduced_splice_transition, validate_factory_single_right_merkle_update,
-    validate_factory_splice_transition, validate_reduced_factory_exit,
+    validate_factory_reduced_splice_transition, validate_factory_single_right_merkle_localization,
+    validate_factory_single_right_merkle_update, validate_factory_splice_transition,
+    validate_reduced_factory_exit,
 };
 use morph_script_common::{
     BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
@@ -858,12 +859,28 @@ impl StoredFactoryReducedExitPackage {
 }
 
 impl StoredFactoryMerkleUpdatePackage {
-    pub fn from_update(
+    pub fn from_update_localization(
         factory_id: Bytes32,
         update_number: u64,
         update: FactorySingleRightMerkleUpdate,
     ) -> Result<Self> {
+        Self::from_update_with_predicate(factory_id, update_number, update, false)
+    }
+
+    fn from_update_with_predicate(
+        factory_id: Bytes32,
+        update_number: u64,
+        update: FactorySingleRightMerkleUpdate,
+        enforce_local_decrease: bool,
+    ) -> Result<Self> {
         validate_factory_single_right_merkle_update(&update)
+            .or_else(|err| {
+                if enforce_local_decrease {
+                    Err(err)
+                } else {
+                    validate_factory_single_right_merkle_localization(&update)
+                }
+            })
             .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
         let mut package = Self {
             schema: FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA.to_string(),
@@ -894,7 +911,11 @@ impl StoredFactoryMerkleUpdatePackage {
         };
         package.normalise()?;
         package.non_interference_digest = package.compute_digest()?;
-        package.validate()?;
+        if enforce_local_decrease {
+            package.validate()?;
+        } else {
+            package.validate_localization()?;
+        }
         Ok(package)
     }
 
@@ -951,6 +972,20 @@ impl StoredFactoryMerkleUpdatePackage {
     }
 
     pub fn validate(&self) -> Result<FactorySingleRightMerkleUpdate> {
+        let update = self.decode_update()?;
+        validate_factory_single_right_merkle_update(&update)
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    pub fn validate_localization(&self) -> Result<FactorySingleRightMerkleUpdate> {
+        let update = self.decode_update()?;
+        validate_factory_single_right_merkle_localization(&update)
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    fn decode_update(&self) -> Result<FactorySingleRightMerkleUpdate> {
         ensure!(
             self.schema == FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA,
             "unsupported factory Merkle update package schema {}",
@@ -1006,8 +1041,6 @@ impl StoredFactoryMerkleUpdatePackage {
                 siblings,
             },
         };
-        validate_factory_single_right_merkle_update(&update)
-            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
         Ok(update)
     }
 
@@ -1420,7 +1453,7 @@ impl StoredFactoryReducedSplicePackage {
             participant_keys.len() <= u8::MAX as usize,
             "reduced factory splice package supports at most 255 participant keys"
         );
-        let merkle_update_package = StoredFactoryMerkleUpdatePackage::from_update(
+        let merkle_update_package = StoredFactoryMerkleUpdatePackage::from_update_localization(
             transition.header.factory_id,
             transition.header.new_update_number,
             transition.update.clone(),
@@ -1575,22 +1608,21 @@ impl StoredFactoryReducedSplicePackage {
             "vault_deltas must contain sorted unique canonical assets"
         );
 
-        let update = self.merkle_update_package.validate()?;
-        let update_summary = self.merkle_update_package.summary()?;
+        let update = self.merkle_update_package.validate_localization()?;
         ensure!(
-            self.factory_id == update_summary.factory_id,
+            self.factory_id == self.merkle_update_package.factory_id,
             "reduced factory splice package factory_id does not match Merkle update package"
         );
         ensure!(
-            self.new_update_number == update_summary.update_number,
+            self.new_update_number == self.merkle_update_package.update_number,
             "reduced factory splice package new_update_number does not match Merkle update package"
         );
         ensure!(
-            self.old_state_root == update_summary.state_root_before,
+            self.old_state_root == self.merkle_update_package.state_root_before,
             "reduced factory splice package old_state_root does not match Merkle update package"
         );
         ensure!(
-            self.new_state_root == update_summary.state_root_after,
+            self.new_state_root == self.merkle_update_package.state_root_after,
             "reduced factory splice package new_state_root does not match Merkle update package"
         );
         let expected_non_interference_digest = hex_prefixed(

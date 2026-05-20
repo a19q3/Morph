@@ -429,6 +429,23 @@ pub fn validate_reduced_factory_exit(
 pub fn validate_factory_single_right_merkle_update(
     update: &FactorySingleRightMerkleUpdate,
 ) -> Result<()> {
+    validate_factory_single_right_merkle_localization(update)?;
+    if update.after.right.quantity > update.before.right.quantity
+        || !matches!(
+            update.before.right.id.kind,
+            FactoryRightKind::Balance
+                | FactoryRightKind::ReserveClaim
+                | FactoryRightKind::SponsorBudgetClaim
+        )
+    {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    Ok(())
+}
+
+pub fn validate_factory_single_right_merkle_localization(
+    update: &FactorySingleRightMerkleUpdate,
+) -> Result<()> {
     verify_factory_right_merkle_proof(update.before_root, &update.before)?;
     verify_factory_right_merkle_proof(update.after_root, &update.after)?;
 
@@ -547,7 +564,7 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
 pub fn validate_factory_reduced_splice_transition(
     splice: &FactoryReducedSpliceTransition,
 ) -> Result<()> {
-    validate_factory_single_right_merkle_update(&splice.update)?;
+    validate_factory_single_right_merkle_localization(&splice.update)?;
     validate_factory_reduced_splice_authorization(&splice.header, &splice.update, &splice.witness)?;
     validate_factory_reduced_splice_assets_registered(splice)?;
 

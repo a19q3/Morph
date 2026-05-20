@@ -120,7 +120,11 @@ pub const FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1: u8 = 2;
 pub const FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1: u8 = 1;
 pub const FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1: u16 = 3;
 pub const FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1: u16 = 4;
+pub const FACTORY_RIGHT_KIND_BALANCE: u8 = 0;
 pub const FACTORY_RIGHT_KIND_RESERVE_CLAIM: u8 = 1;
+pub const FACTORY_RIGHT_KIND_MEMBERSHIP: u8 = 2;
+pub const FACTORY_RIGHT_KIND_EXIT_PATH: u8 = 3;
+pub const FACTORY_RIGHT_KIND_SPONSOR_BUDGET_CLAIM: u8 = 4;
 pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1: u16 = 1;
 pub const FACTORY_SPLICE_WITNESS_VERSION_V1: u16 = 1;
 pub const FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1: u16 = 5;
@@ -145,6 +149,7 @@ pub const FACTORY_RIGHT_KEY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY_V1"
 pub const FACTORY_RIGHT_LEAF_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF_V1";
 pub const FACTORY_RIGHT_NODE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE_V1";
 pub const FACTORY_LOCAL_EXIT_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_LOCAL_EXIT_V1";
+pub const VAULT_CELL_COMMITMENT_DOMAIN_V1: &[u8] = b"CKB_MORPH_VAULT_CELL_V1";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR_V1";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION_V1: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1: u16 = 2;
@@ -1483,6 +1488,7 @@ fn validate_reduced_rights_non_interference(witness: &FactoryReducedRightsWitnes
                 return Err(ScriptError::FactoryReducedProofMismatch);
             }
             if after.quantity() < before.quantity() {
+                validate_reduced_value_right_decrease(&before, &after)?;
                 touched_decreased = true;
             }
         } else if after.quantity() != before.quantity() {
@@ -1494,6 +1500,21 @@ fn validate_reduced_rights_non_interference(witness: &FactoryReducedRightsWitnes
         return Err(ScriptError::FactoryReducedProofMismatch);
     }
     Ok(())
+}
+
+fn validate_reduced_value_right_decrease(
+    before: &FactoryRightV1,
+    after: &FactoryRightV1,
+) -> Result<()> {
+    if !before.same_id(after) || after.quantity() >= before.quantity() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    match before.kind() {
+        FACTORY_RIGHT_KIND_BALANCE
+        | FACTORY_RIGHT_KIND_RESERVE_CLAIM
+        | FACTORY_RIGHT_KIND_SPONSOR_BUDGET_CLAIM => Ok(()),
+        _ => Err(ScriptError::FactoryReducedProofMismatch),
+    }
 }
 
 fn verify_reduced_rights_signature(
@@ -1741,6 +1762,17 @@ pub fn verify_factory_merkle_update(
     verify_merkle_update_signature(new_header, witness)
 }
 
+pub fn validate_factory_merkle_update_local_predicate(
+    witness: &FactoryMerkleUpdateWitnessV1,
+) -> Result<()> {
+    let before = witness.right_before()?;
+    let after = witness.right_after()?;
+    if before.participant() != witness.touched_participant() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    validate_reduced_value_right_decrease(&before, &after)
+}
+
 fn verify_merkle_update_signature(
     header: &FactoryStateHeaderV1,
     witness: &FactoryMerkleUpdateWitnessV1,
@@ -1777,9 +1809,7 @@ pub struct FactoryReducedExitWitnessV1<'a> {
 
 impl<'a> FactoryReducedExitWitnessV1<'a> {
     pub fn parse(raw: &'a [u8]) -> Result<Self> {
-        if raw.len() != FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
-            && raw.len() != FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
-        {
+        if raw.len() != FACTORY_REDUCED_EXIT_WITNESS_V1_LEN {
             return Err(ScriptError::FactoryReducedProofEncoding);
         }
         let witness = Self { raw };
@@ -1804,9 +1834,6 @@ impl<'a> FactoryReducedExitWitnessV1<'a> {
         match witness.settlement_descriptor().len() {
             BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
                 BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
-            }
-            BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
-                BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
             }
             _ => return Err(ScriptError::SettlementDescriptorEncoding),
         }
@@ -2110,13 +2137,13 @@ fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -
     }
     match witness.settlement_descriptor().len() {
         BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+            let descriptor =
+                BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
             if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1 {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
-        }
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
-            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
-                return Err(ScriptError::SettlementDescriptorMismatch);
+            if descriptor.total_capacity() as u128 != witness.release_quantity() {
+                return Err(ScriptError::FactoryReducedProofMismatch);
             }
         }
         _ => return Err(ScriptError::SettlementDescriptorEncoding),
@@ -2141,6 +2168,7 @@ fn validate_reduced_exit_non_interference(witness: &FactoryReducedExitWitnessV1)
 
         if before.participant() == touched
             && before.kind() == FACTORY_RIGHT_KIND_RESERVE_CLAIM
+            && before.asset_present() == 0
             && before.quantity() >= release_quantity
             && before.quantity() - release_quantity == after.quantity()
         {
@@ -3556,6 +3584,60 @@ pub fn field(raw: &[u8], offset: usize, len: usize) -> &[u8] {
     &raw[offset..offset + len]
 }
 
+const CKB_SINCE_LOCK_TYPE_FLAG: u64 = 1 << 63;
+const CKB_SINCE_METRIC_TYPE_FLAG_MASK: u64 = 0x6000_0000_0000_0000;
+const CKB_SINCE_REMAIN_FLAGS_BITS: u64 = 0x1f00_0000_0000_0000;
+const CKB_SINCE_VALUE_MASK: u64 = 0x00ff_ffff_ffff_ffff;
+const CKB_SINCE_LOCK_BY_BLOCK_NUMBER: u64 = 0;
+
+pub fn relative_block_since(value: u64) -> Result<u64> {
+    if value & !CKB_SINCE_VALUE_MASK != 0 {
+        return Err(ScriptError::StateSinceNotMature);
+    }
+    Ok(CKB_SINCE_LOCK_TYPE_FLAG | CKB_SINCE_LOCK_BY_BLOCK_NUMBER | value)
+}
+
+pub fn validate_relative_block_since(input_since: u64, required_since: u64) -> Result<()> {
+    if !since_is_valid_relative_block(input_since) || !since_is_valid_relative_block(required_since)
+    {
+        return Err(ScriptError::StateSinceNotMature);
+    }
+    if (input_since & CKB_SINCE_VALUE_MASK) < (required_since & CKB_SINCE_VALUE_MASK) {
+        return Err(ScriptError::StateSinceNotMature);
+    }
+    Ok(())
+}
+
+fn since_is_valid_relative_block(value: u64) -> bool {
+    (value & CKB_SINCE_LOCK_TYPE_FLAG != 0)
+        && (value & CKB_SINCE_REMAIN_FLAGS_BITS == 0)
+        && (value & CKB_SINCE_METRIC_TYPE_FLAG_MASK == CKB_SINCE_LOCK_BY_BLOCK_NUMBER)
+}
+
+pub fn vault_cell_commitment_v1(
+    lock_hash: &[u8],
+    capacity: u64,
+    type_hash: Option<&[u8]>,
+    data: &[u8],
+) -> [u8; 32] {
+    let capacity = capacity.to_le_bytes();
+    let data_len = (data.len() as u64).to_le_bytes();
+    let type_present = [u8::from(type_hash.is_some())];
+    let mut hasher = new_blake2b();
+    hasher.update(VAULT_CELL_COMMITMENT_DOMAIN_V1);
+    hasher.update(lock_hash);
+    hasher.update(&capacity);
+    hasher.update(&type_present);
+    if let Some(type_hash) = type_hash {
+        hasher.update(type_hash);
+    }
+    hasher.update(&data_len);
+    hasher.update(data);
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    out
+}
+
 pub fn blake2b256(chunks: &[&[u8]]) -> [u8; 32] {
     let mut out = [0u8; 32];
     let mut hasher = new_blake2b();
@@ -3916,11 +3998,24 @@ mod tests {
         kind: u8,
         quantity: u128,
     ) -> [u8; FACTORY_RIGHT_V1_LEN] {
+        factory_right_bytes_with_asset(participant, subchannel, kind, quantity, None)
+    }
+
+    fn factory_right_bytes_with_asset(
+        participant: u8,
+        subchannel: u8,
+        kind: u8,
+        quantity: u128,
+        asset_type: Option<[u8; BYTE32_LEN]>,
+    ) -> [u8; FACTORY_RIGHT_V1_LEN] {
         let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
         raw[0..BYTE32_LEN].fill(participant);
         raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
         raw[2 * BYTE32_LEN] = kind;
-        raw[2 * BYTE32_LEN + 1] = 0;
+        if let Some(asset_type) = asset_type {
+            raw[2 * BYTE32_LEN + 1] = 1;
+            raw[2 * BYTE32_LEN + 2..2 * BYTE32_LEN + 2 + BYTE32_LEN].copy_from_slice(&asset_type);
+        }
         put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
         raw
     }
@@ -4165,13 +4260,20 @@ mod tests {
     fn reduced_exit_rights_pair(
         reserve_claim_after_quantity: u128,
         mutate_other_right: bool,
+        reserve_asset_type: Option<[u8; BYTE32_LEN]>,
     ) -> (
         [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
         [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
     ) {
         let before = [
             factory_right_bytes(1, 10, 0, 100),
-            factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+            factory_right_bytes_with_asset(
+                1,
+                10,
+                FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+                50,
+                reserve_asset_type,
+            ),
             factory_right_bytes(1, 10, 2, 1),
             factory_right_bytes(1, 10, 3, 1),
             factory_right_bytes(1, 10, 4, 20),
@@ -4182,11 +4284,12 @@ mod tests {
             factory_right_bytes(2, 10, 4, 20),
         ];
         let mut after = before;
-        after[1] = factory_right_bytes(
+        after[1] = factory_right_bytes_with_asset(
             1,
             10,
             FACTORY_RIGHT_KIND_RESERVE_CLAIM,
             reserve_claim_after_quantity,
+            reserve_asset_type,
         );
         if mutate_other_right {
             after[0] = factory_right_bytes(1, 10, 0, 90);
@@ -4299,6 +4402,26 @@ mod tests {
         [u8; FACTORY_STATE_HEADER_V1_LEN],
         [u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN],
     ) {
+        reduced_exit_headers_and_witness_with_reserve_asset(
+            release_quantity,
+            reserve_claim_after_quantity,
+            mutate_other_right,
+            descriptor_commitment_valid,
+            None,
+        )
+    }
+
+    fn reduced_exit_headers_and_witness_with_reserve_asset(
+        release_quantity: u128,
+        reserve_claim_after_quantity: u128,
+        mutate_other_right: bool,
+        descriptor_commitment_valid: bool,
+        reserve_asset_type: Option<[u8; BYTE32_LEN]>,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_STATE_HEADER_V1_LEN],
+        [u8; FACTORY_REDUCED_EXIT_WITNESS_V1_LEN],
+    ) {
         let key0 = signing_key(1);
         let key1 = signing_key(2);
         let mut entries = [([1u8; 32], pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
@@ -4311,7 +4434,8 @@ mod tests {
             ],
         );
 
-        let settlement_descriptor = descriptor_bytes([1u8; 32], 100, [2u8; 32], 200);
+        let release_capacity: u64 = release_quantity.try_into().unwrap();
+        let settlement_descriptor = descriptor_bytes([1u8; 32], release_capacity, [2u8; 32], 0);
         let mut exit_state_header = header_bytes(0, PHASE_ACTIVE);
         if descriptor_commitment_valid {
             exit_state_header[174..206]
@@ -4325,8 +4449,11 @@ mod tests {
             BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
         );
 
-        let (before, after) =
-            reduced_exit_rights_pair(reserve_claim_after_quantity, mutate_other_right);
+        let (before, after) = reduced_exit_rights_pair(
+            reserve_claim_after_quantity,
+            mutate_other_right,
+            reserve_asset_type,
+        );
         let mut witness_raw = reduced_exit_witness_raw(
             &key0,
             &key1,
@@ -6058,6 +6185,25 @@ mod tests {
     #[test]
     fn rejects_reduced_factory_exit_release_mismatch() {
         let (old_raw, new_raw, witness_raw) = reduced_exit_headers_and_witness(20, 35, false, true);
+        let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
+        let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_reduced_factory_exit_typed_claim_for_ckb_release() {
+        let (old_raw, new_raw, witness_raw) = reduced_exit_headers_and_witness_with_reserve_asset(
+            20,
+            30,
+            false,
+            true,
+            Some([7u8; BYTE32_LEN]),
+        );
         let old_header = FactoryStateHeaderV1::parse(&old_raw).unwrap();
         let new_header = FactoryStateHeaderV1::parse(&new_raw).unwrap();
         let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();

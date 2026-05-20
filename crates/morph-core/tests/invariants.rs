@@ -836,6 +836,35 @@ fn factory_sparse_merkle_proof_accepts_single_right_update_in_large_tree() {
 }
 
 #[test]
+fn factory_sparse_merkle_update_rejects_value_right_increase() {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let changed = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    after
+        .iter_mut()
+        .find(|right| right.id == changed)
+        .expect("changed right")
+        .quantity = 251;
+
+    let proof = FactorySingleRightMerkleUpdate {
+        before_root: factory_right_sparse_root(&before).unwrap(),
+        after_root: factory_right_sparse_root(&after).unwrap(),
+        touched_participants: BTreeSet::from([bytes32(3)]),
+        authorised_participants: BTreeSet::from([bytes32(3)]),
+        before: factory_right_sparse_proof(&before, &changed).unwrap(),
+        after: factory_right_sparse_proof(&after, &changed).unwrap(),
+    };
+
+    let err = validate_factory_single_right_merkle_update(&proof).unwrap_err();
+    assert_eq!(err, MorphError::FactoryMerkleProofInvalid);
+}
+
+#[test]
 fn factory_sparse_merkle_root_is_order_independent() {
     let rights = large_factory_rights();
     let mut reversed = rights.clone();

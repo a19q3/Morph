@@ -84,17 +84,16 @@ local test asset into the vault and settle exact token balances through the
 same StateCell and VaultCell authority model.
 The reduced-signature factory work is deliberately narrow at this stage:
 CKB-VM tests and devnet smoke cover a fixed-width proof for claim-reducing
-rights updates and fixed-width reserve-claim reduced exits, including a
-CKB+xUDT child vault. Sparse Merkle update packages and a fixed-width no-std
+rights updates and fixed-width CKB reserve-claim reduced exits. The xUDT
+reduced-exit V1 path is disabled pending complete typed release binding.
+Sparse Merkle update packages and a fixed-width no-std
 Merkle witness now cover the first general proof-bundle step for larger
 factories, including a devnet smoke path that updates one right through the
 256-sibling proof. Smoke summaries bind the current bounded reduced-rights,
-sparse Merkle, and reduced-exit proof shapes to their witness sizes and
-node-estimated transaction budgets, including the surplus-preserving typed
-factory-vault change branch, one-sided typed settlement branch, and reduced
-xUDT tampered-amount negative path. Larger, multi-right, variable-depth proof
-profiles and generalized typed reduced-exit variants are deferred beyond this
-roadmap slice.
+sparse Merkle, and CKB reduced-exit proof shapes to their witness sizes and
+node-estimated transaction budgets. Larger, multi-right, variable-depth proof
+profiles and typed reduced-exit variants are deferred beyond this roadmap
+slice.
 
 ## Repository Layout
 
@@ -135,8 +134,6 @@ cargo run -p morph-cli -- devnet xudt-negative-smoke
 cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
 cargo run -p morph-cli -- devnet factory-merkle-update-smoke
 cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
-cargo run -p morph-cli -- devnet factory-reduced-xudt-exit-smoke
-cargo run -p morph-cli -- devnet factory-reduced-xudt-negative-exit-smoke
 cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 make devnet-smoke
 make devnet-e2e
@@ -251,8 +248,10 @@ state package, and a host-side authorised-participant reduced package. The
 devnet CLI also includes `open-factory`,
 `update-factory`, `factory-exit-channel`, and `factory-xudt-smoke` for the
 conservative on-chain path, plus `factory-reduced-rights-smoke` and
-`factory-reduced-exit-smoke` / `factory-reduced-xudt-exit-smoke` for bounded
-one-signer proof paths. `devnet save-factory-splice-package` captures a live
+`factory-reduced-exit-smoke` for the bounded CKB one-signer proof path. The
+typed xUDT reduced-exit smoke commands remain in the CLI as disabled target
+coverage until typed release binding is restored. `devnet
+save-factory-splice-package` captures a live
 conservative FactoryStateCell/FactoryVaultCell pair as a signed
 `morph.factory_splice_package.v1` artifact, and `devnet apply-factory-splice`
 applies that package against the live factory state/vault pair.

@@ -389,7 +389,7 @@ enum DevnetCommand {
         /// Absolute fee to reserve for the open-channel transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before finalisation.
+        /// Relative block count required before finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -860,7 +860,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -915,7 +915,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -970,7 +970,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1025,7 +1025,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1086,7 +1086,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1147,7 +1147,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1208,7 +1208,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1269,7 +1269,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1361,7 +1361,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1371,7 +1371,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Run open -> reduced reserve-claim CKB+xUDT exit -> publish/finalise child channel.
+    /// Disabled target coverage for reduced reserve-claim CKB+xUDT exit.
     FactoryReducedXudtExitSmoke {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -1419,7 +1419,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1429,7 +1429,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Prove devnet rejects a reduced CKB+xUDT exit with a tampered child vault amount.
+    /// Disabled target coverage for reduced CKB+xUDT tampered child-vault rejection.
     FactoryReducedXudtNegativeExitSmoke {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -1474,7 +1474,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after accepted broadcasts. Use 0 to only submit to tx-pool.
@@ -1529,7 +1529,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1587,7 +1587,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -1651,7 +1651,7 @@ enum DevnetCommand {
         /// Absolute fee paid by a normal owner cell, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -2077,7 +2077,7 @@ enum DevnetCommand {
         /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
         #[arg(long)]
         bob_capacity: Option<u64>,
-        /// Raw relative-since value placed on the StateCell input.
+        /// Relative block count encoded onto the StateCell input.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Absolute fee paid from the state-carrier refund, in shannons.
@@ -2126,7 +2126,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel scripts.
+        /// Relative block count used by channel scripts.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2175,7 +2175,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel scripts.
+        /// Relative block count used by channel scripts.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2230,7 +2230,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel scripts.
+        /// Relative block count used by channel scripts.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2285,7 +2285,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel scripts.
+        /// Relative block count used by channel scripts.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2343,7 +2343,7 @@ enum DevnetCommand {
         /// Absolute fee used for setup and rejected apply attempts, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel scripts.
+        /// Relative block count used by channel scripts.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after accepted setup broadcasts. Rejected attempts never mine.
@@ -2389,7 +2389,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2432,7 +2432,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required by channel finalisation.
+        /// Relative block count required by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -2481,7 +2481,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2530,7 +2530,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -2573,7 +2573,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -2616,7 +2616,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -2659,7 +2659,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Must be greater than zero.

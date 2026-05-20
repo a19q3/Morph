@@ -90,6 +90,9 @@ fn main() -> Result<()> {
             witness.vault_lock_hash(),
             witness.settlement_descriptor(),
         )?;
+        if child_vault_capacity as u128 != witness.release_quantity() {
+            return Err(ScriptError::FactoryReserveMismatch);
+        }
         validate_factory_reserve_conservation(child_vault_capacity)?;
     } else if input_type_raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
         let witness = FactorySpliceWitnessV1::parse(input_type_raw.as_ref())?;
