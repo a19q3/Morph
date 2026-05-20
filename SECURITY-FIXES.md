@@ -116,14 +116,18 @@ Implementation safety-boundary baseline: `8944bf7`.
 - Attack model: documentation overstates script-enforced sponsor safety and a
   reviewer assumes operator-only policy fields are consensus checks.
 - Fix: V1 documents the script-enforced sponsor boundary as state type,
-  channel/state-number range, fee caps, and clean change. Expiry, sponsor
-  source, cadence, webhook policy, and similar runtime bounds are
-  operator/watchtower policy until a future script-verifiable design exists.
+  channel/state-number range, fee caps, and clean change. The sponsor lock now
+  rejects finite script-level `expiry` values instead of silently accepting an
+  unenforceable deadline. Expiry windows, sponsor source, cadence, webhook
+  policy, and similar runtime bounds are operator/watchtower policy until a
+  future script-verifiable design exists.
 - Negative tests: `sponsor_lock_rejects_fee_above_per_tx_limit`,
   `sponsor_lock_rejects_state_number_outside_policy_range`,
+  `sponsor_lock_rejects_finite_expiry_policy`,
   `rejects_fee_above_operator_limit`,
   `rejects_explicit_sponsor_when_policy_forbids_it`.
-- Remaining limitation: expiry/source are not V1 script-enforced fields.
+- Remaining limitation: finite expiry windows and sponsor source are not V1
+  script-enforced fields; finite script-level expiry is rejected.
 
 ## Evidence run
 

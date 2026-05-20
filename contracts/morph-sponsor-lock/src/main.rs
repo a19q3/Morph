@@ -35,6 +35,7 @@ fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
     let policy = SponsorPolicyV1::parse(args.as_ref())?;
+    validate_script_enforced_policy(&policy)?;
     validate_sponsored_state(&policy)?;
 
     let sponsor_in = sum_group_capacity(Source::GroupInput)?;
@@ -48,6 +49,14 @@ fn main() -> Result<()> {
     }
     if policy.already_spent().saturating_add(fee) > policy.max_total_fee() {
         return Err(ScriptError::SponsorBudgetExceeded);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_script_enforced_policy(policy: &SponsorPolicyV1) -> Result<()> {
+    if policy.expiry() != u64::MAX {
+        return Err(ScriptError::SponsorPolicyUnsupported);
     }
     Ok(())
 }
