@@ -30,6 +30,24 @@
       "max_bytes": 9000
     },
     {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-full-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-one-sided-smoke",
+      "path": "$.exit",
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
       "check": "factory-splice-in-smoke",
       "path": "$.apply",
       "max_cycles": 16000000,
@@ -123,6 +141,33 @@
       "max_witness_len": 3100,
       "max_cycles": 10000000,
       "max_bytes": 9000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 4000,
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-full-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 4000,
+      "max_cycles": 7500000,
+      "max_bytes": 11000
+    },
+    {
+      "check": "factory-reduced-xudt-exit-one-sided-smoke",
+      "transaction_path": "$.exit",
+      "proof_kind": "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+      "proof_siblings": 0,
+      "max_witness_len": 4000,
+      "max_cycles": 7500000,
+      "max_bytes": 11000
     },
     {
       "check": "factory-splice-in-smoke",

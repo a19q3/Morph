@@ -127,14 +127,14 @@ Implemented devnet-level checks:
   `factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch`,
   `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`, and
   `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`.
+- xUDT reduced-exit V1 is active at the devnet smoke layer through
+  `factory-reduced-xudt-exit-smoke`,
+  `factory-reduced-xudt-exit-full-smoke`,
+  `factory-reduced-xudt-exit-one-sided-smoke`, and
+  `factory-reduced-xudt-negative-exit-smoke`.
 - Sponsor expiry, sponsor source, scan cadence, and webhook policy are
   operator/watchtower policy in V1. They are covered by host/operator policy
   checks, not by sponsor-lock script claims.
-
-Deferred devnet-level checks:
-
-- xUDT reduced-exit devnet smoke and budget profiles pending CLI/devnet
-  restoration.
 
 Implemented factory checks:
 

@@ -1371,7 +1371,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Disabled target coverage for reduced reserve-claim CKB+xUDT exit.
+    /// Run open -> reduced reserve-claim CKB+xUDT exit -> publish/finalise child channel.
     FactoryReducedXudtExitSmoke {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -1429,7 +1429,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Disabled target coverage for reduced CKB+xUDT tampered child-vault rejection.
+    /// Run reduced CKB+xUDT child-vault amount mismatch rejection smoke.
     FactoryReducedXudtNegativeExitSmoke {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -2158,7 +2158,7 @@ enum DevnetCommand {
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
         bob_private_key: String,
         /// Initial capacity placed under the channel vault lock, in shannons.
-        #[arg(long, default_value_t = 20_000_000_000)]
+        #[arg(long, default_value_t = 24_000_000_000)]
         vault_capacity: u64,
         /// Net CKB amount withdrawn from the vault, in shannons.
         #[arg(long, default_value_t = 7_000_000_000)]

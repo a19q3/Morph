@@ -86,14 +86,15 @@ Implementation safety-boundary baseline: `8944bf7`.
   `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`,
   `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`,
   `factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch`.
-- Remaining limitation: xUDT reduced-exit devnet smoke remains disabled pending
-  CLI/devnet restoration.
+- Devnet evidence: CKB and xUDT reduced-exit smoke paths are active. The xUDT
+  smoke covers partial typed FactoryVault change, full release with CKB-only
+  change, one-sided child settlement, and child token amount mismatch rejection.
 
 ## xUDT reduced-exit typed binding
 
-- Current status: contract and CKB-VM coverage are active for xUDT reduced-exit
-  V1. The witness reuses the fixed-width xUDT descriptor variant; no new schema
-  is introduced.
+- Current status: contract, CKB-VM, and devnet smoke coverage are active for
+  xUDT reduced-exit V1. The witness reuses the fixed-width xUDT descriptor
+  variant; no new schema is introduced.
 - Fix: the factory type checks child-vault type hash, token amount, capacity,
   descriptor version, and descriptor commitment. The factory vault lock checks
   FactoryVault capacity conservation and typed xUDT change amount.
@@ -103,9 +104,9 @@ Implementation safety-boundary baseline: `8944bf7`.
   `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`,
   `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`,
   `factory_type_rejects_reduced_exit_xudt_capacity_mismatch`.
-- Remaining limitation: CLI/devnet xUDT reduced-exit smoke is explicitly
-  disabled until the devnet builder is updated for typed ReserveClaim roots and
-  release-quantity-as-token semantics.
+- Devnet negative smoke:
+  `factory-reduced-xudt-negative-exit-smoke` rejects child token amount mismatch
+  even when the FactoryVault change preserves total token supply.
 
 ## Sponsor policy boundary
 

@@ -190,10 +190,12 @@ checks the FactoryStateHeader transition and child materialisation, while
 CKB-VM tests cover the active CKB and xUDT reduced-exit child-vault shapes,
 release-quantity binding, rejection of typed ReserveClaim releases through the
 CKB-only path, child xUDT amount/type mismatches, claim asset-type mismatches,
-and FactoryVault typed-change mismatches. `factory-reduced-exit-smoke`
-publishes the active CKB path on devnet, then uses the ordinary child-channel
-publication and finalisation flow. The xUDT reduced-exit devnet smoke remains
-disabled pending CLI/devnet restoration.
+and FactoryVault typed-change mismatches. `factory-reduced-exit-smoke` and
+`factory-reduced-xudt-exit-smoke` publish the active reduced-exit paths on
+devnet, then use the ordinary child-channel publication and finalisation flow.
+The xUDT smoke covers partial typed FactoryVault change, full release with
+CKB-only change, one-sided child settlement, and tampered child-token amount
+rejection.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -319,8 +321,7 @@ process manager rather than becoming its own process manager.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
   beyond the current roadmap. The implemented on-chain paths are fixed-width:
   CKB and xUDT reserve-claim reduced exits plus a single-right 256-sibling
-  sparse Merkle update. xUDT reduced-exit devnet smoke remains deferred until
-  the CLI/devnet builder is restored.
+  sparse Merkle update.
 - No generic descriptor runtime.
 - No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
   state number; concurrent splice/off-chain-update interleaving is deferred.

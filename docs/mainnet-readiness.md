@@ -1,9 +1,9 @@
 # Mainnet Readiness
 
 This repository remains devnet-first. The current implementation baseline is a
-V1 safety-kernel audit candidate, not a mainnet-ready or production-ready
-release. A mainnet release candidate should not be cut until the items below
-have current evidence from mainnet or a mainnet-like environment.
+Devnet V1 release candidate, not a mainnet-ready or production-ready release. A
+mainnet release candidate should not be cut until the items below have current
+evidence from mainnet or a mainnet-like environment.
 
 ## P0 Release Blockers
 

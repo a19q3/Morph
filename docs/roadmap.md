@@ -172,9 +172,8 @@ finalisation path.
 - Devnet `factory-reduced-exit-smoke` command for the bounded reserve-claim
   reduced-exit path, followed by ordinary child-channel publication and
   finalisation.
-- CKB-VM coverage for xUDT reduced-exit V1 with typed child-vault and
-  FactoryVault change binding. xUDT reduced-exit devnet fixtures/smokes remain
-  target coverage pending CLI/devnet restoration.
+- CKB-VM and devnet smoke coverage for xUDT reduced-exit V1 with typed
+  child-vault and FactoryVault change binding.
 
 ## M4: Reduced-Signature Factory Mode
 
@@ -206,6 +205,9 @@ Implemented:
 - CKB-VM coverage for xUDT reserve-claim reduced-exit publication, including
   token amount, type hash, claim asset-type, and FactoryVault typed-change
   rejection cases;
+- devnet smoke coverage for xUDT reserve-claim reduced-exit publication,
+  including partial typed FactoryVault change, full release with CKB-only change,
+  one-sided child settlement, and tampered child-token amount rejection;
 - host-level sparse Merkle update package for a single-right transition inside
   an arbitrary factory rights tree, including CLI fixture and validation;
 - script-level fixed-width sparse Merkle update witness for the same
@@ -213,7 +215,8 @@ Implemented:
 - devnet smoke coverage for the sparse Merkle factory update witness, including
   smoke-summary evidence and per-transaction budget profile entry;
 - smoke-summary proof profile binding for the bounded reduced-rights update,
-  sparse Merkle update, and CKB reduced-exit proof shapes, including proof
+  sparse Merkle update, CKB reduced-exit, and xUDT reduced-exit proof shapes,
+  including proof
   sibling count where applicable, witness length, node-estimated cycles, and
   transaction byte size;
 - absolute smoke budget gates for cycle and transaction-size ceilings;
@@ -227,8 +230,6 @@ Implemented:
 
 Deferred beyond the current roadmap:
 
-- xUDT reduced-exit devnet smoke and budget profiles pending CLI/devnet
-  restoration;
 - empirical budget profiles for larger, multi-right, or variable-depth proof
   shapes beyond the current fixed-width smoke witnesses.
 
