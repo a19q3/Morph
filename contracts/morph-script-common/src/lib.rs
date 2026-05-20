@@ -1809,7 +1809,9 @@ pub struct FactoryReducedExitWitnessV1<'a> {
 
 impl<'a> FactoryReducedExitWitnessV1<'a> {
     pub fn parse(raw: &'a [u8]) -> Result<Self> {
-        if raw.len() != FACTORY_REDUCED_EXIT_WITNESS_V1_LEN {
+        if raw.len() != FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
+            && raw.len() != FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
+        {
             return Err(ScriptError::FactoryReducedProofEncoding);
         }
         let witness = Self { raw };
@@ -1834,6 +1836,9 @@ impl<'a> FactoryReducedExitWitnessV1<'a> {
         match witness.settlement_descriptor().len() {
             BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
                 BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            }
+            BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+                BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
             }
             _ => return Err(ScriptError::SettlementDescriptorEncoding),
         }
@@ -2146,6 +2151,16 @@ fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -
                 return Err(ScriptError::FactoryReducedProofMismatch);
             }
         }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+            let descriptor =
+                BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
+            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            if descriptor.total_xudt_amount() != witness.release_quantity() {
+                return Err(ScriptError::FactoryReducedProofMismatch);
+            }
+        }
         _ => return Err(ScriptError::SettlementDescriptorEncoding),
     }
     Ok(())
@@ -2157,6 +2172,14 @@ fn validate_reduced_exit_non_interference(witness: &FactoryReducedExitWitnessV1)
     }
     let touched = witness.touched_participant();
     let release_quantity = witness.release_quantity();
+    let expected_asset_type = match witness.settlement_descriptor().len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => None,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => Some(
+            BilateralCkbXudtSettlementDescriptorV1::parse(witness.settlement_descriptor())?
+                .xudt_type_hash(),
+        ),
+        _ => return Err(ScriptError::SettlementDescriptorEncoding),
+    };
     let mut consumed_claims = 0u8;
 
     for index in 0..witness.right_count() as usize {
@@ -2166,9 +2189,13 @@ fn validate_reduced_exit_non_interference(witness: &FactoryReducedExitWitnessV1)
             return Err(ScriptError::FactoryReducedProofMismatch);
         }
 
+        let asset_matches = match expected_asset_type {
+            Some(asset_type) => before.asset_present() == 1 && before.asset_type() == asset_type,
+            None => before.asset_present() == 0,
+        };
         if before.participant() == touched
             && before.kind() == FACTORY_RIGHT_KIND_RESERVE_CLAIM
-            && before.asset_present() == 0
+            && asset_matches
             && before.quantity() >= release_quantity
             && before.quantity() - release_quantity == after.quantity()
         {

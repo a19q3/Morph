@@ -4617,210 +4617,91 @@ pub fn factory_reduced_exit_smoke(
 }
 
 pub fn factory_reduced_xudt_exit_smoke(
-    rpc: &CkbRpcClient,
+    _rpc: &CkbRpcClient,
     options: FactoryReducedXudtExitSmokeOptions,
 ) -> Result<FactoryReducedXudtExitSmokeReport> {
-    ensure!(
-        options.child_vault_capacity > 0,
-        "child xUDT vault capacity must be non-zero"
+    let FactoryReducedXudtExitSmokeOptions {
+        contracts_dir,
+        private_key,
+        alice_private_key,
+        bob_private_key,
+        factory_capacity,
+        factory_vault_capacity,
+        child_vault_capacity,
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount,
+        bob_xudt_amount,
+        factory_vault_xudt_surplus,
+        sponsor_capacity,
+        fee,
+        finalise_since,
+        mine_blocks,
+    } = options;
+    let _ = (
+        contracts_dir,
+        private_key,
+        alice_private_key,
+        bob_private_key,
+        factory_capacity,
+        factory_vault_capacity,
+        child_vault_capacity,
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount,
+        bob_xudt_amount,
+        factory_vault_xudt_surplus,
+        sponsor_capacity,
+        fee,
+        finalise_since,
+        mine_blocks,
     );
-    let total_xudt_amount = options
-        .alice_xudt_amount
-        .checked_add(options.bob_xudt_amount)
-        .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
-    let factory_vault_xudt_amount = total_xudt_amount
-        .checked_add(options.factory_vault_xudt_surplus)
-        .ok_or_else(|| anyhow!("factory reduced xUDT factory vault amount overflow"))?;
-    ensure!(
-        total_xudt_amount > 0,
-        "factory reduced xUDT amount must be non-zero"
-    );
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
-    let (old_state_root, old_access_manifest_root) =
-        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
-
-    let open = open_factory(
-        rpc,
-        OpenFactoryOptions {
-            contracts_dir: options.contracts_dir.clone(),
-            private_key: options.private_key.clone(),
-            alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
-            factory_capacity: options.factory_capacity,
-            factory_vault_capacity: options.factory_vault_capacity,
-            factory_vault_xudt_amount: Some(factory_vault_xudt_amount),
-            state_root: Some(hex32(&old_state_root)),
-            access_manifest_root: Some(hex32(&old_access_manifest_root)),
-            non_interference_digest: None,
-            fee: options.fee,
-            mine_blocks: options.mine_blocks,
-        },
-    )?;
-    let factory_out_point = factory_cell_out_point(&open, "factory")?;
-    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
-    let exit = factory_exit_channel(
-        rpc,
-        FactoryExitChannelOptions {
-            contracts_dir: options.contracts_dir.clone(),
-            private_key: options.private_key.clone(),
-            alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
-            factory_out_point,
-            factory_vault_out_point,
-            update_number: None,
-            vault_capacity: options.child_vault_capacity,
-            alice_capacity: options.alice_capacity,
-            bob_capacity: options.bob_capacity,
-            alice_xudt_amount: Some(options.alice_xudt_amount),
-            bob_xudt_amount: Some(options.bob_xudt_amount),
-            sponsor_capacity: options.sponsor_capacity,
-            fee: options.fee,
-            finalise_since: options.finalise_since,
-            mine_blocks: options.mine_blocks,
-            tamper: FactoryExitChannelTamper::None,
-            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
-        },
-    )?;
-    let publish = publish_state(
-        rpc,
-        PublishStateOptions {
-            contracts_dir: options.contracts_dir.clone(),
-            private_key: options.private_key.clone(),
-            alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
-            state_out_point: printable_out_point_string(&exit.state_out_point),
-            sponsor_out_point: printable_out_point_string(&exit.sponsor_out_point),
-            state_number: Some(1),
-            state_package: None,
-            fee: options.fee,
-            mine_blocks: options.mine_blocks,
-        },
-    )?;
-    let finalise_options = XudtSmokeOptions {
-        contracts_dir: options.contracts_dir,
-        private_key: options.private_key,
-        alice_private_key: options.alice_private_key,
-        bob_private_key: options.bob_private_key,
-        vault_capacity: options.child_vault_capacity,
-        alice_capacity: options.alice_capacity,
-        bob_capacity: options.bob_capacity,
-        alice_xudt_amount: options.alice_xudt_amount,
-        bob_xudt_amount: options.bob_xudt_amount,
-        sponsor_capacity: options.sponsor_capacity,
-        fee: options.fee,
-        finalise_since: options.finalise_since,
-        mine_blocks: options.mine_blocks,
-    };
-    let finalise = finalise_xudt_channel(
-        rpc,
-        &finalise_options,
-        printable_out_point_string(&publish.state_out_point),
-        printable_out_point_string(&exit.vault_out_point),
-    )?;
-
-    Ok(FactoryReducedXudtExitSmokeReport {
-        open,
-        exit,
-        publish,
-        finalise,
-    })
+    Err(anyhow!(
+        "xUDT reduced-exit devnet smoke is disabled pending CLI/devnet restoration"
+    ))
 }
 
 pub fn factory_reduced_xudt_negative_exit_smoke(
-    rpc: &CkbRpcClient,
+    _rpc: &CkbRpcClient,
     options: FactoryReducedXudtNegativeExitSmokeOptions,
 ) -> Result<FactoryReducedXudtNegativeExitSmokeReport> {
-    ensure!(
-        options.child_vault_capacity > 0,
-        "child xUDT vault capacity must be non-zero"
+    let FactoryReducedXudtNegativeExitSmokeOptions {
+        contracts_dir,
+        private_key,
+        alice_private_key,
+        bob_private_key,
+        factory_capacity,
+        factory_vault_capacity,
+        child_vault_capacity,
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount,
+        bob_xudt_amount,
+        sponsor_capacity,
+        fee,
+        finalise_since,
+        mine_blocks,
+    } = options;
+    let _ = (
+        contracts_dir,
+        private_key,
+        alice_private_key,
+        bob_private_key,
+        factory_capacity,
+        factory_vault_capacity,
+        child_vault_capacity,
+        alice_capacity,
+        bob_capacity,
+        alice_xudt_amount,
+        bob_xudt_amount,
+        sponsor_capacity,
+        fee,
+        finalise_since,
+        mine_blocks,
     );
-    let total_xudt_amount = options
-        .alice_xudt_amount
-        .checked_add(options.bob_xudt_amount)
-        .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
-    ensure!(
-        total_xudt_amount > 1,
-        "factory reduced xUDT negative smoke needs at least two units"
-    );
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
-    let (old_state_root, old_access_manifest_root) =
-        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
-
-    let open = open_factory(
-        rpc,
-        OpenFactoryOptions {
-            contracts_dir: options.contracts_dir.clone(),
-            private_key: options.private_key.clone(),
-            alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
-            factory_capacity: options.factory_capacity,
-            factory_vault_capacity: options.factory_vault_capacity,
-            factory_vault_xudt_amount: Some(total_xudt_amount),
-            state_root: Some(hex32(&old_state_root)),
-            access_manifest_root: Some(hex32(&old_access_manifest_root)),
-            non_interference_digest: None,
-            fee: options.fee,
-            mine_blocks: options.mine_blocks,
-        },
-    )?;
-    let factory_out_point = factory_cell_out_point(&open, "factory")?;
-    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
-    let rejected_child_xudt_amount = total_xudt_amount
-        .checked_sub(1)
-        .ok_or_else(|| anyhow!("factory reduced xUDT negative smoke underflow"))?;
-
-    let rejection = match factory_exit_channel(
-        rpc,
-        FactoryExitChannelOptions {
-            contracts_dir: options.contracts_dir,
-            private_key: options.private_key,
-            alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
-            factory_out_point,
-            factory_vault_out_point,
-            update_number: None,
-            vault_capacity: options.child_vault_capacity,
-            alice_capacity: options.alice_capacity,
-            bob_capacity: options.bob_capacity,
-            alice_xudt_amount: Some(options.alice_xudt_amount),
-            bob_xudt_amount: Some(options.bob_xudt_amount),
-            sponsor_capacity: options.sponsor_capacity,
-            fee: options.fee,
-            finalise_since: options.finalise_since,
-            mine_blocks: 0,
-            tamper: FactoryExitChannelTamper::ChildXudtAmountMinusOnePreserveFactoryChange,
-            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
-        },
-    ) {
-        Ok(report) => {
-            return Err(anyhow!(
-                "factory reduced xUDT exit unexpectedly accepted tampered child vault amount in tx {}",
-                report.tx_hash
-            ));
-        }
-        Err(err) => format!("{err:#}"),
-    };
-    let script_failure = parse_script_failure(&rejection);
-    ensure!(
-        script_failure.error_code == Some(ScriptError::SettlementOutputMismatch as i16),
-        "expected SettlementOutputMismatch from factory reduced xUDT exit, got {:?}: {}",
-        script_failure.error_code,
-        rejection
-    );
-
-    Ok(FactoryReducedXudtNegativeExitSmokeReport {
-        open,
-        expected_child_xudt_amount: total_xudt_amount,
-        rejected_child_xudt_amount,
-        rejection,
-        script_failure,
-    })
+    Err(anyhow!(
+        "xUDT reduced-exit devnet smoke is disabled pending CLI/devnet restoration"
+    ))
 }
 
 pub fn factory_xudt_smoke(

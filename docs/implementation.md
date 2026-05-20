@@ -187,13 +187,13 @@ one-signer reduced signature, the local child StateCell evidence, the
 settlement descriptor, and the factory vault release. `morph-factory-type`
 checks the FactoryStateHeader transition and child materialisation, while
 `morph-factory-vault-lock` enforces reserve conservation.
-CKB-VM tests cover the active CKB reduced-exit child-vault shape, the
-release-quantity binding, and rejection of typed ReserveClaim releases through
-the CKB-only path. The xUDT reduced-exit V1 path is disabled pending complete
-typed release binding across child-vault type hash, child amount, settlement
-descriptor, and FactoryVault typed change. `factory-reduced-exit-smoke`
+CKB-VM tests cover the active CKB and xUDT reduced-exit child-vault shapes,
+release-quantity binding, rejection of typed ReserveClaim releases through the
+CKB-only path, child xUDT amount/type mismatches, claim asset-type mismatches,
+and FactoryVault typed-change mismatches. `factory-reduced-exit-smoke`
 publishes the active CKB path on devnet, then uses the ordinary child-channel
-publication and finalisation flow.
+publication and finalisation flow. The xUDT reduced-exit devnet smoke remains
+disabled pending CLI/devnet restoration.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -318,9 +318,9 @@ process manager rather than becoming its own process manager.
 - No routing, gossip, path finding, or liquidity discovery.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
   beyond the current roadmap. The implemented on-chain paths are fixed-width:
-  CKB reserve-claim reduced exits and a single-right 256-sibling sparse Merkle
-  update. xUDT reduced-exit V1 is disabled until typed release binding is
-  restored.
+  CKB and xUDT reserve-claim reduced exits plus a single-right 256-sibling
+  sparse Merkle update. xUDT reduced-exit devnet smoke remains deferred until
+  the CLI/devnet builder is restored.
 - No generic descriptor runtime.
 - No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
   state number; concurrent splice/off-chain-update interleaving is deferred.

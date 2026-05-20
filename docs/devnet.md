@@ -332,10 +332,11 @@ cargo run -q -p morph-cli -- devnet factory-reduced-exit-smoke --json \
   > target/factory-reduced-exit-smoke.json
 ```
 
-The typed xUDT reduced-exit commands are intentionally disabled in the V1
-safety-kernel candidate. They remain in the CLI as target coverage, but active
-acceptance is blocked until typed release binding covers the child-vault type
-hash, child amount, settlement descriptor, and FactoryVault typed change.
+The typed xUDT reduced-exit commands are intentionally disabled in the devnet
+CLI. Contract-level CKB-VM coverage is active for typed release binding across
+the child-vault type hash, child amount, settlement descriptor, and FactoryVault
+typed change, but devnet smoke acceptance is deferred until the CLI/devnet
+builder is restored.
 
 Use `--rpc-url` or `MORPH_CKB_RPC` when the node is not listening on the
 default local endpoint:
@@ -811,6 +812,7 @@ BilateralSignatureWitnessV1
 FactorySignatureWitnessV1
 FactoryReducedRightsWitnessV1
 FactoryReducedExitWitnessV1
+FactoryReducedExitXudtWitnessV1
 FactoryLocalExitWitnessV1
 FactoryLocalExitXudtWitnessV1
 SponsorPolicyV1
@@ -818,9 +820,9 @@ BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
 ```
 
-`FactoryReducedExitXudtWitnessV1` is intentionally absent from the active
-contract milestone. The typed reduced-exit shape is disabled until its typed
-release binding is complete.
+`FactoryReducedExitXudtWitnessV1` is the fixed-width xUDT descriptor variant of
+the reduced-exit witness. It is active in contract/CKB-VM coverage; the devnet
+xUDT reduced-exit smoke commands remain disabled pending CLI/devnet restoration.
 
 The draft Molecule schema in `schemas/morph.mol` records these active wire
 objects and their fixed byte lengths. The devnet contracts still parse the
@@ -1042,11 +1044,12 @@ script, a factory reserve lock, devnet factory open/update transactions,
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
 child bilateral channels, a bounded reduced-rights proof for claim-reducing
 factory updates, and a bounded reduced-exit path that releases a reserve claim
-into a child CKB channel. xUDT reduced-exit V1 is disabled pending complete
-typed release binding.
+into a child CKB channel. xUDT reduced-exit V1 is covered at the contract/CKB-VM
+layer with typed child-vault and FactoryVault change binding; devnet smoke
+coverage is deferred.
 The current devnet roadmap covers the fixed-width reduced-rights,
 sparse-Merkle, and CKB reduced-exit smoke paths. General proof paths for
-larger factories and typed reduced-exit variants are deferred beyond this
+larger factories and xUDT reduced-exit devnet profiles are deferred beyond this
 slice.
 
 The factory research track has a host-side package format that can be exercised

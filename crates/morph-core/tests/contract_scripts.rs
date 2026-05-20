@@ -20,8 +20,9 @@ use morph_script_common::{
     FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1,
     FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1,
     FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1,
-    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
     FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
     FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
@@ -1455,34 +1456,6 @@ fn reduced_exit_rights_pair(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn reduced_exit_witness_raw(
-    release_quantity: u128,
-    reserve_claim_before_quantity: u128,
-    reserve_claim_after_quantity: u128,
-    state_output_index: u32,
-    vault_output_index: u32,
-    state_type_hash: [u8; 32],
-    vault_lock_hash: [u8; 32],
-    state_lock_hash: [u8; 32],
-    state_header: &[u8],
-    descriptor: &[u8],
-) -> (Vec<u8>, SigningKey, SigningKey) {
-    reduced_exit_witness_raw_with_reserve_asset(
-        release_quantity,
-        reserve_claim_before_quantity,
-        reserve_claim_after_quantity,
-        state_output_index,
-        vault_output_index,
-        state_type_hash,
-        vault_lock_hash,
-        state_lock_hash,
-        state_header,
-        descriptor,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
 fn reduced_exit_witness_raw_with_reserve_asset(
     release_quantity: u128,
     reserve_claim_before_quantity: u128,
@@ -1894,6 +1867,18 @@ enum FactoryXudtExitTamper {
     None,
     ChildAmountMinusOneWithConservedSupply,
     ChildTypeMismatchWithAuthorisedMint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FactoryReducedXudtExitTamper {
+    None,
+    FullReleaseNoTypedChange,
+    ChildAmountMinusOneWithConservedSupply,
+    ChildTypeMismatchWithAuthorisedMint,
+    ClaimAssetTypeMismatch,
+    FactoryVaultChangeAmountMismatch,
+    FactoryVaultChangeMissing,
+    CapacityMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2988,27 +2973,11 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
-#[ignore = "requires `make build-contracts`"]
 #[test]
-fn factory_type_rejects_reduced_exit_xudt_reserve_release_v1_disabled() {
-    assert_reduced_exit_xudt_witness_rejected();
-}
-
-#[ignore = "requires `make build-contracts`"]
-#[test]
-fn factory_type_rejects_reduced_exit_xudt_amount_mismatch() {
-    assert_reduced_exit_xudt_witness_rejected();
-}
-
-#[ignore = "requires `make build-contracts`"]
-#[test]
-fn factory_type_rejects_reduced_exit_xudt_type_mismatch() {
-    assert_reduced_exit_xudt_witness_rejected();
-}
-
-fn assert_reduced_exit_xudt_witness_rejected() {
+fn reduced_exit_xudt_witness_parses_with_typed_claim() {
+    let xudt_type_hash = [9u8; 32];
     let descriptor = ckb_xudt_descriptor_bytes(
-        [9u8; 32],
+        xudt_type_hash,
         [1u8; 32],
         ALICE_CAPACITY,
         ALICE_XUDT_AMOUNT,
@@ -3016,11 +2985,18 @@ fn assert_reduced_exit_xudt_witness_rejected() {
         BOB_CAPACITY,
         BOB_XUDT_AMOUNT,
     );
-    let child_state = header_raw(0, PHASE_ACTIVE);
-    let (witness, _, _) = reduced_exit_witness_raw(
+    let release_quantity = ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT;
+    let mut child_state = header_raw(0, PHASE_ACTIVE);
+    child_state[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    put_u16(
+        &mut child_state,
+        206,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+    );
+    let (witness, _, _) = reduced_exit_witness_raw_with_reserve_asset(
+        release_quantity,
+        release_quantity + 1,
         1,
-        10,
-        9,
         1,
         2,
         [0u8; 32],
@@ -3028,8 +3004,320 @@ fn assert_reduced_exit_xudt_witness_rejected() {
         [0u8; 32],
         &child_state,
         &descriptor,
+        Some(xudt_type_hash),
     );
-    assert!(FactoryReducedExitWitnessV1::parse(&witness).is_err());
+    assert_eq!(witness.len(), FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN);
+    let witness = FactoryReducedExitWitnessV1::parse(&witness).unwrap();
+    assert_eq!(
+        witness.settlement_descriptor().len(),
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
+    );
+    assert_eq!(witness.release_quantity(), release_quantity);
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_reduced_exit_xudt_reserve_release() {
+    let (context, tx) = factory_reduced_xudt_exit_tx(FactoryReducedXudtExitTamper::None);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("xUDT reduced factory exit should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change() {
+    let (context, tx) =
+        factory_reduced_xudt_exit_tx(FactoryReducedXudtExitTamper::FullReleaseNoTypedChange);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("full xUDT reduced factory exit should verify with CKB-only factory change");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_exit_xudt_amount_mismatch() {
+    let (context, tx) = factory_reduced_xudt_exit_tx(
+        FactoryReducedXudtExitTamper::ChildAmountMinusOneWithConservedSupply,
+    );
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_exit_xudt_type_mismatch() {
+    let (context, tx) = factory_reduced_xudt_exit_tx(
+        FactoryReducedXudtExitTamper::ChildTypeMismatchWithAuthorisedMint,
+    );
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch() {
+    let (context, tx) =
+        factory_reduced_xudt_exit_tx(FactoryReducedXudtExitTamper::ClaimAssetTypeMismatch);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch() {
+    let (context, tx) = factory_reduced_xudt_exit_tx(
+        FactoryReducedXudtExitTamper::FactoryVaultChangeAmountMismatch,
+    );
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_vault_rejects_reduced_exit_xudt_missing_typed_change() {
+    let (context, tx) =
+        factory_reduced_xudt_exit_tx(FactoryReducedXudtExitTamper::FactoryVaultChangeMissing);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_reduced_exit_xudt_capacity_mismatch() {
+    let (context, tx) =
+        factory_reduced_xudt_exit_tx(FactoryReducedXudtExitTamper::CapacityMismatch);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn factory_reduced_xudt_exit_tx(
+    tamper: FactoryReducedXudtExitTamper,
+) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let factory_lock = deploy_always_success(&mut context);
+    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let xudt_owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+    let xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        xudt_owner_lock.calc_script_hash().as_slice().to_vec(),
+    );
+    let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
+    let wrong_xudt_type = deploy_contract(
+        &mut context,
+        "morph-devnet-xudt",
+        factory_lock.calc_script_hash().as_slice().to_vec(),
+    );
+
+    let descriptor = ckb_xudt_descriptor_bytes(
+        xudt_type_hash,
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        ALICE_XUDT_AMOUNT,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+        BOB_XUDT_AMOUNT,
+    );
+    let released_xudt_amount = ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT;
+    let factory_vault_xudt_surplus = match tamper {
+        FactoryReducedXudtExitTamper::FullReleaseNoTypedChange => 0,
+        _ => 40u128,
+    };
+    let reserve_claim_before_quantity = released_xudt_amount + factory_vault_xudt_surplus;
+    let reserve_claim_after_quantity = factory_vault_xudt_surplus;
+    let reserve_asset_type = match tamper {
+        FactoryReducedXudtExitTamper::ClaimAssetTypeMismatch => [8u8; BYTE32_LEN],
+        _ => xudt_type_hash,
+    };
+    let old_factory_data = reduced_exit_old_factory_data_with_reserve_asset(
+        1,
+        reserve_claim_before_quantity,
+        Some(reserve_asset_type),
+    );
+
+    let factory_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(factory_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_factory_data.clone(),
+    );
+    let factory_input = CellInput::new_builder()
+        .previous_output(factory_input_out_point)
+        .build();
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let factory_vault_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(factory_vault_input_capacity)
+            .lock(factory_vault_lock.clone())
+            .type_(Some(xudt_type.clone()).pack())
+            .build(),
+        xudt_amount_data(reserve_claim_before_quantity),
+    );
+    let reserve_input = CellInput::new_builder()
+        .previous_output(factory_vault_input_out_point)
+        .build();
+    let fee_input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(reserve_lock_placeholder)
+            .build(),
+        Bytes::new(),
+    );
+
+    let state_output_index = 1u32;
+    let vault_output_index = 2u32;
+    let child_anchor = derived_funding_anchor(&factory_input, state_output_index as u64);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(child_anchor, relative_since(0)),
+    );
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
+    let state_lock_hash: [u8; 32] = state_lock.calc_script_hash().unpack();
+    let vault_lock = deploy_contract(
+        &mut context,
+        "morph-vault-lock",
+        vault_args(child_anchor, relative_since(0), &state_type, &state_lock),
+    );
+    let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
+
+    let child_vault_capacity = ALICE_CAPACITY + BOB_CAPACITY;
+    let child_vault_data = xudt_amount_data(released_xudt_amount);
+    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    child_state[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    put_u16(
+        &mut child_state,
+        206,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+    );
+    set_state_payload_commitment(
+        &mut child_state,
+        vault_commitment(
+            &vault_lock,
+            child_vault_capacity,
+            Some(xudt_type_hash),
+            child_vault_data.as_ref(),
+        ),
+    );
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
+    child_pubkeys.sort();
+    child_state[110..142].copy_from_slice(&participants_commitment_v1(
+        2,
+        &[&child_pubkeys[0], &child_pubkeys[1]],
+    ));
+
+    let (expected_old_data, new_data, reduced_witness) =
+        signed_reduced_factory_exit_pair_with_reserve_asset(
+            1,
+            2,
+            released_xudt_amount,
+            reserve_claim_before_quantity,
+            reserve_claim_after_quantity,
+            state_output_index,
+            vault_output_index,
+            state_type_hash,
+            vault_lock_hash,
+            state_lock_hash,
+            &child_state,
+            &descriptor,
+            Some(reserve_asset_type),
+        );
+    assert_eq!(old_factory_data, expected_old_data);
+
+    let actual_child_vault_capacity = match tamper {
+        FactoryReducedXudtExitTamper::CapacityMismatch => child_vault_capacity - 1,
+        _ => child_vault_capacity,
+    };
+    let child_vault_amount = match tamper {
+        FactoryReducedXudtExitTamper::ChildAmountMinusOneWithConservedSupply => {
+            released_xudt_amount - 1
+        }
+        _ => released_xudt_amount,
+    };
+    let child_vault_type = match tamper {
+        FactoryReducedXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => wrong_xudt_type,
+        _ => xudt_type.clone(),
+    };
+    let factory_vault_change_capacity = factory_vault_input_capacity - actual_child_vault_capacity;
+    let factory_vault_change_type = match tamper {
+        FactoryReducedXudtExitTamper::FullReleaseNoTypedChange
+        | FactoryReducedXudtExitTamper::FactoryVaultChangeMissing => None,
+        _ => Some(xudt_type),
+    };
+    let factory_vault_change_amount = match tamper {
+        FactoryReducedXudtExitTamper::FullReleaseNoTypedChange => 0,
+        FactoryReducedXudtExitTamper::ChildAmountMinusOneWithConservedSupply => {
+            factory_vault_xudt_surplus + 1
+        }
+        FactoryReducedXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => {
+            reserve_claim_before_quantity
+        }
+        FactoryReducedXudtExitTamper::FactoryVaultChangeAmountMismatch => {
+            factory_vault_xudt_surplus - 1
+        }
+        _ => factory_vault_xudt_surplus,
+    };
+    let factory_vault_change_data = if factory_vault_change_type.is_some() {
+        xudt_amount_data(factory_vault_change_amount)
+    } else {
+        Bytes::new()
+    };
+
+    let tx = TransactionBuilder::default()
+        .input(factory_input)
+        .input(reserve_input)
+        .input(
+            CellInput::new_builder()
+                .previous_output(fee_input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(factory_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(actual_child_vault_capacity)
+                .lock(vault_lock)
+                .type_(Some(child_vault_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(factory_vault_change_capacity)
+                .lock(factory_vault_lock)
+                .type_(factory_vault_change_type.pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .output_data(Bytes::from(child_state.to_vec()).pack())
+        .output_data(xudt_amount_data(child_vault_amount).pack())
+        .output_data(factory_vault_change_data.pack())
+        .witness(witness_with_input_type(reduced_witness.clone()))
+        .witness(witness_with_input_type(reduced_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]

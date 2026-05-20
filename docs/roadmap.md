@@ -172,9 +172,9 @@ finalisation path.
 - Devnet `factory-reduced-exit-smoke` command for the bounded reserve-claim
   reduced-exit path, followed by ordinary child-channel publication and
   finalisation.
-- xUDT reduced-exit V1 is disabled pending complete typed release binding;
-  typed reduced-exit fixtures/smokes remain target coverage rather than active
-  V1 acceptance.
+- CKB-VM coverage for xUDT reduced-exit V1 with typed child-vault and
+  FactoryVault change binding. xUDT reduced-exit devnet fixtures/smokes remain
+  target coverage pending CLI/devnet restoration.
 
 ## M4: Reduced-Signature Factory Mode
 
@@ -203,8 +203,9 @@ Implemented:
   channel from the factory vault;
 - devnet smoke coverage for CKB reserve-claim reduced-exit publication,
   child-state publication, and child-vault finalisation;
-- CKB-VM rejection coverage proving the disabled xUDT reduced-exit V1 witness
-  shape cannot be accepted before typed release binding is restored;
+- CKB-VM coverage for xUDT reserve-claim reduced-exit publication, including
+  token amount, type hash, claim asset-type, and FactoryVault typed-change
+  rejection cases;
 - host-level sparse Merkle update package for a single-right transition inside
   an arbitrary factory rights tree, including CLI fixture and validation;
 - script-level fixed-width sparse Merkle update witness for the same
@@ -226,8 +227,8 @@ Implemented:
 
 Deferred beyond the current roadmap:
 
-- typed reduced-exit variants pending complete child-vault type hash, amount,
-  settlement descriptor, and FactoryVault typed-change binding;
+- xUDT reduced-exit devnet smoke and budget profiles pending CLI/devnet
+  restoration;
 - empirical budget profiles for larger, multi-right, or variable-depth proof
   shapes beyond the current fixed-width smoke witnesses.
 

@@ -76,27 +76,36 @@ Implementation safety-boundary baseline: `8944bf7`.
   release.
 - Attack model: a reduced exit decreases the claim by a smaller amount than the
   child vault receives.
-- Fix: CKB reduced-exit V1 requires the consumed ReserveClaim to be an
-  untyped CKB claim, requires child vault capacity to equal
-  `release_quantity`, and keeps FactoryVault conservation checks in the
-  factory vault lock.
+- Fix: reduced-exit V1 now checks the ReserveClaim asset domain. CKB releases
+  require an untyped claim and bind `release_quantity` to child vault capacity.
+  xUDT releases require a typed claim whose asset type matches the descriptor
+  and bind `release_quantity` to the child vault token amount.
 - Negative tests: `factory_type_and_vault_accept_reduced_exit_reserve_release`,
   `rejects_reduced_factory_exit_release_mismatch`,
-  `factory_type_rejects_reduced_exit_typed_claim_for_ckb_release`.
-- Remaining limitation: the active reduced-exit path is CKB-only. Typed assets
-  require the disabled xUDT path to be restored with full typed binding.
+  `factory_type_rejects_reduced_exit_typed_claim_for_ckb_release`,
+  `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`,
+  `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`,
+  `factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch`.
+- Remaining limitation: xUDT reduced-exit devnet smoke remains disabled pending
+  CLI/devnet restoration.
 
-## xUDT reduced-exit limitation
+## xUDT reduced-exit typed binding
 
-- Current status: CKB reduced-exit V1 is active. xUDT reduced-exit V1 is
-  disabled pending complete typed release binding across child-vault type hash,
-  child amount, settlement descriptor, and FactoryVault typed change.
-- Rationale: a disabled typed reduced-exit path is safer than a partially bound
-  value-bearing release path.
-- Negative test: `factory_type_rejects_reduced_exit_xudt_reserve_release_v1_disabled`.
-- Remaining limitation: typed reduced exits require a future witness and script
-  path that binds child-vault type hash, token amount, descriptor commitment,
-  and FactoryVault typed change in the same proof.
+- Current status: contract and CKB-VM coverage are active for xUDT reduced-exit
+  V1. The witness reuses the fixed-width xUDT descriptor variant; no new schema
+  is introduced.
+- Fix: the factory type checks child-vault type hash, token amount, capacity,
+  descriptor version, and descriptor commitment. The factory vault lock checks
+  FactoryVault capacity conservation and typed xUDT change amount.
+- Negative tests:
+  `factory_type_rejects_reduced_exit_xudt_amount_mismatch`,
+  `factory_type_rejects_reduced_exit_xudt_type_mismatch`,
+  `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`,
+  `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`,
+  `factory_type_rejects_reduced_exit_xudt_capacity_mismatch`.
+- Remaining limitation: CLI/devnet xUDT reduced-exit smoke is explicitly
+  disabled until the devnet builder is updated for typed ReserveClaim roots and
+  release-quantity-as-token semantics.
 
 ## Sponsor policy boundary
 
