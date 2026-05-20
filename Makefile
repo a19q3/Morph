@@ -1,9 +1,16 @@
 CARGO ?= cargo
 CONTRACT_CARGO ?= $(CARGO)
+AUDIT ?= cargo audit
+DENY ?= cargo deny
+# Current CKB dependencies pull transitive informational advisories for
+# paste (unmaintained) and rand 0.7 (unsound). Keep vulnerability failures
+# enabled while avoiding noisy warning trees until upstream CKB crates move.
+# RUSTSEC-2026-0097 is the current rand advisory; RUSTSEC-2020-0097 is for xcb.
+AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097
 
-.PHONY: ci test lint fmt fmt-check smoke fixture-checks build-contracts contract-tests devnet-smoke smoke-report smoke-assert smoke-assert-budget
+.PHONY: ci test lint fmt fmt-check audit deny supply-chain smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e smoke-report smoke-assert smoke-assert-budget
 
-ci: fmt-check lint test fixture-checks contract-tests
+ci: fmt-check lint supply-chain test fixture-checks contract-tests
 
 test:
 	$(CARGO) test --workspace
@@ -16,6 +23,14 @@ fmt:
 
 fmt-check:
 	$(CARGO) fmt --all -- --check
+
+audit:
+	$(AUDIT) $(AUDIT_IGNORE)
+
+deny:
+	$(DENY) check
+
+supply-chain: audit deny
 
 smoke:
 	$(CARGO) test --workspace
@@ -38,6 +53,14 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-factory-merkle-update-package target/fixture-checks/factory-merkle-update.json --json > target/fixture-checks/factory-merkle-update-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-splice-fixture --kind splice-in > target/fixture-checks/factory-splice-in.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-splice-package target/fixture-checks/factory-splice-in.json --json > target/fixture-checks/factory-splice-in-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-splice-fixture --kind xudt-splice-out > target/fixture-checks/factory-xudt-splice-out.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-splice-package target/fixture-checks/factory-xudt-splice-out.json --json > target/fixture-checks/factory-xudt-splice-out-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind splice-in > target/fixture-checks/factory-reduced-splice-in.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-splice-package target/fixture-checks/factory-reduced-splice-in.json --json > target/fixture-checks/factory-reduced-splice-in-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-reduced-splice-fixture --kind xudt-splice-out > target/fixture-checks/factory-reduced-xudt-splice-out.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-splice-package target/fixture-checks/factory-reduced-xudt-splice-out.json --json > target/fixture-checks/factory-reduced-xudt-splice-out-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
@@ -51,6 +74,9 @@ contract-tests: build-contracts
 
 devnet-smoke:
 	scripts/devnet-smoke.sh
+
+devnet-e2e:
+	scripts/devnet-e2e.sh
 
 smoke-report:
 	$(CARGO) run -p morph-cli -- devnet-smoke-report

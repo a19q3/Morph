@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -16,8 +18,20 @@ use ckb_types::{
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
-use morph_core::types::{FactoryMerkleSibling, FactoryRight, FactoryRightId, FactoryRightKind};
+use morph_core::types::{
+    AssetRegistry, FactoryMerkleSibling, FactoryReducedSpliceTransition,
+    FactoryReducedSpliceWitness, FactoryRight, FactoryRightId, FactoryRightKind,
+    FactorySingleRightMerkleUpdate, FactorySpliceHeader, FactorySpliceKind,
+    FactorySpliceTransition, FactoryUpdate, FactoryVaultDelta, FactoryVaultDescriptorV1, Mode,
+    ParticipantSignature, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, SpliceTransition,
+    SpliceWitness, StateCell as CoreStateCell, StateHeader, VaultAsset, VaultAssetAmount,
+    VaultDescriptorV2,
+};
 use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
+use morph_core::{
+    factory_vault_delta_commitment_v1, participants_commitment as core_participants_commitment,
+    splice_asset_delta_commitment_v1, vault_descriptor_commitment_v2,
+};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1, BILATERAL_CKB_DESCRIPTOR_V1_LEN,
     BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1,
@@ -38,24 +52,30 @@ use morph_script_common::{
     FactoryReducedExitWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
     SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
     ScriptError, StateHeaderV1, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
-    factory_participants_commitment_v1, participants_commitment_v1,
-    settlement_descriptor_commitment_v1, verify_factory_merkle_update,
+    factory_participants_commitment_v1, participants_commitment_v1, relative_block_since,
+    settlement_descriptor_commitment_v1, vault_cell_commitment_v1, verify_factory_merkle_update,
     verify_reduced_factory_exit_update,
 };
 use serde::Serialize;
 
+use crate::factory_packages::{
+    StoredFactoryReducedSplicePackage, StoredFactorySplicePackage,
+    read_factory_reduced_splice_package, read_factory_splice_package,
+    write_factory_reduced_splice_package, write_factory_splice_package,
+};
 use crate::packages::{
     FactoryStateCellPackageRecord, PackageOutPoint, StatePackageRecord,
     StoredFactoryLocalExitPackage, StoredFactoryMerkleUpdateStatePackage,
     StoredFactoryReducedRightsPackage, StoredFactoryStateCellPackage, StoredStatePackage,
     WatchCursor, canonical_hex32, default_watch_cursor_path,
     fixture_factory_reduced_rights_package, latest_factory_state_cell_package, latest_package,
-    read_factory_state_cell_update_package, read_package, read_watch_cursor,
+    list_packages, read_factory_state_cell_update_package, read_package, read_watch_cursor,
     reduced_rights_package_from_factory_header, write_factory_merkle_update_package,
     write_factory_reduced_rights_package, write_factory_state_cell_package, write_package,
     write_watch_cursor,
 };
 use crate::rpc::CkbRpcClient;
+use crate::splice_packages::{StoredSplicePackage, read_splice_package, write_splice_package};
 use crate::watch_alert::{
     WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert, append_watchtower_alert,
     post_watchtower_alert_webhook,
@@ -162,6 +182,58 @@ pub struct SaveFactoryReducedRightsPackageOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct SaveFactorySplicePackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_out_point: String,
+    pub factory_vault_out_point: String,
+    pub kind: DevnetSpliceKind,
+    pub asset: DevnetSpliceAsset,
+    pub ckb_amount: u64,
+    pub xudt_amount: Option<u128>,
+    pub update_number: Option<u64>,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveFactoryReducedSplicePackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_out_point: String,
+    pub factory_vault_out_point: String,
+    pub kind: DevnetSpliceKind,
+    pub asset: DevnetSpliceAsset,
+    pub ckb_amount: u64,
+    pub xudt_amount: Option<u128>,
+    pub update_number: Option<u64>,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyFactorySpliceOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub factory_out_point: String,
+    pub factory_vault_out_point: String,
+    pub factory_splice_package: PathBuf,
+    pub xudt_input_out_point: Option<String>,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplyFactoryReducedSpliceOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub factory_out_point: String,
+    pub factory_vault_out_point: String,
+    pub factory_reduced_splice_package: PathBuf,
+    pub xudt_input_out_point: Option<String>,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct SaveFactoryMerkleUpdatePackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
@@ -199,6 +271,48 @@ pub struct FactoryReducedRightsSmokeOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct FactorySpliceSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub kind: DevnetSpliceKind,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub splice_amount: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactoryXudtSpliceSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub kind: DevnetSpliceKind,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub splice_xudt_amount: u128,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub struct FactoryMerkleUpdateSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -231,6 +345,26 @@ pub struct FactoryReducedExitSmokeOptions {
 
 #[derive(Debug, Clone)]
 pub struct FactoryReducedXudtExitSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub factory_capacity: u64,
+    pub factory_vault_capacity: u64,
+    pub child_vault_capacity: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub factory_vault_xudt_surplus: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FactoryReducedXudtNegativeExitSmokeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
     pub alice_private_key: String,
@@ -346,6 +480,20 @@ pub struct SaveStatePackageOptions {
 }
 
 #[derive(Debug, Clone)]
+struct SettlementDescriptorUpdate {
+    alice_capacity: u64,
+    bob_capacity: u64,
+    xudt: Option<SettlementXudtUpdate>,
+}
+
+#[derive(Debug, Clone)]
+struct SettlementXudtUpdate {
+    type_hash: [u8; BYTE32_LEN],
+    alice_amount: u128,
+    bob_amount: u128,
+}
+
+#[derive(Debug, Clone)]
 pub struct PublishLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
@@ -406,6 +554,104 @@ pub struct FinaliseChannelOptions {
     pub finalise_since: u64,
     pub fee: u64,
     pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DevnetSpliceKind {
+    SpliceIn,
+    SpliceOut,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevnetSpliceAsset {
+    Ckb,
+    Xudt,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveSplicePackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub state_out_point: String,
+    pub vault_out_point: String,
+    pub kind: DevnetSpliceKind,
+    pub asset: DevnetSpliceAsset,
+    pub ckb_amount: u64,
+    pub xudt_amount: Option<u128>,
+    pub signed_fee: u64,
+    pub old_funding_epoch: u64,
+    pub new_funding_epoch: Option<u64>,
+    pub splice_number: Option<u64>,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplySpliceOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub state_out_point: String,
+    pub vault_out_point: String,
+    pub splice_package: PathBuf,
+    pub xudt_input_out_point: Option<String>,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpliceSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub kind: DevnetSpliceKind,
+    pub vault_capacity: u64,
+    pub splice_amount: u64,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct XudtSpliceSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub splice_xudt_amount: u128,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpliceNegativeSmokeOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub vault_capacity: u64,
+    pub splice_amount: u64,
+    pub splice_xudt_amount: u128,
+    pub alice_capacity: Option<u64>,
+    pub bob_capacity: Option<u64>,
+    pub alice_xudt_amount: u128,
+    pub bob_xudt_amount: u128,
+    pub sponsor_capacity: u64,
+    pub fee: u64,
+    pub finalise_since: u64,
+    pub mine_blocks: u64,
+    pub store_dir: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -525,7 +771,7 @@ struct SponsorPolicySettings {
     max_total_fee: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TransactionMetrics {
     pub estimated_cycles: u64,
     pub tx_size_bytes: usize,
@@ -555,7 +801,23 @@ pub struct DeployContractsReport {
     pub status: String,
     pub block_number: Option<u64>,
     pub block_hash: Option<String>,
+    pub transactions: Vec<DeployContractTransactionReport>,
     pub scripts: Vec<DeployedScriptReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeployContractTransactionReport {
+    pub tx_hash: String,
+    pub input_capacity: u64,
+    pub deployed_capacity: u64,
+    pub change_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub script_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -639,6 +901,8 @@ pub struct FactoryExitChannelReport {
     pub state_capacity: u64,
     pub vault_capacity: u64,
     pub child_xudt_amount: Option<u128>,
+    pub alice_xudt_amount: Option<u128>,
+    pub bob_xudt_amount: Option<u128>,
     pub factory_vault_input_capacity: u64,
     pub factory_vault_change_capacity: u64,
     pub factory_vault_input_xudt_amount: Option<u128>,
@@ -704,6 +968,61 @@ pub struct SaveFactoryReducedRightsPackageReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SaveFactorySplicePackageReport {
+    pub path: String,
+    pub kind: String,
+    pub asset: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_vault_amount: u128,
+    pub new_vault_amount: u128,
+    pub external_input: u128,
+    pub withdrawal: u128,
+    pub contract_witness_len: usize,
+    pub package: StoredFactorySplicePackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveFactoryReducedSplicePackageReport {
+    pub path: String,
+    pub kind: String,
+    pub asset: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_vault_amount: u128,
+    pub new_vault_amount: u128,
+    pub external_input: u128,
+    pub withdrawal: u128,
+    pub proof_siblings: usize,
+    pub contract_witness_len: usize,
+    pub package: StoredFactoryReducedSplicePackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApplyFactorySpliceReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub factory_id: String,
+    pub kind: String,
+    pub asset: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub factory_out_point: PrintableOutPoint,
+    pub factory_vault_out_point: PrintableOutPoint,
+    pub withdrawal_out_point: Option<PrintableOutPoint>,
+    pub fee_change_capacity: u64,
+    pub fee: u64,
+    pub factory_splice_package: String,
+    pub contract_witness_len: usize,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SaveFactoryMerkleUpdatePackageReport {
     pub path: String,
     pub package: StoredFactoryMerkleUpdateStatePackage,
@@ -722,6 +1041,46 @@ pub struct FactoryReducedRightsSmokeReport {
     pub open: OpenFactoryReport,
     pub package: SaveFactoryReducedRightsPackageReport,
     pub update: UpdateFactoryReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactorySpliceSmokeReport {
+    pub kind: String,
+    pub open: OpenFactoryReport,
+    pub package: SaveFactorySplicePackageReport,
+    pub apply: ApplyFactorySpliceReport,
+    pub exit: FactoryExitChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedSpliceSmokeReport {
+    pub kind: String,
+    pub open: OpenFactoryReport,
+    pub package: SaveFactoryReducedSplicePackageReport,
+    pub apply: ApplyFactorySpliceReport,
+    pub exit: FactoryExitChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryXudtSpliceSmokeReport {
+    pub kind: String,
+    pub open: OpenFactoryReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_xudt: Option<MintXudtCellReport>,
+    pub package: SaveFactorySplicePackageReport,
+    pub apply: ApplyFactorySpliceReport,
+    pub exit: FactoryExitChannelReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedXudtSpliceSmokeReport {
+    pub kind: String,
+    pub open: OpenFactoryReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_xudt: Option<MintXudtCellReport>,
+    pub package: SaveFactoryReducedSplicePackageReport,
+    pub apply: ApplyFactorySpliceReport,
+    pub exit: FactoryExitChannelReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -745,6 +1104,15 @@ pub struct FactoryReducedXudtExitSmokeReport {
     pub exit: FactoryExitChannelReport,
     pub publish: PublishStateReport,
     pub finalise: XudtFinaliseReport,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FactoryReducedXudtNegativeExitSmokeReport {
+    pub open: OpenFactoryReport,
+    pub expected_child_xudt_amount: u128,
+    pub rejected_child_xudt_amount: u128,
+    pub rejection: String,
+    pub script_failure: ScriptFailureReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -806,6 +1174,25 @@ pub struct SaveStatePackageReport {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SaveSplicePackageReport {
+    pub path: String,
+    pub kind: String,
+    pub asset: String,
+    pub ckb_amount: u64,
+    pub xudt_amount: Option<u128>,
+    pub xudt_type_hash: Option<String>,
+    pub old_vault_capacity: u64,
+    pub new_vault_capacity: u64,
+    pub old_xudt_amount: Option<u128>,
+    pub new_xudt_amount: Option<u128>,
+    pub old_funding_epoch: u64,
+    pub new_funding_epoch: u64,
+    pub splice_number: u64,
+    pub contract_witness_len: usize,
+    pub package: StoredSplicePackage,
+}
+
+#[derive(Debug, Serialize)]
 pub struct PublishLatestStatePackageReport {
     pub selected_package: StatePackageRecord,
     pub publication: PublishStateReport,
@@ -818,8 +1205,11 @@ pub struct ObservedStateCellReport {
     pub tx_hash: String,
     pub output_index: u32,
     pub out_point: String,
+    pub funding_anchor: String,
     pub state_number: u64,
     pub phase: String,
+    pub settlement_descriptor_commitment: String,
+    pub descriptor_version: u16,
     pub confirmations: u64,
 }
 
@@ -881,6 +1271,84 @@ pub struct FinaliseChannelReport {
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
     pub outputs: Vec<ChannelCellReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ApplySpliceReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub channel_id: String,
+    pub old_funding_anchor: String,
+    pub new_funding_anchor: String,
+    pub old_funding_epoch: u64,
+    pub new_funding_epoch: u64,
+    pub splice_number: u64,
+    pub old_state_number: u64,
+    pub new_state_number: u64,
+    pub state_out_point: PrintableOutPoint,
+    pub vault_out_point: PrintableOutPoint,
+    pub withdrawal_out_point: Option<PrintableOutPoint>,
+    pub withdrawal_payout_policy: String,
+    pub withdrawal_participant_pubkey_sec1: Option<String>,
+    pub withdrawal_lock_hash: Option<String>,
+    pub fee_change_capacity: u64,
+    pub fee: u64,
+    pub splice_package: String,
+    pub contract_witness_len: usize,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpliceSmokeReport {
+    pub kind: String,
+    pub open: OpenChannelReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_xudt: Option<MintXudtCellReport>,
+    pub package: SaveSplicePackageReport,
+    pub apply: ApplySpliceReport,
+    pub post_splice_sponsor: FundSponsorReport,
+    pub publish: PublishStateReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalise: Option<FinaliseChannelReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xudt_finalise: Option<XudtFinaliseReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpliceNegativeCaseReport {
+    pub case: String,
+    pub stage: String,
+    pub rejected_package: String,
+    pub rejection: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpliceNegativeSmokeReport {
+    pub ckb_open: OpenChannelReport,
+    pub xudt_open: OpenChannelReport,
+    pub ckb_package: SaveSplicePackageReport,
+    pub xudt_package: SaveSplicePackageReport,
+    pub signed_fee_package: SaveSplicePackageReport,
+    pub rejections: Vec<SpliceNegativeCaseReport>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MintXudtCellReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub xudt_type_hash: String,
+    pub amount: u128,
+    pub cell_out_point: PrintableOutPoint,
+    pub cell_capacity: u64,
+    pub change_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1062,6 +1530,12 @@ struct ResolvedContract {
     cell_dep: CellDep,
 }
 
+#[derive(Debug, Clone)]
+struct StateCellDetectionFilter {
+    state_type_code_hash: H256,
+    state_lock_code_hash: H256,
+}
+
 pub fn deploy_contracts(
     rpc: &CkbRpcClient,
     options: DeployContractsOptions,
@@ -1073,66 +1547,114 @@ pub fn deploy_contracts(
     let owner_lock = secp256k1_lock(&privkey)?;
     let tip = rpc.tip_header()?;
     let tip_number = tip.number_value()?;
-    let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let mut funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
     let contracts = load_contracts(&options.contracts_dir, &owner_lock)?;
+    ensure!(
+        !contracts.is_empty(),
+        "no contracts configured for deployment"
+    );
+    let input_capacity = funding_cell.capacity;
 
     let deployed_capacity = contracts
         .iter()
         .try_fold(0u64, |acc, contract| acc.checked_add(contract.capacity))
         .ok_or_else(|| anyhow!("deployed capacity overflow"))?;
-    let change_capacity = funding_cell
-        .capacity
+    let total_fee = (contracts.len() as u64)
+        .checked_mul(options.fee)
+        .ok_or_else(|| anyhow!("deployment fee overflow"))?;
+    let final_change_capacity = input_capacity
         .checked_sub(deployed_capacity)
-        .and_then(|value| value.checked_sub(options.fee))
+        .and_then(|value| value.checked_sub(total_fee))
         .ok_or_else(|| {
             anyhow!(
-                "funding cell capacity {} cannot cover deployed capacity {} and fee {}",
-                funding_cell.capacity,
+                "funding cell capacity {} cannot cover deployed capacity {} and total fee {}",
+                input_capacity,
                 deployed_capacity,
-                options.fee
+                total_fee
             )
         })?;
-    ensure_change_capacity(&owner_lock, change_capacity)?;
+    ensure_change_capacity(&owner_lock, final_change_capacity)?;
 
-    let unsigned = build_deploy_transaction(
-        &funding_cell,
-        secp_dep,
-        &owner_lock,
-        &contracts,
-        change_capacity,
-    );
-    let signed = sign_single_secp_input(unsigned, &privkey)?;
-    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let mut transactions = Vec::with_capacity(contracts.len());
+    let mut scripts = Vec::with_capacity(contracts.len());
+    let mut all_mined_blocks = Vec::new();
 
-    let tx_hash_string = sent.tx_hash.clone();
-    let scripts = contracts
-        .into_iter()
-        .enumerate()
-        .map(|(index, contract)| DeployedScriptReport {
-            name: contract.name,
+    for contract in contracts {
+        let change_capacity = funding_cell
+            .capacity
+            .checked_sub(contract.capacity)
+            .and_then(|value| value.checked_sub(options.fee))
+            .ok_or_else(|| {
+                anyhow!(
+                    "funding cell capacity {} cannot deploy {} capacity {} and fee {}",
+                    funding_cell.capacity,
+                    contract.name,
+                    contract.capacity,
+                    options.fee
+                )
+            })?;
+        ensure_change_capacity(&owner_lock, change_capacity)?;
+
+        let unsigned = build_deploy_transaction(
+            &funding_cell,
+            secp_dep.clone(),
+            &owner_lock,
+            std::slice::from_ref(&contract),
+            change_capacity,
+        );
+        let signed = sign_single_secp_input(unsigned, &privkey)?;
+        let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+        all_mined_blocks.extend(sent.mined_blocks.iter().cloned());
+
+        let tx_hash = parse_h256(&sent.tx_hash)?;
+        let tx_hash_string = sent.tx_hash.clone();
+        scripts.push(DeployedScriptReport {
+            name: contract.name.clone(),
             out_point: PrintableOutPoint {
                 tx_hash: tx_hash_string.clone(),
-                index: index as u32,
+                index: 0,
             },
             data_hash: format!("{:#x}", contract.data_hash),
             hash_type: "data1".to_string(),
             data_len: contract.data.len(),
             capacity: contract.capacity,
-        })
-        .collect();
+        });
+        transactions.push(DeployContractTransactionReport {
+            tx_hash: tx_hash_string,
+            input_capacity: funding_cell.capacity,
+            deployed_capacity: contract.capacity,
+            change_capacity,
+            fee: options.fee,
+            metrics: sent.metrics.clone(),
+            mined_blocks: sent.mined_blocks,
+            status: sent.status.clone(),
+            block_number: sent.block_number,
+            block_hash: sent.block_hash.clone(),
+            script_names: vec![contract.name],
+        });
+        funding_cell = LiveCell {
+            out_point: OutPoint::new(tx_hash.pack(), 1),
+            capacity: change_capacity,
+        };
+    }
+
+    let last = transactions
+        .last()
+        .ok_or_else(|| anyhow!("no deployment transactions were produced"))?;
 
     Ok(DeployContractsReport {
-        tx_hash: tx_hash_string,
-        input_capacity: funding_cell.capacity,
+        tx_hash: last.tx_hash.clone(),
+        input_capacity,
         deployed_capacity,
-        change_capacity,
-        fee: options.fee,
-        metrics: sent.metrics,
-        mined_blocks: sent.mined_blocks,
-        status: sent.status,
-        block_number: sent.block_number,
-        block_hash: sent.block_hash,
+        change_capacity: final_change_capacity,
+        fee: total_fee,
+        metrics: last.metrics.clone(),
+        mined_blocks: all_mined_blocks,
+        status: last.status.clone(),
+        block_number: last.block_number,
+        block_hash: last.block_hash.clone(),
+        transactions,
         scripts,
     })
 }
@@ -1175,18 +1697,21 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, 0);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut script_args = funding_anchor.to_vec();
-    script_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(script_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(state_type.calc_script_hash().as_slice()),
     );
 
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
 
     let change_lock_hash = owner_lock.calc_script_hash();
     let sponsor_policy_settings = sponsor_policy_settings(
@@ -1242,9 +1767,9 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -1270,6 +1795,10 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .lock(vault_lock)
         .build();
     ensure_output_capacity("vault", &vault_output, 0)?;
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, &[]),
+    );
 
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
@@ -1956,6 +2485,1265 @@ pub fn save_factory_reduced_rights_package(
     })
 }
 
+pub fn save_factory_splice_package(
+    rpc: &CkbRpcClient,
+    options: SaveFactorySplicePackageOptions,
+) -> Result<SaveFactorySplicePackageReport> {
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
+    let factory_type = factory_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("factory cell has no type script"))?;
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    ensure!(
+        factory_type.args().raw_data().as_ref() == old_header.factory_id(),
+        "factory type args do not match the factory id in cell data"
+    );
+    let alice_pubkey = k256_pubkey(&alice_key);
+    let bob_pubkey = k256_pubkey(&bob_key);
+    let expected_participants =
+        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+    ensure!(
+        old_header.participants_commitment() == expected_participants.as_slice(),
+        "live factory participant commitment does not match supplied Alice/Bob keys"
+    );
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let factory_vault_args = factory_vault_cell.output.lock().args().raw_data();
+    ensure!(
+        factory_vault_args.len() == 2 * BYTE32_LEN,
+        "factory vault lock args must be 64 bytes"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[..BYTE32_LEN] == old_header.factory_id(),
+        "factory vault lock is for a different factory id"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN] == factory_type_hash.as_slice(),
+        "factory vault lock is for a different factory type hash"
+    );
+
+    let live_xudt = live_vault_xudt_asset(&factory_vault_cell)?;
+    let old_update_number = old_header.update_number();
+    let new_update_number = options
+        .update_number
+        .unwrap_or_else(|| old_update_number.saturating_add(1));
+    ensure!(
+        new_update_number > old_update_number,
+        "new update number must be greater than old update number {}",
+        old_update_number
+    );
+
+    let old_ckb_amount = u128::from(factory_vault_cell.capacity);
+    let mut new_ckb_amount = old_ckb_amount;
+    let old_xudt_amount = live_xudt.as_ref().map(|asset| asset.amount);
+    let mut new_xudt_amount = old_xudt_amount;
+    let splice_kind = match options.kind {
+        DevnetSpliceKind::SpliceIn => FactorySpliceKind::In,
+        DevnetSpliceKind::SpliceOut => FactorySpliceKind::Out,
+    };
+    let (asset, old_amount, new_amount, external_input, withdrawal) = match options.asset {
+        DevnetSpliceAsset::Ckb => {
+            ensure!(options.ckb_amount > 0, "ckb_amount must be non-zero");
+            let amount = u128::from(options.ckb_amount);
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    new_ckb_amount = old_ckb_amount
+                        .checked_add(amount)
+                        .ok_or_else(|| anyhow!("post-splice factory vault capacity overflows"))?;
+                    (VaultAsset::Ckb, old_ckb_amount, new_ckb_amount, amount, 0)
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        amount < old_ckb_amount,
+                        "factory splice-out amount must be below live vault capacity {}",
+                        factory_vault_cell.capacity
+                    );
+                    new_ckb_amount = old_ckb_amount - amount;
+                    (VaultAsset::Ckb, old_ckb_amount, new_ckb_amount, 0, amount)
+                }
+            }
+        }
+        DevnetSpliceAsset::Xudt => {
+            let amount = options
+                .xudt_amount
+                .ok_or_else(|| anyhow!("xudt_amount is required for xUDT factory splices"))?;
+            ensure!(amount > 0, "xudt_amount must be non-zero");
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("live FactoryVaultCell does not carry xUDT"))?;
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    let post_splice_amount = live_xudt
+                        .amount
+                        .checked_add(amount)
+                        .ok_or_else(|| anyhow!("post-splice factory xUDT amount overflows"))?;
+                    new_xudt_amount = Some(post_splice_amount);
+                    (
+                        VaultAsset::Xudt(live_xudt.type_hash),
+                        live_xudt.amount,
+                        post_splice_amount,
+                        amount,
+                        0,
+                    )
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        amount < live_xudt.amount,
+                        "factory xUDT splice-out amount must be below live vault amount {}",
+                        live_xudt.amount
+                    );
+                    let post_splice_amount = live_xudt.amount - amount;
+                    new_xudt_amount = Some(post_splice_amount);
+                    (
+                        VaultAsset::Xudt(live_xudt.type_hash),
+                        live_xudt.amount,
+                        post_splice_amount,
+                        0,
+                        amount,
+                    )
+                }
+            }
+        }
+    };
+
+    let asset_type = match asset {
+        VaultAsset::Ckb => None,
+        VaultAsset::Xudt(type_hash) => Some(type_hash),
+    };
+    let (before, after) = factory_splice_reserve_rights(asset_type, old_amount, new_amount);
+    let old_state_root = factory_right_sparse_root(&before)
+        .map_err(|err| anyhow!("failed to compute factory splice old root: {err:?}"))?;
+    ensure!(
+        old_header.state_root() == old_state_root.as_slice(),
+        "live factory state_root does not match the conservative factory-splice reserve shape"
+    );
+    let new_state_root = factory_right_sparse_root(&after)
+        .map_err(|err| anyhow!("failed to compute factory splice new root: {err:?}"))?;
+    let old_access_manifest_root = bytes32_from_slice(
+        "factory access_manifest_root",
+        old_header.access_manifest_root(),
+    )?;
+    let new_access_manifest_root = derived_factory_update_digest(
+        b"CKB_MORPH_FACTORY_SPLICE_ACCESS_MANIFEST_V1",
+        old_header.access_manifest_root(),
+        new_update_number,
+    );
+    let factory_id = bytes32_from_slice("factory id", old_header.factory_id())?;
+    let xudt_type_hash = live_xudt.as_ref().map(|asset| asset.type_hash);
+    let old_vault = FactoryVaultDescriptorV1 {
+        factory_id,
+        assets: live_vault_assets(old_ckb_amount, xudt_type_hash, old_xudt_amount),
+    };
+    let new_vault = FactoryVaultDescriptorV1 {
+        factory_id,
+        assets: live_vault_assets(new_ckb_amount, xudt_type_hash, new_xudt_amount),
+    };
+    let deltas = vec![FactoryVaultDelta {
+        asset: asset.clone(),
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    }];
+    let header = FactorySpliceHeader {
+        protocol_version: old_header.protocol_version(),
+        factory_id,
+        old_update_number,
+        new_update_number,
+        old_state_root,
+        new_state_root,
+        old_access_manifest_root,
+        new_access_manifest_root,
+        kind: splice_kind,
+        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        non_interference_digest: [0u8; BYTE32_LEN],
+        participants_commitment: [0u8; BYTE32_LEN],
+    };
+    let transition = FactorySpliceTransition {
+        header,
+        witness: SpliceWitness {
+            threshold: 0,
+            signatures: Vec::new(),
+        },
+        update: FactoryUpdate {
+            before,
+            after,
+            touched_participants: BTreeSet::from([[1u8; BYTE32_LEN]]),
+            authorised_participants: BTreeSet::from([[1u8; BYTE32_LEN]]),
+        },
+        old_vault,
+        new_vault,
+        deltas,
+        asset_registry: AssetRegistry {
+            xudt_types: xudt_type_hash.into_iter().collect(),
+        },
+    };
+    let package = StoredFactorySplicePackage::from_transition(
+        transition,
+        &[([1u8; BYTE32_LEN], alice_key), ([2u8; BYTE32_LEN], bob_key)],
+    )?;
+    let summary = package.summary()?;
+    let path = write_factory_splice_package(&options.store_dir, &package)?;
+
+    Ok(SaveFactorySplicePackageReport {
+        path: path.display().to_string(),
+        kind: summary.kind,
+        asset: match options.asset {
+            DevnetSpliceAsset::Ckb => "ckb",
+            DevnetSpliceAsset::Xudt => "xudt",
+        }
+        .to_string(),
+        factory_id: summary.factory_id,
+        old_update_number: summary.old_update_number,
+        new_update_number: summary.new_update_number,
+        old_vault_amount: summary.vault_old_amount,
+        new_vault_amount: summary.vault_new_amount,
+        external_input: summary.external_input,
+        withdrawal: summary.withdrawal,
+        contract_witness_len: summary.contract_witness_len,
+        package,
+    })
+}
+
+pub fn save_factory_reduced_splice_package(
+    rpc: &CkbRpcClient,
+    options: SaveFactoryReducedSplicePackageOptions,
+) -> Result<SaveFactoryReducedSplicePackageReport> {
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point)?;
+    let factory_type = factory_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("factory cell has no type script"))?;
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    ensure!(
+        factory_type.args().raw_data().as_ref() == old_header.factory_id(),
+        "factory type args do not match the factory id in cell data"
+    );
+    let alice_pubkey = k256_pubkey(&alice_key);
+    let bob_pubkey = k256_pubkey(&bob_key);
+    let expected_participants =
+        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+    ensure!(
+        old_header.participants_commitment() == expected_participants.as_slice(),
+        "live factory participant commitment does not match supplied Alice/Bob keys"
+    );
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let factory_vault_args = factory_vault_cell.output.lock().args().raw_data();
+    ensure!(
+        factory_vault_args.len() == 2 * BYTE32_LEN,
+        "factory vault lock args must be 64 bytes"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[..BYTE32_LEN] == old_header.factory_id(),
+        "factory vault lock is for a different factory id"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN] == factory_type_hash.as_slice(),
+        "factory vault lock is for a different factory type hash"
+    );
+
+    let live_xudt = live_vault_xudt_asset(&factory_vault_cell)?;
+    let old_update_number = old_header.update_number();
+    let new_update_number = options
+        .update_number
+        .unwrap_or_else(|| old_update_number.saturating_add(1));
+    ensure!(
+        new_update_number > old_update_number,
+        "new update number must be greater than old update number {}",
+        old_update_number
+    );
+
+    let old_ckb_amount = u128::from(factory_vault_cell.capacity);
+    let mut new_ckb_amount = old_ckb_amount;
+    let old_xudt_amount = live_xudt.as_ref().map(|asset| asset.amount);
+    let mut new_xudt_amount = old_xudt_amount;
+    let splice_kind = match options.kind {
+        DevnetSpliceKind::SpliceIn => FactorySpliceKind::In,
+        DevnetSpliceKind::SpliceOut => FactorySpliceKind::Out,
+    };
+    let (asset, old_amount, new_amount, external_input, withdrawal) = match options.asset {
+        DevnetSpliceAsset::Ckb => {
+            ensure!(options.ckb_amount > 0, "ckb_amount must be non-zero");
+            let amount = u128::from(options.ckb_amount);
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    new_ckb_amount = old_ckb_amount
+                        .checked_add(amount)
+                        .ok_or_else(|| anyhow!("post-splice factory vault capacity overflows"))?;
+                    (VaultAsset::Ckb, old_ckb_amount, new_ckb_amount, amount, 0)
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        amount < old_ckb_amount,
+                        "factory splice-out amount must be below live vault capacity {}",
+                        factory_vault_cell.capacity
+                    );
+                    new_ckb_amount = old_ckb_amount - amount;
+                    (VaultAsset::Ckb, old_ckb_amount, new_ckb_amount, 0, amount)
+                }
+            }
+        }
+        DevnetSpliceAsset::Xudt => {
+            let amount = options
+                .xudt_amount
+                .ok_or_else(|| anyhow!("xudt_amount is required for xUDT factory splices"))?;
+            ensure!(amount > 0, "xudt_amount must be non-zero");
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("live FactoryVaultCell does not carry xUDT"))?;
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    let post_splice_amount = live_xudt
+                        .amount
+                        .checked_add(amount)
+                        .ok_or_else(|| anyhow!("post-splice factory xUDT amount overflows"))?;
+                    new_xudt_amount = Some(post_splice_amount);
+                    (
+                        VaultAsset::Xudt(live_xudt.type_hash),
+                        live_xudt.amount,
+                        post_splice_amount,
+                        amount,
+                        0,
+                    )
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        amount < live_xudt.amount,
+                        "factory xUDT splice-out amount must be below live vault amount {}",
+                        live_xudt.amount
+                    );
+                    let post_splice_amount = live_xudt.amount - amount;
+                    new_xudt_amount = Some(post_splice_amount);
+                    (
+                        VaultAsset::Xudt(live_xudt.type_hash),
+                        live_xudt.amount,
+                        post_splice_amount,
+                        0,
+                        amount,
+                    )
+                }
+            }
+        }
+    };
+
+    let asset_type = match asset {
+        VaultAsset::Ckb => None,
+        VaultAsset::Xudt(type_hash) => Some(type_hash),
+    };
+    let (before, after) = factory_splice_reserve_rights(asset_type, old_amount, new_amount);
+    let changed_id = before[0].id.clone();
+    let old_state_root = factory_right_sparse_root(&before)
+        .map_err(|err| anyhow!("failed to compute reduced factory splice old root: {err:?}"))?;
+    ensure!(
+        old_header.state_root() == old_state_root.as_slice(),
+        "live factory state_root does not match the reduced factory-splice reserve shape"
+    );
+    let new_state_root = factory_right_sparse_root(&after)
+        .map_err(|err| anyhow!("failed to compute reduced factory splice new root: {err:?}"))?;
+    let before_proof = factory_right_sparse_proof(&before, &changed_id).map_err(|err| {
+        anyhow!("failed to build reduced factory splice old sparse proof: {err:?}")
+    })?;
+    let after_proof = factory_right_sparse_proof(&after, &changed_id).map_err(|err| {
+        anyhow!("failed to build reduced factory splice new sparse proof: {err:?}")
+    })?;
+    ensure!(
+        before_proof.siblings == after_proof.siblings,
+        "reduced factory splice proof must keep the sibling frontier unchanged"
+    );
+
+    let old_access_manifest_root = bytes32_from_slice(
+        "factory access_manifest_root",
+        old_header.access_manifest_root(),
+    )?;
+    let factory_id = bytes32_from_slice("factory id", old_header.factory_id())?;
+    let xudt_type_hash = live_xudt.as_ref().map(|asset| asset.type_hash);
+    let old_vault = FactoryVaultDescriptorV1 {
+        factory_id,
+        assets: live_vault_assets(old_ckb_amount, xudt_type_hash, old_xudt_amount),
+    };
+    let new_vault = FactoryVaultDescriptorV1 {
+        factory_id,
+        assets: live_vault_assets(new_ckb_amount, xudt_type_hash, new_xudt_amount),
+    };
+    let deltas = vec![FactoryVaultDelta {
+        asset: asset.clone(),
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    }];
+    let header = FactorySpliceHeader {
+        protocol_version: old_header.protocol_version(),
+        factory_id,
+        old_update_number,
+        new_update_number,
+        old_state_root,
+        new_state_root,
+        old_access_manifest_root,
+        new_access_manifest_root: old_access_manifest_root,
+        kind: splice_kind,
+        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        non_interference_digest: [0u8; BYTE32_LEN],
+        participants_commitment: [0u8; BYTE32_LEN],
+    };
+    let update = FactorySingleRightMerkleUpdate {
+        before_root: old_state_root,
+        after_root: new_state_root,
+        touched_participants: BTreeSet::from([[1u8; BYTE32_LEN]]),
+        authorised_participants: BTreeSet::from([[1u8; BYTE32_LEN]]),
+        before: before_proof,
+        after: after_proof,
+    };
+    let transition = FactoryReducedSpliceTransition {
+        header,
+        witness: FactoryReducedSpliceWitness {
+            participant_threshold: 0,
+            participant_keys: Vec::new(),
+            signatures: Vec::new(),
+        },
+        update,
+        old_vault,
+        new_vault,
+        deltas,
+        asset_registry: AssetRegistry {
+            xudt_types: xudt_type_hash.into_iter().collect(),
+        },
+    };
+    let package = StoredFactoryReducedSplicePackage::from_transition(
+        transition,
+        &[([1u8; BYTE32_LEN], alice_key), ([2u8; BYTE32_LEN], bob_key)],
+    )?;
+    let summary = package.summary()?;
+    let path = write_factory_reduced_splice_package(&options.store_dir, &package)?;
+
+    Ok(SaveFactoryReducedSplicePackageReport {
+        path: path.display().to_string(),
+        kind: summary.kind,
+        asset: match options.asset {
+            DevnetSpliceAsset::Ckb => "ckb",
+            DevnetSpliceAsset::Xudt => "xudt",
+        }
+        .to_string(),
+        factory_id: summary.factory_id,
+        old_update_number: summary.old_update_number,
+        new_update_number: summary.new_update_number,
+        old_vault_amount: summary.vault_old_amount,
+        new_vault_amount: summary.vault_new_amount,
+        external_input: summary.external_input,
+        withdrawal: summary.withdrawal,
+        proof_siblings: summary.proof_siblings,
+        contract_witness_len: summary.contract_witness_len,
+        package,
+    })
+}
+
+pub fn apply_factory_splice(
+    rpc: &CkbRpcClient,
+    options: ApplyFactorySpliceOptions,
+) -> Result<ApplyFactorySpliceReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for factory splice fee/change")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let package = read_factory_splice_package(&options.factory_splice_package)?;
+    let transition = package.validate()?;
+    let contract_witness = package.contract_witness_bytes()?;
+    let delta = transition
+        .deltas
+        .first()
+        .ok_or_else(|| anyhow!("factory splice package has no vault delta"))?;
+
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
+    ensure!(
+        factory_cell.output.lock() == owner_lock,
+        "private key does not control the FactoryStateCell lock"
+    );
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    ensure!(
+        old_header.factory_id() == transition.header.factory_id.as_slice(),
+        "factory splice package is for a different factory id"
+    );
+    ensure!(
+        old_header.update_number() == transition.header.old_update_number
+            && old_header.state_root() == transition.header.old_state_root.as_slice()
+            && old_header.access_manifest_root()
+                == transition.header.old_access_manifest_root.as_slice(),
+        "factory splice package old header does not match the live FactoryStateCell"
+    );
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
+    let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
+    let factory_type = factory_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("factory cell has no type script"))?;
+    ensure!(
+        byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
+        "FactoryStateCell type script does not use deployed morph-factory-type"
+    );
+    ensure!(
+        factory_type.args().raw_data().as_ref() == transition.header.factory_id.as_slice(),
+        "factory type args do not match the factory splice package"
+    );
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let factory_vault_lock = factory_vault_cell.output.lock();
+    ensure!(
+        byte32_to_h256(factory_vault_lock.code_hash()) == factory_vault_contract.data_hash,
+        "FactoryVaultCell lock does not use deployed morph-factory-vault-lock"
+    );
+    let factory_vault_args = factory_vault_lock.args().raw_data();
+    ensure!(
+        factory_vault_args.len() == 2 * BYTE32_LEN,
+        "factory vault lock args must be 64 bytes"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[..BYTE32_LEN] == transition.header.factory_id.as_slice(),
+        "factory vault lock is for a different factory id"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN] == factory_type_hash.as_slice(),
+        "factory vault lock is for a different factory type hash"
+    );
+
+    let old_descriptor_ckb =
+        factory_vault_amount(&transition.old_vault, &VaultAsset::Ckb).unwrap_or_default();
+    let new_descriptor_ckb =
+        factory_vault_amount(&transition.new_vault, &VaultAsset::Ckb).unwrap_or_default();
+    ensure!(
+        u128::from(factory_vault_cell.capacity) == old_descriptor_ckb,
+        "live FactoryVaultCell capacity {} does not match old factory vault descriptor {}",
+        factory_vault_cell.capacity,
+        old_descriptor_ckb
+    );
+    let new_vault_capacity: u64 = new_descriptor_ckb
+        .try_into()
+        .context("new factory vault CKB amount does not fit in u64 capacity")?;
+
+    let live_xudt = live_vault_xudt_asset(&factory_vault_cell)?;
+    let xudt_contract = if live_xudt.is_some() || matches!(delta.asset, VaultAsset::Xudt(_)) {
+        Some(contract_by_name(&contracts, "morph-devnet-xudt")?)
+    } else {
+        None
+    };
+    if let Some(live_xudt) = &live_xudt
+        && let Some(xudt_contract) = &xudt_contract
+    {
+        ensure!(
+            byte32_to_h256(live_xudt.type_script.code_hash()) == xudt_contract.data_hash,
+            "FactoryVaultCell xUDT type script does not use deployed morph-devnet-xudt"
+        );
+    }
+
+    match &delta.asset {
+        VaultAsset::Ckb => {
+            ensure!(
+                factory_vault_cell.output.type_().to_opt().is_none()
+                    && factory_vault_cell.data.is_empty(),
+                "CKB factory splice package requires a plain FactoryVaultCell"
+            );
+        }
+        VaultAsset::Xudt(type_hash) => {
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("xUDT factory splice package requires a typed vault"))?;
+            ensure!(
+                &live_xudt.type_hash == type_hash,
+                "live FactoryVaultCell xUDT type hash does not match factory splice package"
+            );
+            ensure!(
+                live_xudt.amount == delta.old_amount,
+                "live FactoryVaultCell xUDT amount {} does not match signed old amount {}",
+                live_xudt.amount,
+                delta.old_amount
+            );
+        }
+    }
+
+    let external_xudt_input = if let VaultAsset::Xudt(_) = &delta.asset {
+        if delta.external_input > 0 {
+            let out_point = options
+                .xudt_input_out_point
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow!("--xudt-input-out-point is required for xUDT factory splice-in")
+                })
+                .and_then(parse_out_point)?;
+            let external_cell = load_live_cell(rpc, out_point.clone())?;
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("xUDT factory splice package requires a typed vault"))?;
+            ensure!(
+                external_cell.output.lock() == owner_lock,
+                "external xUDT input must be locked by the factory splice owner key"
+            );
+            let external_type = external_cell
+                .output
+                .type_()
+                .to_opt()
+                .ok_or_else(|| anyhow!("external xUDT input does not carry a type script"))?;
+            ensure!(
+                external_type == live_xudt.type_script,
+                "external xUDT input type does not match the live FactoryVaultCell type"
+            );
+            ensure!(
+                xudt_amount_from_data(&external_cell.data)? == delta.external_input,
+                "external xUDT input amount does not match the signed factory splice delta"
+            );
+            Some((out_point, external_cell))
+        } else {
+            ensure!(
+                options.xudt_input_out_point.is_none(),
+                "--xudt-input-out-point is only used for xUDT factory splice-in"
+            );
+            None
+        }
+    } else {
+        ensure!(
+            options.xudt_input_out_point.is_none(),
+            "--xudt-input-out-point requires an xUDT factory splice package"
+        );
+        None
+    };
+
+    let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    ensure!(
+        fee_cell.out_point != factory_out_point,
+        "fee input cannot be the FactoryStateCell itself"
+    );
+    ensure!(
+        fee_cell.out_point != factory_vault_out_point,
+        "fee input cannot be the FactoryVaultCell itself"
+    );
+    if let Some((out_point, _)) = &external_xudt_input {
+        ensure!(
+            fee_cell.out_point != *out_point,
+            "fee input cannot also be the external xUDT input"
+        );
+    }
+
+    let mut new_factory_data = factory_cell.data.to_vec();
+    put_u64(
+        &mut new_factory_data,
+        68,
+        transition.header.new_update_number,
+    );
+    new_factory_data[76..108].copy_from_slice(&transition.header.new_state_root);
+    new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
+    new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
+    let parsed_new_header = FactoryStateHeaderV1::parse(&new_factory_data)
+        .map_err(|err| anyhow!("constructed factory splice header is invalid: {err:?}"))?;
+    ensure!(
+        parsed_new_header.update_number() == transition.header.new_update_number,
+        "constructed factory splice header update number mismatch"
+    );
+
+    let new_factory_output = factory_cell.output.clone();
+    ensure_output_capacity("factory", &new_factory_output, new_factory_data.len())?;
+
+    let mut new_vault_builder = CellOutput::new_builder()
+        .capacity(new_vault_capacity)
+        .lock(factory_vault_lock.clone());
+    let new_vault_data = if let Some(live_xudt) = &live_xudt {
+        let expected_amount = factory_vault_amount(
+            &transition.new_vault,
+            &VaultAsset::Xudt(live_xudt.type_hash),
+        )
+        .ok_or_else(|| anyhow!("new factory vault descriptor omits live xUDT asset"))?;
+        new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
+        xudt_amount_bytes(expected_amount)
+    } else {
+        Bytes::new()
+    };
+    let new_vault_output = new_vault_builder.build();
+    ensure_output_capacity(
+        "post-splice factory vault",
+        &new_vault_output,
+        new_vault_data.len(),
+    )?;
+
+    let withdrawal_target = factory_splice_participant_withdrawal_target(&package, &transition)?;
+    let mut builder = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(factory_contract.cell_dep)
+        .cell_dep(factory_vault_contract.cell_dep);
+    if let Some(xudt_contract) = &xudt_contract {
+        builder = builder.cell_dep(xudt_contract.cell_dep.clone());
+    }
+    builder = builder
+        .input(CellInput::new(factory_out_point, 0))
+        .input(CellInput::new(factory_vault_out_point, 0))
+        .input(CellInput::new(fee_cell.out_point.clone(), 0));
+    if let Some((out_point, _)) = &external_xudt_input {
+        builder = builder.input(CellInput::new(out_point.clone(), 0));
+    }
+    builder = builder
+        .output(new_factory_output)
+        .output(new_vault_output)
+        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(new_vault_data.pack());
+
+    let mut withdrawal_out_point = None;
+    let mut withdrawal_output_capacity = 0u64;
+    match &delta.asset {
+        VaultAsset::Ckb if delta.withdrawal > 0 => {
+            let withdrawal_capacity: u64 = delta
+                .withdrawal
+                .try_into()
+                .context("factory splice CKB withdrawal does not fit in u64 capacity")?;
+            let withdrawal_output = CellOutput::new_builder()
+                .capacity(withdrawal_capacity)
+                .lock(withdrawal_target.lock.clone())
+                .build();
+            ensure_output_capacity("factory splice withdrawal", &withdrawal_output, 0)?;
+            withdrawal_output_capacity = withdrawal_capacity;
+            builder = builder
+                .output(withdrawal_output)
+                .output_data(Bytes::new().pack());
+            withdrawal_out_point = Some(2u32);
+        }
+        VaultAsset::Xudt(_) if delta.withdrawal > 0 => {
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("xUDT factory splice package requires a typed vault"))?;
+            let withdrawal_output_for_capacity = CellOutput::new_builder()
+                .lock(withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            let withdrawal_capacity = occupied_capacity(&withdrawal_output_for_capacity, 16)?;
+            let withdrawal_output = CellOutput::new_builder()
+                .capacity(withdrawal_capacity)
+                .lock(withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            ensure_output_capacity("factory xUDT splice withdrawal", &withdrawal_output, 16)?;
+            withdrawal_output_capacity = withdrawal_capacity;
+            builder = builder
+                .output(withdrawal_output)
+                .output_data(xudt_amount_bytes(delta.withdrawal).pack());
+            withdrawal_out_point = Some(2u32);
+        }
+        _ => {}
+    }
+
+    let external_input_capacity = external_xudt_input
+        .as_ref()
+        .map(|(_, cell)| cell.capacity)
+        .unwrap_or_default();
+    let fixed_output_delta = new_vault_capacity
+        .checked_add(withdrawal_output_capacity)
+        .and_then(|value| value.checked_sub(factory_vault_cell.capacity))
+        .ok_or_else(|| anyhow!("factory splice package would create excess input capacity"))?;
+    if matches!(&delta.asset, VaultAsset::Ckb) {
+        let expected_delta: u64 = delta
+            .external_input
+            .try_into()
+            .context("factory splice CKB external input does not fit in u64")?;
+        ensure!(
+            fixed_output_delta == expected_delta,
+            "factory splice output delta {} does not match signed external CKB delta {}",
+            fixed_output_delta,
+            expected_delta
+        );
+    }
+    let fee_change_capacity = fee_cell
+        .capacity
+        .checked_add(external_input_capacity)
+        .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
+        .checked_sub(fixed_output_delta)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "fee cell capacity {} plus external input capacity {} cannot cover factory splice output delta {} and fee {}",
+                fee_cell.capacity,
+                external_input_capacity,
+                fixed_output_delta,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, fee_change_capacity)?;
+    let fee_change_output = CellOutput::new_builder()
+        .capacity(fee_change_capacity)
+        .lock(owner_lock)
+        .build();
+
+    let unsigned = builder
+        .output(fee_change_output)
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_factory_splice_transaction(
+        unsigned,
+        &owner_key,
+        Bytes::from(contract_witness.clone()),
+        usize::from(external_xudt_input.is_some()),
+    )?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let tx_hash = sent.tx_hash.clone();
+
+    Ok(ApplyFactorySpliceReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        factory_id: hex32(&transition.header.factory_id),
+        kind: match transition.header.kind {
+            FactorySpliceKind::In => "splice_in",
+            FactorySpliceKind::Out => "splice_out",
+        }
+        .to_string(),
+        asset: match &delta.asset {
+            VaultAsset::Ckb => "ckb".to_string(),
+            VaultAsset::Xudt(type_hash) => format!("xudt:{}", hex32(type_hash)),
+        },
+        old_update_number: transition.header.old_update_number,
+        new_update_number: transition.header.new_update_number,
+        factory_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 0,
+        },
+        factory_vault_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 1,
+        },
+        withdrawal_out_point: withdrawal_out_point.map(|index| PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index,
+        }),
+        fee_change_capacity,
+        fee: options.fee,
+        factory_splice_package: options.factory_splice_package.display().to_string(),
+        contract_witness_len: contract_witness.len(),
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
+pub fn apply_factory_reduced_splice(
+    rpc: &CkbRpcClient,
+    options: ApplyFactoryReducedSpliceOptions,
+) -> Result<ApplyFactorySpliceReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for factory splice fee/change")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let package = read_factory_reduced_splice_package(&options.factory_reduced_splice_package)?;
+    let transition = package.validate()?;
+    let contract_witness = package.contract_witness_bytes()?;
+    let delta = transition
+        .deltas
+        .first()
+        .ok_or_else(|| anyhow!("reduced factory splice package has no vault delta"))?;
+
+    let factory_out_point = parse_out_point(&options.factory_out_point)?;
+    let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
+    let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
+    let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
+    ensure!(
+        factory_cell.output.lock() == owner_lock,
+        "private key does not control the FactoryStateCell lock"
+    );
+    let old_header = FactoryStateHeaderV1::parse(factory_cell.data.as_ref()).map_err(|err| {
+        anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
+    })?;
+    ensure!(
+        old_header.factory_id() == transition.header.factory_id.as_slice(),
+        "reduced factory splice package is for a different factory id"
+    );
+    ensure!(
+        old_header.update_number() == transition.header.old_update_number
+            && old_header.state_root() == transition.header.old_state_root.as_slice()
+            && old_header.access_manifest_root()
+                == transition.header.old_access_manifest_root.as_slice(),
+        "reduced factory splice package old header does not match the live FactoryStateCell"
+    );
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
+    let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
+    let factory_type = factory_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("factory cell has no type script"))?;
+    ensure!(
+        byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
+        "FactoryStateCell type script does not use deployed morph-factory-type"
+    );
+    ensure!(
+        factory_type.args().raw_data().as_ref() == transition.header.factory_id.as_slice(),
+        "factory type args do not match the reduced factory splice package"
+    );
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let factory_vault_lock = factory_vault_cell.output.lock();
+    ensure!(
+        byte32_to_h256(factory_vault_lock.code_hash()) == factory_vault_contract.data_hash,
+        "FactoryVaultCell lock does not use deployed morph-factory-vault-lock"
+    );
+    let factory_vault_args = factory_vault_lock.args().raw_data();
+    ensure!(
+        factory_vault_args.len() == 2 * BYTE32_LEN,
+        "factory vault lock args must be 64 bytes"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[..BYTE32_LEN] == transition.header.factory_id.as_slice(),
+        "factory vault lock is for a different factory id"
+    );
+    ensure!(
+        &factory_vault_args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN] == factory_type_hash.as_slice(),
+        "factory vault lock is for a different factory type hash"
+    );
+
+    let old_descriptor_ckb =
+        factory_vault_amount(&transition.old_vault, &VaultAsset::Ckb).unwrap_or_default();
+    let new_descriptor_ckb =
+        factory_vault_amount(&transition.new_vault, &VaultAsset::Ckb).unwrap_or_default();
+    ensure!(
+        u128::from(factory_vault_cell.capacity) == old_descriptor_ckb,
+        "live FactoryVaultCell capacity {} does not match old reduced factory vault descriptor {}",
+        factory_vault_cell.capacity,
+        old_descriptor_ckb
+    );
+    let new_vault_capacity: u64 = new_descriptor_ckb
+        .try_into()
+        .context("new reduced factory vault CKB amount does not fit in u64 capacity")?;
+
+    let live_xudt = live_vault_xudt_asset(&factory_vault_cell)?;
+    let xudt_contract = if live_xudt.is_some() || matches!(delta.asset, VaultAsset::Xudt(_)) {
+        Some(contract_by_name(&contracts, "morph-devnet-xudt")?)
+    } else {
+        None
+    };
+    if let Some(live_xudt) = &live_xudt
+        && let Some(xudt_contract) = &xudt_contract
+    {
+        ensure!(
+            byte32_to_h256(live_xudt.type_script.code_hash()) == xudt_contract.data_hash,
+            "FactoryVaultCell xUDT type script does not use deployed morph-devnet-xudt"
+        );
+    }
+
+    match &delta.asset {
+        VaultAsset::Ckb => {
+            ensure!(
+                factory_vault_cell.output.type_().to_opt().is_none()
+                    && factory_vault_cell.data.is_empty(),
+                "CKB reduced factory splice package requires a plain FactoryVaultCell"
+            );
+        }
+        VaultAsset::Xudt(type_hash) => {
+            let live_xudt = live_xudt.as_ref().ok_or_else(|| {
+                anyhow!("xUDT reduced factory splice package requires a typed vault")
+            })?;
+            ensure!(
+                &live_xudt.type_hash == type_hash,
+                "live FactoryVaultCell xUDT type hash does not match reduced factory splice package"
+            );
+            ensure!(
+                live_xudt.amount == delta.old_amount,
+                "live FactoryVaultCell xUDT amount {} does not match signed old amount {}",
+                live_xudt.amount,
+                delta.old_amount
+            );
+        }
+    }
+
+    let external_xudt_input = if let VaultAsset::Xudt(_) = &delta.asset {
+        if delta.external_input > 0 {
+            let out_point = options
+                .xudt_input_out_point
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow!("--xudt-input-out-point is required for xUDT reduced factory splice-in")
+                })
+                .and_then(parse_out_point)?;
+            let external_cell = load_live_cell(rpc, out_point.clone())?;
+            let live_xudt = live_xudt.as_ref().ok_or_else(|| {
+                anyhow!("xUDT reduced factory splice package requires a typed vault")
+            })?;
+            ensure!(
+                external_cell.output.lock() == owner_lock,
+                "external xUDT input must be locked by the factory splice owner key"
+            );
+            let external_type = external_cell
+                .output
+                .type_()
+                .to_opt()
+                .ok_or_else(|| anyhow!("external xUDT input does not carry a type script"))?;
+            ensure!(
+                external_type == live_xudt.type_script,
+                "external xUDT input type does not match the live FactoryVaultCell type"
+            );
+            ensure!(
+                xudt_amount_from_data(&external_cell.data)? == delta.external_input,
+                "external xUDT input amount does not match the signed reduced factory splice delta"
+            );
+            Some((out_point, external_cell))
+        } else {
+            ensure!(
+                options.xudt_input_out_point.is_none(),
+                "--xudt-input-out-point is only used for xUDT reduced factory splice-in"
+            );
+            None
+        }
+    } else {
+        ensure!(
+            options.xudt_input_out_point.is_none(),
+            "--xudt-input-out-point requires an xUDT reduced factory splice package"
+        );
+        None
+    };
+
+    let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    ensure!(
+        fee_cell.out_point != factory_out_point,
+        "fee input cannot be the FactoryStateCell itself"
+    );
+    ensure!(
+        fee_cell.out_point != factory_vault_out_point,
+        "fee input cannot be the FactoryVaultCell itself"
+    );
+    if let Some((out_point, _)) = &external_xudt_input {
+        ensure!(
+            fee_cell.out_point != *out_point,
+            "fee input cannot also be the external xUDT input"
+        );
+    }
+
+    let mut new_factory_data = factory_cell.data.to_vec();
+    put_u64(
+        &mut new_factory_data,
+        68,
+        transition.header.new_update_number,
+    );
+    new_factory_data[76..108].copy_from_slice(&transition.header.new_state_root);
+    new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
+    new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
+    let parsed_new_header = FactoryStateHeaderV1::parse(&new_factory_data)
+        .map_err(|err| anyhow!("constructed reduced factory splice header is invalid: {err:?}"))?;
+    ensure!(
+        parsed_new_header.update_number() == transition.header.new_update_number,
+        "constructed reduced factory splice header update number mismatch"
+    );
+
+    let new_factory_output = factory_cell.output.clone();
+    ensure_output_capacity("factory", &new_factory_output, new_factory_data.len())?;
+
+    let mut new_vault_builder = CellOutput::new_builder()
+        .capacity(new_vault_capacity)
+        .lock(factory_vault_lock.clone());
+    let new_vault_data = if let Some(live_xudt) = &live_xudt {
+        let expected_amount = factory_vault_amount(
+            &transition.new_vault,
+            &VaultAsset::Xudt(live_xudt.type_hash),
+        )
+        .ok_or_else(|| anyhow!("new reduced factory vault descriptor omits live xUDT asset"))?;
+        new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
+        xudt_amount_bytes(expected_amount)
+    } else {
+        Bytes::new()
+    };
+    let new_vault_output = new_vault_builder.build();
+    ensure_output_capacity(
+        "post-splice factory vault",
+        &new_vault_output,
+        new_vault_data.len(),
+    )?;
+
+    let withdrawal_target =
+        factory_reduced_splice_participant_withdrawal_target(&package, &transition)?;
+    let mut builder = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(factory_contract.cell_dep)
+        .cell_dep(factory_vault_contract.cell_dep);
+    if let Some(xudt_contract) = &xudt_contract {
+        builder = builder.cell_dep(xudt_contract.cell_dep.clone());
+    }
+    builder = builder
+        .input(CellInput::new(factory_out_point, 0))
+        .input(CellInput::new(factory_vault_out_point, 0))
+        .input(CellInput::new(fee_cell.out_point.clone(), 0));
+    if let Some((out_point, _)) = &external_xudt_input {
+        builder = builder.input(CellInput::new(out_point.clone(), 0));
+    }
+    builder = builder
+        .output(new_factory_output)
+        .output(new_vault_output)
+        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(new_vault_data.pack());
+
+    let mut withdrawal_out_point = None;
+    let mut withdrawal_output_capacity = 0u64;
+    match &delta.asset {
+        VaultAsset::Ckb if delta.withdrawal > 0 => {
+            let withdrawal_capacity: u64 = delta
+                .withdrawal
+                .try_into()
+                .context("reduced factory splice CKB withdrawal does not fit in u64 capacity")?;
+            let withdrawal_output = CellOutput::new_builder()
+                .capacity(withdrawal_capacity)
+                .lock(withdrawal_target.lock.clone())
+                .build();
+            ensure_output_capacity("reduced factory splice withdrawal", &withdrawal_output, 0)?;
+            withdrawal_output_capacity = withdrawal_capacity;
+            builder = builder
+                .output(withdrawal_output)
+                .output_data(Bytes::new().pack());
+            withdrawal_out_point = Some(2u32);
+        }
+        VaultAsset::Xudt(_) if delta.withdrawal > 0 => {
+            let live_xudt = live_xudt.as_ref().ok_or_else(|| {
+                anyhow!("xUDT reduced factory splice package requires a typed vault")
+            })?;
+            let withdrawal_output_for_capacity = CellOutput::new_builder()
+                .lock(withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            let withdrawal_capacity = occupied_capacity(&withdrawal_output_for_capacity, 16)?;
+            let withdrawal_output = CellOutput::new_builder()
+                .capacity(withdrawal_capacity)
+                .lock(withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            ensure_output_capacity(
+                "reduced factory xUDT splice withdrawal",
+                &withdrawal_output,
+                16,
+            )?;
+            withdrawal_output_capacity = withdrawal_capacity;
+            builder = builder
+                .output(withdrawal_output)
+                .output_data(xudt_amount_bytes(delta.withdrawal).pack());
+            withdrawal_out_point = Some(2u32);
+        }
+        _ => {}
+    }
+
+    let external_input_capacity = external_xudt_input
+        .as_ref()
+        .map(|(_, cell)| cell.capacity)
+        .unwrap_or_default();
+    let fixed_output_delta = new_vault_capacity
+        .checked_add(withdrawal_output_capacity)
+        .and_then(|value| value.checked_sub(factory_vault_cell.capacity))
+        .ok_or_else(|| {
+            anyhow!("reduced factory splice package would create excess input capacity")
+        })?;
+    if matches!(&delta.asset, VaultAsset::Ckb) {
+        let expected_delta: u64 = delta
+            .external_input
+            .try_into()
+            .context("reduced factory splice CKB external input does not fit in u64")?;
+        ensure!(
+            fixed_output_delta == expected_delta,
+            "reduced factory splice output delta {} does not match signed external CKB delta {}",
+            fixed_output_delta,
+            expected_delta
+        );
+    }
+    let fee_change_capacity = fee_cell
+        .capacity
+        .checked_add(external_input_capacity)
+        .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
+        .checked_sub(fixed_output_delta)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "fee cell capacity {} plus external input capacity {} cannot cover reduced factory splice output delta {} and fee {}",
+                fee_cell.capacity,
+                external_input_capacity,
+                fixed_output_delta,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, fee_change_capacity)?;
+    let fee_change_output = CellOutput::new_builder()
+        .capacity(fee_change_capacity)
+        .lock(owner_lock)
+        .build();
+
+    let unsigned = builder
+        .output(fee_change_output)
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_factory_splice_transaction(
+        unsigned,
+        &owner_key,
+        Bytes::from(contract_witness.clone()),
+        usize::from(external_xudt_input.is_some()),
+    )?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let tx_hash = sent.tx_hash.clone();
+
+    Ok(ApplyFactorySpliceReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        factory_id: hex32(&transition.header.factory_id),
+        kind: match transition.header.kind {
+            FactorySpliceKind::In => "splice_in",
+            FactorySpliceKind::Out => "splice_out",
+        }
+        .to_string(),
+        asset: match &delta.asset {
+            VaultAsset::Ckb => "ckb".to_string(),
+            VaultAsset::Xudt(type_hash) => format!("xudt:{}", hex32(type_hash)),
+        },
+        old_update_number: transition.header.old_update_number,
+        new_update_number: transition.header.new_update_number,
+        factory_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 0,
+        },
+        factory_vault_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 1,
+        },
+        withdrawal_out_point: withdrawal_out_point.map(|index| PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index,
+        }),
+        fee_change_capacity,
+        fee: options.fee,
+        factory_splice_package: options.factory_reduced_splice_package.display().to_string(),
+        contract_witness_len: contract_witness.len(),
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
 pub fn save_factory_merkle_update_package(
     rpc: &CkbRpcClient,
     options: SaveFactoryMerkleUpdatePackageOptions,
@@ -2118,6 +3906,553 @@ pub fn factory_reduced_rights_smoke(
         open,
         package,
         update,
+    })
+}
+
+pub fn factory_splice_smoke(
+    rpc: &CkbRpcClient,
+    options: FactorySpliceSmokeOptions,
+) -> Result<FactorySpliceSmokeReport> {
+    ensure!(options.splice_amount > 0, "splice_amount must be non-zero");
+    let old_amount = u128::from(options.factory_vault_capacity);
+    let new_amount = match options.kind {
+        DevnetSpliceKind::SpliceIn => old_amount
+            .checked_add(u128::from(options.splice_amount))
+            .ok_or_else(|| anyhow!("post-splice factory vault capacity overflows"))?,
+        DevnetSpliceKind::SpliceOut => {
+            ensure!(
+                u128::from(options.splice_amount) < old_amount,
+                "splice-out amount must be below factory vault capacity {}",
+                options.factory_vault_capacity
+            );
+            old_amount - u128::from(options.splice_amount)
+        }
+    };
+    ensure!(
+        u128::from(options.child_vault_capacity) < new_amount,
+        "child vault capacity must be below post-splice factory vault capacity {}",
+        new_amount
+    );
+    let (before, _) = factory_splice_reserve_rights(None, old_amount, new_amount);
+    let old_state_root = factory_right_sparse_root(&before)
+        .map_err(|err| anyhow!("failed to compute factory splice smoke root: {err:?}"))?;
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: None,
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let package = save_factory_splice_package(
+        rpc,
+        SaveFactorySplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            factory_vault_out_point: factory_vault_out_point.clone(),
+            kind: options.kind,
+            asset: DevnetSpliceAsset::Ckb,
+            ckb_amount: options.splice_amount,
+            xudt_amount: None,
+            update_number: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let apply = apply_factory_splice(
+        rpc,
+        ApplyFactorySpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            factory_splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point: format!(
+                "{}:{}",
+                apply.factory_out_point.tx_hash, apply.factory_out_point.index
+            ),
+            factory_vault_out_point: format!(
+                "{}:{}",
+                apply.factory_vault_out_point.tx_hash, apply.factory_vault_out_point.index
+            ),
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: None,
+            bob_xudt_amount: None,
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
+        },
+    )?;
+
+    Ok(FactorySpliceSmokeReport {
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "splice_in",
+            DevnetSpliceKind::SpliceOut => "splice_out",
+        }
+        .to_string(),
+        open,
+        package,
+        apply,
+        exit,
+    })
+}
+
+pub fn factory_reduced_splice_smoke(
+    rpc: &CkbRpcClient,
+    options: FactorySpliceSmokeOptions,
+) -> Result<FactoryReducedSpliceSmokeReport> {
+    ensure!(options.splice_amount > 0, "splice_amount must be non-zero");
+    let old_amount = u128::from(options.factory_vault_capacity);
+    let new_amount = match options.kind {
+        DevnetSpliceKind::SpliceIn => old_amount
+            .checked_add(u128::from(options.splice_amount))
+            .ok_or_else(|| anyhow!("post-splice factory vault capacity overflows"))?,
+        DevnetSpliceKind::SpliceOut => {
+            ensure!(
+                u128::from(options.splice_amount) < old_amount,
+                "splice-out amount must be below factory vault capacity {}",
+                options.factory_vault_capacity
+            );
+            old_amount - u128::from(options.splice_amount)
+        }
+    };
+    ensure!(
+        u128::from(options.child_vault_capacity) < new_amount,
+        "child vault capacity must be below post-splice factory vault capacity {}",
+        new_amount
+    );
+    let (before, _) = factory_splice_reserve_rights(None, old_amount, new_amount);
+    let old_state_root = factory_right_sparse_root(&before)
+        .map_err(|err| anyhow!("failed to compute reduced factory splice smoke root: {err:?}"))?;
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: None,
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let package = save_factory_reduced_splice_package(
+        rpc,
+        SaveFactoryReducedSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            factory_vault_out_point: factory_vault_out_point.clone(),
+            kind: options.kind,
+            asset: DevnetSpliceAsset::Ckb,
+            ckb_amount: options.splice_amount,
+            xudt_amount: None,
+            update_number: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let apply = apply_factory_reduced_splice(
+        rpc,
+        ApplyFactoryReducedSpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            factory_reduced_splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point: format!(
+                "{}:{}",
+                apply.factory_out_point.tx_hash, apply.factory_out_point.index
+            ),
+            factory_vault_out_point: format!(
+                "{}:{}",
+                apply.factory_vault_out_point.tx_hash, apply.factory_vault_out_point.index
+            ),
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: None,
+            bob_xudt_amount: None,
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
+        },
+    )?;
+
+    Ok(FactoryReducedSpliceSmokeReport {
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "splice_in",
+            DevnetSpliceKind::SpliceOut => "splice_out",
+        }
+        .to_string(),
+        open,
+        package,
+        apply,
+        exit,
+    })
+}
+
+pub fn factory_xudt_splice_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryXudtSpliceSmokeOptions,
+) -> Result<FactoryXudtSpliceSmokeReport> {
+    ensure!(
+        options.splice_xudt_amount > 0,
+        "splice xUDT amount must be non-zero"
+    );
+    let old_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("factory xUDT amount overflow"))?;
+    ensure!(old_xudt_amount > 0, "factory xUDT amount must be non-zero");
+    let new_xudt_amount = match options.kind {
+        DevnetSpliceKind::SpliceIn => old_xudt_amount
+            .checked_add(options.splice_xudt_amount)
+            .ok_or_else(|| anyhow!("post-splice factory xUDT amount overflows"))?,
+        DevnetSpliceKind::SpliceOut => {
+            ensure!(
+                options.splice_xudt_amount < old_xudt_amount,
+                "splice xUDT amount must be below the live vault amount {}",
+                old_xudt_amount
+            );
+            old_xudt_amount - options.splice_xudt_amount
+        }
+    };
+    ensure!(
+        options.child_vault_capacity < options.factory_vault_capacity,
+        "child vault capacity must be below factory vault capacity {}",
+        options.factory_vault_capacity
+    );
+
+    let xudt_type_hash =
+        devnet_owner_xudt_type_hash(rpc, &options.contracts_dir, &options.private_key)?;
+    let (before, _) =
+        factory_splice_reserve_rights(Some(xudt_type_hash), old_xudt_amount, new_xudt_amount);
+    let old_state_root = factory_right_sparse_root(&before)
+        .map_err(|err| anyhow!("failed to compute factory xUDT splice smoke root: {err:?}"))?;
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(old_xudt_amount),
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+
+    let external_xudt = if matches!(options.kind, DevnetSpliceKind::SpliceIn) {
+        Some(mint_owner_xudt_cell(
+            rpc,
+            &options.contracts_dir,
+            &options.private_key,
+            options.splice_xudt_amount,
+            options.fee,
+            options.mine_blocks,
+        )?)
+    } else {
+        None
+    };
+    let external_xudt_out_point = external_xudt
+        .as_ref()
+        .map(|report| printable_out_point_string(&report.cell_out_point));
+
+    let package = save_factory_splice_package(
+        rpc,
+        SaveFactorySplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            factory_vault_out_point: factory_vault_out_point.clone(),
+            kind: options.kind,
+            asset: DevnetSpliceAsset::Xudt,
+            ckb_amount: 0,
+            xudt_amount: Some(options.splice_xudt_amount),
+            update_number: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let apply = apply_factory_splice(
+        rpc,
+        ApplyFactorySpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            factory_splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: external_xudt_out_point,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    let (post_alice_xudt_amount, post_bob_xudt_amount) = proportional_xudt_split(
+        new_xudt_amount,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
+    ensure!(
+        post_alice_xudt_amount.checked_add(post_bob_xudt_amount) == Some(new_xudt_amount),
+        "post-splice factory xUDT settlement split does not match new vault amount"
+    );
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point: format!(
+                "{}:{}",
+                apply.factory_out_point.tx_hash, apply.factory_out_point.index
+            ),
+            factory_vault_out_point: format!(
+                "{}:{}",
+                apply.factory_vault_out_point.tx_hash, apply.factory_vault_out_point.index
+            ),
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(post_alice_xudt_amount),
+            bob_xudt_amount: Some(post_bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
+        },
+    )?;
+
+    Ok(FactoryXudtSpliceSmokeReport {
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "xudt_splice_in",
+            DevnetSpliceKind::SpliceOut => "xudt_splice_out",
+        }
+        .to_string(),
+        open,
+        external_xudt,
+        package,
+        apply,
+        exit,
+    })
+}
+
+pub fn factory_reduced_xudt_splice_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryXudtSpliceSmokeOptions,
+) -> Result<FactoryReducedXudtSpliceSmokeReport> {
+    ensure!(
+        options.splice_xudt_amount > 0,
+        "splice xUDT amount must be non-zero"
+    );
+    let old_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("factory xUDT amount overflow"))?;
+    ensure!(old_xudt_amount > 0, "factory xUDT amount must be non-zero");
+    let new_xudt_amount = match options.kind {
+        DevnetSpliceKind::SpliceIn => old_xudt_amount
+            .checked_add(options.splice_xudt_amount)
+            .ok_or_else(|| anyhow!("post-splice factory xUDT amount overflows"))?,
+        DevnetSpliceKind::SpliceOut => {
+            ensure!(
+                options.splice_xudt_amount < old_xudt_amount,
+                "splice xUDT amount must be below the live vault amount {}",
+                old_xudt_amount
+            );
+            old_xudt_amount - options.splice_xudt_amount
+        }
+    };
+    ensure!(
+        options.child_vault_capacity < options.factory_vault_capacity,
+        "child vault capacity must be below factory vault capacity {}",
+        options.factory_vault_capacity
+    );
+
+    let xudt_type_hash =
+        devnet_owner_xudt_type_hash(rpc, &options.contracts_dir, &options.private_key)?;
+    let (before, _) =
+        factory_splice_reserve_rights(Some(xudt_type_hash), old_xudt_amount, new_xudt_amount);
+    let old_state_root = factory_right_sparse_root(&before).map_err(|err| {
+        anyhow!("failed to compute reduced factory xUDT splice smoke root: {err:?}")
+    })?;
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(old_xudt_amount),
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: None,
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+
+    let external_xudt = if matches!(options.kind, DevnetSpliceKind::SpliceIn) {
+        Some(mint_owner_xudt_cell(
+            rpc,
+            &options.contracts_dir,
+            &options.private_key,
+            options.splice_xudt_amount,
+            options.fee,
+            options.mine_blocks,
+        )?)
+    } else {
+        None
+    };
+    let external_xudt_out_point = external_xudt
+        .as_ref()
+        .map(|report| printable_out_point_string(&report.cell_out_point));
+
+    let package = save_factory_reduced_splice_package(
+        rpc,
+        SaveFactoryReducedSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point: factory_out_point.clone(),
+            factory_vault_out_point: factory_vault_out_point.clone(),
+            kind: options.kind,
+            asset: DevnetSpliceAsset::Xudt,
+            ckb_amount: 0,
+            xudt_amount: Some(options.splice_xudt_amount),
+            update_number: None,
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let apply = apply_factory_reduced_splice(
+        rpc,
+        ApplyFactoryReducedSpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            factory_reduced_splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: external_xudt_out_point,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    let (post_alice_xudt_amount, post_bob_xudt_amount) = proportional_xudt_split(
+        new_xudt_amount,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
+    ensure!(
+        post_alice_xudt_amount.checked_add(post_bob_xudt_amount) == Some(new_xudt_amount),
+        "post-splice factory xUDT settlement split does not match new vault amount"
+    );
+    let exit = factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            factory_out_point: format!(
+                "{}:{}",
+                apply.factory_out_point.tx_hash, apply.factory_out_point.index
+            ),
+            factory_vault_out_point: format!(
+                "{}:{}",
+                apply.factory_vault_out_point.tx_hash, apply.factory_vault_out_point.index
+            ),
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(post_alice_xudt_amount),
+            bob_xudt_amount: Some(post_bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+            tamper: FactoryExitChannelTamper::None,
+            authorisation: FactoryExitAuthorisation::FullParticipants,
+        },
+    )?;
+
+    Ok(FactoryReducedXudtSpliceSmokeReport {
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "reduced_xudt_splice_in",
+            DevnetSpliceKind::SpliceOut => "reduced_xudt_splice_out",
+        }
+        .to_string(),
+        open,
+        external_xudt,
+        package,
+        apply,
+        exit,
     })
 }
 
@@ -2285,24 +4620,33 @@ pub fn factory_reduced_xudt_exit_smoke(
     rpc: &CkbRpcClient,
     options: FactoryReducedXudtExitSmokeOptions,
 ) -> Result<FactoryReducedXudtExitSmokeReport> {
-    ensure!(
-        options.child_vault_capacity > 0,
-        "child xUDT vault capacity must be non-zero"
-    );
-    let total_xudt_amount = options
+    let child_xudt_amount = options
         .alice_xudt_amount
         .checked_add(options.bob_xudt_amount)
-        .ok_or_else(|| anyhow!("factory reduced xUDT amount overflow"))?;
-    ensure!(
-        total_xudt_amount > 0,
-        "factory reduced xUDT amount must be non-zero"
-    );
+        .ok_or_else(|| anyhow!("child xUDT amount overflow"))?;
+    ensure!(child_xudt_amount > 0, "child xUDT amount must be non-zero");
+    let factory_vault_xudt_amount = child_xudt_amount
+        .checked_add(options.factory_vault_xudt_surplus)
+        .ok_or_else(|| anyhow!("factory vault xUDT amount overflow"))?;
+    let xudt_type_hash =
+        devnet_owner_xudt_type_hash(rpc, &options.contracts_dir, &options.private_key)?;
     let alice_key = k256_signing_key(&options.alice_private_key)
         .with_context(|| "invalid Alice factory private key")?;
     let bob_key = k256_signing_key(&options.bob_private_key)
         .with_context(|| "invalid Bob factory private key")?;
-    let (old_state_root, old_access_manifest_root) =
-        reduced_exit_initial_roots(&alice_key, &bob_key, options.child_vault_capacity as u128)?;
+    let (old_state_root, old_access_manifest_root) = reduced_xudt_exit_initial_roots(
+        &alice_key,
+        &bob_key,
+        child_xudt_amount,
+        factory_vault_xudt_amount,
+        options.factory_vault_xudt_surplus,
+        xudt_type_hash,
+        options.child_vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
 
     let open = open_factory(
         rpc,
@@ -2313,7 +4657,7 @@ pub fn factory_reduced_xudt_exit_smoke(
             bob_private_key: options.bob_private_key.clone(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
-            factory_vault_xudt_amount: Some(total_xudt_amount),
+            factory_vault_xudt_amount: Some(factory_vault_xudt_amount),
             state_root: Some(hex32(&old_state_root)),
             access_manifest_root: Some(hex32(&old_access_manifest_root)),
             non_interference_digest: None,
@@ -2381,13 +4725,113 @@ pub fn factory_reduced_xudt_exit_smoke(
         &finalise_options,
         printable_out_point_string(&publish.state_out_point),
         printable_out_point_string(&exit.vault_out_point),
-    )?;
+    );
 
     Ok(FactoryReducedXudtExitSmokeReport {
         open,
         exit,
         publish,
-        finalise,
+        finalise: finalise?,
+    })
+}
+
+pub fn factory_reduced_xudt_negative_exit_smoke(
+    rpc: &CkbRpcClient,
+    options: FactoryReducedXudtNegativeExitSmokeOptions,
+) -> Result<FactoryReducedXudtNegativeExitSmokeReport> {
+    let child_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("child xUDT amount overflow"))?;
+    ensure!(
+        child_xudt_amount > 1,
+        "negative xUDT reduced-exit smoke needs at least two token units"
+    );
+    let xudt_type_hash =
+        devnet_owner_xudt_type_hash(rpc, &options.contracts_dir, &options.private_key)?;
+    let alice_key = k256_signing_key(&options.alice_private_key)
+        .with_context(|| "invalid Alice factory private key")?;
+    let bob_key = k256_signing_key(&options.bob_private_key)
+        .with_context(|| "invalid Bob factory private key")?;
+    let (old_state_root, old_access_manifest_root) = reduced_xudt_exit_initial_roots(
+        &alice_key,
+        &bob_key,
+        child_xudt_amount,
+        child_xudt_amount,
+        0,
+        xudt_type_hash,
+        options.child_vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
+
+    let open = open_factory(
+        rpc,
+        OpenFactoryOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_capacity: options.factory_capacity,
+            factory_vault_capacity: options.factory_vault_capacity,
+            factory_vault_xudt_amount: Some(child_xudt_amount),
+            state_root: Some(hex32(&old_state_root)),
+            access_manifest_root: Some(hex32(&old_access_manifest_root)),
+            non_interference_digest: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let factory_out_point = factory_cell_out_point(&open, "factory")?;
+    let factory_vault_out_point = factory_cell_out_point(&open, "factory-vault")?;
+    let rejected_child_xudt_amount = child_xudt_amount - 1;
+    let rejection = match factory_exit_channel(
+        rpc,
+        FactoryExitChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            factory_out_point,
+            factory_vault_out_point,
+            update_number: None,
+            vault_capacity: options.child_vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            alice_xudt_amount: Some(options.alice_xudt_amount),
+            bob_xudt_amount: Some(options.bob_xudt_amount),
+            sponsor_capacity: options.sponsor_capacity,
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: 0,
+            tamper: FactoryExitChannelTamper::ChildXudtAmountMinusOnePreserveFactoryChange,
+            authorisation: FactoryExitAuthorisation::ReducedReserveClaim,
+        },
+    ) {
+        Ok(report) => {
+            return Err(anyhow!(
+                "xUDT reduced factory exit unexpectedly accepted tampered child vault amount in tx {}",
+                report.tx_hash
+            ));
+        }
+        Err(err) => err.to_string(),
+    };
+    let script_failure = parse_script_failure(&rejection);
+    ensure!(
+        script_failure.error_code == Some(ScriptError::SettlementOutputMismatch as i16),
+        "expected SettlementOutputMismatch from xUDT reduced factory exit, got {:?}: {}",
+        script_failure.error_code,
+        rejection
+    );
+
+    Ok(FactoryReducedXudtNegativeExitSmokeReport {
+        open,
+        expected_child_xudt_amount: child_xudt_amount,
+        rejected_child_xudt_amount,
+        rejection,
+        script_failure,
     })
 }
 
@@ -2855,25 +5299,27 @@ pub fn factory_exit_channel(
     } else {
         None
     };
-
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
     let channel_input = CellInput::new(factory_out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, state_output_index as u64);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut state_args = funding_anchor.to_vec();
-    state_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(state_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(&state_type_hash),
     );
     let state_lock_hash: [u8; BYTE32_LEN] = state_lock.calc_script_hash().unpack();
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
     let vault_lock_hash: [u8; BYTE32_LEN] = vault_lock.calc_script_hash().unpack();
 
     let owner_lock_hash = owner_lock.calc_script_hash();
@@ -2961,9 +5407,9 @@ pub fn factory_exit_channel(
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -3020,6 +5466,10 @@ pub fn factory_exit_channel(
         .type_(child_vault_type.pack())
         .build();
     ensure_output_capacity("child vault", &vault_output, child_vault_data.len())?;
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, child_vault_data.as_ref()),
+    );
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
         .lock(sponsor_lock)
@@ -3116,20 +5566,34 @@ pub fn factory_exit_channel(
                 )
             }
             FactoryExitAuthorisation::ReducedReserveClaim => {
-                ensure!(
-                    matches!(options.tamper, FactoryExitChannelTamper::None),
-                    "reduced factory exit does not support tampered child vault construction"
-                );
                 let alice_factory_key = k256_signing_key(&options.alice_private_key)
                     .with_context(|| "invalid Alice factory private key")?;
                 let bob_factory_key = k256_signing_key(&options.bob_private_key)
                     .with_context(|| "invalid Bob factory private key")?;
+                let reserve_claim = match &child_xudt {
+                    Some((_, xudt_type_hash, total_amount, _, _, child_amount)) => {
+                        ReducedExitReserveClaim {
+                            release_quantity: *child_amount,
+                            before_quantity: *total_amount,
+                            after_quantity: total_amount.checked_sub(*child_amount).ok_or_else(
+                                || anyhow!("child xUDT amount exceeds factory vault amount"),
+                            )?,
+                            asset_type: Some(*xudt_type_hash),
+                        }
+                    }
+                    None => ReducedExitReserveClaim {
+                        release_quantity: options.vault_capacity as u128,
+                        before_quantity: options.vault_capacity as u128,
+                        after_quantity: 0,
+                        asset_type: None,
+                    },
+                };
                 let reduced = reduced_exit_from_factory_header(
                     factory_cell.data.as_ref(),
                     &alice_factory_key,
                     &bob_factory_key,
                     new_update_number,
-                    options.vault_capacity as u128,
+                    reserve_claim,
                     state_output_index,
                     vault_output_index,
                     &state_type_hash,
@@ -3249,6 +5713,12 @@ pub fn factory_exit_channel(
         child_xudt_amount: child_xudt
             .as_ref()
             .map(|(_, _, _, _, _, child_amount)| *child_amount),
+        alice_xudt_amount: child_xudt
+            .as_ref()
+            .map(|(_, _, _, alice_amount, _, _)| *alice_amount),
+        bob_xudt_amount: child_xudt
+            .as_ref()
+            .map(|(_, _, _, _, bob_amount, _)| *bob_amount),
         factory_vault_input_capacity: factory_vault_cell.capacity,
         factory_vault_change_capacity,
         factory_vault_input_xudt_amount: factory_vault_xudt_amount,
@@ -3324,18 +5794,21 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
     let funding_anchor = derive_funding_anchor(&channel_input, 0);
     let channel_id = script_blake2b256(&[b"CKB_MORPH_CHANNEL_ID_V1", &funding_anchor]);
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
 
-    let mut script_args = funding_anchor.to_vec();
-    script_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let state_type = data1_script(state_contract.data_hash.clone(), Bytes::from(script_args));
+    let state_type = data1_script(
+        state_contract.data_hash.clone(),
+        state_type_args(&funding_anchor, finalise_since),
+    );
     let state_lock = data1_script(
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(state_type.calc_script_hash().as_slice()),
     );
 
-    let mut vault_args = funding_anchor.to_vec();
-    vault_args.extend_from_slice(&options.finalise_since.to_le_bytes());
-    let vault_lock = data1_script(vault_contract.data_hash.clone(), Bytes::from(vault_args));
+    let vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+    );
 
     let owner_lock_hash = owner_lock.calc_script_hash();
     let xudt_type = data1_script(
@@ -3401,9 +5874,9 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
     let challenge_policy_commitment = script_blake2b256(&[
         b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &options.finalise_since.to_le_bytes(),
+        &finalise_since.to_le_bytes(),
     ]);
-    let state_header = initial_state_header(InitialStateHeader {
+    let mut state_header = initial_state_header(InitialStateHeader {
         chain_id,
         channel_id,
         funding_anchor,
@@ -3430,6 +5903,11 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .type_(Some(xudt_type).pack())
         .build();
     ensure_output_capacity("xUDT vault", &vault_output, 16)?;
+    let vault_data = xudt_amount_bytes(total_xudt_amount);
+    set_state_payload_commitment(
+        &mut state_header,
+        vault_cell_commitment_from_output(&vault_output, vault_data.as_ref()),
+    );
 
     let sponsor_output = CellOutput::new_builder()
         .capacity(options.sponsor_capacity)
@@ -3474,7 +5952,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .output(sponsor_output.clone())
         .output(change_output.clone())
         .output_data(Bytes::copy_from_slice(&state_header).pack())
-        .output_data(xudt_amount_bytes(total_xudt_amount).pack())
+        .output_data(vault_data.pack())
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
@@ -3553,9 +6031,119 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     })
 }
 
+fn mint_owner_xudt_cell(
+    rpc: &CkbRpcClient,
+    contracts_dir: &Path,
+    private_key: &str,
+    amount: u128,
+    fee: u64,
+    mine_blocks: u64,
+) -> Result<MintXudtCellReport> {
+    ensure!(amount > 0, "xUDT mint amount must be non-zero");
+    ensure!(fee > 0, "fee must be non-zero");
+
+    let owner_key = parse_privkey(private_key)
+        .with_context(|| "invalid secp256k1 private key for xUDT mint")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, contracts_dir, tip_number)?;
+    let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
+
+    let owner_lock_hash = owner_lock.calc_script_hash();
+    let xudt_type = data1_script(
+        xudt_contract.data_hash.clone(),
+        Bytes::copy_from_slice(owner_lock_hash.as_slice()),
+    );
+    let xudt_type_hash: [u8; BYTE32_LEN] = xudt_type.calc_script_hash().unpack();
+    let xudt_output_for_capacity = CellOutput::new_builder()
+        .lock(owner_lock.clone())
+        .type_(Some(xudt_type.clone()).pack())
+        .build();
+    let xudt_cell_capacity = occupied_capacity(&xudt_output_for_capacity, 16)?;
+    let change_capacity = funding_cell
+        .capacity
+        .checked_sub(xudt_cell_capacity)
+        .and_then(|value| value.checked_sub(fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "funding cell capacity {} cannot cover xUDT cell {} and fee {}",
+                funding_cell.capacity,
+                xudt_cell_capacity,
+                fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, change_capacity)?;
+
+    let xudt_output = CellOutput::new_builder()
+        .capacity(xudt_cell_capacity)
+        .lock(owner_lock.clone())
+        .type_(Some(xudt_type).pack())
+        .build();
+    let change_output = CellOutput::new_builder()
+        .capacity(change_capacity)
+        .lock(owner_lock)
+        .build();
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(xudt_contract.cell_dep)
+        .input(CellInput::new(funding_cell.out_point.clone(), 0))
+        .output(xudt_output)
+        .output(change_output)
+        .output_data(xudt_amount_bytes(amount).pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let sent = send_and_mine(rpc, signed, mine_blocks)?;
+    let tx_hash = sent.tx_hash.clone();
+
+    Ok(MintXudtCellReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        xudt_type_hash: hex32(&xudt_type_hash),
+        amount,
+        cell_out_point: PrintableOutPoint { tx_hash, index: 0 },
+        cell_capacity: xudt_cell_capacity,
+        change_capacity,
+        fee,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
+fn devnet_owner_xudt_type_hash(
+    rpc: &CkbRpcClient,
+    contracts_dir: &Path,
+    private_key: &str,
+) -> Result<[u8; BYTE32_LEN]> {
+    let owner_key = parse_privkey(private_key)
+        .with_context(|| "invalid secp256k1 private key for xUDT type hash")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let contracts = find_deployed_contracts(rpc, contracts_dir, tip_number)?;
+    let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
+    let owner_lock_hash = owner_lock.calc_script_hash();
+    let xudt_type = data1_script(
+        xudt_contract.data_hash.clone(),
+        Bytes::copy_from_slice(owner_lock_hash.as_slice()),
+    );
+    Ok(xudt_type.calc_script_hash().unpack())
+}
+
 pub fn publish_state(
     rpc: &CkbRpcClient,
     options: PublishStateOptions,
+) -> Result<PublishStateReport> {
+    publish_state_with_descriptor_update(rpc, options, None)
+}
+
+fn publish_state_with_descriptor_update(
+    rpc: &CkbRpcClient,
+    options: PublishStateOptions,
+    descriptor_update: Option<&SettlementDescriptorUpdate>,
 ) -> Result<PublishStateReport> {
     ensure!(options.fee > 0, "fee must be non-zero");
 
@@ -3595,6 +6183,10 @@ pub fn publish_state(
 
     let (new_state_data, signature_witness, new_state_number, state_package) =
         if let Some(path) = &options.state_package {
+            ensure!(
+                descriptor_update.is_none(),
+                "state package already defines the signed settlement descriptor"
+            );
             let package = read_package(path)?;
             let header_bytes = package.header_bytes()?;
             let witness_bytes = package.witness_bytes()?;
@@ -3627,6 +6219,14 @@ pub fn publish_state(
             let mut new_state_data = state_cell.data.to_vec();
             put_u64(&mut new_state_data, 100, new_state_number);
             new_state_data[109] = PHASE_SETTLING;
+            if let Some(update) = descriptor_update {
+                apply_settlement_descriptor_update(
+                    &mut new_state_data,
+                    &options.alice_private_key,
+                    &options.bob_private_key,
+                    update,
+                )?;
+            }
             let signature_witness = bilateral_signature_witness(
                 &new_state_data,
                 &options.alice_private_key,
@@ -3697,6 +6297,56 @@ pub fn publish_state(
     })
 }
 
+fn apply_settlement_descriptor_update(
+    state_data: &mut [u8],
+    alice_private_key: &str,
+    bob_private_key: &str,
+    update: &SettlementDescriptorUpdate,
+) -> Result<()> {
+    ensure!(
+        state_data.len() == STATE_HEADER_V1_LEN,
+        "state descriptor update requires a fixed-width StateHeader"
+    );
+    let alice_key = parse_privkey(alice_private_key)
+        .with_context(|| "invalid Alice channel private key for descriptor update")?;
+    let bob_key = parse_privkey(bob_private_key)
+        .with_context(|| "invalid Bob channel private key for descriptor update")?;
+    let alice_lock = secp256k1_lock(&alice_key)?;
+    let bob_lock = secp256k1_lock(&bob_key)?;
+    let alice_lock_hash: [u8; BYTE32_LEN] = alice_lock.calc_script_hash().unpack();
+    let bob_lock_hash: [u8; BYTE32_LEN] = bob_lock.calc_script_hash().unpack();
+
+    let (descriptor_commitment, descriptor_version) = if let Some(xudt) = &update.xudt {
+        let descriptor = bilateral_ckb_xudt_descriptor(
+            xudt.type_hash,
+            alice_lock_hash,
+            update.alice_capacity,
+            xudt.alice_amount,
+            bob_lock_hash,
+            update.bob_capacity,
+            xudt.bob_amount,
+        );
+        (
+            settlement_descriptor_commitment_v1(&descriptor),
+            BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+        )
+    } else {
+        let descriptor = bilateral_ckb_descriptor(
+            alice_lock_hash,
+            update.alice_capacity,
+            bob_lock_hash,
+            update.bob_capacity,
+        );
+        (
+            settlement_descriptor_commitment_v1(&descriptor),
+            BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        )
+    };
+    state_data[174..206].copy_from_slice(&descriptor_commitment);
+    put_u16(state_data, 206, descriptor_version);
+    Ok(())
+}
+
 pub fn save_state_package(
     rpc: &CkbRpcClient,
     options: SaveStatePackageOptions,
@@ -3736,6 +6386,281 @@ pub fn save_state_package(
 
     Ok(SaveStatePackageReport {
         path: path.display().to_string(),
+        package,
+    })
+}
+
+pub fn save_splice_package(
+    rpc: &CkbRpcClient,
+    options: SaveSplicePackageOptions,
+) -> Result<SaveSplicePackageReport> {
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let vault_out_point = parse_out_point(&options.vault_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
+    let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
+    let live_xudt = live_vault_xudt_asset(&vault_cell)?;
+
+    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+        .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+    ensure!(
+        old_header.phase() == PHASE_ACTIVE,
+        "splice packages can only be generated from an active StateCell"
+    );
+    let current_state = core_state_cell_from_live(&old_header, &state_cell)?;
+    ensure!(
+        current_state.header.signature_scheme_id == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        "unsupported StateCell signature scheme {}",
+        current_state.header.signature_scheme_id
+    );
+
+    let new_funding_epoch = options
+        .new_funding_epoch
+        .unwrap_or_else(|| options.old_funding_epoch.saturating_add(1));
+    ensure!(
+        new_funding_epoch > options.old_funding_epoch,
+        "new funding epoch must be greater than old funding epoch {}",
+        options.old_funding_epoch
+    );
+    let splice_number = options.splice_number.unwrap_or(new_funding_epoch);
+    if matches!(options.kind, DevnetSpliceKind::SpliceOut) {
+        ensure!(
+            options.signed_fee == 0,
+            "splice-out packages cannot carry signed_fee"
+        );
+    }
+
+    let old_ckb_amount = u128::from(vault_cell.capacity);
+    let mut new_ckb_amount = old_ckb_amount;
+    let mut new_xudt_amount = live_xudt.as_ref().map(|asset| asset.amount);
+    let mut deltas = Vec::new();
+    let mut withdrawals = Vec::new();
+    let splice_kind = match options.kind {
+        DevnetSpliceKind::SpliceIn => SpliceKind::In,
+        DevnetSpliceKind::SpliceOut => SpliceKind::Out,
+    };
+
+    match options.asset {
+        DevnetSpliceAsset::Ckb => {
+            ensure!(options.ckb_amount > 0, "ckb_amount must be non-zero");
+            let requested_amount = u128::from(options.ckb_amount);
+            let signed_fee = u128::from(options.signed_fee);
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    new_ckb_amount = old_ckb_amount
+                        .checked_add(requested_amount)
+                        .ok_or_else(|| anyhow!("post-splice vault capacity overflows u128"))?;
+                    let external_input = requested_amount
+                        .checked_add(signed_fee)
+                        .ok_or_else(|| anyhow!("splice external input overflows u128"))?;
+                    deltas.push(SpliceAssetDelta {
+                        asset: VaultAsset::Ckb,
+                        old_amount: old_ckb_amount,
+                        new_amount: new_ckb_amount,
+                        external_input,
+                        withdrawal: 0,
+                        signed_fee,
+                    });
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        requested_amount < old_ckb_amount,
+                        "splice-out amount must be below the live vault capacity {}",
+                        vault_cell.capacity
+                    );
+                    new_ckb_amount = old_ckb_amount - requested_amount;
+                    deltas.push(SpliceAssetDelta {
+                        asset: VaultAsset::Ckb,
+                        old_amount: old_ckb_amount,
+                        new_amount: new_ckb_amount,
+                        external_input: 0,
+                        withdrawal: requested_amount,
+                        signed_fee,
+                    });
+                    withdrawals.push(VaultAssetAmount {
+                        asset: VaultAsset::Ckb,
+                        amount: requested_amount,
+                    });
+                }
+            }
+        }
+        DevnetSpliceAsset::Xudt => {
+            ensure!(
+                options.signed_fee == 0,
+                "xUDT splice packages cannot carry signed_fee"
+            );
+            let requested_amount = options
+                .xudt_amount
+                .ok_or_else(|| anyhow!("xudt_amount is required for xUDT splice packages"))?;
+            ensure!(requested_amount > 0, "xudt_amount must be non-zero");
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("live VaultCell does not carry a devnet xUDT type"))?;
+            match options.kind {
+                DevnetSpliceKind::SpliceIn => {
+                    let post_splice_amount = live_xudt
+                        .amount
+                        .checked_add(requested_amount)
+                        .ok_or_else(|| anyhow!("post-splice xUDT amount overflows u128"))?;
+                    new_xudt_amount = Some(post_splice_amount);
+                    deltas.push(SpliceAssetDelta {
+                        asset: VaultAsset::Xudt(live_xudt.type_hash),
+                        old_amount: live_xudt.amount,
+                        new_amount: post_splice_amount,
+                        external_input: requested_amount,
+                        withdrawal: 0,
+                        signed_fee: 0,
+                    });
+                }
+                DevnetSpliceKind::SpliceOut => {
+                    ensure!(
+                        requested_amount < live_xudt.amount,
+                        "xUDT splice-out amount must be below the live vault amount {}",
+                        live_xudt.amount
+                    );
+                    let post_splice_amount = live_xudt.amount - requested_amount;
+                    new_xudt_amount = Some(post_splice_amount);
+                    deltas.push(SpliceAssetDelta {
+                        asset: VaultAsset::Xudt(live_xudt.type_hash),
+                        old_amount: live_xudt.amount,
+                        new_amount: post_splice_amount,
+                        external_input: 0,
+                        withdrawal: requested_amount,
+                        signed_fee: 0,
+                    });
+                    withdrawals.push(VaultAssetAmount {
+                        asset: VaultAsset::Xudt(live_xudt.type_hash),
+                        amount: requested_amount,
+                    });
+                }
+            }
+        }
+    }
+
+    let new_vault_capacity: u64 = new_ckb_amount
+        .try_into()
+        .context("post-splice CKB vault amount does not fit in u64 capacity")?;
+
+    let xudt_type_hash = live_xudt.as_ref().map(|asset| asset.type_hash);
+    let new_funding_anchor = derive_splice_funding_anchor(
+        &current_state.header.funding_anchor,
+        &state_out_point,
+        &vault_out_point,
+        options.old_funding_epoch,
+        new_funding_epoch,
+        splice_number,
+        options.kind,
+        options.asset,
+        xudt_type_hash.as_ref(),
+        match options.asset {
+            DevnetSpliceAsset::Ckb => u128::from(options.ckb_amount),
+            DevnetSpliceAsset::Xudt => options.xudt_amount.unwrap_or_default(),
+        },
+    );
+    ensure!(
+        new_funding_anchor != current_state.header.funding_anchor,
+        "derived splice funding anchor unexpectedly matches the current anchor"
+    );
+
+    let old_xudt_amount = live_xudt.as_ref().map(|asset| asset.amount);
+    let old_vault = VaultDescriptorV2 {
+        funding_anchor: current_state.header.funding_anchor,
+        assets: live_vault_assets(old_ckb_amount, xudt_type_hash, old_xudt_amount),
+    };
+    let new_vault = VaultDescriptorV2 {
+        funding_anchor: new_funding_anchor,
+        assets: live_vault_assets(new_ckb_amount, xudt_type_hash, new_xudt_amount),
+    };
+    let remaining_settlement = new_vault.assets.clone();
+
+    let mut header = SpliceHeader {
+        protocol_version: current_state.header.protocol_version,
+        chain_id: current_state.header.chain_id,
+        signature_scheme_id: current_state.header.signature_scheme_id,
+        channel_id: current_state.header.channel_id,
+        old_funding_anchor: current_state.header.funding_anchor,
+        new_funding_anchor,
+        old_funding_epoch: options.old_funding_epoch,
+        new_funding_epoch,
+        base_state_number: current_state.header.state_number,
+        splice_number,
+        kind: splice_kind,
+        old_vault_commitment: [0u8; BYTE32_LEN],
+        new_vault_commitment: [0u8; BYTE32_LEN],
+        asset_delta_commitment: [0u8; BYTE32_LEN],
+        participants_commitment: current_state.header.participants_commitment,
+        challenge_policy_commitment: current_state.header.challenge_policy_commitment,
+    };
+    header.old_vault_commitment = vault_descriptor_commitment_v2(&old_vault);
+    header.new_vault_commitment = vault_descriptor_commitment_v2(&new_vault);
+    header.asset_delta_commitment = splice_asset_delta_commitment_v1(&deltas);
+
+    let witness = splice_witness_from_keys(
+        &header,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+    let transition = SpliceTransition {
+        current_state,
+        header,
+        witness,
+        old_vault,
+        new_vault,
+        deltas,
+        withdrawals,
+        remaining_settlement,
+        asset_registry: AssetRegistry {
+            xudt_types: xudt_type_hash.into_iter().collect(),
+        },
+    };
+
+    let state_printable = printable_out_point(&state_out_point);
+    let vault_printable = printable_out_point(&vault_out_point);
+    let package = StoredSplicePackage::from_transition(
+        &transition,
+        Some(PackageOutPoint {
+            tx_hash: state_printable.tx_hash,
+            index: state_printable.index,
+        }),
+        Some(PackageOutPoint {
+            tx_hash: vault_printable.tx_hash,
+            index: vault_printable.index,
+        }),
+        None,
+    )?;
+    let contract_witness_len = package.contract_witness_bytes()?.len();
+    let path = write_splice_package(&options.store_dir, &package)?;
+
+    Ok(SaveSplicePackageReport {
+        path: path.display().to_string(),
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "splice_in",
+            DevnetSpliceKind::SpliceOut => "splice_out",
+        }
+        .to_string(),
+        asset: match options.asset {
+            DevnetSpliceAsset::Ckb => "ckb",
+            DevnetSpliceAsset::Xudt => "xudt",
+        }
+        .to_string(),
+        ckb_amount: if options.asset == DevnetSpliceAsset::Ckb {
+            options.ckb_amount
+        } else {
+            0
+        },
+        xudt_amount: if options.asset == DevnetSpliceAsset::Xudt {
+            options.xudt_amount
+        } else {
+            None
+        },
+        xudt_type_hash: xudt_type_hash.map(|type_hash| hex32(&type_hash)),
+        old_vault_capacity: vault_cell.capacity,
+        new_vault_capacity,
+        old_xudt_amount,
+        new_xudt_amount,
+        old_funding_epoch: options.old_funding_epoch,
+        new_funding_epoch,
+        splice_number,
+        contract_witness_len,
         package,
     })
 }
@@ -3802,8 +6727,11 @@ pub fn watch_latest_state_package(
         })?;
     }
     let channel_id = canonical_hex32(&options.channel_id)?;
-    let selected_package = latest_package(&options.store_dir, &channel_id)?;
+    let package_records = list_packages(&options.store_dir, Some(&channel_id))?;
+    let selected_package = latest_state_package_record(&package_records)
+        .ok_or_else(|| anyhow!("no state package found for channel {channel_id}"))?;
     let selected_state_number = selected_package.package.state_number;
+    let state_cell_filter = state_cell_detection_filter(&options.contracts_dir)?;
     let cursor_file = options
         .cursor_file
         .clone()
@@ -3836,6 +6764,9 @@ pub fn watch_latest_state_package(
     let mut next_block = effective_from_block;
     let mut scanned_to_block = effective_from_block.saturating_sub(1);
     let mut last_observed = None;
+    let mut current_funding_anchor = loaded_cursor
+        .as_ref()
+        .and_then(|cursor| cursor.current_funding_anchor.clone());
 
     loop {
         let tip_number = rpc.tip_header()?.number_value()?;
@@ -3845,8 +6776,100 @@ pub fn watch_latest_state_package(
                 let current_block = next_block;
                 if let Some(block) = rpc.block_by_number(next_block)? {
                     scanned_to_block = current_block;
-                    for observed in observed_state_cells(&block, &channel_id, tip_number)? {
-                        if observed.state_number < selected_state_number {
+                    for observed in
+                        observed_state_cells(&block, &channel_id, tip_number, &state_cell_filter)?
+                    {
+                        let previous_funding_anchor = current_funding_anchor.clone();
+                        let splice_detected = previous_funding_anchor
+                            .as_ref()
+                            .is_some_and(|anchor| anchor != &observed.funding_anchor);
+                        if splice_detected {
+                            append_watch_alert_if_requested(
+                                &options.alert_file,
+                                &options.alert_webhook_url,
+                                WatchtowerAlert::new(
+                                    channel_id.clone(),
+                                    WatchAlertSeverity::Warning,
+                                    WatchAlertEvent::SpliceDetected,
+                                    format!(
+                                        "confirmed StateCell funding anchor changed from {} to {}",
+                                        previous_funding_anchor.as_deref().unwrap_or_default(),
+                                        observed.funding_anchor
+                                    ),
+                                    selected_state_number,
+                                    scanned_to_block,
+                                    current_block.saturating_add(1),
+                                )?
+                                .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_funding_anchors(
+                                    previous_funding_anchor.unwrap_or_default(),
+                                    observed.funding_anchor.clone(),
+                                ),
+                            )?;
+                        }
+                        current_funding_anchor = Some(observed.funding_anchor.clone());
+
+                        let selected_for_anchor = latest_package_for_funding_anchor(
+                            &package_records,
+                            &observed.funding_anchor,
+                        );
+                        let Some(selected_for_anchor) = selected_for_anchor else {
+                            append_watch_alert_if_requested(
+                                &options.alert_file,
+                                &options.alert_webhook_url,
+                                WatchtowerAlert::new(
+                                    channel_id.clone(),
+                                    WatchAlertSeverity::Warning,
+                                    WatchAlertEvent::SplicePackageStale,
+                                    format!(
+                                        "no saved state package matches confirmed funding anchor {}",
+                                        observed.funding_anchor
+                                    ),
+                                    selected_state_number,
+                                    scanned_to_block,
+                                    current_block.saturating_add(1),
+                                )?
+                                .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_funding_anchors(
+                                    selected_package.package.funding_anchor.clone(),
+                                    observed.funding_anchor.clone(),
+                                ),
+                            )?;
+                            last_observed = Some(observed);
+                            continue;
+                        };
+
+                        if selected_package.package.funding_anchor != observed.funding_anchor
+                            && selected_package.package.state_number > observed.state_number
+                        {
+                            append_watch_alert_if_requested(
+                                &options.alert_file,
+                                &options.alert_webhook_url,
+                                WatchtowerAlert::new(
+                                    channel_id.clone(),
+                                    WatchAlertSeverity::Warning,
+                                    WatchAlertEvent::SplicePackageStale,
+                                    format!(
+                                        "newest saved state {} belongs to funding anchor {}, while confirmed StateCell uses {}",
+                                        selected_package.package.state_number,
+                                        selected_package.package.funding_anchor,
+                                        observed.funding_anchor
+                                    ),
+                                    selected_package.package.state_number,
+                                    scanned_to_block,
+                                    current_block.saturating_add(1),
+                                )?
+                                .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_funding_anchors(
+                                    selected_package.package.funding_anchor.clone(),
+                                    observed.funding_anchor.clone(),
+                                ),
+                            )?;
+                        }
+
+                        let selected_for_anchor_state_number =
+                            selected_for_anchor.package.state_number;
+                        if observed.state_number < selected_for_anchor_state_number {
                             append_watch_alert_if_requested(
                                 &options.alert_file,
                                 &options.alert_webhook_url,
@@ -3856,20 +6879,24 @@ pub fn watch_latest_state_package(
                                     WatchAlertEvent::OlderStateDetected,
                                     format!(
                                         "confirmed StateCell {} is older than saved state {}",
-                                        observed.state_number, selected_state_number
+                                        observed.state_number, selected_for_anchor_state_number
                                     ),
-                                    selected_state_number,
+                                    selected_for_anchor_state_number,
                                     scanned_to_block,
                                     current_block.saturating_add(1),
                                 )?
-                                .with_observed(observed.state_number, observed.out_point.clone()),
+                                .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_funding_anchors(
+                                    selected_for_anchor.package.funding_anchor.clone(),
+                                    observed.funding_anchor.clone(),
+                                ),
                             )?;
                             let (sponsor_out_point, sponsor_top_up) =
                                 sponsor_for_watch_publication(
                                     rpc,
                                     &options,
                                     &observed,
-                                    selected_state_number,
+                                    selected_for_anchor_state_number,
                                 )?;
                             let publication = publish_state(
                                 rpc,
@@ -3881,33 +6908,51 @@ pub fn watch_latest_state_package(
                                     state_out_point: observed.out_point.clone(),
                                     sponsor_out_point,
                                     state_number: None,
-                                    state_package: Some(selected_package.path.clone()),
+                                    state_package: Some(selected_for_anchor.path.clone()),
                                     fee: options.fee,
                                     mine_blocks: options.mine_blocks,
                                 },
                             )?;
+                            let publication_event = if splice_detected
+                                || selected_for_anchor.package.funding_anchor
+                                    != selected_package.package.funding_anchor
+                            {
+                                WatchAlertEvent::SplicePublicationSubmitted
+                            } else {
+                                WatchAlertEvent::PublicationSubmitted
+                            };
                             append_watch_alert_if_requested(
                                 &options.alert_file,
                                 &options.alert_webhook_url,
                                 WatchtowerAlert::new(
                                     channel_id.clone(),
                                     WatchAlertSeverity::Warning,
-                                    WatchAlertEvent::PublicationSubmitted,
+                                    publication_event,
                                     format!(
                                         "published saved state {} against older StateCell {}",
-                                        selected_state_number, observed.state_number
+                                        selected_for_anchor_state_number, observed.state_number
                                     ),
-                                    selected_state_number,
+                                    selected_for_anchor_state_number,
                                     scanned_to_block,
                                     current_block.saturating_add(1),
                                 )?
                                 .with_observed(observed.state_number, observed.out_point.clone())
+                                .with_funding_anchors(
+                                    selected_for_anchor.package.funding_anchor.clone(),
+                                    observed.funding_anchor.clone(),
+                                )
                                 .with_publication(publication.tx_hash.clone()),
                             )?;
                             let next_from_block = current_block.saturating_add(1);
                             write_watch_cursor(
                                 &cursor_file,
-                                &WatchCursor::new(&channel_id, next_from_block, scanned_to_block)?,
+                                &watch_cursor_for_state(
+                                    &channel_id,
+                                    next_from_block,
+                                    scanned_to_block,
+                                    Some(&observed),
+                                    loaded_cursor.as_ref(),
+                                )?,
                             )?;
                             return Ok(WatchLatestStatePackageReport {
                                 channel_id,
@@ -3920,7 +6965,7 @@ pub fn watch_latest_state_package(
                                 alert_file: options.alert_file.clone(),
                                 alert_webhook_url: options.alert_webhook_url.clone(),
                                 loaded_cursor,
-                                selected_package,
+                                selected_package: selected_for_anchor,
                                 sponsor_top_up,
                                 observed: Some(observed),
                                 publication: Some(publication),
@@ -3932,7 +6977,13 @@ pub fn watch_latest_state_package(
                 next_block = current_block.saturating_add(1);
                 write_watch_cursor(
                     &cursor_file,
-                    &WatchCursor::new(&channel_id, next_block, scanned_to_block)?,
+                    &watch_cursor_for_state(
+                        &channel_id,
+                        next_block,
+                        scanned_to_block,
+                        last_observed.as_ref(),
+                        loaded_cursor.as_ref(),
+                    )?,
                 )?;
             }
         }
@@ -3940,7 +6991,13 @@ pub fn watch_latest_state_package(
         if started.elapsed() >= timeout {
             write_watch_cursor(
                 &cursor_file,
-                &WatchCursor::new(&channel_id, next_block, scanned_to_block)?,
+                &watch_cursor_for_state(
+                    &channel_id,
+                    next_block,
+                    scanned_to_block,
+                    last_observed.as_ref(),
+                    loaded_cursor.as_ref(),
+                )?,
             )?;
             append_watch_alert_if_requested(
                 &options.alert_file,
@@ -3973,6 +7030,68 @@ pub fn watch_latest_state_package(
             });
         }
         std::thread::sleep(poll_interval);
+    }
+}
+
+fn latest_state_package_record(records: &[StatePackageRecord]) -> Option<StatePackageRecord> {
+    records
+        .iter()
+        .cloned()
+        .max_by(compare_state_package_records)
+}
+
+fn latest_package_for_funding_anchor(
+    records: &[StatePackageRecord],
+    funding_anchor: &str,
+) -> Option<StatePackageRecord> {
+    records
+        .iter()
+        .filter(|record| record.package.funding_anchor == funding_anchor)
+        .cloned()
+        .max_by(compare_state_package_records)
+}
+
+fn compare_state_package_records(
+    left: &StatePackageRecord,
+    right: &StatePackageRecord,
+) -> Ordering {
+    left.package
+        .state_number
+        .cmp(&right.package.state_number)
+        .then_with(|| {
+            left.package
+                .created_unix_ms
+                .cmp(&right.package.created_unix_ms)
+        })
+        .then_with(|| {
+            left.package
+                .signing_digest
+                .cmp(&right.package.signing_digest)
+        })
+}
+
+fn watch_cursor_for_state(
+    channel_id: &str,
+    next_block: u64,
+    scanned_to_block: u64,
+    observed: Option<&ObservedStateCellReport>,
+    previous_cursor: Option<&WatchCursor>,
+) -> Result<WatchCursor> {
+    let mut cursor = WatchCursor::new(channel_id, next_block, scanned_to_block)?;
+    if let Some(observed) = observed {
+        cursor.with_observed_state(
+            &observed.funding_anchor,
+            observed.state_number,
+            &observed.out_point,
+        )
+    } else if let Some(previous_cursor) = previous_cursor {
+        cursor.current_funding_anchor = previous_cursor.current_funding_anchor.clone();
+        cursor.last_observed_state_number = previous_cursor.last_observed_state_number;
+        cursor.last_observed_out_point = previous_cursor.last_observed_out_point.clone();
+        cursor.validate()?;
+        Ok(cursor)
+    } else {
+        Ok(cursor)
     }
 }
 
@@ -4195,6 +7314,11 @@ pub fn finalise_channel(
             == header.settlement_descriptor_commitment(),
         "reconstructed settlement descriptor does not match the state commitment"
     );
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == header.payload_commitment(),
+        "StateHeader payload commitment does not match the live VaultCell"
+    );
 
     let state_refund_capacity = state_cell
         .capacity
@@ -4212,11 +7336,13 @@ pub fn finalise_channel(
         .capacity(state_refund_capacity)
         .lock(owner_lock)
         .build();
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
+    mine_relative_since_maturity(rpc, options.finalise_since)?;
     let tx = TransactionBuilder::default()
         .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(state_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
-        .input(CellInput::new(state_out_point, options.finalise_since))
+        .input(CellInput::new(state_out_point, finalise_since))
         .input(CellInput::new(vault_out_point, 0))
         .output(
             CellOutput::new_builder()
@@ -4279,6 +7405,1320 @@ pub fn finalise_channel(
     })
 }
 
+pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<ApplySpliceReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid secp256k1 private key for splice fee/change")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let package = read_splice_package(&options.splice_package)?;
+    let transition = package.validate()?;
+    let splice_assets = splice_application_assets(&transition)?;
+    let current_state_header = package.current_state_header_bytes()?;
+    let mut next_state_header = package.next_state_header_bytes()?;
+    let splice_witness = package.contract_witness_bytes()?;
+    let participant_withdrawal_target = splice_participant_withdrawal_target(&transition)?;
+
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let vault_out_point = parse_out_point(&options.vault_out_point)?;
+    if let Some(package_out_point) = &package.current_state_out_point {
+        ensure!(
+            package_out_point.tx_hash == printable_out_point(&state_out_point).tx_hash
+                && package_out_point.index == printable_out_point(&state_out_point).index,
+            "splice package current_state_out_point does not match --state-out-point"
+        );
+    }
+    if let Some(package_out_point) = &package.old_vault_out_point {
+        ensure!(
+            package_out_point.tx_hash == printable_out_point(&vault_out_point).tx_hash
+                && package_out_point.index == printable_out_point(&vault_out_point).index,
+            "splice package old_vault_out_point does not match --vault-out-point"
+        );
+    }
+
+    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
+    let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
+    ensure!(
+        state_cell.data.as_ref() == current_state_header,
+        "splice package current StateHeader bytes do not match the live StateCell"
+    );
+    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+        .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
+    ensure!(
+        old_header.phase() == PHASE_ACTIVE,
+        "splice can only consume an active StateCell"
+    );
+
+    ensure!(
+        vault_cell.capacity == splice_assets.old_vault_capacity,
+        "live VaultCell capacity {} does not match old vault descriptor {}",
+        vault_cell.capacity,
+        splice_assets.old_vault_capacity
+    );
+    let live_xudt = live_vault_xudt_asset(&vault_cell)?;
+    match (&splice_assets.xudt, &live_xudt) {
+        (Some(delta), Some(asset)) => {
+            ensure!(
+                asset.type_hash == delta.type_hash,
+                "live VaultCell xUDT type hash does not match splice package"
+            );
+            ensure!(
+                asset.amount == delta.old_amount,
+                "live VaultCell xUDT amount {} does not match old vault descriptor {}",
+                asset.amount,
+                delta.old_amount
+            );
+        }
+        (Some(_), None) => return Err(anyhow!("splice package expects an xUDT VaultCell")),
+        (None, Some(asset)) => {
+            let old_descriptor_xudt = xudt_vault_amount(&transition.old_vault)?;
+            ensure!(
+                old_descriptor_xudt == Some((asset.type_hash, asset.amount)),
+                "live VaultCell xUDT asset does not match old vault descriptor"
+            );
+        }
+        (None, None) => {}
+    }
+    let external_xudt_input = if let Some(delta) = &splice_assets.xudt {
+        if delta.external_input > 0 {
+            let out_point = options
+                .xudt_input_out_point
+                .as_deref()
+                .ok_or_else(|| {
+                    anyhow!("--xudt-input-out-point is required for xUDT splice-in packages")
+                })
+                .and_then(parse_out_point)?;
+            let external_cell = load_live_cell(rpc, out_point.clone())?;
+            let live_xudt = live_xudt
+                .as_ref()
+                .ok_or_else(|| anyhow!("xUDT splice package requires a live xUDT VaultCell"))?;
+            ensure!(
+                external_cell.output.lock() == owner_lock,
+                "external xUDT input must be locked by the splice owner key"
+            );
+            let external_type = external_cell
+                .output
+                .type_()
+                .to_opt()
+                .ok_or_else(|| anyhow!("external xUDT input does not carry a type script"))?;
+            ensure!(
+                external_type == live_xudt.type_script,
+                "external xUDT input type does not match the live VaultCell type"
+            );
+            ensure!(
+                xudt_amount_from_data(&external_cell.data)? == delta.external_input,
+                "external xUDT input amount does not match the signed splice delta"
+            );
+            Some((out_point, external_cell))
+        } else {
+            ensure!(
+                options.xudt_input_out_point.is_none(),
+                "--xudt-input-out-point is only used for xUDT splice-in packages"
+            );
+            None
+        }
+    } else {
+        ensure!(
+            options.xudt_input_out_point.is_none(),
+            "--xudt-input-out-point requires an xUDT splice package"
+        );
+        None
+    };
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
+    let state_contract = contract_by_name(&contracts, "morph-state-type")?;
+    let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let xudt_contract = if live_xudt.is_some() {
+        Some(contract_by_name(&contracts, "morph-devnet-xudt")?)
+    } else {
+        None
+    };
+
+    let old_state_type = state_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("StateCell does not carry a type script"))?;
+    ensure!(
+        byte32_to_h256(old_state_type.code_hash()) == state_contract.data_hash,
+        "StateCell type script does not use deployed morph-state-type"
+    );
+    let old_state_args = old_state_type.args().raw_data();
+    ensure!(
+        old_state_args.len() >= BYTE32_LEN
+            && old_state_args.as_ref()[..BYTE32_LEN] == transition.header.old_funding_anchor,
+        "StateCell type args do not match splice old funding anchor"
+    );
+    let mut new_state_args = transition.header.new_funding_anchor.to_vec();
+    new_state_args.extend_from_slice(&old_state_args.as_ref()[BYTE32_LEN..]);
+    let new_state_type = data1_script(
+        state_contract.data_hash.clone(),
+        Bytes::from(new_state_args),
+    );
+    let new_state_lock = data1_script(
+        state_lock_contract.data_hash.clone(),
+        Bytes::copy_from_slice(new_state_type.calc_script_hash().as_slice()),
+    );
+    let new_state_output = CellOutput::new_builder()
+        .capacity(state_cell.capacity)
+        .lock(new_state_lock)
+        .type_(Some(new_state_type).pack())
+        .build();
+    ensure_output_capacity(
+        "post-splice state",
+        &new_state_output,
+        next_state_header.len(),
+    )?;
+
+    let old_vault_lock = vault_cell.output.lock();
+    ensure!(
+        byte32_to_h256(old_vault_lock.code_hash()) == vault_contract.data_hash,
+        "VaultCell lock does not use deployed morph-vault-lock"
+    );
+    let old_vault_args = old_vault_lock.args().raw_data();
+    ensure!(
+        old_vault_args.len() >= BYTE32_LEN
+            && old_vault_args.as_ref()[..BYTE32_LEN] == transition.header.old_funding_anchor,
+        "VaultCell lock args do not match splice old funding anchor"
+    );
+    let mut new_vault_args = transition.header.new_funding_anchor.to_vec();
+    new_vault_args.extend_from_slice(&old_vault_args.as_ref()[BYTE32_LEN..]);
+    let new_vault_lock = data1_script(
+        vault_contract.data_hash.clone(),
+        Bytes::from(new_vault_args),
+    );
+    let mut new_vault_builder = CellOutput::new_builder()
+        .capacity(splice_assets.new_vault_capacity)
+        .lock(new_vault_lock);
+    let new_vault_data = if let Some(live_xudt) = &live_xudt {
+        if let Some(xudt_contract) = &xudt_contract {
+            ensure!(
+                byte32_to_h256(live_xudt.type_script.code_hash()) == xudt_contract.data_hash,
+                "VaultCell xUDT type script does not use deployed morph-devnet-xudt"
+            );
+        }
+        let expected_amount = splice_assets
+            .xudt
+            .as_ref()
+            .map(|delta| delta.new_amount)
+            .unwrap_or(live_xudt.amount);
+        new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
+        xudt_amount_bytes(expected_amount)
+    } else {
+        Bytes::new()
+    };
+    let new_vault_output = new_vault_builder.build();
+    ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
+    set_state_payload_commitment(
+        &mut next_state_header,
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref()),
+    );
+
+    let signed_fee = splice_assets
+        .ckb_delta
+        .as_ref()
+        .map(|delta| delta.signed_fee)
+        .unwrap_or_default();
+    ensure!(
+        options.fee >= signed_fee,
+        "transaction fee {} is below signed splice fee {}",
+        options.fee,
+        signed_fee
+    );
+
+    let mut builder = TransactionBuilder::default()
+        .cell_dep(secp_dep)
+        .cell_dep(state_lock_contract.cell_dep)
+        .cell_dep(state_contract.cell_dep)
+        .cell_dep(vault_contract.cell_dep);
+    if let Some(xudt_contract) = &xudt_contract {
+        builder = builder.cell_dep(xudt_contract.cell_dep.clone());
+    }
+    builder = builder
+        .input(CellInput::new(state_out_point, 0))
+        .input(CellInput::new(vault_out_point, 0))
+        .input(CellInput::new(fee_cell.out_point.clone(), 0));
+    if let Some((out_point, _)) = &external_xudt_input {
+        builder = builder.input(CellInput::new(out_point.clone(), 0));
+    }
+    builder = builder
+        .output(new_state_output.clone())
+        .output(new_vault_output.clone())
+        .output_data(Bytes::copy_from_slice(&next_state_header).pack())
+        .output_data(new_vault_data.pack());
+
+    let mut withdrawal_out_point = None;
+    let mut withdrawal_output_capacity = 0u64;
+    if splice_assets.ckb_withdrawal > 0 {
+        let withdrawal_output = CellOutput::new_builder()
+            .capacity(splice_assets.ckb_withdrawal)
+            .lock(participant_withdrawal_target.lock.clone())
+            .build();
+        ensure_output_capacity("splice withdrawal", &withdrawal_output, 0)?;
+        withdrawal_output_capacity = withdrawal_output_capacity
+            .checked_add(splice_assets.ckb_withdrawal)
+            .ok_or_else(|| anyhow!("splice withdrawal capacity overflow"))?;
+        builder = builder
+            .output(withdrawal_output)
+            .output_data(Bytes::new().pack());
+        withdrawal_out_point = Some(2u32);
+    }
+    if let Some(xudt_delta) = &splice_assets.xudt {
+        let live_xudt = live_xudt
+            .as_ref()
+            .ok_or_else(|| anyhow!("xUDT splice package requires a live xUDT VaultCell"))?;
+        if xudt_delta.withdrawal > 0 {
+            let withdrawal_output_for_capacity = CellOutput::new_builder()
+                .lock(participant_withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            let withdrawal_capacity = occupied_capacity(&withdrawal_output_for_capacity, 16)?;
+            let withdrawal_output = CellOutput::new_builder()
+                .capacity(withdrawal_capacity)
+                .lock(participant_withdrawal_target.lock.clone())
+                .type_(Some(live_xudt.type_script.clone()).pack())
+                .build();
+            ensure_output_capacity("xUDT splice withdrawal", &withdrawal_output, 16)?;
+            withdrawal_output_capacity = withdrawal_output_capacity
+                .checked_add(withdrawal_capacity)
+                .ok_or_else(|| anyhow!("splice withdrawal capacity overflow"))?;
+            builder = builder
+                .output(withdrawal_output)
+                .output_data(xudt_amount_bytes(xudt_delta.withdrawal).pack());
+            withdrawal_out_point = Some(2u32);
+        }
+    }
+
+    let required_output_delta = splice_assets
+        .new_vault_capacity
+        .checked_add(withdrawal_output_capacity)
+        .and_then(|value| value.checked_sub(splice_assets.old_vault_capacity))
+        .ok_or_else(|| anyhow!("splice package would create excess input capacity"))?;
+    if let Some(ckb_delta) = &splice_assets.ckb_delta {
+        let expected_delta = ckb_delta
+            .external_input
+            .checked_sub(ckb_delta.signed_fee)
+            .ok_or_else(|| anyhow!("signed CKB splice fee exceeds external input"))?;
+        ensure!(
+            required_output_delta == expected_delta,
+            "CKB splice package capacity delta {} does not match signed external delta {}",
+            required_output_delta,
+            expected_delta
+        );
+    }
+    let external_input_capacity = external_xudt_input
+        .as_ref()
+        .map(|(_, cell)| cell.capacity)
+        .unwrap_or_default();
+    let fee_change_capacity = fee_cell
+        .capacity
+        .checked_add(external_input_capacity)
+        .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
+        .checked_sub(required_output_delta)
+        .and_then(|value| value.checked_sub(options.fee))
+        .ok_or_else(|| {
+            anyhow!(
+                "fee cell capacity {} plus external input capacity {} cannot cover splice output capacity delta {} and fee {}",
+                fee_cell.capacity,
+                external_input_capacity,
+                required_output_delta,
+                options.fee
+            )
+        })?;
+    ensure_change_capacity(&owner_lock, fee_change_capacity)?;
+    let fee_change_output = CellOutput::new_builder()
+        .capacity(fee_change_capacity)
+        .lock(owner_lock.clone())
+        .build();
+
+    let unsigned = builder
+        .output(fee_change_output)
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_splice_transaction(
+        unsigned,
+        &owner_key,
+        Bytes::from(splice_witness.clone()),
+        usize::from(external_xudt_input.is_some()),
+    )?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let tx_hash = sent.tx_hash.clone();
+
+    Ok(ApplySpliceReport {
+        tx_hash: sent.tx_hash.clone(),
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        channel_id: hex32(&transition.header.channel_id),
+        old_funding_anchor: hex32(&transition.header.old_funding_anchor),
+        new_funding_anchor: hex32(&transition.header.new_funding_anchor),
+        old_funding_epoch: transition.header.old_funding_epoch,
+        new_funding_epoch: transition.header.new_funding_epoch,
+        splice_number: transition.header.splice_number,
+        old_state_number: old_header.state_number(),
+        new_state_number: old_header.state_number(),
+        state_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 0,
+        },
+        vault_out_point: PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index: 1,
+        },
+        withdrawal_out_point: withdrawal_out_point.map(|index| PrintableOutPoint {
+            tx_hash: tx_hash.clone(),
+            index,
+        }),
+        withdrawal_payout_policy: if transition.withdrawals.is_empty() {
+            "none".to_string()
+        } else {
+            "participant_signature_pubkey".to_string()
+        },
+        withdrawal_participant_pubkey_sec1: if transition.withdrawals.is_empty() {
+            None
+        } else {
+            Some(hex_prefixed(&participant_withdrawal_target.pubkey_sec1))
+        },
+        withdrawal_lock_hash: if transition.withdrawals.is_empty() {
+            None
+        } else {
+            Some(hex32(
+                participant_withdrawal_target
+                    .lock
+                    .calc_script_hash()
+                    .as_slice(),
+            ))
+        },
+        fee_change_capacity,
+        fee: options.fee,
+        splice_package: options.splice_package.display().to_string(),
+        contract_witness_len: splice_witness.len(),
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
+pub fn splice_smoke(rpc: &CkbRpcClient, options: SpliceSmokeOptions) -> Result<SpliceSmokeReport> {
+    ensure!(options.splice_amount > 0, "splice amount must be non-zero");
+    let sponsor_policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building post-splice sponsor policy"))?;
+    ensure!(
+        sponsor_policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the post-splice policy budget"
+    );
+
+    let open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
+            sponsor_max_total_fee: Some(sponsor_policy_fee),
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let initial_vault_out_point = channel_cell_out_point(&open, "vault")?;
+
+    let package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            vault_out_point: initial_vault_out_point.clone(),
+            kind: options.kind,
+            asset: DevnetSpliceAsset::Ckb,
+            ckb_amount: options.splice_amount,
+            xudt_amount: None,
+            signed_fee: 0,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(1),
+            splice_number: Some(1),
+            store_dir: options.store_dir,
+        },
+    )?;
+
+    let apply = apply_splice(
+        rpc,
+        ApplySpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: initial_state_out_point,
+            vault_out_point: initial_vault_out_point,
+            splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_state_out_point = printable_out_point_string(&apply.state_out_point);
+
+    let post_splice_sponsor = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
+            sponsor_max_total_fee: Some(sponsor_policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_sponsor_out_point =
+        printable_out_point_string(&post_splice_sponsor.sponsor_out_point);
+
+    let (initial_alice_capacity, initial_bob_capacity) = settlement_split(
+        options.vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+    )?;
+    let (post_alice_capacity, post_bob_capacity) = proportional_capacity_split(
+        package.new_vault_capacity,
+        initial_alice_capacity,
+        initial_bob_capacity,
+    )?;
+    ensure!(
+        post_alice_capacity.checked_add(post_bob_capacity) == Some(package.new_vault_capacity),
+        "post-splice settlement split does not match new vault capacity"
+    );
+    let descriptor_update = SettlementDescriptorUpdate {
+        alice_capacity: post_alice_capacity,
+        bob_capacity: post_bob_capacity,
+        xudt: None,
+    };
+
+    let publish = publish_state_with_descriptor_update(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_out_point: post_splice_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+        Some(&descriptor_update),
+    )?;
+    let finalise = finalise_channel(
+        rpc,
+        FinaliseChannelOptions {
+            contracts_dir: options.contracts_dir,
+            private_key: options.private_key,
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
+            state_out_point: printable_out_point_string(&publish.state_out_point),
+            vault_out_point: printable_out_point_string(&apply.vault_out_point),
+            alice_capacity: Some(post_alice_capacity),
+            bob_capacity: Some(post_bob_capacity),
+            finalise_since: options.finalise_since,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+
+    Ok(SpliceSmokeReport {
+        kind: match options.kind {
+            DevnetSpliceKind::SpliceIn => "splice_in",
+            DevnetSpliceKind::SpliceOut => "splice_out",
+        }
+        .to_string(),
+        open,
+        external_xudt: None,
+        package,
+        apply,
+        post_splice_sponsor,
+        publish,
+        finalise: Some(finalise),
+        xudt_finalise: None,
+    })
+}
+
+pub fn xudt_splice_in_smoke(
+    rpc: &CkbRpcClient,
+    options: XudtSpliceSmokeOptions,
+) -> Result<SpliceSmokeReport> {
+    ensure!(
+        options.splice_xudt_amount > 0,
+        "splice xUDT amount must be non-zero"
+    );
+    options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+    let sponsor_policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building post-splice sponsor policy"))?;
+    ensure!(
+        sponsor_policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the post-splice policy budget"
+    );
+
+    let xudt_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir.clone(),
+        private_key: options.private_key.clone(),
+        alice_private_key: options.alice_private_key.clone(),
+        bob_private_key: options.bob_private_key.clone(),
+        vault_capacity: options.vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let open = open_xudt_channel(rpc, &xudt_options)?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let initial_vault_out_point = channel_cell_out_point(&open, "xudt-vault")?;
+
+    let external_xudt = mint_owner_xudt_cell(
+        rpc,
+        &options.contracts_dir,
+        &options.private_key,
+        options.splice_xudt_amount,
+        options.fee,
+        options.mine_blocks,
+    )?;
+    let external_xudt_out_point = printable_out_point_string(&external_xudt.cell_out_point);
+
+    let package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            vault_out_point: initial_vault_out_point.clone(),
+            kind: DevnetSpliceKind::SpliceIn,
+            asset: DevnetSpliceAsset::Xudt,
+            ckb_amount: 0,
+            xudt_amount: Some(options.splice_xudt_amount),
+            signed_fee: 0,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(1),
+            splice_number: Some(1),
+            store_dir: options.store_dir,
+        },
+    )?;
+
+    let apply = apply_splice(
+        rpc,
+        ApplySpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: initial_state_out_point,
+            vault_out_point: initial_vault_out_point,
+            splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: Some(external_xudt_out_point),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_state_out_point = printable_out_point_string(&apply.state_out_point);
+
+    let post_splice_sponsor = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
+            sponsor_max_total_fee: Some(sponsor_policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_sponsor_out_point =
+        printable_out_point_string(&post_splice_sponsor.sponsor_out_point);
+
+    let (post_alice_capacity, post_bob_capacity) = settlement_split(
+        options.vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+    )?;
+    let post_xudt_amount = package
+        .new_xudt_amount
+        .ok_or_else(|| anyhow!("xUDT splice package report is missing new_xudt_amount"))?;
+    let (post_alice_xudt_amount, post_bob_xudt_amount) = proportional_xudt_split(
+        post_xudt_amount,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
+    ensure!(
+        post_alice_xudt_amount.checked_add(post_bob_xudt_amount) == Some(post_xudt_amount),
+        "post-splice xUDT settlement split does not match new vault amount"
+    );
+    let xudt_type_hash = parse_hex32_array(
+        "xudt_type_hash",
+        package
+            .xudt_type_hash
+            .as_deref()
+            .ok_or_else(|| anyhow!("xUDT splice package report is missing xudt_type_hash"))?,
+    )?;
+    let descriptor_update = SettlementDescriptorUpdate {
+        alice_capacity: post_alice_capacity,
+        bob_capacity: post_bob_capacity,
+        xudt: Some(SettlementXudtUpdate {
+            type_hash: xudt_type_hash,
+            alice_amount: post_alice_xudt_amount,
+            bob_amount: post_bob_xudt_amount,
+        }),
+    };
+
+    let publish = publish_state_with_descriptor_update(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_out_point: post_splice_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+        Some(&descriptor_update),
+    )?;
+    let finalise_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: options.alice_private_key,
+        bob_private_key: options.bob_private_key,
+        vault_capacity: options.vault_capacity,
+        alice_capacity: Some(post_alice_capacity),
+        bob_capacity: Some(post_bob_capacity),
+        alice_xudt_amount: post_alice_xudt_amount,
+        bob_xudt_amount: post_bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let xudt_finalise = finalise_xudt_channel(
+        rpc,
+        &finalise_options,
+        printable_out_point_string(&publish.state_out_point),
+        printable_out_point_string(&apply.vault_out_point),
+    )?;
+
+    Ok(SpliceSmokeReport {
+        kind: "xudt_splice_in".to_string(),
+        open,
+        external_xudt: Some(external_xudt),
+        package,
+        apply,
+        post_splice_sponsor,
+        publish,
+        finalise: None,
+        xudt_finalise: Some(xudt_finalise),
+    })
+}
+
+pub fn xudt_splice_out_smoke(
+    rpc: &CkbRpcClient,
+    options: XudtSpliceSmokeOptions,
+) -> Result<SpliceSmokeReport> {
+    ensure!(
+        options.splice_xudt_amount > 0,
+        "splice xUDT amount must be non-zero"
+    );
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+    ensure!(
+        options.splice_xudt_amount < total_xudt_amount,
+        "splice xUDT amount must be below the live vault amount {}",
+        total_xudt_amount
+    );
+    let sponsor_policy_fee = options
+        .fee
+        .checked_mul(2)
+        .ok_or_else(|| anyhow!("fee overflow while building post-splice sponsor policy"))?;
+    ensure!(
+        sponsor_policy_fee <= options.sponsor_capacity,
+        "sponsor capacity must cover the post-splice policy budget"
+    );
+
+    let xudt_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir.clone(),
+        private_key: options.private_key.clone(),
+        alice_private_key: options.alice_private_key.clone(),
+        bob_private_key: options.bob_private_key.clone(),
+        vault_capacity: options.vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let open = open_xudt_channel(rpc, &xudt_options)?;
+    let initial_state_out_point = channel_cell_out_point(&open, "state")?;
+    let initial_vault_out_point = channel_cell_out_point(&open, "xudt-vault")?;
+
+    let package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: initial_state_out_point.clone(),
+            vault_out_point: initial_vault_out_point.clone(),
+            kind: DevnetSpliceKind::SpliceOut,
+            asset: DevnetSpliceAsset::Xudt,
+            ckb_amount: 0,
+            xudt_amount: Some(options.splice_xudt_amount),
+            signed_fee: 0,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(1),
+            splice_number: Some(1),
+            store_dir: options.store_dir,
+        },
+    )?;
+
+    let apply = apply_splice(
+        rpc,
+        ApplySpliceOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: initial_state_out_point,
+            vault_out_point: initial_vault_out_point,
+            splice_package: PathBuf::from(&package.path),
+            xudt_input_out_point: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_state_out_point = printable_out_point_string(&apply.state_out_point);
+
+    let post_splice_sponsor = fund_sponsor(
+        rpc,
+        FundSponsorOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
+            sponsor_max_total_fee: Some(sponsor_policy_fee),
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let post_splice_sponsor_out_point =
+        printable_out_point_string(&post_splice_sponsor.sponsor_out_point);
+
+    let (post_alice_capacity, post_bob_capacity) = settlement_split(
+        options.vault_capacity,
+        options.alice_capacity,
+        options.bob_capacity,
+    )?;
+    let post_xudt_amount = package
+        .new_xudt_amount
+        .ok_or_else(|| anyhow!("xUDT splice package report is missing new_xudt_amount"))?;
+    let (post_alice_xudt_amount, post_bob_xudt_amount) = proportional_xudt_split(
+        post_xudt_amount,
+        options.alice_xudt_amount,
+        options.bob_xudt_amount,
+    )?;
+    ensure!(
+        post_alice_xudt_amount.checked_add(post_bob_xudt_amount) == Some(post_xudt_amount),
+        "post-splice xUDT settlement split does not match new vault amount"
+    );
+    let xudt_type_hash = parse_hex32_array(
+        "xudt_type_hash",
+        package
+            .xudt_type_hash
+            .as_deref()
+            .ok_or_else(|| anyhow!("xUDT splice package report is missing xudt_type_hash"))?,
+    )?;
+    let descriptor_update = SettlementDescriptorUpdate {
+        alice_capacity: post_alice_capacity,
+        bob_capacity: post_bob_capacity,
+        xudt: Some(SettlementXudtUpdate {
+            type_hash: xudt_type_hash,
+            alice_amount: post_alice_xudt_amount,
+            bob_amount: post_bob_xudt_amount,
+        }),
+    };
+
+    let publish = publish_state_with_descriptor_update(
+        rpc,
+        PublishStateOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: post_splice_state_out_point.clone(),
+            sponsor_out_point: post_splice_sponsor_out_point,
+            state_number: Some(1),
+            state_package: None,
+            fee: options.fee,
+            mine_blocks: options.mine_blocks,
+        },
+        Some(&descriptor_update),
+    )?;
+    let finalise_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: options.alice_private_key,
+        bob_private_key: options.bob_private_key,
+        vault_capacity: options.vault_capacity,
+        alice_capacity: Some(post_alice_capacity),
+        bob_capacity: Some(post_bob_capacity),
+        alice_xudt_amount: post_alice_xudt_amount,
+        bob_xudt_amount: post_bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let xudt_finalise = finalise_xudt_channel(
+        rpc,
+        &finalise_options,
+        printable_out_point_string(&publish.state_out_point),
+        printable_out_point_string(&apply.vault_out_point),
+    )?;
+
+    Ok(SpliceSmokeReport {
+        kind: "xudt_splice_out".to_string(),
+        open,
+        external_xudt: None,
+        package,
+        apply,
+        post_splice_sponsor,
+        publish,
+        finalise: None,
+        xudt_finalise: Some(xudt_finalise),
+    })
+}
+
+pub fn splice_negative_smoke(
+    rpc: &CkbRpcClient,
+    options: SpliceNegativeSmokeOptions,
+) -> Result<SpliceNegativeSmokeReport> {
+    ensure!(options.splice_amount > 0, "splice amount must be non-zero");
+    ensure!(
+        options.splice_amount < options.vault_capacity,
+        "splice amount must be below the live vault capacity {}",
+        options.vault_capacity
+    );
+    ensure!(
+        options.splice_xudt_amount > 0,
+        "splice xUDT amount must be non-zero"
+    );
+    let total_xudt_amount = options
+        .alice_xudt_amount
+        .checked_add(options.bob_xudt_amount)
+        .ok_or_else(|| anyhow!("xUDT amount overflow"))?;
+    ensure!(
+        options.splice_xudt_amount < total_xudt_amount,
+        "splice xUDT amount must be below the live xUDT amount {}",
+        total_xudt_amount
+    );
+    let rejected_signed_fee = options
+        .fee
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("fee overflow while building signed-fee negative splice"))?;
+
+    let ckb_open = open_channel(
+        rpc,
+        OpenChannelOptions {
+            contracts_dir: options.contracts_dir.clone(),
+            private_key: options.private_key.clone(),
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            vault_capacity: options.vault_capacity,
+            alice_capacity: options.alice_capacity,
+            bob_capacity: options.bob_capacity,
+            sponsor_capacity: options.sponsor_capacity,
+            sponsor_min_state_number: 1,
+            sponsor_max_state_number: 1,
+            sponsor_max_fee_per_tx: Some(options.fee),
+            sponsor_max_total_fee: Some(options.fee),
+            fee: options.fee,
+            finalise_since: options.finalise_since,
+            mine_blocks: options.mine_blocks,
+        },
+    )?;
+    let ckb_state_out_point = channel_cell_out_point(&ckb_open, "state")?;
+    let ckb_vault_out_point = channel_cell_out_point(&ckb_open, "vault")?;
+
+    let ckb_package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: ckb_state_out_point.clone(),
+            vault_out_point: ckb_vault_out_point.clone(),
+            kind: DevnetSpliceKind::SpliceOut,
+            asset: DevnetSpliceAsset::Ckb,
+            ckb_amount: options.splice_amount,
+            xudt_amount: None,
+            signed_fee: 0,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(1),
+            splice_number: Some(1),
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+    let signed_fee_package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: ckb_state_out_point.clone(),
+            vault_out_point: ckb_vault_out_point.clone(),
+            kind: DevnetSpliceKind::SpliceIn,
+            asset: DevnetSpliceAsset::Ckb,
+            ckb_amount: options.splice_amount,
+            xudt_amount: None,
+            signed_fee: rejected_signed_fee,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(2),
+            splice_number: Some(2),
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+
+    let xudt_options = XudtSmokeOptions {
+        contracts_dir: options.contracts_dir.clone(),
+        private_key: options.private_key.clone(),
+        alice_private_key: options.alice_private_key.clone(),
+        bob_private_key: options.bob_private_key.clone(),
+        vault_capacity: options.vault_capacity,
+        alice_capacity: options.alice_capacity,
+        bob_capacity: options.bob_capacity,
+        alice_xudt_amount: options.alice_xudt_amount,
+        bob_xudt_amount: options.bob_xudt_amount,
+        sponsor_capacity: options.sponsor_capacity,
+        fee: options.fee,
+        finalise_since: options.finalise_since,
+        mine_blocks: options.mine_blocks,
+    };
+    let xudt_open = open_xudt_channel(rpc, &xudt_options)?;
+    let xudt_state_out_point = channel_cell_out_point(&xudt_open, "state")?;
+    let xudt_vault_out_point = channel_cell_out_point(&xudt_open, "xudt-vault")?;
+    let xudt_package = save_splice_package(
+        rpc,
+        SaveSplicePackageOptions {
+            alice_private_key: options.alice_private_key.clone(),
+            bob_private_key: options.bob_private_key.clone(),
+            state_out_point: xudt_state_out_point,
+            vault_out_point: xudt_vault_out_point.clone(),
+            kind: DevnetSpliceKind::SpliceOut,
+            asset: DevnetSpliceAsset::Xudt,
+            ckb_amount: 0,
+            xudt_amount: Some(options.splice_xudt_amount),
+            signed_fee: 0,
+            old_funding_epoch: 0,
+            new_funding_epoch: Some(1),
+            splice_number: Some(1),
+            store_dir: options.store_dir.clone(),
+        },
+    )?;
+
+    let mut rejections = Vec::new();
+
+    let mut stale_epoch = ckb_package.package.validate()?;
+    stale_epoch.header.new_funding_epoch = stale_epoch.header.old_funding_epoch;
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "stale_funding_epoch",
+            stage: "package_validation",
+            package: negative_splice_package_from_transition(
+                &stale_epoch,
+                &ckb_package.package,
+                &options,
+            )?,
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &ckb_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "splice funding epoch must advance",
+        },
+    )?);
+
+    let mut wrong_channel = ckb_package.package.validate()?;
+    wrong_channel.header.channel_id = [99u8; BYTE32_LEN];
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "wrong_channel_id",
+            stage: "package_validation",
+            package: negative_splice_package_from_transition(
+                &wrong_channel,
+                &ckb_package.package,
+                &options,
+            )?,
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &ckb_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "splice header does not match",
+        },
+    )?);
+
+    let mut shortfall = ckb_package.package.validate()?;
+    let ckb_remaining = shortfall
+        .remaining_settlement
+        .iter_mut()
+        .find(|amount| amount.asset == VaultAsset::Ckb)
+        .ok_or_else(|| anyhow!("CKB splice package is missing remaining CKB settlement"))?;
+    ckb_remaining.amount = shortfall
+        .new_vault
+        .assets
+        .iter()
+        .find(|amount| amount.asset == VaultAsset::Ckb)
+        .ok_or_else(|| anyhow!("CKB splice package is missing new CKB vault amount"))?
+        .amount
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("remaining settlement overflow"))?;
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "insufficient_remaining_vault_value",
+            stage: "package_validation",
+            package: negative_splice_package_from_transition(
+                &shortfall,
+                &ckb_package.package,
+                &options,
+            )?,
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &ckb_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "post-splice vault does not cover",
+        },
+    )?);
+
+    let mut tampered_xudt = xudt_package.package.validate()?;
+    let xudt_delta = tampered_xudt
+        .deltas
+        .iter_mut()
+        .find(|delta| matches!(delta.asset, VaultAsset::Xudt(_)))
+        .ok_or_else(|| anyhow!("xUDT splice package is missing an xUDT delta"))?;
+    xudt_delta.new_amount = xudt_delta
+        .new_amount
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("xUDT delta overflow"))?;
+    tampered_xudt.header.asset_delta_commitment =
+        splice_asset_delta_commitment_v1(&tampered_xudt.deltas);
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "tampered_xudt_amount",
+            stage: "package_validation",
+            package: negative_splice_package_from_transition(
+                &tampered_xudt,
+                &xudt_package.package,
+                &options,
+            )?,
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &ckb_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "splice vault descriptor does not match",
+        },
+    )?);
+
+    let mut wrong_vault_type = ckb_package.package.clone();
+    wrong_vault_type.old_vault_out_point = None;
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "wrong_vault_type",
+            stage: "apply_preflight",
+            package: wrong_vault_type,
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &xudt_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "live VaultCell xUDT asset does not match old vault descriptor",
+        },
+    )?);
+
+    rejections.push(expect_splice_apply_rejection(
+        rpc,
+        &options,
+        SpliceApplyRejectionCheck {
+            case: "sponsor_fee_leakage",
+            stage: "apply_preflight",
+            package: signed_fee_package.package.clone(),
+            state_out_point: &ckb_state_out_point,
+            vault_out_point: &ckb_vault_out_point,
+            xudt_input_out_point: None,
+            fee: options.fee,
+            expected: "below signed splice fee",
+        },
+    )?);
+
+    Ok(SpliceNegativeSmokeReport {
+        ckb_open,
+        xudt_open,
+        ckb_package,
+        xudt_package,
+        signed_fee_package,
+        rejections,
+    })
+}
+
+fn negative_splice_package_from_transition(
+    transition: &SpliceTransition,
+    template: &StoredSplicePackage,
+    options: &SpliceNegativeSmokeOptions,
+) -> Result<StoredSplicePackage> {
+    let mut transition = transition.clone();
+    transition.witness = splice_witness_from_keys(
+        &transition.header,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+    StoredSplicePackage::from_transition_unchecked(
+        &transition,
+        template.current_state_out_point.clone(),
+        template.old_vault_out_point.clone(),
+        template.sponsor_policy_hint.clone(),
+    )
+}
+
+struct SpliceApplyRejectionCheck<'a> {
+    case: &'a str,
+    stage: &'a str,
+    package: StoredSplicePackage,
+    state_out_point: &'a str,
+    vault_out_point: &'a str,
+    xudt_input_out_point: Option<String>,
+    fee: u64,
+    expected: &'a str,
+}
+
+fn expect_splice_apply_rejection(
+    rpc: &CkbRpcClient,
+    options: &SpliceNegativeSmokeOptions,
+    check: SpliceApplyRejectionCheck<'_>,
+) -> Result<SpliceNegativeCaseReport> {
+    let rejected_package =
+        write_negative_splice_package(&options.store_dir, check.case, &check.package)?;
+    let rejection = if check.stage == "package_validation" {
+        match check.package.validate() {
+            Ok(_) => {
+                return Err(anyhow!(
+                    "splice negative case {} unexpectedly passed package validation",
+                    check.case
+                ));
+            }
+            Err(err) => format!("{err:#}"),
+        }
+    } else {
+        match apply_splice(
+            rpc,
+            ApplySpliceOptions {
+                contracts_dir: options.contracts_dir.clone(),
+                private_key: options.private_key.clone(),
+                state_out_point: check.state_out_point.to_string(),
+                vault_out_point: check.vault_out_point.to_string(),
+                splice_package: rejected_package.clone(),
+                xudt_input_out_point: check.xudt_input_out_point,
+                fee: check.fee,
+                mine_blocks: 0,
+            },
+        ) {
+            Ok(report) => {
+                return Err(anyhow!(
+                    "splice negative case {} was unexpectedly accepted in tx {}",
+                    check.case,
+                    report.tx_hash
+                ));
+            }
+            Err(err) => format!("{err:#}"),
+        }
+    };
+    ensure!(
+        rejection.contains(check.expected),
+        "splice negative case {} expected rejection containing {:?}, got: {}",
+        check.case,
+        check.expected,
+        rejection
+    );
+    Ok(SpliceNegativeCaseReport {
+        case: check.case.to_string(),
+        stage: check.stage.to_string(),
+        rejected_package: rejected_package.display().to_string(),
+        rejection,
+    })
+}
+
+fn write_negative_splice_package(
+    dir: &Path,
+    case: &str,
+    package: &StoredSplicePackage,
+) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create splice negative package directory {}",
+            dir.display()
+        )
+    })?;
+    let path = dir.join(format!("splice-negative-{case}.json"));
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json).with_context(|| {
+        format!(
+            "failed to write temporary splice negative package {}",
+            tmp.display()
+        )
+    })?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move splice negative package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
 fn finalise_xudt_channel(
     rpc: &CkbRpcClient,
     options: &XudtSmokeOptions,
@@ -4292,8 +8732,98 @@ fn finalise_xudt_channel(
         vault_out_point,
         (options.alice_xudt_amount, options.bob_xudt_amount),
     )?;
+    mine_relative_since_maturity(rpc, options.finalise_since)?;
     let sent = send_and_mine(rpc, build.tx.clone(), options.mine_blocks)?;
     Ok(xudt_finalise_report(build, sent))
+}
+
+struct SpliceParticipantWithdrawalTarget {
+    pubkey_sec1: Vec<u8>,
+    lock: Script,
+}
+
+fn splice_participant_withdrawal_target(
+    transition: &SpliceTransition,
+) -> Result<SpliceParticipantWithdrawalTarget> {
+    let signature = transition
+        .witness
+        .signatures
+        .first()
+        .ok_or_else(|| anyhow!("splice witness does not contain a participant payout key"))?;
+    ensure!(
+        signature.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
+        "splice participant payout key must be compressed secp256k1"
+    );
+    let lock = secp256k1_lock_from_pubkey(&signature.pubkey_sec1)?;
+    Ok(SpliceParticipantWithdrawalTarget {
+        pubkey_sec1: signature.pubkey_sec1.clone(),
+        lock,
+    })
+}
+
+fn factory_splice_participant_withdrawal_target(
+    package: &StoredFactorySplicePackage,
+    transition: &FactorySpliceTransition,
+) -> Result<SpliceParticipantWithdrawalTarget> {
+    let participant = transition
+        .update
+        .touched_participants
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("factory splice package has no touched participant"))?;
+    let participant_hex = hex32(participant);
+    let signature = package
+        .signatures
+        .iter()
+        .find(|signature| signature.participant == participant_hex)
+        .ok_or_else(|| {
+            anyhow!("factory splice package has no signature for touched participant")
+        })?;
+    let pubkey_sec1 = decode_hex_len(
+        &signature.pubkey_sec1,
+        COMPRESSED_SECP256K1_PUBKEY_LEN,
+        "factory splice participant pubkey",
+    )?;
+    let lock = secp256k1_lock_from_pubkey(&pubkey_sec1)?;
+    Ok(SpliceParticipantWithdrawalTarget { pubkey_sec1, lock })
+}
+
+fn factory_reduced_splice_participant_withdrawal_target(
+    package: &StoredFactoryReducedSplicePackage,
+    transition: &FactoryReducedSpliceTransition,
+) -> Result<SpliceParticipantWithdrawalTarget> {
+    let participant = transition
+        .update
+        .touched_participants
+        .iter()
+        .next()
+        .ok_or_else(|| anyhow!("reduced factory splice package has no touched participant"))?;
+    let participant_hex = hex32(participant);
+    let signature = package
+        .signatures
+        .iter()
+        .find(|signature| signature.participant == participant_hex)
+        .ok_or_else(|| {
+            anyhow!("reduced factory splice package has no signature for touched participant")
+        })?;
+    let pubkey_sec1 = decode_hex_len(
+        &signature.pubkey_sec1,
+        COMPRESSED_SECP256K1_PUBKEY_LEN,
+        "reduced factory splice participant pubkey",
+    )?;
+    let lock = secp256k1_lock_from_pubkey(&pubkey_sec1)?;
+    Ok(SpliceParticipantWithdrawalTarget { pubkey_sec1, lock })
+}
+
+fn decode_hex_len(value: &str, byte_len: usize, label: &str) -> Result<Vec<u8>> {
+    let stripped = value.strip_prefix("0x").unwrap_or(value);
+    ensure!(
+        stripped.len() == byte_len * 2,
+        "{label} must be {byte_len} bytes"
+    );
+    let bytes = hex::decode(stripped).with_context(|| format!("{label} is not valid hex"))?;
+    ensure!(bytes.len() == byte_len, "{label} must be {byte_len} bytes");
+    Ok(bytes)
 }
 
 struct BuiltXudtFinalise {
@@ -4404,6 +8934,11 @@ fn build_xudt_finalise_transaction(
             == header.settlement_descriptor_commitment(),
         "reconstructed xUDT settlement descriptor does not match the state commitment"
     );
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == header.payload_commitment(),
+        "StateHeader payload commitment does not match the live xUDT VaultCell"
+    );
 
     let state_refund_capacity = state_cell
         .capacity
@@ -4432,12 +8967,13 @@ fn build_xudt_finalise_transaction(
         .capacity(state_refund_capacity)
         .lock(owner_lock)
         .build();
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
     let tx = TransactionBuilder::default()
         .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(state_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
         .cell_dep(xudt_contract.cell_dep)
-        .input(CellInput::new(state_out_point, options.finalise_since))
+        .input(CellInput::new(state_out_point, finalise_since))
         .input(CellInput::new(vault_out_point, 0))
         .output(alice_output.clone())
         .output(bob_output.clone())
@@ -4605,6 +9141,7 @@ pub fn xudt_negative_smoke(
         vault_out_point.clone(),
         (rejected_alice_xudt_amount, rejected_bob_xudt_amount),
     )?;
+    mine_relative_since_maturity(rpc, smoke_options.finalise_since)?;
     let rejection = match send_and_mine(rpc, rejected_build.tx, 0) {
         Ok(report) => {
             return Err(anyhow!(
@@ -4803,7 +9340,7 @@ pub fn finalise_since_negative_smoke(
     )?;
     let settling_state_out_point = printable_out_point_string(&publish.state_out_point);
 
-    let rejected_input_since = 0;
+    let rejected_input_since = options.finalise_since - 1;
     let rejection = match finalise_channel(
         rpc,
         FinaliseChannelOptions {
@@ -5383,6 +9920,83 @@ fn sign_factory_exit_transaction(
         .build())
 }
 
+fn sign_factory_splice_transaction(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    input_type: Bytes,
+    extra_owner_inputs: usize,
+) -> Result<ckb_types::core::TransactionView> {
+    let placeholder_factory_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .input_type(Some(input_type.clone()).pack())
+        .build();
+    let factory_vault_witness = WitnessArgs::new_builder()
+        .input_type(Some(input_type.clone()).pack())
+        .build();
+    let placeholder_fee_witness = WitnessArgs::default();
+    let extra_owner_witness = WitnessArgs::default();
+    let mut owner_witnesses = vec![
+        placeholder_factory_witness.as_bytes(),
+        placeholder_fee_witness.as_bytes(),
+    ];
+    for _ in 0..extra_owner_inputs {
+        owner_witnesses.push(extra_owner_witness.as_bytes());
+    }
+    let message = sighash_all_message(tx.hash(), &owner_witnesses);
+    let signature = privkey
+        .sign_recoverable(&message)
+        .context("failed to sign CKB factory splice transaction")?;
+    let factory_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(signature.serialize())))
+        .input_type(Some(input_type).pack())
+        .build();
+    let mut builder = tx
+        .as_advanced_builder()
+        .witness(factory_witness.as_bytes())
+        .witness(factory_vault_witness.as_bytes())
+        .witness(placeholder_fee_witness.as_bytes());
+    for _ in 0..extra_owner_inputs {
+        builder = builder.witness(extra_owner_witness.as_bytes());
+    }
+    Ok(builder.build())
+}
+
+fn sign_splice_transaction(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    splice_witness: Bytes,
+    extra_owner_inputs: usize,
+) -> Result<ckb_types::core::TransactionView> {
+    let state_witness = WitnessArgs::new_builder()
+        .input_type(Some(splice_witness).pack())
+        .build();
+    let vault_witness = WitnessArgs::default();
+    let placeholder_fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .build();
+    let extra_owner_witness = WitnessArgs::default();
+    let mut owner_witnesses = vec![placeholder_fee_witness.as_bytes()];
+    for _ in 0..extra_owner_inputs {
+        owner_witnesses.push(extra_owner_witness.as_bytes());
+    }
+    let message = sighash_all_message(tx.hash(), &owner_witnesses);
+    let signature = privkey
+        .sign_recoverable(&message)
+        .context("failed to sign CKB splice fee transaction")?;
+    let fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(signature.serialize())))
+        .build();
+    let mut builder = tx
+        .as_advanced_builder()
+        .witness(state_witness.as_bytes())
+        .witness(vault_witness.as_bytes())
+        .witness(fee_witness.as_bytes());
+    for _ in 0..extra_owner_inputs {
+        builder = builder.witness(extra_owner_witness.as_bytes());
+    }
+    Ok(builder.build())
+}
+
 fn send_and_mine(
     rpc: &CkbRpcClient,
     tx: ckb_types::core::TransactionView,
@@ -5424,6 +10038,13 @@ fn send_and_mine(
         metrics,
         mined_blocks,
     })
+}
+
+fn mine_relative_since_maturity(rpc: &CkbRpcClient, finalise_since: u64) -> Result<()> {
+    for _ in 0..finalise_since {
+        rpc.generate_block()?;
+    }
+    Ok(())
 }
 
 fn mine_pending_transaction(
@@ -5470,6 +10091,7 @@ fn observed_state_cells(
     block: &ckb_jsonrpc_types::BlockView,
     channel_id: &str,
     tip_number: u64,
+    filter: &StateCellDetectionFilter,
 ) -> Result<Vec<ObservedStateCellReport>> {
     let block_number = block.header.inner.number.value();
     let block_hash = format!("{:#x}", block.header.hash);
@@ -5483,6 +10105,13 @@ fn observed_state_cells(
             if hex32(header.channel_id()) != channel_id {
                 continue;
             }
+            let Some(output) = tx.inner.outputs.get(index) else {
+                continue;
+            };
+            let output: CellOutput = output.clone().into();
+            if !is_authentic_observed_state_cell(&output, &header, filter) {
+                continue;
+            }
             let tx_hash = format!("{:#x}", tx.hash);
             observed.push(ObservedStateCellReport {
                 block_number,
@@ -5490,13 +10119,46 @@ fn observed_state_cells(
                 tx_hash: tx_hash.clone(),
                 output_index: index as u32,
                 out_point: format!("{tx_hash}:{index}"),
+                funding_anchor: hex32(header.funding_anchor()),
                 state_number: header.state_number(),
                 phase: phase_label(header.phase()).to_string(),
+                settlement_descriptor_commitment: hex32(header.settlement_descriptor_commitment()),
+                descriptor_version: header.descriptor_version(),
                 confirmations,
             });
         }
     }
     Ok(observed)
+}
+
+fn is_authentic_observed_state_cell(
+    output: &CellOutput,
+    header: &StateHeaderV1,
+    filter: &StateCellDetectionFilter,
+) -> bool {
+    let Some(type_script) = output.type_().to_opt() else {
+        return false;
+    };
+    if !script_uses_data1_code_hash(&type_script, &filter.state_type_code_hash) {
+        return false;
+    }
+    let type_args = type_script.args().raw_data();
+    if type_args.len() < BYTE32_LEN || &type_args.as_ref()[..BYTE32_LEN] != header.funding_anchor()
+    {
+        return false;
+    }
+
+    let lock = output.lock();
+    if !script_uses_data1_code_hash(&lock, &filter.state_lock_code_hash) {
+        return false;
+    }
+    let expected_lock_args: [u8; BYTE32_LEN] = type_script.calc_script_hash().unpack();
+    lock.args().raw_data().as_ref() == expected_lock_args.as_slice()
+}
+
+fn script_uses_data1_code_hash(script: &Script, code_hash: &H256) -> bool {
+    byte32_to_h256(script.code_hash()) == *code_hash
+        && script.hash_type() == ScriptHashType::Data1.into()
 }
 
 fn phase_label(phase: u8) -> &'static str {
@@ -5636,6 +10298,22 @@ fn contract_by_name(contracts: &[ResolvedContract], name: &str) -> Result<Resolv
         .find(|contract| contract.name == name)
         .cloned()
         .ok_or_else(|| anyhow!("resolved contract {name} is missing"))
+}
+
+fn state_cell_detection_filter(contracts_dir: &Path) -> Result<StateCellDetectionFilter> {
+    let targets = load_contract_targets(contracts_dir)?;
+    Ok(StateCellDetectionFilter {
+        state_type_code_hash: contract_target_hash_by_name(&targets, "morph-state-type")?,
+        state_lock_code_hash: contract_target_hash_by_name(&targets, "morph-state-lock")?,
+    })
+}
+
+fn contract_target_hash_by_name(targets: &[ContractTarget], name: &str) -> Result<H256> {
+    targets
+        .iter()
+        .find(|target| target.name == name)
+        .map(|target| target.data_hash.clone())
+        .ok_or_else(|| anyhow!("contract target {name} is missing"))
 }
 
 fn ensure_change_capacity(owner_lock: &Script, change_capacity: u64) -> Result<()> {
@@ -5779,7 +10457,15 @@ fn find_secp256k1_cell_dep(rpc: &CkbRpcClient) -> Result<CellDep> {
 
 fn secp256k1_lock(privkey: &Privkey) -> Result<Script> {
     let pubkey = privkey.pubkey().context("failed to derive public key")?;
-    let args = blake160(&pubkey.serialize());
+    secp256k1_lock_from_pubkey(&pubkey.serialize())
+}
+
+fn secp256k1_lock_from_pubkey(pubkey_sec1: &[u8]) -> Result<Script> {
+    ensure!(
+        pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
+        "secp256k1 lock pubkey must be compressed"
+    );
+    let args = blake160(pubkey_sec1);
     Ok(Script::new_builder()
         .code_hash(parse_h256(DEFAULT_SECP_TYPE_HASH)?.pack())
         .hash_type(ScriptHashType::Type)
@@ -5846,6 +10532,40 @@ fn bilateral_signature_witness(
             .copy_from_slice(&ecdsa_signature(key, &digest)?);
     }
     Ok(witness)
+}
+
+fn splice_witness_from_keys(
+    header: &SpliceHeader,
+    alice_private_key: &str,
+    bob_private_key: &str,
+) -> Result<SpliceWitness> {
+    let alice_key = k256_signing_key(alice_private_key)?;
+    let bob_key = k256_signing_key(bob_private_key)?;
+    let mut entries = [
+        (k256_pubkey(&alice_key), alice_key),
+        (k256_pubkey(&bob_key), bob_key),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
+    ensure!(
+        core_participants_commitment(2, &pubkeys) == header.participants_commitment,
+        "Alice/Bob keys do not match the live StateCell participants commitment"
+    );
+
+    let digest = header.signing_digest();
+    let signatures = entries
+        .iter()
+        .map(|(pubkey, key)| {
+            Ok(ParticipantSignature {
+                pubkey_sec1: pubkey.to_vec(),
+                signature: ecdsa_signature(key, &digest)?.to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(SpliceWitness {
+        threshold: 2,
+        signatures,
+    })
 }
 
 fn factory_signature_witness(
@@ -6133,10 +10853,76 @@ struct BuiltReducedExit {
     report: FactoryReducedExitEvidenceReport,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReducedExitReserveClaim {
+    release_quantity: u128,
+    before_quantity: u128,
+    after_quantity: u128,
+    asset_type: Option<[u8; BYTE32_LEN]>,
+}
+
 fn reduced_exit_initial_roots(
     alice: &SigningKey,
     bob: &SigningKey,
     release_quantity: u128,
+) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
+    let descriptor = bilateral_ckb_descriptor([1u8; BYTE32_LEN], 1, [2u8; BYTE32_LEN], 2);
+    reduced_exit_initial_roots_with_descriptor(
+        alice,
+        bob,
+        ReducedExitReserveClaim {
+            release_quantity,
+            before_quantity: release_quantity,
+            after_quantity: 0,
+            asset_type: None,
+        },
+        &descriptor,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reduced_xudt_exit_initial_roots(
+    alice: &SigningKey,
+    bob: &SigningKey,
+    release_quantity: u128,
+    reserve_claim_before_quantity: u128,
+    reserve_claim_after_quantity: u128,
+    reserve_asset_type: [u8; BYTE32_LEN],
+    child_vault_capacity: u64,
+    alice_capacity: Option<u64>,
+    bob_capacity: Option<u64>,
+    alice_xudt_amount: u128,
+    bob_xudt_amount: u128,
+) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
+    let (alice_capacity, bob_capacity) =
+        settlement_split(child_vault_capacity, alice_capacity, bob_capacity)?;
+    let descriptor = bilateral_ckb_xudt_descriptor(
+        reserve_asset_type,
+        [1u8; BYTE32_LEN],
+        alice_capacity,
+        alice_xudt_amount,
+        [2u8; BYTE32_LEN],
+        bob_capacity,
+        bob_xudt_amount,
+    );
+    reduced_exit_initial_roots_with_descriptor(
+        alice,
+        bob,
+        ReducedExitReserveClaim {
+            release_quantity,
+            before_quantity: reserve_claim_before_quantity,
+            after_quantity: reserve_claim_after_quantity,
+            asset_type: Some(reserve_asset_type),
+        },
+        &descriptor,
+    )
+}
+
+fn reduced_exit_initial_roots_with_descriptor(
+    alice: &SigningKey,
+    bob: &SigningKey,
+    reserve_claim: ReducedExitReserveClaim,
+    descriptor: &[u8],
 ) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
     let mut state_header = [0u8; STATE_HEADER_V1_LEN];
     put_u16(&mut state_header, 0, 1);
@@ -6146,20 +10932,24 @@ fn reduced_exit_initial_roots(
         SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
     );
     state_header[109] = PHASE_ACTIVE;
-    put_u16(&mut state_header, 206, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
-    let descriptor = bilateral_ckb_descriptor([1u8; BYTE32_LEN], 1, [2u8; BYTE32_LEN], 2);
-    state_header[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    let descriptor_version = match descriptor.len() {
+        BILATERAL_CKB_DESCRIPTOR_V1_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
+        _ => return Err(anyhow!("unsupported reduced-exit descriptor length")),
+    };
+    put_u16(&mut state_header, 206, descriptor_version);
+    state_header[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(descriptor));
     let witness = reduced_exit_witness_bytes(
         alice,
         bob,
-        release_quantity,
+        reserve_claim,
         1,
         2,
         &[3u8; BYTE32_LEN],
         &[4u8; BYTE32_LEN],
         &[5u8; BYTE32_LEN],
         &state_header,
-        &descriptor,
+        descriptor,
     )?;
     let parsed = FactoryReducedExitWitnessV1::parse(&witness)
         .map_err(|err| anyhow!("constructed reduced-exit fixture is invalid: {err:?}"))?;
@@ -6179,7 +10969,7 @@ fn reduced_exit_from_factory_header(
     alice: &SigningKey,
     bob: &SigningKey,
     new_update_number: u64,
-    release_quantity: u128,
+    reserve_claim: ReducedExitReserveClaim,
     state_output_index: u32,
     vault_output_index: u32,
     state_type_hash: &[u8],
@@ -6189,8 +10979,17 @@ fn reduced_exit_from_factory_header(
     descriptor: &[u8],
 ) -> Result<BuiltReducedExit> {
     ensure!(
-        release_quantity > 0,
+        reserve_claim.release_quantity > 0,
         "reduced factory exit release quantity must be non-zero"
+    );
+    ensure!(
+        reserve_claim.before_quantity >= reserve_claim.release_quantity,
+        "reduced factory exit claim before quantity must cover the release"
+    );
+    ensure!(
+        reserve_claim.before_quantity - reserve_claim.release_quantity
+            == reserve_claim.after_quantity,
+        "reduced factory exit claim delta must equal the release quantity"
     );
     let old_header = FactoryStateHeaderV1::parse(old_header_bytes)
         .map_err(|err| anyhow!("old factory header is invalid: {err:?}"))?;
@@ -6203,7 +11002,7 @@ fn reduced_exit_from_factory_header(
     let mut witness = reduced_exit_witness_bytes(
         alice,
         bob,
-        release_quantity,
+        reserve_claim,
         state_output_index,
         vault_output_index,
         state_type_hash,
@@ -6283,7 +11082,7 @@ fn reduced_exit_from_factory_header(
         new_header,
         witness,
         report: FactoryReducedExitEvidenceReport {
-            release_quantity,
+            release_quantity: reserve_claim.release_quantity,
             old_state_root: hex32(&old_state_root),
             new_state_root: hex32(&new_state_root),
             old_access_manifest_root: hex32(&old_access_manifest_root),
@@ -6299,7 +11098,7 @@ fn reduced_exit_from_factory_header(
 fn reduced_exit_witness_bytes(
     alice: &SigningKey,
     bob: &SigningKey,
-    release_quantity: u128,
+    reserve_claim: ReducedExitReserveClaim,
     state_output_index: u32,
     vault_output_index: u32,
     state_type_hash: &[u8],
@@ -6337,7 +11136,7 @@ fn reduced_exit_witness_bytes(
         }
     };
     let entries = reduced_exit_participant_entries(alice, bob);
-    let (before, after) = reduced_exit_rights_pair(release_quantity);
+    let (before, after) = reduced_exit_rights_pair(reserve_claim);
 
     let mut raw = vec![0u8; witness_len];
     put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1);
@@ -6358,7 +11157,7 @@ fn reduced_exit_witness_bytes(
     put_u128(
         &mut raw,
         reduced_exit_release_quantity_offset(),
-        release_quantity,
+        reserve_claim.release_quantity,
     );
     put_u32(
         &mut raw,
@@ -6403,14 +11202,20 @@ fn reduced_exit_participant_entries(
 }
 
 fn reduced_exit_rights_pair(
-    release_quantity: u128,
+    reserve_claim: ReducedExitReserveClaim,
 ) -> (
     [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
     [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
 ) {
     let before = [
         factory_right_bytes(1, 10, 0, 100),
-        factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, release_quantity),
+        factory_right_bytes_with_asset(
+            1,
+            10,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            reserve_claim.before_quantity,
+            reserve_claim.asset_type,
+        ),
         factory_right_bytes(1, 10, 2, 1),
         factory_right_bytes(1, 10, 3, 1),
         factory_right_bytes(1, 10, 4, 20),
@@ -6421,7 +11226,13 @@ fn reduced_exit_rights_pair(
         factory_right_bytes(2, 10, 4, 20),
     ];
     let mut after = before;
-    after[1] = factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 0);
+    after[1] = factory_right_bytes_with_asset(
+        1,
+        10,
+        FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+        reserve_claim.after_quantity,
+        reserve_claim.asset_type,
+    );
     (before, after)
 }
 
@@ -6431,11 +11242,24 @@ fn factory_right_bytes(
     kind: u8,
     quantity: u128,
 ) -> [u8; FACTORY_RIGHT_V1_LEN] {
+    factory_right_bytes_with_asset(participant, subchannel, kind, quantity, None)
+}
+
+fn factory_right_bytes_with_asset(
+    participant: u8,
+    subchannel: u8,
+    kind: u8,
+    quantity: u128,
+    asset_type: Option<[u8; BYTE32_LEN]>,
+) -> [u8; FACTORY_RIGHT_V1_LEN] {
     let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
     raw[0..BYTE32_LEN].fill(participant);
     raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
     raw[2 * BYTE32_LEN] = kind;
-    raw[2 * BYTE32_LEN + 1] = 0;
+    if let Some(asset_type) = asset_type {
+        raw[2 * BYTE32_LEN + 1] = 1;
+        raw[2 * BYTE32_LEN + 2..2 * BYTE32_LEN + 2 + BYTE32_LEN].copy_from_slice(&asset_type);
+    }
     put_u128(&mut raw, 2 * BYTE32_LEN + 2 + BYTE32_LEN, quantity);
     raw
 }
@@ -6598,6 +11422,49 @@ fn data1_script(code_hash: H256, args: Bytes) -> Script {
         .build()
 }
 
+fn relative_block_since_arg(blocks: u64) -> Result<u64> {
+    relative_block_since(blocks)
+        .map_err(|_| anyhow!("finalise_since must fit in the CKB since 56-bit value field"))
+}
+
+fn state_type_args(funding_anchor: &[u8; BYTE32_LEN], finalise_since: u64) -> Bytes {
+    let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    Bytes::from(args)
+}
+
+fn vault_lock_args(
+    funding_anchor: &[u8; BYTE32_LEN],
+    finalise_since: u64,
+    state_type: &Script,
+    state_lock: &Script,
+) -> Bytes {
+    let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    args.extend_from_slice(state_type.code_hash().as_slice());
+    args.push(state_type.hash_type().as_slice()[0]);
+    args.extend_from_slice(state_lock.code_hash().as_slice());
+    args.push(state_lock.hash_type().as_slice()[0]);
+    Bytes::from(args)
+}
+
+fn set_state_payload_commitment(state_header: &mut [u8], commitment: [u8; BYTE32_LEN]) {
+    state_header[208..240].copy_from_slice(&commitment);
+}
+
+fn vault_cell_commitment_from_output(output: &CellOutput, data: &[u8]) -> [u8; BYTE32_LEN] {
+    let type_hash = output.type_().to_opt().map(|script| {
+        let hash: [u8; BYTE32_LEN] = script.calc_script_hash().unpack();
+        hash
+    });
+    vault_cell_commitment_v1(
+        output.lock().calc_script_hash().as_slice(),
+        output.capacity().unpack(),
+        type_hash.as_ref().map(|hash| hash.as_slice()),
+        data,
+    )
+}
+
 fn derive_funding_anchor(input: &CellInput, output_index: u64) -> [u8; 32] {
     script_blake2b256(&[input.as_slice(), &output_index.to_le_bytes()])
 }
@@ -6744,7 +11611,7 @@ fn settlement_split(
 ) -> Result<(u64, u64)> {
     match (alice_capacity, bob_capacity) {
         (None, None) => {
-            let alice = vault_capacity.saturating_mul(6) / 10;
+            let alice = vault_capacity / 2;
             let bob = vault_capacity
                 .checked_sub(alice)
                 .ok_or_else(|| anyhow!("vault capacity split underflow"))?;
@@ -6761,6 +11628,346 @@ fn settlement_split(
             "alice and bob capacities must either both be provided or both be omitted"
         )),
     }
+}
+
+fn proportional_capacity_split(new_total: u64, old_alice: u64, old_bob: u64) -> Result<(u64, u64)> {
+    let old_total = old_alice
+        .checked_add(old_bob)
+        .ok_or_else(|| anyhow!("old settlement capacity overflows"))?;
+    ensure!(old_total > 0, "old settlement capacity must be non-zero");
+    let alice = (u128::from(new_total) * u128::from(old_alice) / u128::from(old_total))
+        .try_into()
+        .context("post-splice Alice capacity does not fit in u64")?;
+    let bob = new_total
+        .checked_sub(alice)
+        .ok_or_else(|| anyhow!("post-splice capacity split underflows"))?;
+    Ok((alice, bob))
+}
+
+fn proportional_xudt_split(
+    new_total: u128,
+    old_alice: u128,
+    old_bob: u128,
+) -> Result<(u128, u128)> {
+    let old_total = old_alice
+        .checked_add(old_bob)
+        .ok_or_else(|| anyhow!("old xUDT settlement amount overflows"))?;
+    ensure!(old_total > 0, "old xUDT settlement amount must be non-zero");
+    let alice = new_total
+        .checked_mul(old_alice)
+        .ok_or_else(|| anyhow!("post-splice Alice xUDT amount overflows"))?
+        / old_total;
+    let bob = new_total
+        .checked_sub(alice)
+        .ok_or_else(|| anyhow!("post-splice xUDT split underflows"))?;
+    Ok((alice, bob))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CkbSpliceDelta {
+    external_input: u64,
+    signed_fee: u64,
+}
+
+#[derive(Debug, Clone)]
+struct LiveXudtAsset {
+    type_script: Script,
+    type_hash: [u8; BYTE32_LEN],
+    amount: u128,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct XudtSpliceDelta {
+    type_hash: [u8; BYTE32_LEN],
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+}
+
+#[derive(Debug, Clone)]
+struct SpliceApplicationAssets {
+    old_vault_capacity: u64,
+    new_vault_capacity: u64,
+    ckb_delta: Option<CkbSpliceDelta>,
+    ckb_withdrawal: u64,
+    xudt: Option<XudtSpliceDelta>,
+}
+
+fn live_vault_xudt_asset(cell: &LiveCellDetails) -> Result<Option<LiveXudtAsset>> {
+    match cell.output.type_().to_opt() {
+        Some(type_script) => {
+            let type_hash: [u8; BYTE32_LEN] = type_script.calc_script_hash().unpack();
+            Ok(Some(LiveXudtAsset {
+                type_script,
+                type_hash,
+                amount: xudt_amount_from_data(&cell.data)?,
+            }))
+        }
+        None => {
+            ensure!(
+                cell.data.is_empty(),
+                "plain CKB VaultCell must not carry data"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn live_vault_assets(
+    ckb_amount: u128,
+    xudt_type_hash: Option<[u8; BYTE32_LEN]>,
+    xudt_amount: Option<u128>,
+) -> Vec<VaultAssetAmount> {
+    let mut assets = vec![VaultAssetAmount {
+        asset: VaultAsset::Ckb,
+        amount: ckb_amount,
+    }];
+    if let (Some(type_hash), Some(amount)) = (xudt_type_hash, xudt_amount) {
+        assets.push(VaultAssetAmount {
+            asset: VaultAsset::Xudt(type_hash),
+            amount,
+        });
+    }
+    assets
+}
+
+fn factory_vault_amount(descriptor: &FactoryVaultDescriptorV1, asset: &VaultAsset) -> Option<u128> {
+    descriptor
+        .assets
+        .iter()
+        .find(|amount| &amount.asset == asset)
+        .map(|amount| amount.amount)
+}
+
+fn core_state_cell_from_live(
+    header: &StateHeaderV1<'_>,
+    cell: &LiveCellDetails,
+) -> Result<CoreStateCell> {
+    Ok(CoreStateCell {
+        header: StateHeader {
+            protocol_version: header.protocol_version(),
+            chain_id: bytes32_from_slice("state chain_id", header.chain_id())?,
+            signature_scheme_id: header.signature_scheme_id(),
+            channel_id: bytes32_from_slice("state channel_id", header.channel_id())?,
+            funding_anchor: bytes32_from_slice("state funding_anchor", header.funding_anchor())?,
+            state_number: header.state_number(),
+            mode: core_mode_from_wire(header.mode())?,
+            phase: core_phase_from_wire(header.phase())?,
+            participants_commitment: bytes32_from_slice(
+                "state participants_commitment",
+                header.participants_commitment(),
+            )?,
+            asset_registry_commitment: bytes32_from_slice(
+                "state asset_registry_commitment",
+                header.asset_registry_commitment(),
+            )?,
+            settlement_descriptor_commitment: bytes32_from_slice(
+                "state settlement_descriptor_commitment",
+                header.settlement_descriptor_commitment(),
+            )?,
+            descriptor_version: header.descriptor_version(),
+            payload_commitment: bytes32_from_slice(
+                "state payload_commitment",
+                header.payload_commitment(),
+            )?,
+            challenge_policy_commitment: bytes32_from_slice(
+                "state challenge_policy_commitment",
+                header.challenge_policy_commitment(),
+            )?,
+            state_layout_version: header.state_layout_version(),
+        },
+        capacity: cell.capacity,
+        occupied_capacity: occupied_capacity(&cell.output, cell.data.len())?,
+    })
+}
+
+fn core_mode_from_wire(value: u8) -> Result<Mode> {
+    match value {
+        1 => Ok(Mode::BilateralPlain),
+        2 => Ok(Mode::FactoryProof),
+        other => Err(anyhow!("unsupported StateHeader mode byte {other}")),
+    }
+}
+
+fn core_phase_from_wire(value: u8) -> Result<Phase> {
+    match value {
+        0 => Ok(Phase::Funding),
+        1 => Ok(Phase::Active),
+        2 => Ok(Phase::Settling),
+        3 => Ok(Phase::Closed),
+        other => Err(anyhow!("unsupported StateHeader phase byte {other}")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_splice_funding_anchor(
+    old_funding_anchor: &[u8; BYTE32_LEN],
+    state_out_point: &OutPoint,
+    vault_out_point: &OutPoint,
+    old_funding_epoch: u64,
+    new_funding_epoch: u64,
+    splice_number: u64,
+    kind: DevnetSpliceKind,
+    asset: DevnetSpliceAsset,
+    xudt_type_hash: Option<&[u8; BYTE32_LEN]>,
+    amount: u128,
+) -> [u8; BYTE32_LEN] {
+    let state = format_out_point(state_out_point);
+    let vault = format_out_point(vault_out_point);
+    let old_epoch = old_funding_epoch.to_le_bytes();
+    let new_epoch = new_funding_epoch.to_le_bytes();
+    let splice = splice_number.to_le_bytes();
+    let kind = [match kind {
+        DevnetSpliceKind::SpliceIn => 0,
+        DevnetSpliceKind::SpliceOut => 1,
+    }];
+    let asset = [match asset {
+        DevnetSpliceAsset::Ckb => 0,
+        DevnetSpliceAsset::Xudt => 1,
+    }];
+    let empty_xudt_type_hash = [0u8; BYTE32_LEN];
+    let xudt_type_hash = xudt_type_hash.unwrap_or(&empty_xudt_type_hash);
+    let amount = amount.to_le_bytes();
+    script_blake2b256(&[
+        b"CKB_MORPH_DEVNET_SPLICE_ANCHOR_V1",
+        old_funding_anchor,
+        state.as_bytes(),
+        vault.as_bytes(),
+        &old_epoch,
+        &new_epoch,
+        &splice,
+        &kind,
+        &asset,
+        xudt_type_hash,
+        &amount,
+    ])
+}
+
+fn ckb_vault_amount(descriptor: &morph_core::types::VaultDescriptorV2) -> Result<u64> {
+    let amount = descriptor
+        .assets
+        .iter()
+        .find(|amount| matches!(amount.asset, VaultAsset::Ckb))
+        .ok_or_else(|| anyhow!("splice vault descriptor does not contain CKB"))?
+        .amount;
+    u64::try_from(amount).context("CKB vault amount does not fit in u64 capacity")
+}
+
+fn ckb_withdrawal_amount(transition: &SpliceTransition) -> Result<u64> {
+    let amount = transition
+        .withdrawals
+        .iter()
+        .find(|amount| matches!(amount.asset, VaultAsset::Ckb))
+        .map(|amount| amount.amount)
+        .unwrap_or_default();
+    u64::try_from(amount).context("CKB withdrawal amount does not fit in u64 capacity")
+}
+
+fn ckb_splice_delta(transition: &SpliceTransition) -> Result<CkbSpliceDelta> {
+    let delta = transition
+        .deltas
+        .iter()
+        .find(|delta| matches!(delta.asset, VaultAsset::Ckb))
+        .ok_or_else(|| anyhow!("splice package does not contain a CKB delta"))?;
+    Ok(CkbSpliceDelta {
+        external_input: u64::try_from(delta.external_input)
+            .context("CKB external input does not fit in u64 capacity")?,
+        signed_fee: u64::try_from(delta.signed_fee)
+            .context("CKB signed fee does not fit in u64 capacity")?,
+    })
+}
+
+fn splice_application_assets(transition: &SpliceTransition) -> Result<SpliceApplicationAssets> {
+    ensure!(
+        transition.deltas.len() == 1,
+        "devnet apply-splice currently supports exactly one CKB or xUDT asset delta"
+    );
+    let old_vault_capacity = ckb_vault_amount(&transition.old_vault)?;
+    let new_vault_capacity = ckb_vault_amount(&transition.new_vault)?;
+    let ckb_withdrawal = ckb_withdrawal_amount(transition)?;
+    let old_xudt = xudt_vault_amount(&transition.old_vault)?;
+    let new_xudt = xudt_vault_amount(&transition.new_vault)?;
+
+    let mut ckb_delta = None;
+    let mut xudt = None;
+    let delta = &transition.deltas[0];
+    match &delta.asset {
+        VaultAsset::Ckb => {
+            ensure!(
+                old_xudt == new_xudt,
+                "devnet apply-splice cannot change xUDT amounts without an xUDT delta"
+            );
+            ckb_delta = Some(ckb_splice_delta(transition)?);
+        }
+        VaultAsset::Xudt(type_hash) => {
+            ensure!(
+                delta.signed_fee == 0,
+                "xUDT splice deltas cannot carry signed CKB fees"
+            );
+            match transition.header.kind {
+                SpliceKind::In => ensure!(
+                    delta.external_input > 0
+                        && delta.withdrawal == 0
+                        && delta.new_amount > delta.old_amount,
+                    "xUDT splice-in must increase the vault amount with an external typed input"
+                ),
+                SpliceKind::Out => ensure!(
+                    delta.external_input == 0
+                        && delta.withdrawal > 0
+                        && delta.new_amount < delta.old_amount,
+                    "xUDT splice-out must decrease the vault amount with a typed withdrawal"
+                ),
+            }
+            ensure!(
+                old_vault_capacity == new_vault_capacity && ckb_withdrawal == 0,
+                "xUDT-only splice must not change CKB vault capacity"
+            );
+            let old_xudt =
+                old_xudt.ok_or_else(|| anyhow!("old vault descriptor does not contain xUDT"))?;
+            let new_xudt =
+                new_xudt.ok_or_else(|| anyhow!("new vault descriptor does not contain xUDT"))?;
+            ensure!(
+                old_xudt.0 == *type_hash && new_xudt.0 == *type_hash,
+                "xUDT delta type hash does not match vault descriptors"
+            );
+            ensure!(
+                old_xudt.1 == delta.old_amount && new_xudt.1 == delta.new_amount,
+                "xUDT delta amounts do not match vault descriptors"
+            );
+            xudt = Some(XudtSpliceDelta {
+                type_hash: *type_hash,
+                old_amount: delta.old_amount,
+                new_amount: delta.new_amount,
+                external_input: delta.external_input,
+                withdrawal: delta.withdrawal,
+            });
+        }
+    }
+
+    Ok(SpliceApplicationAssets {
+        old_vault_capacity,
+        new_vault_capacity,
+        ckb_delta,
+        ckb_withdrawal,
+        xudt,
+    })
+}
+
+fn xudt_vault_amount(
+    descriptor: &morph_core::types::VaultDescriptorV2,
+) -> Result<Option<([u8; BYTE32_LEN], u128)>> {
+    let mut found = None;
+    for amount in &descriptor.assets {
+        if let VaultAsset::Xudt(type_hash) = &amount.asset {
+            ensure!(
+                found.is_none(),
+                "splice vault descriptor contains multiple xUDT assets"
+            );
+            found = Some((*type_hash, amount.amount));
+        }
+    }
+    Ok(found)
 }
 
 struct InitialStateHeader {
@@ -6792,7 +11999,7 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V1_LEN] 
     raw[36..68].copy_from_slice(&input.channel_id);
     raw[68..100].copy_from_slice(&input.funding_anchor);
     put_u64(&mut raw, 100, 0);
-    raw[108] = 0;
+    raw[108] = 1;
     raw[109] = PHASE_ACTIVE;
     raw[110..142].copy_from_slice(&input.participants_commitment);
     raw[142..174].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V1"]));
@@ -6857,6 +12064,36 @@ fn factory_participant_reports(
             pubkey_sec1: hex_prefixed(&pubkey),
         })
         .collect()
+}
+
+fn factory_splice_reserve_rights(
+    asset_type: Option<[u8; BYTE32_LEN]>,
+    old_amount: u128,
+    new_amount: u128,
+) -> (Vec<FactoryRight>, Vec<FactoryRight>) {
+    let before = vec![
+        factory_splice_reserve_right([1u8; BYTE32_LEN], asset_type, old_amount),
+        factory_splice_reserve_right([2u8; BYTE32_LEN], asset_type, 0),
+    ];
+    let mut after = before.clone();
+    after[0].quantity = new_amount;
+    (before, after)
+}
+
+fn factory_splice_reserve_right(
+    participant: [u8; BYTE32_LEN],
+    asset_type: Option<[u8; BYTE32_LEN]>,
+    quantity: u128,
+) -> FactoryRight {
+    FactoryRight {
+        id: FactoryRightId {
+            participant,
+            subchannel: [10u8; BYTE32_LEN],
+            kind: FactoryRightKind::ReserveClaim,
+            asset_type,
+        },
+        quantity,
+    }
 }
 
 fn derived_factory_update_digest(
@@ -7123,6 +12360,7 @@ fn byte32_to_h256(value: ckb_types::packed::Byte32) -> H256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn parses_ckb_script_failure() {
@@ -7140,5 +12378,200 @@ mod tests {
             Some("SponsorStateOutOfRange")
         );
         assert_eq!(parsed.raw, raw);
+    }
+
+    #[test]
+    fn participant_pubkey_lock_matches_private_key_lock() {
+        let key = parse_privkey(DEFAULT_ALICE_PRIVATE_KEY).unwrap();
+        let lock_from_key = secp256k1_lock(&key).unwrap();
+        let pubkey = key.pubkey().unwrap().serialize();
+        let lock_from_pubkey = secp256k1_lock_from_pubkey(&pubkey).unwrap();
+
+        assert_eq!(lock_from_pubkey, lock_from_key);
+    }
+
+    #[test]
+    fn selects_latest_state_package_for_funding_anchor() {
+        let old_anchor = format!("0x{}", "11".repeat(BYTE32_LEN));
+        let new_anchor = format!("0x{}", "22".repeat(BYTE32_LEN));
+        let records = vec![
+            state_package_record(&old_anchor, 2, 10, 1),
+            state_package_record(&new_anchor, 1, 20, 2),
+            state_package_record(&old_anchor, 3, 30, 3),
+        ];
+
+        let global = latest_state_package_record(&records).unwrap();
+        assert_eq!(global.package.state_number, 3);
+        assert_eq!(global.package.funding_anchor, old_anchor);
+
+        let selected = latest_package_for_funding_anchor(&records, &new_anchor).unwrap();
+        assert_eq!(selected.package.state_number, 1);
+        assert_eq!(selected.package.funding_anchor, new_anchor);
+    }
+
+    #[test]
+    fn watch_cursor_for_state_records_observed_funding_anchor() {
+        let channel_id = format!("0x{}", "33".repeat(BYTE32_LEN));
+        let funding_anchor = format!("0x{}", "44".repeat(BYTE32_LEN));
+        let observed = ObservedStateCellReport {
+            block_number: 10,
+            block_hash: format!("0x{}", "55".repeat(BYTE32_LEN)),
+            tx_hash: format!("0x{}", "66".repeat(BYTE32_LEN)),
+            output_index: 0,
+            out_point: format!("0x{}:0", "66".repeat(BYTE32_LEN)),
+            funding_anchor: funding_anchor.clone(),
+            state_number: 7,
+            phase: "active".to_string(),
+            settlement_descriptor_commitment: format!("0x{}", "77".repeat(BYTE32_LEN)),
+            descriptor_version: 1,
+            confirmations: 4,
+        };
+
+        let cursor = watch_cursor_for_state(&channel_id, 12, 11, Some(&observed), None).unwrap();
+
+        assert_eq!(cursor.channel_id, channel_id);
+        assert_eq!(cursor.next_block, 12);
+        assert_eq!(cursor.scanned_to_block, 11);
+        assert_eq!(
+            cursor.current_funding_anchor.as_deref(),
+            Some(funding_anchor.as_str())
+        );
+        assert_eq!(cursor.last_observed_state_number, Some(7));
+        assert_eq!(
+            cursor.last_observed_out_point.as_deref(),
+            Some(observed.out_point.as_str())
+        );
+    }
+
+    #[test]
+    fn watch_cursor_for_state_preserves_previous_observation_when_idle() {
+        let channel_id = format!("0x{}", "33".repeat(BYTE32_LEN));
+        let funding_anchor = format!("0x{}", "44".repeat(BYTE32_LEN));
+        let previous = WatchCursor::new(&channel_id, 10, 9)
+            .unwrap()
+            .with_observed_state(&funding_anchor, 5, "0xabc:0")
+            .unwrap();
+
+        let cursor = watch_cursor_for_state(&channel_id, 12, 11, None, Some(&previous)).unwrap();
+
+        assert_eq!(cursor.next_block, 12);
+        assert_eq!(cursor.scanned_to_block, 11);
+        assert_eq!(
+            cursor.current_funding_anchor.as_deref(),
+            Some(funding_anchor.as_str())
+        );
+        assert_eq!(cursor.last_observed_state_number, Some(5));
+        assert_eq!(cursor.last_observed_out_point.as_deref(), Some("0xabc:0"));
+    }
+
+    #[test]
+    fn watchtower_state_detection_requires_authentic_state_scripts() {
+        let filter = StateCellDetectionFilter {
+            state_type_code_hash: H256::from([0x11; BYTE32_LEN]),
+            state_lock_code_hash: H256::from([0x22; BYTE32_LEN]),
+        };
+        let funding_anchor = [0x33; BYTE32_LEN];
+        let header_bytes = initial_state_header(InitialStateHeader {
+            chain_id: [0x44; BYTE32_LEN],
+            channel_id: [0x55; BYTE32_LEN],
+            funding_anchor,
+            participants_commitment: [0x66; BYTE32_LEN],
+            settlement_descriptor_commitment: [0x77; BYTE32_LEN],
+            descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+            challenge_policy_commitment: [0x88; BYTE32_LEN],
+        });
+        let header = StateHeaderV1::parse(&header_bytes).unwrap();
+        let state_type = data1_script(
+            filter.state_type_code_hash.clone(),
+            state_type_args(&funding_anchor, relative_block_since_arg(4).unwrap()),
+        );
+        let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
+        let state_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&state_type_hash),
+        );
+        let state_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build();
+
+        assert!(is_authentic_observed_state_cell(
+            &state_output,
+            &header,
+            &filter
+        ));
+
+        let fake_data_only_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(state_lock.clone())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &fake_data_only_output,
+            &header,
+            &filter
+        ));
+
+        let mismatched_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&[0xff; BYTE32_LEN]),
+        );
+        let mismatched_lock_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(mismatched_lock)
+            .type_(Some(state_type.clone()).pack())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &mismatched_lock_output,
+            &header,
+            &filter
+        ));
+
+        let wrong_anchor_type = data1_script(
+            filter.state_type_code_hash.clone(),
+            state_type_args(&[0x99; BYTE32_LEN], relative_block_since_arg(4).unwrap()),
+        );
+        let wrong_anchor_type_hash: [u8; BYTE32_LEN] =
+            wrong_anchor_type.calc_script_hash().unpack();
+        let wrong_anchor_lock = data1_script(
+            filter.state_lock_code_hash.clone(),
+            Bytes::copy_from_slice(&wrong_anchor_type_hash),
+        );
+        let wrong_anchor_output = CellOutput::new_builder()
+            .capacity(10_000_000_000u64)
+            .lock(wrong_anchor_lock)
+            .type_(Some(wrong_anchor_type).pack())
+            .build();
+        assert!(!is_authentic_observed_state_cell(
+            &wrong_anchor_output,
+            &header,
+            &filter
+        ));
+    }
+
+    fn state_package_record(
+        funding_anchor: &str,
+        state_number: u64,
+        created_unix_ms: u64,
+        digest_byte: u8,
+    ) -> StatePackageRecord {
+        StatePackageRecord {
+            path: PathBuf::from(format!("state-{state_number}.json")),
+            package: StoredStatePackage {
+                schema: "morph.state_package.v1".to_string(),
+                created_unix_ms,
+                channel_id: format!("0x{}", "99".repeat(BYTE32_LEN)),
+                funding_anchor: funding_anchor.to_string(),
+                funding_epoch: None,
+                state_number,
+                phase: "settling".to_string(),
+                settlement_descriptor_commitment: None,
+                descriptor_version: None,
+                signing_digest: format!("0x{}", format!("{digest_byte:02x}").repeat(BYTE32_LEN)),
+                header_hex: "0x".to_string(),
+                witness_hex: "0x".to_string(),
+                source_state_out_point: None,
+            },
+        }
     }
 }

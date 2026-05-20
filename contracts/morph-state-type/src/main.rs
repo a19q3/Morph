@@ -9,15 +9,18 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    QueryIter, load_cell_capacity, load_cell_data, load_cell_occupied_capacity,
-    load_cell_type_hash, load_input, load_script, load_script_hash, load_witness_args,
+    QueryIter, load_cell_capacity, load_cell_data, load_cell_lock_hash,
+    load_cell_occupied_capacity, load_cell_type, load_cell_type_hash, load_input, load_script,
+    load_script_hash, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
     BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
-    StateHeaderV1, blake2b256, read_u64, verify_bilateral_state_signatures,
+    SpliceStateTransitionWitnessV1, StateHeaderV1, blake2b256, read_u64,
+    validate_relative_block_since, vault_cell_commitment_v1, verify_bilateral_state_signatures,
+    verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -54,7 +57,7 @@ fn main() -> Result<()> {
         zero_or_one_group_cell_data(Source::GroupInput)?,
         zero_or_one_group_cell_data(Source::GroupOutput)?,
     ) {
-        (None, Some(new_data)) => validate_create(&new_data, expected_funding_anchor)?,
+        (None, Some(new_data)) => validate_create(&script, &new_data, expected_funding_anchor)?,
         (Some(old_data), Some(new_data)) => {
             let old_header = StateHeaderV1::parse(&old_data)?;
             if old_header.funding_anchor() != expected_funding_anchor {
@@ -67,7 +70,11 @@ fn main() -> Result<()> {
             if old_header.funding_anchor() != expected_funding_anchor {
                 return Err(ScriptError::FundingAnchorMismatch);
             }
-            validate_finalise(&old_header, finalise_since)?;
+            if old_header.phase() == PHASE_ACTIVE {
+                validate_splice_retire(&script, &old_header, expected_funding_anchor)?;
+            } else {
+                validate_finalise(&old_header, finalise_since)?;
+            }
         }
         (None, None) => return Err(ScriptError::WrongGroupShape),
     }
@@ -76,20 +83,32 @@ fn main() -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_create(new_data: &[u8], expected_funding_anchor: &[u8]) -> Result<()> {
+fn validate_create(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    new_data: &[u8],
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
     let new_header = StateHeaderV1::parse(new_data)?;
 
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
     }
-    if new_header.state_number() != 0 {
-        return Err(ScriptError::NonMonotonicStateNumber);
-    }
     if new_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::NewStateNotSettling);
     }
+    if new_header.state_number() != 0
+        || find_splice_witness_raw(expected_funding_anchor, false).is_ok()
+    {
+        validate_splice_create(current_script, &new_header, expected_funding_anchor)?;
+        validate_group_output_capacity()?;
+        return Ok(());
+    }
     validate_anchor_derivation(expected_funding_anchor)?;
+    validate_group_output_capacity()
+}
 
+#[cfg(target_arch = "riscv64")]
+fn validate_group_output_capacity() -> Result<()> {
     let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
     let occupied =
         load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
@@ -98,6 +117,57 @@ fn validate_create(new_data: &[u8], expected_funding_anchor: &[u8]) -> Result<()
     }
 
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_create(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    new_header: &StateHeaderV1,
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
+    let witness_raw = find_splice_witness_raw(expected_funding_anchor, false)?;
+    let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
+        .map_err(|_| ScriptError::SpliceProofEncoding)?;
+    let splice_header = witness.header()?;
+    let (old_index, old_data) = find_unique_state_cell(
+        Source::Input,
+        current_script,
+        splice_header.old_funding_anchor(),
+    )?;
+    validate_peer_state_type_script(
+        current_script,
+        old_index,
+        Source::Input,
+        splice_header.old_funding_anchor(),
+    )?;
+    let old_header = StateHeaderV1::parse(&old_data)?;
+    verify_splice_state_transition_bundle(&old_header, new_header, &witness)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_retire(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    old_header: &StateHeaderV1,
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
+    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
+    let witness_raw = find_splice_witness_raw(expected_funding_anchor, true)?;
+    let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
+        .map_err(|_| ScriptError::SpliceProofEncoding)?;
+    let splice_header = witness.header()?;
+    let (new_index, new_data) = find_unique_state_cell(
+        Source::Output,
+        current_script,
+        splice_header.new_funding_anchor(),
+    )?;
+    validate_peer_state_type_script(
+        current_script,
+        new_index,
+        Source::Output,
+        splice_header.new_funding_anchor(),
+    )?;
+    let new_header = StateHeaderV1::parse(&new_data)?;
+    verify_splice_state_transition_bundle(old_header, &new_header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -169,11 +239,154 @@ fn validate_finalise(old_header: &StateHeaderV1, finalise_since: Option<u64>) ->
     let required_since = finalise_since.ok_or(ScriptError::StateSinceNotMature)?;
     let input = load_input(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
-    if since < required_since {
-        return Err(ScriptError::StateSinceNotMature);
-    }
+    validate_relative_block_since(since, required_since)?;
+    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
 
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
+    let mut found = None;
+    let mut index = 0;
+    loop {
+        match load_cell_capacity(index, Source::Input) {
+            Ok(capacity) => {
+                let lock_hash =
+                    load_cell_lock_hash(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let type_hash =
+                    load_cell_type_hash(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let data =
+                    load_cell_data(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                let commitment = vault_cell_commitment_v1(
+                    lock_hash.as_slice(),
+                    capacity,
+                    type_hash.as_ref().map(|hash| hash.as_slice()),
+                    data.as_slice(),
+                );
+                if commitment.as_slice() == expected {
+                    if found.is_some() {
+                        return Err(ScriptError::StateCellAmbiguous);
+                    }
+                    found = Some(index);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_splice_witness_raw(
+    expected_funding_anchor: &[u8],
+    match_old_anchor: bool,
+) -> Result<alloc::vec::Vec<u8>> {
+    let mut found: Option<alloc::vec::Vec<u8>> = None;
+    let mut index = 0;
+    loop {
+        match load_witness_args(index, Source::Input) {
+            Ok(witness_args) => {
+                if let Some(input_type) = witness_args.input_type().to_opt() {
+                    let raw = input_type.raw_data();
+                    if let Ok(witness) = SpliceStateTransitionWitnessV1::parse(raw.as_ref()) {
+                        let header = witness.header()?;
+                        let anchor = if match_old_anchor {
+                            header.old_funding_anchor()
+                        } else {
+                            header.new_funding_anchor()
+                        };
+                        if anchor == expected_funding_anchor {
+                            if found.is_some() {
+                                return Err(ScriptError::SpliceProofEncoding);
+                            }
+                            found = Some(raw.as_ref().to_vec());
+                        }
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::SpliceProofEncoding)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_state_cell(
+    source: Source,
+    current_script: &ckb_std::ckb_types::packed::Script,
+    expected_funding_anchor: &[u8],
+) -> Result<(usize, alloc::vec::Vec<u8>)> {
+    let mut found: Option<(usize, alloc::vec::Vec<u8>)> = None;
+    let mut index = 0;
+    loop {
+        match load_cell_data(index, source) {
+            Ok(data) => {
+                if let Ok(header) = StateHeaderV1::parse(&data)
+                    && header.funding_anchor() == expected_funding_anchor
+                    && state_type_script_matches_anchor(
+                        current_script,
+                        index,
+                        source,
+                        expected_funding_anchor,
+                    )?
+                {
+                    if found.is_some() {
+                        return Err(ScriptError::StateCellAmbiguous);
+                    }
+                    found = Some((index, data));
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_peer_state_type_script(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    index: usize,
+    source: Source,
+    expected_funding_anchor: &[u8],
+) -> Result<()> {
+    if state_type_script_matches_anchor(current_script, index, source, expected_funding_anchor)? {
+        Ok(())
+    } else {
+        Err(ScriptError::StateTypeMismatch)
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn state_type_script_matches_anchor(
+    current_script: &ckb_std::ckb_types::packed::Script,
+    index: usize,
+    source: Source,
+    expected_funding_anchor: &[u8],
+) -> Result<bool> {
+    let Some(candidate) = load_cell_type(index, source).map_err(|_| ScriptError::Encoding)? else {
+        return Ok(false);
+    };
+    if candidate.code_hash() != current_script.code_hash()
+        || candidate.hash_type() != current_script.hash_type()
+    {
+        return Ok(false);
+    }
+    let current_args = current_script.args().raw_data();
+    let candidate_args = candidate.args().raw_data();
+    if candidate_args.len() != current_args.len() || candidate_args.len() < BYTE32_LEN {
+        return Ok(false);
+    }
+    if &candidate_args.as_ref()[..BYTE32_LEN] != expected_funding_anchor {
+        return Ok(false);
+    }
+    Ok(candidate_args.as_ref()[BYTE32_LEN..] == current_args.as_ref()[BYTE32_LEN..])
 }
 
 #[cfg(target_arch = "riscv64")]

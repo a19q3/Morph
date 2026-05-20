@@ -6,13 +6,18 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | --- | --- |
 | One live State Cell controls the channel pointer | `accepts_valid_state_supersession`, `rejects_stale_or_equal_state_number` |
 | Funding anchor identity is canonical | `rejects_wrong_funding_anchor_reference`, `rejects_changed_header_context` |
+| StateHeaderV2 funding epoch and vault-set commitments are signed state semantics | `state_header_v2_digest_binds_epoch_and_vault_set`, `state_header_v2_context_rejects_epoch_and_vault_set_changes`, `state_header_v2_fields_are_fixed_width`, `verifies_splice_state_transition_v2_epoch_bridge` |
 | State numbers are strictly monotonic | `rejects_stale_or_equal_state_number` |
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |
 | Factory state pointer is unique and monotonic | `factory_type_accepts_canonical_initial_factory_state`, `factory_type_accepts_signed_factory_update`, `factory_type_rejects_equal_update_number` |
-| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch` |
+| Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch`, `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`, `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`, `factory_type_rejects_reduced_exit_xudt_capacity_mismatch` |
+| Factory splice reserve claims match exact vault deltas | `accepts_valid_factory_splice_in_transition`, `accepts_valid_factory_xudt_splice_out_transition`, `factory_splice_rejects_reserve_claim_without_vault_input`, `factory_splice_rejects_vault_release_without_rights_decrease`, `factory_splice_rejects_xudt_type_mismatch`, `factory_splice_rejects_invalid_signature`, `validates_factory_splice_package`, `validates_factory_xudt_splice_out_package`, `writes_reads_and_validates_factory_splice_package`, `rejects_factory_splice_vault_delta_mismatch`, `factory_splice_witness_fields_are_fixed_width`, `verifies_factory_splice_update`, `rejects_factory_splice_vault_delta_tamper`, `factory_type_and_vault_accept_factory_splice_in`, `factory_vault_rejects_factory_splice_capacity_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
-| Vault outputs match the signed settlement descriptor | `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
+| Vault outputs match the signed settlement descriptor | `accepts_signed_settlement_descriptor_update`, `state_type_accepts_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
+| Splice transitions preserve StateCell/VaultCell funding epochs | `state_and_vault_accept_splice_in_bridge`, `state_and_vault_accept_splice_out_bridge`, `state_and_vault_reject_splice_wrong_channel_header`, `vault_lock_rejects_splice_new_vault_capacity_mismatch` |
+| Authentic StateCell authority gates value and monitoring | `vault_lock_rejects_fake_state_header_without_state_type`, `state_type_rejects_standalone_settling_close_without_matching_vault`, `state_type_rejects_standalone_active_splice_retire_without_matching_vault`, `watchtower_state_detection_requires_authentic_state_scripts` |
+| Splice-out payouts stay participant-owned in V1 | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
 | Reserve and business CKB are not confused | `rejects_business_ckb_confusion` |
 | xUDT value is conserved by canonical type script | `rejects_xudt_type_mismatch`, `rejects_xudt_amount_mismatch` |
@@ -20,7 +25,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Unrelated Cells cannot influence channel validity | `rejects_unrelated_cell_used_for_channel_semantics` |
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a real Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication`, `sponsor_lock_rejects_fake_state_header_without_state_type` |
-| Sponsor policy bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
+| Sponsor fee/state bounds are enforced by script | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
 | Watchtower runtime key material stays outside the config | `resolves_private_key_from_file`, `rejects_ambiguous_private_key_sources`, `rejects_multi_token_private_key_file`, `falls_back_to_devnet_key_for_local_watchers` |
@@ -49,8 +54,9 @@ Implemented devnet-level checks:
 - CKB-VM factory local-exit execution with a FactoryVaultCell, committed
   child-channel evidence, reserve conservation, and CKB+xUDT child-vault
   materialisation;
-- CKB-VM reduced factory-exit execution for CKB and CKB+xUDT child vaults,
-  including xUDT child-vault amount and type mismatch rejection;
+- CKB-VM reduced factory-exit execution for the active CKB and xUDT child-vault
+  paths, including typed ReserveClaim rejection on the CKB-only path and
+  xUDT amount/type/change mismatch rejection;
 - finalise-since rejection and maturity-block finalisation through
   `devnet finalise-since-negative-smoke`;
 - CKB+xUDT vault publication and settlement on devnet through
@@ -76,9 +82,17 @@ Implemented devnet-level checks:
 - foreground watchtower service mode with health-file output, stop-file
   shutdown, error backoff, and consecutive-error limits;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
-  submitted publication, and idle scans;
-- smoke assertions that require older-state detection and publication-submitted
-  watchtower alert evidence in the default smoke run;
+  submitted publication, confirmed splice detection, stale splice package
+  selection, splice-aware publication, and idle scans;
+- splice negative smoke coverage for stale funding epoch, wrong channel id,
+  wrong vault type, insufficient remaining vault value, tampered xUDT delta, and
+  signed-fee leakage rejections;
+- conservative splice V1 policy: quiescent base state number, explicit
+  funding-epoch semantics, fixed-width typed deltas, and participant-owned
+  splice-out payouts;
+- smoke assertions that require older-state detection, publication-submitted,
+  splice-detected, and stale splice-package watchtower alert evidence in the
+  default smoke run;
 - smoke assertions that require watchtower service and health-file evidence for
   the bounded stop-file path in the default smoke run;
 - node-reported cycle measurement and transaction size reporting, summarised by
@@ -88,10 +102,10 @@ Implemented devnet-level checks:
   local-exit evidence through `devnet-smoke-assert`;
 - optional smoke comparison gates for transaction-set, status, cycle, and
   byte-size regressions through `devnet-smoke-compare`;
-- absolute smoke budget gates for total and per-transaction cycle/byte ceilings
-  through `devnet-smoke-assert`;
-- JSON smoke budget profiles for named critical transactions, such as
-  `factory-reduced-rights-smoke $.update`;
+- absolute smoke budget gates for total, per-transaction, and proof-profile
+  cycle/byte ceilings through `devnet-smoke-assert`;
+- JSON smoke budget profiles for named critical transactions and proof shapes,
+  such as `factory-reduced-rights-smoke $.update`;
 - CI fixture checks for bilateral fixtures, factory update packages, factory
   state packages, reduced host-side factory packages, reduced-rights factory
   packages, reduced-exit host packages, local-exit evidence, watchtower policy
@@ -102,14 +116,25 @@ Implemented devnet-level checks:
 - conservative factory local exit on devnet through `factory-exit-channel`,
   followed by ordinary child-channel publication and finalisation in
   `scripts/devnet-smoke.sh`.
-- bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`
-  and `factory-reduced-xudt-exit-smoke`, followed by ordinary child-channel
-  publication and finalisation in `scripts/devnet-smoke.sh`.
-
-Missing devnet-level checks:
-
-- additional typed reduced-exit variants beyond the fixed-width CKB+xUDT
-  reserve-claim smokes.
+- bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`,
+  followed by ordinary child-channel publication and finalisation in
+  `scripts/devnet-smoke.sh`.
+- xUDT reduced-exit V1 is active at the contract/CKB-VM layer. Executable checks
+  include `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`,
+  `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`,
+  `factory_type_rejects_reduced_exit_xudt_amount_mismatch`,
+  `factory_type_rejects_reduced_exit_xudt_type_mismatch`,
+  `factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch`,
+  `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`, and
+  `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`.
+- xUDT reduced-exit V1 is active at the devnet smoke layer through
+  `factory-reduced-xudt-exit-smoke`,
+  `factory-reduced-xudt-exit-full-smoke`,
+  `factory-reduced-xudt-exit-one-sided-smoke`, and
+  `factory-reduced-xudt-negative-exit-smoke`.
+- Sponsor expiry, sponsor source, scan cadence, and webhook policy are
+  operator/watchtower policy in V1. They are covered by host/operator policy
+  checks, not by sponsor-lock script claims.
 
 Implemented factory checks:
 
@@ -132,6 +157,8 @@ Implemented factory checks:
 - devnet smoke coverage for the sparse Merkle factory update witness, including
   package evidence and proof-shape budget profile evidence in the smoke
   summary assertion.
+- smoke-summary proof profile coverage for the bounded reduced-rights update,
+  sparse Merkle update, and CKB reduced-exit proof shapes.
 - script-level reduced factory-exit validation for the same reserve-claim
   release predicate, with factory type and factory vault lock CKB-VM coverage.
 - serialisable factory update package with canonical roots, canonical

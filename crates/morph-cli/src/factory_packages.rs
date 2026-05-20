@@ -1,17 +1,38 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use morph_core::{
-    Amount, Bytes32, FactoryMerkleSibling, FactoryMerkleSiblingSide, FactoryReducedExit,
-    FactoryRight, FactoryRightId, FactoryRightKind, FactoryRightMerkleProof,
-    FactorySingleRightMerkleUpdate, FactoryUpdate, blake2b256, bytes32, factory_right_sparse_proof,
-    factory_right_sparse_root, validate_factory_non_interference,
-    validate_factory_single_right_merkle_update, validate_reduced_factory_exit,
+    Amount, Bytes32, FactoryMerkleSibling, FactoryMerkleSiblingSide, FactoryParticipantKey,
+    FactoryParticipantSignature, FactoryReducedExit, FactoryReducedSpliceTransition,
+    FactoryReducedSpliceWitness, FactoryRight, FactoryRightId, FactoryRightKind,
+    FactoryRightMerkleProof, FactorySingleRightMerkleUpdate, FactorySpliceHeader,
+    FactorySpliceKind, FactorySpliceTransition, FactoryUpdate, FactoryVaultDelta,
+    FactoryVaultDescriptorV1, ParticipantSignature, SpliceWitness, VaultAsset, VaultAssetAmount,
+    blake2b256, bytes32, factory_right_sparse_proof, factory_right_sparse_root,
+    factory_vault_delta_commitment_v1, participants_commitment, validate_factory_non_interference,
+    validate_factory_reduced_splice_transition, validate_factory_single_right_merkle_localization,
+    validate_factory_single_right_merkle_update, validate_factory_splice_transition,
+    validate_reduced_factory_exit,
+};
+use morph_script_common::{
+    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
+    FACTORY_MERKLE_UPDATE_DOMAIN_V1, FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1,
+    FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1,
+    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
+    FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1, FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1,
+    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
+    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_SPARSE_MERKLE_DEPTH_V1,
+    FACTORY_SPLICE_HEADER_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN, FACTORY_SPLICE_WITNESS_VERSION_V1,
+    FACTORY_VAULT_ASSET_AMOUNT_V1_LEN, FACTORY_VAULT_DELTA_V1_LEN, FACTORY_VAULT_DELTAS_V1_LEN,
+    FACTORY_VAULT_DESCRIPTOR_V1_LEN, FactoryReducedSpliceWitnessV1, FactorySpliceWitnessV1,
+    VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,8 +45,18 @@ const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1
 const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package.v1";
 const FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_merkle_update_package.v1";
 const FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_MERKLE_UPDATE_PACKAGE_V1";
+const FACTORY_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_splice_package.v1";
+const FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_reduced_splice_package.v1";
 const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
 const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1: &str = "authorised_participants_v1";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FixtureFactorySpliceKind {
+    CkbSpliceIn,
+    CkbSpliceOut,
+    XudtSpliceIn,
+    XudtSpliceOut,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredFactoryRight {
@@ -117,6 +148,73 @@ pub struct StoredFactoryMerkleUpdatePackage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryVaultAssetAmount {
+    pub asset: String,
+    pub type_hash: Option<String>,
+    pub amount: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryVaultDelta {
+    pub asset: String,
+    pub type_hash: Option<String>,
+    pub old_amount: Amount,
+    pub new_amount: Amount,
+    pub external_input: Amount,
+    pub withdrawal: Amount,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactorySplicePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub kind: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub vault_delta_commitment: String,
+    pub non_interference_digest: String,
+    pub participants_commitment: String,
+    pub signing_digest: String,
+    pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
+    pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
+    pub vault_deltas: Vec<StoredFactoryVaultDelta>,
+    pub update_package: StoredFactoryUpdatePackage,
+    pub participant_keys: Vec<StoredFactoryParticipantKey>,
+    pub signature_threshold: u8,
+    pub signatures: Vec<StoredFactorySignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryReducedSplicePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub kind: String,
+    pub factory_id: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub vault_delta_commitment: String,
+    pub non_interference_digest: String,
+    pub participants_commitment: String,
+    pub signing_digest: String,
+    pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
+    pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
+    pub vault_deltas: Vec<StoredFactoryVaultDelta>,
+    pub merkle_update_package: StoredFactoryMerkleUpdatePackage,
+    pub participant_keys: Vec<StoredFactoryParticipantKey>,
+    pub signature_threshold: u8,
+    pub signatures: Vec<StoredFactorySignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryPackageSummary {
     pub factory_id: String,
     pub update_number: u64,
@@ -169,6 +267,64 @@ pub struct FactoryMerkleUpdatePackageSummary {
     pub quantity_after: Amount,
     pub proof_siblings: usize,
     pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactorySplicePackageSummary {
+    pub factory_id: String,
+    pub kind: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub signing_digest: String,
+    pub vault_delta_commitment: String,
+    pub non_interference_digest: String,
+    pub reserve_claim_participant: String,
+    pub reserve_claim_subchannel: String,
+    pub reserve_claim_asset: String,
+    pub reserve_claim_before: Amount,
+    pub reserve_claim_after: Amount,
+    pub vault_old_amount: Amount,
+    pub vault_new_amount: Amount,
+    pub external_input: Amount,
+    pub withdrawal: Amount,
+    pub signature_threshold: u8,
+    pub signatures: usize,
+    pub contract_witness_len: usize,
+    pub contract_witness_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryReducedSplicePackageSummary {
+    pub factory_id: String,
+    pub kind: String,
+    pub old_update_number: u64,
+    pub new_update_number: u64,
+    pub old_state_root: String,
+    pub new_state_root: String,
+    pub old_access_manifest_root: String,
+    pub new_access_manifest_root: String,
+    pub signing_digest: String,
+    pub vault_delta_commitment: String,
+    pub non_interference_digest: String,
+    pub reserve_claim_participant: String,
+    pub reserve_claim_subchannel: String,
+    pub reserve_claim_asset: String,
+    pub reserve_claim_before: Amount,
+    pub reserve_claim_after: Amount,
+    pub vault_old_amount: Amount,
+    pub vault_new_amount: Amount,
+    pub external_input: Amount,
+    pub withdrawal: Amount,
+    pub participant_keys: usize,
+    pub signature_threshold: u8,
+    pub signatures: usize,
+    pub proof_siblings: usize,
+    pub contract_witness_len: usize,
+    pub contract_witness_hex: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -703,6 +859,66 @@ impl StoredFactoryReducedExitPackage {
 }
 
 impl StoredFactoryMerkleUpdatePackage {
+    pub fn from_update_localization(
+        factory_id: Bytes32,
+        update_number: u64,
+        update: FactorySingleRightMerkleUpdate,
+    ) -> Result<Self> {
+        Self::from_update_with_predicate(factory_id, update_number, update, false)
+    }
+
+    fn from_update_with_predicate(
+        factory_id: Bytes32,
+        update_number: u64,
+        update: FactorySingleRightMerkleUpdate,
+        enforce_local_decrease: bool,
+    ) -> Result<Self> {
+        validate_factory_single_right_merkle_update(&update)
+            .or_else(|err| {
+                if enforce_local_decrease {
+                    Err(err)
+                } else {
+                    validate_factory_single_right_merkle_localization(&update)
+                }
+            })
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        let mut package = Self {
+            schema: FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(&factory_id),
+            update_number,
+            state_root_before: hex_prefixed(&update.before_root),
+            state_root_after: hex_prefixed(&update.after_root),
+            touched_participants: update
+                .touched_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            authorised_participants: update
+                .authorised_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            right_before: StoredFactoryRight::from_right(&update.before.right),
+            right_after: StoredFactoryRight::from_right(&update.after.right),
+            proof_siblings: update
+                .before
+                .siblings
+                .iter()
+                .map(StoredFactoryMerkleSibling::from_sibling)
+                .collect(),
+            non_interference_digest: String::new(),
+        };
+        package.normalise()?;
+        package.non_interference_digest = package.compute_digest()?;
+        if enforce_local_decrease {
+            package.validate()?;
+        } else {
+            package.validate_localization()?;
+        }
+        Ok(package)
+    }
+
     pub fn from_rights(
         factory_id: Bytes32,
         update_number: u64,
@@ -756,6 +972,20 @@ impl StoredFactoryMerkleUpdatePackage {
     }
 
     pub fn validate(&self) -> Result<FactorySingleRightMerkleUpdate> {
+        let update = self.decode_update()?;
+        validate_factory_single_right_merkle_update(&update)
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    pub fn validate_localization(&self) -> Result<FactorySingleRightMerkleUpdate> {
+        let update = self.decode_update()?;
+        validate_factory_single_right_merkle_localization(&update)
+            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    fn decode_update(&self) -> Result<FactorySingleRightMerkleUpdate> {
         ensure!(
             self.schema == FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA,
             "unsupported factory Merkle update package schema {}",
@@ -811,8 +1041,6 @@ impl StoredFactoryMerkleUpdatePackage {
                 siblings,
             },
         };
-        validate_factory_single_right_merkle_update(&update)
-            .map_err(|err| anyhow::anyhow!("factory Merkle update proof failed: {err}"))?;
         Ok(update)
     }
 
@@ -865,6 +1093,746 @@ impl StoredFactoryMerkleUpdatePackage {
     }
 }
 
+impl StoredFactorySplicePackage {
+    pub fn from_transition(
+        transition: FactorySpliceTransition,
+        signing_keys: &[(Bytes32, SigningKey)],
+    ) -> Result<Self> {
+        ensure!(
+            !signing_keys.is_empty(),
+            "factory splice package requires at least one participant key"
+        );
+        ensure!(
+            signing_keys.len() <= u8::MAX as usize,
+            "factory splice package supports at most 255 participant keys"
+        );
+        let update_package = StoredFactoryUpdatePackage::from_update(
+            transition.header.factory_id,
+            transition.header.new_update_number,
+            transition.header.old_state_root,
+            transition.header.new_state_root,
+            transition.update.clone(),
+        )?;
+        let mut entries = signing_keys
+            .iter()
+            .map(|(participant, key)| (hex_prefixed(participant), pubkey_hex(key), key))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        ensure!(
+            entries.windows(2).all(|window| window[0].0 != window[1].0),
+            "factory participant ids must be unique"
+        );
+        ensure!(
+            unique_pubkeys(entries.iter().map(|(_, pubkey, _)| pubkey.as_str())),
+            "factory participant pubkeys must be unique"
+        );
+        let participant_keys = entries
+            .iter()
+            .map(|(participant, pubkey, _)| StoredFactoryParticipantKey {
+                participant: participant.clone(),
+                pubkey_sec1: pubkey.clone(),
+            })
+            .collect::<Vec<_>>();
+        let pubkeys = entries
+            .iter()
+            .map(|(_, pubkey, _)| decode_hex_exact(pubkey, 33, "pubkey_sec1"))
+            .collect::<Result<Vec<_>>>()?;
+        let pubkey_refs = pubkeys.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let participants_commitment =
+            participants_commitment(signing_keys.len() as u8, &pubkey_refs);
+        let mut package = Self {
+            schema: FACTORY_SPLICE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            kind: factory_splice_kind_name(transition.header.kind).to_string(),
+            factory_id: hex_prefixed(&transition.header.factory_id),
+            old_update_number: transition.header.old_update_number,
+            new_update_number: transition.header.new_update_number,
+            old_state_root: hex_prefixed(&transition.header.old_state_root),
+            new_state_root: hex_prefixed(&transition.header.new_state_root),
+            old_access_manifest_root: hex_prefixed(&transition.header.old_access_manifest_root),
+            new_access_manifest_root: hex_prefixed(&transition.header.new_access_manifest_root),
+            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment_v1(
+                &transition.deltas,
+            )),
+            non_interference_digest: update_package.non_interference_digest.clone(),
+            participants_commitment: hex_prefixed(&participants_commitment),
+            signing_digest: String::new(),
+            old_vault: transition
+                .old_vault
+                .assets
+                .iter()
+                .map(StoredFactoryVaultAssetAmount::from_amount)
+                .collect(),
+            new_vault: transition
+                .new_vault
+                .assets
+                .iter()
+                .map(StoredFactoryVaultAssetAmount::from_amount)
+                .collect(),
+            vault_deltas: transition
+                .deltas
+                .iter()
+                .map(StoredFactoryVaultDelta::from_delta)
+                .collect(),
+            update_package,
+            participant_keys,
+            signature_threshold: signing_keys.len() as u8,
+            signatures: Vec::new(),
+        };
+        package.normalise()?;
+        package.signing_digest = hex_prefixed(&package.header()?.signing_digest());
+        let digest = hex32_bytes(&package.signing_digest)?;
+        package.signatures = entries
+            .iter()
+            .map(|(participant, pubkey, key)| {
+                sign_factory_digest(participant, pubkey, key, &digest)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<FactorySpliceTransition> {
+        ensure!(
+            self.schema == FACTORY_SPLICE_PACKAGE_SCHEMA,
+            "unsupported factory splice package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.factory_id == canonical_hex32(&self.factory_id)?,
+            "factory_id must be canonical"
+        );
+        ensure!(
+            self.old_state_root == canonical_hex32(&self.old_state_root)?,
+            "old_state_root must be canonical"
+        );
+        ensure!(
+            self.new_state_root == canonical_hex32(&self.new_state_root)?,
+            "new_state_root must be canonical"
+        );
+        ensure!(
+            self.old_access_manifest_root == canonical_hex32(&self.old_access_manifest_root)?,
+            "old_access_manifest_root must be canonical"
+        );
+        ensure!(
+            self.new_access_manifest_root == canonical_hex32(&self.new_access_manifest_root)?,
+            "new_access_manifest_root must be canonical"
+        );
+        ensure!(
+            self.vault_delta_commitment == canonical_hex32(&self.vault_delta_commitment)?,
+            "vault_delta_commitment must be canonical"
+        );
+        ensure!(
+            self.non_interference_digest == canonical_hex32(&self.non_interference_digest)?,
+            "non_interference_digest must be canonical"
+        );
+        ensure!(
+            self.participants_commitment == canonical_hex32(&self.participants_commitment)?,
+            "participants_commitment must be canonical"
+        );
+        ensure!(
+            self.signing_digest == canonical_hex32(&self.signing_digest)?,
+            "signing_digest must be canonical"
+        );
+        ensure!(
+            self.old_vault == canonical_factory_amounts(&self.old_vault)?,
+            "old_vault must contain sorted unique canonical assets"
+        );
+        ensure!(
+            self.new_vault == canonical_factory_amounts(&self.new_vault)?,
+            "new_vault must contain sorted unique canonical assets"
+        );
+        ensure!(
+            self.vault_deltas == canonical_factory_deltas(&self.vault_deltas)?,
+            "vault_deltas must contain sorted unique canonical assets"
+        );
+        let update = self.update_package.validate()?;
+        let update_summary = self.update_package.summary()?;
+        ensure!(
+            self.factory_id == update_summary.factory_id,
+            "factory splice package factory_id does not match update package"
+        );
+        ensure!(
+            self.new_update_number == update_summary.update_number,
+            "factory splice package new_update_number does not match update package"
+        );
+        ensure!(
+            self.old_state_root == update_summary.state_root_before,
+            "factory splice package old_state_root does not match update package"
+        );
+        ensure!(
+            self.new_state_root == update_summary.state_root_after,
+            "factory splice package new_state_root does not match update package"
+        );
+        ensure!(
+            self.non_interference_digest == update_summary.non_interference_digest,
+            "factory splice package non_interference_digest does not match update package"
+        );
+        let canonical_participant_keys = canonical_participant_keys(&self.participant_keys)?;
+        ensure!(
+            canonical_participant_keys == self.participant_keys,
+            "participant_keys must contain sorted unique canonical participant ids and pubkeys"
+        );
+        ensure!(
+            self.signature_threshold as usize == self.participant_keys.len(),
+            "factory splice signature threshold must equal participant key count"
+        );
+        let canonical_signatures = canonical_factory_signatures(&self.signatures)?;
+        ensure!(
+            canonical_signatures == self.signatures,
+            "factory splice signatures must contain sorted unique canonical participants and pubkeys"
+        );
+        ensure!(
+            self.signatures.len() == self.participant_keys.len(),
+            "factory splice package must include one signature per participant"
+        );
+        let signature_keys = self
+            .signatures
+            .iter()
+            .map(|signature| StoredFactoryParticipantKey {
+                participant: signature.participant.clone(),
+                pubkey_sec1: signature.pubkey_sec1.clone(),
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            signature_keys == self.participant_keys,
+            "factory splice signatures do not match participant key set"
+        );
+
+        let transition = FactorySpliceTransition {
+            header: self.header()?,
+            witness: SpliceWitness {
+                threshold: self.signature_threshold,
+                signatures: self
+                    .signatures
+                    .iter()
+                    .map(|signature| {
+                        Ok(ParticipantSignature {
+                            pubkey_sec1: decode_hex_exact(
+                                &signature.pubkey_sec1,
+                                33,
+                                "pubkey_sec1",
+                            )?,
+                            signature: decode_hex_exact(&signature.signature, 64, "signature")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            update,
+            old_vault: FactoryVaultDescriptorV1 {
+                factory_id: hex32_bytes(&self.factory_id)?,
+                assets: self
+                    .old_vault
+                    .iter()
+                    .map(StoredFactoryVaultAssetAmount::to_amount)
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            new_vault: FactoryVaultDescriptorV1 {
+                factory_id: hex32_bytes(&self.factory_id)?,
+                assets: self
+                    .new_vault
+                    .iter()
+                    .map(StoredFactoryVaultAssetAmount::to_amount)
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            deltas: self
+                .vault_deltas
+                .iter()
+                .map(StoredFactoryVaultDelta::to_delta)
+                .collect::<Result<Vec<_>>>()?,
+            asset_registry: factory_splice_asset_registry(self)?,
+        };
+        ensure!(
+            self.signing_digest == hex_prefixed(&transition.header.signing_digest()),
+            "factory splice signing_digest mismatch"
+        );
+        validate_factory_splice_transition(&transition)
+            .map_err(|err| anyhow::anyhow!("factory splice transition check failed: {err}"))?;
+        Ok(transition)
+    }
+
+    pub fn summary(&self) -> Result<FactorySplicePackageSummary> {
+        let transition = self.validate()?;
+        let (right_before, right_after) = changed_reserve_claim(&transition.update)?;
+        let delta = transition
+            .deltas
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("factory splice package has no vault delta"))?;
+        let contract_witness = contract_witness_bytes_from_transition(&transition)?;
+        Ok(FactorySplicePackageSummary {
+            factory_id: self.factory_id.clone(),
+            kind: self.kind.clone(),
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            old_state_root: self.old_state_root.clone(),
+            new_state_root: self.new_state_root.clone(),
+            old_access_manifest_root: self.old_access_manifest_root.clone(),
+            new_access_manifest_root: self.new_access_manifest_root.clone(),
+            signing_digest: self.signing_digest.clone(),
+            vault_delta_commitment: self.vault_delta_commitment.clone(),
+            non_interference_digest: self.non_interference_digest.clone(),
+            reserve_claim_participant: hex_prefixed(&right_before.id.participant),
+            reserve_claim_subchannel: hex_prefixed(&right_before.id.subchannel),
+            reserve_claim_asset: asset_name(&delta.asset),
+            reserve_claim_before: right_before.quantity,
+            reserve_claim_after: right_after.map(|right| right.quantity).unwrap_or_default(),
+            vault_old_amount: delta.old_amount,
+            vault_new_amount: delta.new_amount,
+            external_input: delta.external_input,
+            withdrawal: delta.withdrawal,
+            signature_threshold: self.signature_threshold,
+            signatures: self.signatures.len(),
+            contract_witness_len: contract_witness.len(),
+            contract_witness_hex: hex_prefixed(&contract_witness),
+        })
+    }
+
+    fn normalise(&mut self) -> Result<()> {
+        self.factory_id = canonical_hex32(&self.factory_id)?;
+        self.old_state_root = canonical_hex32(&self.old_state_root)?;
+        self.new_state_root = canonical_hex32(&self.new_state_root)?;
+        self.old_access_manifest_root = canonical_hex32(&self.old_access_manifest_root)?;
+        self.new_access_manifest_root = canonical_hex32(&self.new_access_manifest_root)?;
+        self.vault_delta_commitment = canonical_hex32(&self.vault_delta_commitment)?;
+        self.non_interference_digest = canonical_hex32(&self.non_interference_digest)?;
+        self.participants_commitment = canonical_hex32(&self.participants_commitment)?;
+        if !self.signing_digest.is_empty() {
+            self.signing_digest = canonical_hex32(&self.signing_digest)?;
+        }
+        self.old_vault = canonical_factory_amounts(&self.old_vault)?;
+        self.new_vault = canonical_factory_amounts(&self.new_vault)?;
+        self.vault_deltas = canonical_factory_deltas(&self.vault_deltas)?;
+        self.participant_keys = canonical_participant_keys(&self.participant_keys)?;
+        self.signatures = canonical_factory_signatures(&self.signatures)?;
+        Ok(())
+    }
+
+    pub fn file_name(&self) -> String {
+        let factory = self.factory_id.trim_start_matches("0x");
+        let digest = self.signing_digest.trim_start_matches("0x");
+        format!(
+            "factory-splice-{factory}-{:020}-{}.json",
+            self.new_update_number,
+            &digest[0..16]
+        )
+    }
+
+    pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
+        let transition = self.validate()?;
+        contract_witness_bytes_from_transition(&transition)
+    }
+
+    fn header(&self) -> Result<FactorySpliceHeader> {
+        Ok(FactorySpliceHeader {
+            protocol_version: 1,
+            factory_id: hex32_bytes(&self.factory_id)?,
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            old_state_root: hex32_bytes(&self.old_state_root)?,
+            new_state_root: hex32_bytes(&self.new_state_root)?,
+            old_access_manifest_root: hex32_bytes(&self.old_access_manifest_root)?,
+            new_access_manifest_root: hex32_bytes(&self.new_access_manifest_root)?,
+            kind: parse_factory_splice_kind(&self.kind)?,
+            vault_delta_commitment: hex32_bytes(&self.vault_delta_commitment)?,
+            non_interference_digest: hex32_bytes(&self.non_interference_digest)?,
+            participants_commitment: hex32_bytes(&self.participants_commitment)?,
+        })
+    }
+}
+
+impl StoredFactoryReducedSplicePackage {
+    pub fn from_transition(
+        transition: FactoryReducedSpliceTransition,
+        participant_keys: &[(Bytes32, SigningKey)],
+    ) -> Result<Self> {
+        ensure!(
+            !participant_keys.is_empty(),
+            "reduced factory splice package requires participant keys"
+        );
+        ensure!(
+            participant_keys.len() <= u8::MAX as usize,
+            "reduced factory splice package supports at most 255 participant keys"
+        );
+        let merkle_update_package = StoredFactoryMerkleUpdatePackage::from_update_localization(
+            transition.header.factory_id,
+            transition.header.new_update_number,
+            transition.update.clone(),
+        )?;
+        let contract_non_interference_digest =
+            factory_reduced_splice_contract_non_interference_digest(
+                &transition.header,
+                &transition.update,
+            )?;
+        let mut entries = participant_keys
+            .iter()
+            .map(|(participant, key)| (hex_prefixed(participant), pubkey_hex(key), key))
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        ensure!(
+            entries.windows(2).all(|window| window[0].0 != window[1].0),
+            "factory participant ids must be unique"
+        );
+        ensure!(
+            unique_pubkeys(entries.iter().map(|(_, pubkey, _)| pubkey.as_str())),
+            "factory participant pubkeys must be unique"
+        );
+        let participant_key_records = entries
+            .iter()
+            .map(|(participant, pubkey, _)| StoredFactoryParticipantKey {
+                participant: participant.clone(),
+                pubkey_sec1: pubkey.clone(),
+            })
+            .collect::<Vec<_>>();
+        let pubkeys = entries
+            .iter()
+            .map(|(_, pubkey, _)| decode_hex_exact(pubkey, 33, "pubkey_sec1"))
+            .collect::<Result<Vec<_>>>()?;
+        let pubkey_refs = pubkeys.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let participants_commitment =
+            participants_commitment(participant_keys.len() as u8, &pubkey_refs);
+        let mut package = Self {
+            schema: FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            kind: factory_splice_kind_name(transition.header.kind).to_string(),
+            factory_id: hex_prefixed(&transition.header.factory_id),
+            old_update_number: transition.header.old_update_number,
+            new_update_number: transition.header.new_update_number,
+            old_state_root: hex_prefixed(&transition.header.old_state_root),
+            new_state_root: hex_prefixed(&transition.header.new_state_root),
+            old_access_manifest_root: hex_prefixed(&transition.header.old_access_manifest_root),
+            new_access_manifest_root: hex_prefixed(&transition.header.new_access_manifest_root),
+            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment_v1(
+                &transition.deltas,
+            )),
+            non_interference_digest: hex_prefixed(&contract_non_interference_digest),
+            participants_commitment: hex_prefixed(&participants_commitment),
+            signing_digest: String::new(),
+            old_vault: transition
+                .old_vault
+                .assets
+                .iter()
+                .map(StoredFactoryVaultAssetAmount::from_amount)
+                .collect(),
+            new_vault: transition
+                .new_vault
+                .assets
+                .iter()
+                .map(StoredFactoryVaultAssetAmount::from_amount)
+                .collect(),
+            vault_deltas: transition
+                .deltas
+                .iter()
+                .map(StoredFactoryVaultDelta::from_delta)
+                .collect(),
+            merkle_update_package,
+            participant_keys: participant_key_records,
+            signature_threshold: participant_keys.len() as u8,
+            signatures: Vec::new(),
+        };
+        package.normalise()?;
+        package.signing_digest = hex_prefixed(&package.header()?.signing_digest());
+        let digest = hex32_bytes(&package.signing_digest)?;
+        let authorised = package
+            .merkle_update_package
+            .authorised_participants
+            .iter()
+            .map(|participant| canonical_hex32(participant))
+            .collect::<Result<BTreeSet<_>>>()?;
+        package.signatures = entries
+            .iter()
+            .filter(|(participant, _, _)| authorised.contains(participant))
+            .map(|(participant, pubkey, key)| {
+                sign_factory_digest(participant, pubkey, key, &digest)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn validate(&self) -> Result<FactoryReducedSpliceTransition> {
+        ensure!(
+            self.schema == FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA,
+            "unsupported reduced factory splice package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.factory_id == canonical_hex32(&self.factory_id)?,
+            "factory_id must be canonical"
+        );
+        ensure!(
+            self.old_state_root == canonical_hex32(&self.old_state_root)?,
+            "old_state_root must be canonical"
+        );
+        ensure!(
+            self.new_state_root == canonical_hex32(&self.new_state_root)?,
+            "new_state_root must be canonical"
+        );
+        ensure!(
+            self.old_access_manifest_root == canonical_hex32(&self.old_access_manifest_root)?,
+            "old_access_manifest_root must be canonical"
+        );
+        ensure!(
+            self.new_access_manifest_root == canonical_hex32(&self.new_access_manifest_root)?,
+            "new_access_manifest_root must be canonical"
+        );
+        ensure!(
+            self.old_access_manifest_root == self.new_access_manifest_root,
+            "reduced factory splice contract witness requires unchanged access manifest roots"
+        );
+        ensure!(
+            self.vault_delta_commitment == canonical_hex32(&self.vault_delta_commitment)?,
+            "vault_delta_commitment must be canonical"
+        );
+        ensure!(
+            self.non_interference_digest == canonical_hex32(&self.non_interference_digest)?,
+            "non_interference_digest must be canonical"
+        );
+        ensure!(
+            self.participants_commitment == canonical_hex32(&self.participants_commitment)?,
+            "participants_commitment must be canonical"
+        );
+        ensure!(
+            self.signing_digest == canonical_hex32(&self.signing_digest)?,
+            "signing_digest must be canonical"
+        );
+        ensure!(
+            self.old_vault == canonical_factory_amounts(&self.old_vault)?,
+            "old_vault must contain sorted unique canonical assets"
+        );
+        ensure!(
+            self.new_vault == canonical_factory_amounts(&self.new_vault)?,
+            "new_vault must contain sorted unique canonical assets"
+        );
+        ensure!(
+            self.vault_deltas == canonical_factory_deltas(&self.vault_deltas)?,
+            "vault_deltas must contain sorted unique canonical assets"
+        );
+
+        let update = self.merkle_update_package.validate_localization()?;
+        ensure!(
+            self.factory_id == self.merkle_update_package.factory_id,
+            "reduced factory splice package factory_id does not match Merkle update package"
+        );
+        ensure!(
+            self.new_update_number == self.merkle_update_package.update_number,
+            "reduced factory splice package new_update_number does not match Merkle update package"
+        );
+        ensure!(
+            self.old_state_root == self.merkle_update_package.state_root_before,
+            "reduced factory splice package old_state_root does not match Merkle update package"
+        );
+        ensure!(
+            self.new_state_root == self.merkle_update_package.state_root_after,
+            "reduced factory splice package new_state_root does not match Merkle update package"
+        );
+        let expected_non_interference_digest = hex_prefixed(
+            &factory_reduced_splice_contract_non_interference_digest(&self.header()?, &update)?,
+        );
+        ensure!(
+            self.non_interference_digest == expected_non_interference_digest,
+            "reduced factory splice package contract non_interference_digest mismatch"
+        );
+
+        let canonical_participant_keys = canonical_participant_keys(&self.participant_keys)?;
+        ensure!(
+            canonical_participant_keys == self.participant_keys,
+            "participant_keys must contain sorted unique canonical participant ids and pubkeys"
+        );
+        ensure!(
+            self.signature_threshold as usize == self.participant_keys.len(),
+            "reduced factory splice signature threshold must equal participant key count"
+        );
+        let canonical_signatures = canonical_factory_signatures(&self.signatures)?;
+        ensure!(
+            canonical_signatures == self.signatures,
+            "reduced factory splice signatures must contain sorted unique canonical participants and pubkeys"
+        );
+        let authorised = self
+            .merkle_update_package
+            .authorised_participants
+            .iter()
+            .map(|participant| canonical_hex32(participant))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let signed_participants = self
+            .signatures
+            .iter()
+            .map(|signature| canonical_hex32(&signature.participant))
+            .collect::<Result<BTreeSet<_>>>()?;
+        ensure!(
+            signed_participants == authorised,
+            "reduced factory splice signatures must cover exactly the authorised participants"
+        );
+        for signature in &self.signatures {
+            let Some(key) = self
+                .participant_keys
+                .iter()
+                .find(|key| key.participant == signature.participant)
+            else {
+                return Err(anyhow::anyhow!(
+                    "reduced factory splice signature has no participant key"
+                ));
+            };
+            ensure!(
+                key.pubkey_sec1 == signature.pubkey_sec1,
+                "reduced factory splice signature pubkey does not match participant key"
+            );
+        }
+
+        let transition = FactoryReducedSpliceTransition {
+            header: self.header()?,
+            witness: FactoryReducedSpliceWitness {
+                participant_threshold: self.signature_threshold,
+                participant_keys: self
+                    .participant_keys
+                    .iter()
+                    .map(|key| {
+                        Ok(FactoryParticipantKey {
+                            participant: hex32_bytes(&key.participant)?,
+                            pubkey_sec1: decode_hex_exact(&key.pubkey_sec1, 33, "pubkey_sec1")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+                signatures: self
+                    .signatures
+                    .iter()
+                    .map(|signature| {
+                        Ok(FactoryParticipantSignature {
+                            participant: hex32_bytes(&signature.participant)?,
+                            pubkey_sec1: decode_hex_exact(
+                                &signature.pubkey_sec1,
+                                33,
+                                "pubkey_sec1",
+                            )?,
+                            signature: decode_hex_exact(&signature.signature, 64, "signature")?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            update,
+            old_vault: FactoryVaultDescriptorV1 {
+                factory_id: hex32_bytes(&self.factory_id)?,
+                assets: self
+                    .old_vault
+                    .iter()
+                    .map(StoredFactoryVaultAssetAmount::to_amount)
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            new_vault: FactoryVaultDescriptorV1 {
+                factory_id: hex32_bytes(&self.factory_id)?,
+                assets: self
+                    .new_vault
+                    .iter()
+                    .map(StoredFactoryVaultAssetAmount::to_amount)
+                    .collect::<Result<Vec<_>>>()?,
+            },
+            deltas: self
+                .vault_deltas
+                .iter()
+                .map(StoredFactoryVaultDelta::to_delta)
+                .collect::<Result<Vec<_>>>()?,
+            asset_registry: factory_reduced_splice_asset_registry(self)?,
+        };
+        ensure!(
+            self.signing_digest == hex_prefixed(&transition.header.signing_digest()),
+            "reduced factory splice signing_digest mismatch"
+        );
+        validate_factory_reduced_splice_transition(&transition).map_err(|err| {
+            anyhow::anyhow!("reduced factory splice transition check failed: {err}")
+        })?;
+        Ok(transition)
+    }
+
+    pub fn summary(&self) -> Result<FactoryReducedSplicePackageSummary> {
+        let transition = self.validate()?;
+        let (right_before, right_after) = changed_merkle_reserve_claim(&transition.update)?;
+        let delta = transition
+            .deltas
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("reduced factory splice package has no vault delta"))?;
+        let contract_witness = contract_reduced_splice_witness_bytes_from_transition(&transition)?;
+        Ok(FactoryReducedSplicePackageSummary {
+            factory_id: self.factory_id.clone(),
+            kind: self.kind.clone(),
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            old_state_root: self.old_state_root.clone(),
+            new_state_root: self.new_state_root.clone(),
+            old_access_manifest_root: self.old_access_manifest_root.clone(),
+            new_access_manifest_root: self.new_access_manifest_root.clone(),
+            signing_digest: self.signing_digest.clone(),
+            vault_delta_commitment: self.vault_delta_commitment.clone(),
+            non_interference_digest: self.non_interference_digest.clone(),
+            reserve_claim_participant: hex_prefixed(&right_before.id.participant),
+            reserve_claim_subchannel: hex_prefixed(&right_before.id.subchannel),
+            reserve_claim_asset: asset_name(&delta.asset),
+            reserve_claim_before: right_before.quantity,
+            reserve_claim_after: right_after.quantity,
+            vault_old_amount: delta.old_amount,
+            vault_new_amount: delta.new_amount,
+            external_input: delta.external_input,
+            withdrawal: delta.withdrawal,
+            participant_keys: self.participant_keys.len(),
+            signature_threshold: self.signature_threshold,
+            signatures: self.signatures.len(),
+            proof_siblings: transition.update.before.siblings.len(),
+            contract_witness_len: contract_witness.len(),
+            contract_witness_hex: hex_prefixed(&contract_witness),
+        })
+    }
+
+    fn normalise(&mut self) -> Result<()> {
+        self.factory_id = canonical_hex32(&self.factory_id)?;
+        self.old_state_root = canonical_hex32(&self.old_state_root)?;
+        self.new_state_root = canonical_hex32(&self.new_state_root)?;
+        self.old_access_manifest_root = canonical_hex32(&self.old_access_manifest_root)?;
+        self.new_access_manifest_root = canonical_hex32(&self.new_access_manifest_root)?;
+        self.vault_delta_commitment = canonical_hex32(&self.vault_delta_commitment)?;
+        self.non_interference_digest = canonical_hex32(&self.non_interference_digest)?;
+        self.participants_commitment = canonical_hex32(&self.participants_commitment)?;
+        if !self.signing_digest.is_empty() {
+            self.signing_digest = canonical_hex32(&self.signing_digest)?;
+        }
+        self.old_vault = canonical_factory_amounts(&self.old_vault)?;
+        self.new_vault = canonical_factory_amounts(&self.new_vault)?;
+        self.vault_deltas = canonical_factory_deltas(&self.vault_deltas)?;
+        self.participant_keys = canonical_participant_keys(&self.participant_keys)?;
+        self.signatures = canonical_factory_signatures(&self.signatures)?;
+        Ok(())
+    }
+
+    pub fn file_name(&self) -> String {
+        let factory = self.factory_id.trim_start_matches("0x");
+        let digest = self.signing_digest.trim_start_matches("0x");
+        format!(
+            "factory-reduced-splice-{factory}-{:020}-{}.json",
+            self.new_update_number,
+            &digest[0..16]
+        )
+    }
+
+    pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
+        let transition = self.validate()?;
+        contract_reduced_splice_witness_bytes_from_transition(&transition)
+    }
+
+    fn header(&self) -> Result<FactorySpliceHeader> {
+        Ok(FactorySpliceHeader {
+            protocol_version: 1,
+            factory_id: hex32_bytes(&self.factory_id)?,
+            old_update_number: self.old_update_number,
+            new_update_number: self.new_update_number,
+            old_state_root: hex32_bytes(&self.old_state_root)?,
+            new_state_root: hex32_bytes(&self.new_state_root)?,
+            old_access_manifest_root: hex32_bytes(&self.old_access_manifest_root)?,
+            new_access_manifest_root: hex32_bytes(&self.new_access_manifest_root)?,
+            kind: parse_factory_splice_kind(&self.kind)?,
+            vault_delta_commitment: hex32_bytes(&self.vault_delta_commitment)?,
+            non_interference_digest: hex32_bytes(&self.non_interference_digest)?,
+            participants_commitment: hex32_bytes(&self.participants_commitment)?,
+        })
+    }
+}
+
 impl StoredFactoryRight {
     fn from_right(right: &FactoryRight) -> Self {
         Self {
@@ -906,6 +1874,71 @@ impl StoredFactoryRight {
                 .map(|value| canonical_hex32(value))
                 .transpose()?,
             quantity: self.quantity,
+        })
+    }
+}
+
+impl StoredFactoryVaultAssetAmount {
+    fn from_amount(amount: &VaultAssetAmount) -> Self {
+        let (asset, type_hash) = stored_asset_fields(&amount.asset);
+        Self {
+            asset,
+            type_hash,
+            amount: amount.amount,
+        }
+    }
+
+    fn to_amount(&self) -> Result<VaultAssetAmount> {
+        Ok(VaultAssetAmount {
+            asset: parse_vault_asset(&self.asset, self.type_hash.as_deref())?,
+            amount: self.amount,
+        })
+    }
+
+    fn canonical(&self) -> Result<Self> {
+        let asset = parse_vault_asset(&self.asset, self.type_hash.as_deref())?;
+        let (asset, type_hash) = stored_asset_fields(&asset);
+        Ok(Self {
+            asset,
+            type_hash,
+            amount: self.amount,
+        })
+    }
+}
+
+impl StoredFactoryVaultDelta {
+    fn from_delta(delta: &FactoryVaultDelta) -> Self {
+        let (asset, type_hash) = stored_asset_fields(&delta.asset);
+        Self {
+            asset,
+            type_hash,
+            old_amount: delta.old_amount,
+            new_amount: delta.new_amount,
+            external_input: delta.external_input,
+            withdrawal: delta.withdrawal,
+        }
+    }
+
+    fn to_delta(&self) -> Result<FactoryVaultDelta> {
+        Ok(FactoryVaultDelta {
+            asset: parse_vault_asset(&self.asset, self.type_hash.as_deref())?,
+            old_amount: self.old_amount,
+            new_amount: self.new_amount,
+            external_input: self.external_input,
+            withdrawal: self.withdrawal,
+        })
+    }
+
+    fn canonical(&self) -> Result<Self> {
+        let asset = parse_vault_asset(&self.asset, self.type_hash.as_deref())?;
+        let (asset, type_hash) = stored_asset_fields(&asset);
+        Ok(Self {
+            asset,
+            type_hash,
+            old_amount: self.old_amount,
+            new_amount: self.new_amount,
+            external_input: self.external_input,
+            withdrawal: self.withdrawal,
         })
     }
 }
@@ -1006,6 +2039,270 @@ pub fn read_factory_merkle_update_package(path: &Path) -> Result<StoredFactoryMe
         .validate()
         .with_context(|| format!("invalid factory Merkle update package {}", path.display()))?;
     Ok(package)
+}
+
+pub fn read_factory_splice_package(path: &Path) -> Result<StoredFactorySplicePackage> {
+    let bytes = fs::read(path)
+        .with_context(|| format!("failed to read factory splice package {}", path.display()))?;
+    let package: StoredFactorySplicePackage = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse factory splice package {}", path.display()))?;
+    package
+        .validate()
+        .with_context(|| format!("invalid factory splice package {}", path.display()))?;
+    Ok(package)
+}
+
+pub fn read_factory_reduced_splice_package(
+    path: &Path,
+) -> Result<StoredFactoryReducedSplicePackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read reduced factory splice package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryReducedSplicePackage =
+        serde_json::from_slice(&bytes).with_context(|| {
+            format!(
+                "failed to parse reduced factory splice package {}",
+                path.display()
+            )
+        })?;
+    package
+        .validate()
+        .with_context(|| format!("invalid reduced factory splice package {}", path.display()))?;
+    Ok(package)
+}
+
+pub fn write_factory_splice_package(
+    dir: &Path,
+    package: &StoredFactorySplicePackage,
+) -> Result<PathBuf> {
+    package.validate()?;
+    fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create factory splice package directory {}",
+            dir.display()
+        )
+    })?;
+    let path = dir.join(package.file_name());
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json).with_context(|| {
+        format!(
+            "failed to write temporary factory splice package {}",
+            tmp.display()
+        )
+    })?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move factory splice package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+pub fn write_factory_reduced_splice_package(
+    dir: &Path,
+    package: &StoredFactoryReducedSplicePackage,
+) -> Result<PathBuf> {
+    package.validate()?;
+    fs::create_dir_all(dir).with_context(|| {
+        format!(
+            "failed to create reduced factory splice package directory {}",
+            dir.display()
+        )
+    })?;
+    let path = dir.join(package.file_name());
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_vec_pretty(package)?;
+    fs::write(&tmp, json).with_context(|| {
+        format!(
+            "failed to write temporary reduced factory splice package {}",
+            tmp.display()
+        )
+    })?;
+    fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "failed to atomically move reduced factory splice package {} to {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+pub fn fixture_factory_splice_package_with_kind(
+    kind: FixtureFactorySpliceKind,
+) -> Result<StoredFactorySplicePackage> {
+    let (splice_kind, asset, old_amount, new_amount, external_input, withdrawal) = match kind {
+        FixtureFactorySpliceKind::CkbSpliceIn => {
+            (FactorySpliceKind::In, VaultAsset::Ckb, 50, 70, 20, 0)
+        }
+        FixtureFactorySpliceKind::CkbSpliceOut => {
+            (FactorySpliceKind::Out, VaultAsset::Ckb, 50, 30, 0, 20)
+        }
+        FixtureFactorySpliceKind::XudtSpliceIn => (
+            FactorySpliceKind::In,
+            VaultAsset::Xudt(bytes32(42)),
+            50,
+            70,
+            20,
+            0,
+        ),
+        FixtureFactorySpliceKind::XudtSpliceOut => (
+            FactorySpliceKind::Out,
+            VaultAsset::Xudt(bytes32(42)),
+            50,
+            30,
+            0,
+            20,
+        ),
+    };
+    let asset_type = match asset {
+        VaultAsset::Ckb => None,
+        VaultAsset::Xudt(type_hash) => Some(type_hash),
+    };
+    let before = vec![
+        right(1, 10, FactoryRightKind::Balance, None, 100),
+        right_with_asset(1, 10, FactoryRightKind::ReserveClaim, asset_type, 50),
+        right(1, 10, FactoryRightKind::Membership, None, 1),
+        right(1, 10, FactoryRightKind::ExitPath, None, 1),
+        right(2, 10, FactoryRightKind::Balance, None, 100),
+        right(2, 10, FactoryRightKind::ReserveClaim, None, 50),
+        right(2, 10, FactoryRightKind::Membership, None, 1),
+        right(2, 10, FactoryRightKind::ExitPath, None, 1),
+    ];
+    let mut after = before.clone();
+    after[1].quantity = match splice_kind {
+        FactorySpliceKind::In => 70,
+        FactorySpliceKind::Out => 30,
+    };
+    let update = FactoryUpdate {
+        before: before.clone(),
+        after: after.clone(),
+        touched_participants: BTreeSet::from([bytes32(1)]),
+        authorised_participants: BTreeSet::from([bytes32(1)]),
+    };
+    let deltas = vec![FactoryVaultDelta {
+        asset: asset.clone(),
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+    }];
+    let mut header = FactorySpliceHeader {
+        protocol_version: 1,
+        factory_id: bytes32(90),
+        old_update_number: 1,
+        new_update_number: 2,
+        old_state_root: factory_right_sparse_root(&before)
+            .map_err(|err| anyhow::anyhow!("failed to compute old factory root: {err}"))?,
+        new_state_root: factory_right_sparse_root(&after)
+            .map_err(|err| anyhow::anyhow!("failed to compute new factory root: {err}"))?,
+        old_access_manifest_root: bytes32(91),
+        new_access_manifest_root: bytes32(92),
+        kind: splice_kind,
+        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        non_interference_digest: bytes32(0),
+        participants_commitment: bytes32(0),
+    };
+    let update_package = StoredFactoryUpdatePackage::from_update(
+        header.factory_id,
+        header.new_update_number,
+        header.old_state_root,
+        header.new_state_root,
+        update.clone(),
+    )?;
+    header.non_interference_digest = hex32_bytes(&update_package.non_interference_digest)?;
+    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    let transition = FactorySpliceTransition {
+        header,
+        witness: SpliceWitness {
+            threshold: 0,
+            signatures: Vec::new(),
+        },
+        update,
+        old_vault: FactoryVaultDescriptorV1 {
+            factory_id: bytes32(90),
+            assets: vec![VaultAssetAmount {
+                asset: asset.clone(),
+                amount: old_amount,
+            }],
+        },
+        new_vault: FactoryVaultDescriptorV1 {
+            factory_id: bytes32(90),
+            assets: vec![VaultAssetAmount {
+                asset,
+                amount: new_amount,
+            }],
+        },
+        deltas,
+        asset_registry: morph_core::AssetRegistry {
+            xudt_types: BTreeSet::from([bytes32(42)]),
+        },
+    };
+    StoredFactorySplicePackage::from_transition(
+        transition,
+        &[(bytes32(1), alice), (bytes32(2), bob)],
+    )
+}
+
+pub fn fixture_factory_reduced_splice_package_with_kind(
+    kind: FixtureFactorySpliceKind,
+) -> Result<StoredFactoryReducedSplicePackage> {
+    let full = fixture_factory_splice_package_with_kind(kind)?.validate()?;
+    let mut header = full.header;
+    header.new_access_manifest_root = header.old_access_manifest_root;
+    let changed_id = full
+        .update
+        .before
+        .iter()
+        .find(|right| {
+            full.update
+                .after
+                .iter()
+                .find(|after| after.id == right.id)
+                .map(|after| after.quantity)
+                .unwrap_or_default()
+                != right.quantity
+                && right.id.kind == FactoryRightKind::ReserveClaim
+        })
+        .ok_or_else(|| anyhow::anyhow!("factory splice fixture did not change a reserve claim"))?
+        .id
+        .clone();
+    let update = FactorySingleRightMerkleUpdate {
+        before_root: header.old_state_root,
+        after_root: header.new_state_root,
+        touched_participants: full.update.touched_participants.clone(),
+        authorised_participants: full.update.authorised_participants.clone(),
+        before: factory_right_sparse_proof(&full.update.before, &changed_id)
+            .map_err(|err| anyhow::anyhow!("failed to build reduced splice before proof: {err}"))?,
+        after: factory_right_sparse_proof(&full.update.after, &changed_id)
+            .map_err(|err| anyhow::anyhow!("failed to build reduced splice after proof: {err}"))?,
+    };
+    let transition = FactoryReducedSpliceTransition {
+        header,
+        witness: FactoryReducedSpliceWitness {
+            participant_threshold: 0,
+            participant_keys: Vec::new(),
+            signatures: Vec::new(),
+        },
+        update,
+        old_vault: full.old_vault,
+        new_vault: full.new_vault,
+        deltas: full.deltas,
+        asset_registry: full.asset_registry,
+    };
+    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    StoredFactoryReducedSplicePackage::from_transition(
+        transition,
+        &[(bytes32(1), alice), (bytes32(2), bob)],
+    )
 }
 
 pub fn fixture_package() -> Result<StoredFactoryUpdatePackage> {
@@ -1147,12 +2444,28 @@ fn right(
     asset_type: Option<u8>,
     quantity: Amount,
 ) -> FactoryRight {
+    right_with_asset(
+        participant,
+        subchannel,
+        kind,
+        asset_type.map(bytes32),
+        quantity,
+    )
+}
+
+fn right_with_asset(
+    participant: u8,
+    subchannel: u8,
+    kind: FactoryRightKind,
+    asset_type: Option<Bytes32>,
+    quantity: Amount,
+) -> FactoryRight {
     FactoryRight {
         id: FactoryRightId {
             participant: bytes32(participant),
             subchannel: bytes32(subchannel),
             kind,
-            asset_type: asset_type.map(bytes32),
+            asset_type,
         },
         quantity,
     }
@@ -1186,6 +2499,39 @@ fn canonical_rights(values: &[StoredFactoryRight]) -> Result<Vec<StoredFactoryRi
         .map(StoredFactoryRight::canonical)
         .collect::<Result<Vec<_>>>()?;
     out.sort_by_key(right_sort_key);
+    Ok(out)
+}
+
+fn canonical_factory_amounts(
+    values: &[StoredFactoryVaultAssetAmount],
+) -> Result<Vec<StoredFactoryVaultAssetAmount>> {
+    let mut out = values
+        .iter()
+        .map(StoredFactoryVaultAssetAmount::canonical)
+        .collect::<Result<Vec<_>>>()?;
+    out.sort_by_key(factory_amount_sort_key);
+    ensure!(
+        out.windows(2).all(
+            |window| factory_amount_sort_key(&window[0]) != factory_amount_sort_key(&window[1])
+        ),
+        "factory vault assets must be unique"
+    );
+    Ok(out)
+}
+
+fn canonical_factory_deltas(
+    values: &[StoredFactoryVaultDelta],
+) -> Result<Vec<StoredFactoryVaultDelta>> {
+    let mut out = values
+        .iter()
+        .map(StoredFactoryVaultDelta::canonical)
+        .collect::<Result<Vec<_>>>()?;
+    out.sort_by_key(factory_delta_sort_key);
+    ensure!(
+        out.windows(2)
+            .all(|window| factory_delta_sort_key(&window[0]) != factory_delta_sort_key(&window[1])),
+        "factory vault deltas must be unique"
+    );
     Ok(out)
 }
 
@@ -1286,6 +2632,20 @@ fn right_sort_key(right: &StoredFactoryRight) -> (String, String, u8, String, Am
     )
 }
 
+fn factory_amount_sort_key(right: &StoredFactoryVaultAssetAmount) -> (String, String) {
+    (
+        right.asset.clone(),
+        right.type_hash.clone().unwrap_or_default(),
+    )
+}
+
+fn factory_delta_sort_key(delta: &StoredFactoryVaultDelta) -> (String, String) {
+    (
+        delta.asset.clone(),
+        delta.type_hash.clone().unwrap_or_default(),
+    )
+}
+
 fn factory_kind_order(kind: FactoryRightKind) -> u8 {
     match kind {
         FactoryRightKind::Balance => 0,
@@ -1293,6 +2653,520 @@ fn factory_kind_order(kind: FactoryRightKind) -> u8 {
         FactoryRightKind::Membership => 2,
         FactoryRightKind::ExitPath => 3,
         FactoryRightKind::SponsorBudgetClaim => 4,
+    }
+}
+
+fn parse_factory_splice_kind(kind: &str) -> Result<FactorySpliceKind> {
+    match kind {
+        "splice_in" => Ok(FactorySpliceKind::In),
+        "splice_out" => Ok(FactorySpliceKind::Out),
+        other => Err(anyhow::anyhow!("unsupported factory splice kind {other}")),
+    }
+}
+
+fn factory_splice_kind_name(kind: FactorySpliceKind) -> &'static str {
+    match kind {
+        FactorySpliceKind::In => "splice_in",
+        FactorySpliceKind::Out => "splice_out",
+    }
+}
+
+fn stored_asset_fields(asset: &VaultAsset) -> (String, Option<String>) {
+    match asset {
+        VaultAsset::Ckb => ("ckb".to_string(), None),
+        VaultAsset::Xudt(type_hash) => ("xudt".to_string(), Some(hex_prefixed(type_hash))),
+    }
+}
+
+fn parse_vault_asset(asset: &str, type_hash: Option<&str>) -> Result<VaultAsset> {
+    match asset {
+        "ckb" => {
+            ensure!(
+                type_hash.is_none(),
+                "CKB factory vault asset must not carry type_hash"
+            );
+            Ok(VaultAsset::Ckb)
+        }
+        "xudt" => Ok(VaultAsset::Xudt(hex32_bytes(type_hash.ok_or_else(
+            || anyhow::anyhow!("xUDT factory vault asset requires type_hash"),
+        )?)?)),
+        other => Err(anyhow::anyhow!("unsupported factory vault asset {other}")),
+    }
+}
+
+fn asset_name(asset: &VaultAsset) -> String {
+    match asset {
+        VaultAsset::Ckb => "ckb".to_string(),
+        VaultAsset::Xudt(type_hash) => format!("xudt:{}", hex_prefixed(type_hash)),
+    }
+}
+
+fn factory_splice_asset_registry(
+    package: &StoredFactorySplicePackage,
+) -> Result<morph_core::AssetRegistry> {
+    let mut xudt_types = BTreeSet::new();
+    for amount in package.old_vault.iter().chain(package.new_vault.iter()) {
+        if let VaultAsset::Xudt(type_hash) =
+            parse_vault_asset(&amount.asset, amount.type_hash.as_deref())?
+        {
+            xudt_types.insert(type_hash);
+        }
+    }
+    for delta in &package.vault_deltas {
+        if let VaultAsset::Xudt(type_hash) =
+            parse_vault_asset(&delta.asset, delta.type_hash.as_deref())?
+        {
+            xudt_types.insert(type_hash);
+        }
+    }
+    for right in package
+        .update_package
+        .rights_before
+        .iter()
+        .chain(package.update_package.rights_after.iter())
+    {
+        if let Some(asset_type) = &right.asset_type {
+            xudt_types.insert(hex32_bytes(asset_type)?);
+        }
+    }
+    Ok(morph_core::AssetRegistry { xudt_types })
+}
+
+fn factory_reduced_splice_asset_registry(
+    package: &StoredFactoryReducedSplicePackage,
+) -> Result<morph_core::AssetRegistry> {
+    let mut xudt_types = BTreeSet::new();
+    for amount in package.old_vault.iter().chain(package.new_vault.iter()) {
+        if let VaultAsset::Xudt(type_hash) =
+            parse_vault_asset(&amount.asset, amount.type_hash.as_deref())?
+        {
+            xudt_types.insert(type_hash);
+        }
+    }
+    for delta in &package.vault_deltas {
+        if let VaultAsset::Xudt(type_hash) =
+            parse_vault_asset(&delta.asset, delta.type_hash.as_deref())?
+        {
+            xudt_types.insert(type_hash);
+        }
+    }
+    for right in [
+        &package.merkle_update_package.right_before,
+        &package.merkle_update_package.right_after,
+    ] {
+        if let Some(asset_type) = &right.asset_type {
+            xudt_types.insert(hex32_bytes(asset_type)?);
+        }
+    }
+    Ok(morph_core::AssetRegistry { xudt_types })
+}
+
+fn changed_reserve_claim(update: &FactoryUpdate) -> Result<(&FactoryRight, Option<&FactoryRight>)> {
+    let mut found = None;
+    for before in &update.before {
+        let after = update.after.iter().find(|right| right.id == before.id);
+        if after.map(|right| right.quantity).unwrap_or_default() != before.quantity {
+            ensure!(
+                before.id.kind == FactoryRightKind::ReserveClaim,
+                "changed factory splice right must be a reserve claim"
+            );
+            ensure!(
+                found.is_none(),
+                "factory splice package changed multiple rights"
+            );
+            found = Some((before, after));
+        }
+    }
+    for after in &update.after {
+        if update.before.iter().any(|right| right.id == after.id) {
+            continue;
+        }
+        ensure!(
+            after.id.kind == FactoryRightKind::ReserveClaim,
+            "created factory splice right must be a reserve claim"
+        );
+        ensure!(
+            found.is_none(),
+            "factory splice package changed multiple rights"
+        );
+        found = Some((after, Some(after)));
+    }
+    found.ok_or_else(|| anyhow::anyhow!("factory splice package did not change a reserve claim"))
+}
+
+fn changed_merkle_reserve_claim(
+    update: &FactorySingleRightMerkleUpdate,
+) -> Result<(&FactoryRight, &FactoryRight)> {
+    ensure!(
+        update.before.right.id == update.after.right.id
+            && update.before.right.id.kind == FactoryRightKind::ReserveClaim
+            && update.before.right.quantity != update.after.right.quantity,
+        "reduced factory splice package must change exactly one reserve claim"
+    );
+    Ok((&update.before.right, &update.after.right))
+}
+
+fn contract_witness_bytes_from_transition(transition: &FactorySpliceTransition) -> Result<Vec<u8>> {
+    let header = factory_splice_header_wire_bytes(&transition.header);
+    let signatures = factory_signature_witness_wire_bytes(&transition.witness, &transition.update)?;
+    let old_vault =
+        factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.old_vault)?;
+    let new_vault =
+        factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
+    let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
+
+    let mut raw = vec![0u8; FACTORY_SPLICE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_SPLICE_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    raw[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_V1_LEN;
+    raw[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
+    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+
+    let parsed = FactorySpliceWitnessV1::parse(&raw)
+        .map_err(|err| anyhow::anyhow!("encoded factory splice witness is invalid: {err:?}"))?;
+    parsed
+        .header()
+        .map_err(|err| anyhow::anyhow!("encoded factory splice header is invalid: {err:?}"))?;
+    parsed
+        .factory_signature()
+        .map_err(|err| anyhow::anyhow!("encoded factory splice signatures are invalid: {err:?}"))?;
+    parsed.old_vault().map_err(|err| {
+        anyhow::anyhow!("encoded old factory splice vault descriptor is invalid: {err:?}")
+    })?;
+    parsed.new_vault().map_err(|err| {
+        anyhow::anyhow!("encoded new factory splice vault descriptor is invalid: {err:?}")
+    })?;
+    parsed
+        .deltas()
+        .map_err(|err| anyhow::anyhow!("encoded factory splice deltas are invalid: {err:?}"))?;
+    Ok(raw)
+}
+
+fn contract_reduced_splice_witness_bytes_from_transition(
+    transition: &FactoryReducedSpliceTransition,
+) -> Result<Vec<u8>> {
+    let header = factory_splice_header_wire_bytes(&transition.header);
+    let merkle_update =
+        factory_merkle_update_witness_wire_bytes(&transition.update, &transition.witness)?;
+    let old_vault =
+        factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.old_vault)?;
+    let new_vault =
+        factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
+    let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
+
+    let mut raw = vec![0u8; FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1);
+    let mut offset = 2;
+    raw[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_V1_LEN;
+    raw[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN].copy_from_slice(&merkle_update);
+    offset += FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
+    raw[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+
+    let parsed = FactoryReducedSpliceWitnessV1::parse(&raw).map_err(|err| {
+        anyhow::anyhow!("encoded reduced factory splice witness is invalid: {err:?}")
+    })?;
+    parsed.header().map_err(|err| {
+        anyhow::anyhow!("encoded reduced factory splice header is invalid: {err:?}")
+    })?;
+    parsed.merkle_update().map_err(|err| {
+        anyhow::anyhow!("encoded reduced factory splice Merkle update is invalid: {err:?}")
+    })?;
+    parsed.old_vault().map_err(|err| {
+        anyhow::anyhow!("encoded old reduced factory splice vault descriptor is invalid: {err:?}")
+    })?;
+    parsed.new_vault().map_err(|err| {
+        anyhow::anyhow!("encoded new reduced factory splice vault descriptor is invalid: {err:?}")
+    })?;
+    parsed.deltas().map_err(|err| {
+        anyhow::anyhow!("encoded reduced factory splice deltas are invalid: {err:?}")
+    })?;
+    Ok(raw)
+}
+
+fn factory_reduced_splice_contract_non_interference_digest(
+    header: &FactorySpliceHeader,
+    update: &FactorySingleRightMerkleUpdate,
+) -> Result<Bytes32> {
+    ensure!(
+        update.before.right.id == update.after.right.id,
+        "reduced factory splice contract digest requires one stable right id"
+    );
+    let old_update_number = header.old_update_number.to_le_bytes();
+    let new_update_number = header.new_update_number.to_le_bytes();
+    let before = factory_right_wire_bytes(&update.before.right);
+    let after = factory_right_wire_bytes(&update.after.right);
+
+    let mut payload = Vec::new();
+    payload.extend_from_slice(FACTORY_MERKLE_UPDATE_DOMAIN_V1);
+    payload.extend_from_slice(&header.factory_id);
+    payload.extend_from_slice(&old_update_number);
+    payload.extend_from_slice(&new_update_number);
+    payload.extend_from_slice(&header.old_state_root);
+    payload.extend_from_slice(&header.new_state_root);
+    payload.extend_from_slice(&header.old_access_manifest_root);
+    payload.extend_from_slice(&header.new_access_manifest_root);
+    payload.extend_from_slice(&update.before.right.id.participant);
+    payload.extend_from_slice(&before);
+    payload.extend_from_slice(&after);
+    Ok(blake2b256(&payload))
+}
+
+fn factory_splice_header_wire_bytes(
+    header: &FactorySpliceHeader,
+) -> [u8; FACTORY_SPLICE_HEADER_V1_LEN] {
+    let mut raw = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    put_u16(&mut raw, 0, header.protocol_version);
+    raw[2..34].copy_from_slice(&header.factory_id);
+    put_u64(&mut raw, 34, header.old_update_number);
+    put_u64(&mut raw, 42, header.new_update_number);
+    raw[50..82].copy_from_slice(&header.old_state_root);
+    raw[82..114].copy_from_slice(&header.new_state_root);
+    raw[114..146].copy_from_slice(&header.old_access_manifest_root);
+    raw[146..178].copy_from_slice(&header.new_access_manifest_root);
+    raw[178] = factory_splice_kind_wire_byte(header.kind);
+    raw[179..211].copy_from_slice(&header.vault_delta_commitment);
+    raw[211..243].copy_from_slice(&header.non_interference_digest);
+    raw[243..275].copy_from_slice(&header.participants_commitment);
+    raw
+}
+
+fn factory_signature_witness_wire_bytes(
+    witness: &SpliceWitness,
+    update: &FactoryUpdate,
+) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN]> {
+    ensure!(
+        witness.threshold == FACTORY_SIGNATURE_THRESHOLD_V1
+            && witness.signatures.len() == FACTORY_SIGNATURE_COUNT_V1 as usize,
+        "contract factory splice witness requires exactly two participant signatures"
+    );
+    let participants = factory_participants_from_update(update)?;
+    ensure!(
+        participants.len() == FACTORY_SIGNATURE_COUNT_V1 as usize,
+        "contract factory splice witness requires exactly two participant ids"
+    );
+
+    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
+    raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+    for (index, (participant, signature)) in participants
+        .iter()
+        .zip(witness.signatures.iter())
+        .enumerate()
+    {
+        ensure!(
+            signature.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
+            "factory splice participant pubkey must be compressed secp256k1"
+        );
+        ensure!(
+            signature.signature.len() == ECDSA_SIGNATURE_LEN,
+            "factory splice participant signature must be 64 bytes"
+        );
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(&signature.pubkey_sec1);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature.signature);
+    }
+    Ok(raw)
+}
+
+fn factory_merkle_update_witness_wire_bytes(
+    update: &FactorySingleRightMerkleUpdate,
+    witness: &FactoryReducedSpliceWitness,
+) -> Result<[u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN]> {
+    ensure!(
+        witness.participant_threshold == FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1
+            && witness.participant_keys.len()
+                == FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+            && witness.signatures.len() == FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1 as usize,
+        "contract reduced factory splice witness requires two participant keys and one authorised signature"
+    );
+    ensure!(
+        update.before.siblings == update.after.siblings
+            && update.before.siblings.len() == FACTORY_SPARSE_MERKLE_DEPTH_V1,
+        "contract reduced factory splice witness requires one unchanged sparse Merkle frontier"
+    );
+    ensure!(
+        update.before.right.id == update.after.right.id,
+        "contract reduced factory splice witness requires one changed right"
+    );
+
+    let mut raw = [0u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN];
+    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
+    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1;
+
+    for (index, key) in witness.participant_keys.iter().enumerate() {
+        ensure!(
+            key.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
+            "contract reduced factory splice participant pubkey must be compressed secp256k1"
+        );
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN;
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(&key.participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(&key.pubkey_sec1);
+        if let Some(signature) = witness
+            .signatures
+            .iter()
+            .find(|signature| signature.participant == key.participant)
+        {
+            ensure!(
+                signature.pubkey_sec1 == key.pubkey_sec1
+                    && signature.signature.len() == ECDSA_SIGNATURE_LEN,
+                "contract reduced factory splice signature must match the participant key"
+            );
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] = 1;
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1
+                ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1 + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(&signature.signature);
+        }
+    }
+
+    let touched_offset = 8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN;
+    raw[touched_offset..touched_offset + BYTE32_LEN]
+        .copy_from_slice(&update.before.right.id.participant);
+    let before_offset = touched_offset + BYTE32_LEN;
+    raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN]
+        .copy_from_slice(&factory_right_wire_bytes(&update.before.right));
+    let after_offset = before_offset + FACTORY_RIGHT_V1_LEN;
+    raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN]
+        .copy_from_slice(&factory_right_wire_bytes(&update.after.right));
+    let siblings_offset = after_offset + FACTORY_RIGHT_V1_LEN;
+    for (depth, sibling) in update.before.siblings.iter().enumerate() {
+        let offset = siblings_offset + depth * BYTE32_LEN;
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(&sibling.hash);
+    }
+
+    Ok(raw)
+}
+
+fn factory_participants_from_update(update: &FactoryUpdate) -> Result<Vec<Bytes32>> {
+    let mut participants = BTreeSet::new();
+    for right in update.before.iter().chain(update.after.iter()) {
+        participants.insert(right.id.participant);
+    }
+    ensure!(
+        !participants.is_empty() && participants.len() <= u8::MAX as usize,
+        "factory splice update must contain participant ids"
+    );
+    Ok(participants.into_iter().collect())
+}
+
+fn factory_right_wire_bytes(right: &FactoryRight) -> [u8; FACTORY_RIGHT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+    raw[0..32].copy_from_slice(&right.id.participant);
+    raw[32..64].copy_from_slice(&right.id.subchannel);
+    raw[64] = factory_right_kind_wire_byte(right.id.kind);
+    if let Some(asset_type) = right.id.asset_type {
+        raw[65] = 1;
+        raw[66..98].copy_from_slice(&asset_type);
+    }
+    put_u128(&mut raw, 98, right.quantity);
+    raw
+}
+
+fn factory_right_kind_wire_byte(kind: FactoryRightKind) -> u8 {
+    match kind {
+        FactoryRightKind::Balance => 0,
+        FactoryRightKind::ReserveClaim => 1,
+        FactoryRightKind::Membership => 2,
+        FactoryRightKind::ExitPath => 3,
+        FactoryRightKind::SponsorBudgetClaim => 4,
+    }
+}
+
+fn factory_vault_descriptor_wire_bytes(
+    expected_factory_id: &Bytes32,
+    descriptor: &FactoryVaultDescriptorV1,
+) -> Result<[u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN]> {
+    ensure!(
+        &descriptor.factory_id == expected_factory_id,
+        "factory vault descriptor factory_id mismatch"
+    );
+    ensure!(
+        !descriptor.assets.is_empty() && descriptor.assets.len() <= 2,
+        "contract factory vault descriptor supports one or two assets"
+    );
+    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN];
+    raw[0..32].copy_from_slice(&descriptor.factory_id);
+    put_u16(&mut raw, 32, descriptor.assets.len() as u16);
+    for (index, asset) in descriptor.assets.iter().enumerate() {
+        let offset = 34 + index * FACTORY_VAULT_ASSET_AMOUNT_V1_LEN;
+        raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN]
+            .copy_from_slice(&factory_vault_asset_wire_bytes(asset));
+    }
+    Ok(raw)
+}
+
+fn factory_vault_asset_wire_bytes(
+    amount: &VaultAssetAmount,
+) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN];
+    let (kind, type_hash) = vault_asset_wire_key(&amount.asset);
+    raw[0] = kind;
+    raw[1..33].copy_from_slice(&type_hash);
+    put_u128(&mut raw, 33, amount.amount);
+    raw
+}
+
+fn factory_vault_deltas_wire_bytes(
+    deltas: &[FactoryVaultDelta],
+) -> Result<[u8; FACTORY_VAULT_DELTAS_V1_LEN]> {
+    ensure!(
+        !deltas.is_empty() && deltas.len() <= 2,
+        "contract factory vault deltas support one or two assets"
+    );
+    let mut raw = [0u8; FACTORY_VAULT_DELTAS_V1_LEN];
+    put_u16(&mut raw, 0, deltas.len() as u16);
+    for (index, delta) in deltas.iter().enumerate() {
+        let offset = 2 + index * FACTORY_VAULT_DELTA_V1_LEN;
+        raw[offset..offset + FACTORY_VAULT_DELTA_V1_LEN]
+            .copy_from_slice(&factory_vault_delta_wire_bytes(delta));
+    }
+    Ok(raw)
+}
+
+fn factory_vault_delta_wire_bytes(delta: &FactoryVaultDelta) -> [u8; FACTORY_VAULT_DELTA_V1_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTA_V1_LEN];
+    let (kind, type_hash) = vault_asset_wire_key(&delta.asset);
+    raw[0] = kind;
+    raw[1..33].copy_from_slice(&type_hash);
+    put_u128(&mut raw, 33, delta.old_amount);
+    put_u128(&mut raw, 49, delta.new_amount);
+    put_u128(&mut raw, 65, delta.external_input);
+    put_u128(&mut raw, 81, delta.withdrawal);
+    raw
+}
+
+fn factory_splice_kind_wire_byte(kind: FactorySpliceKind) -> u8 {
+    match kind {
+        FactorySpliceKind::In => 0,
+        FactorySpliceKind::Out => 1,
+    }
+}
+
+fn vault_asset_wire_key(asset: &VaultAsset) -> (u8, Bytes32) {
+    match asset {
+        VaultAsset::Ckb => (VAULT_ASSET_KIND_CKB_V1, [0u8; 32]),
+        VaultAsset::Xudt(type_hash) => (VAULT_ASSET_KIND_XUDT_V1, *type_hash),
     }
 }
 
@@ -1322,6 +3196,18 @@ fn decode_hex_exact(value: &str, byte_len: usize, field: &str) -> Result<Vec<u8>
     let canonical = canonical_hex_exact(value, byte_len)
         .with_context(|| format!("{field} must be canonical {byte_len}-byte hex"))?;
     Ok(hex::decode(canonical.trim_start_matches("0x"))?)
+}
+
+fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
+    raw[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
+    raw[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u128(raw: &mut [u8], offset: usize, value: u128) {
+    raw[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
 }
 
 fn hex_prefixed(bytes: &[u8]) -> String {
@@ -1437,6 +3323,356 @@ mod tests {
         assert_eq!(summary.quantity_before, 50);
         assert_eq!(summary.quantity_after, 35);
         assert_eq!(summary.proof_siblings, 256);
+    }
+
+    #[test]
+    fn validates_factory_splice_package() {
+        let package =
+            fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.kind, "splice_in");
+        assert_eq!(summary.old_update_number, 1);
+        assert_eq!(summary.new_update_number, 2);
+        assert_eq!(summary.reserve_claim_before, 50);
+        assert_eq!(summary.reserve_claim_after, 70);
+        assert_eq!(summary.external_input, 20);
+        assert_eq!(summary.withdrawal, 0);
+        assert_eq!(summary.signature_threshold, 2);
+        assert_eq!(summary.signatures, 2);
+        assert_factory_splice_contract_witness(&package, &summary);
+    }
+
+    #[test]
+    fn validates_factory_xudt_splice_out_package() {
+        let package =
+            fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::XudtSpliceOut)
+                .unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.kind, "splice_out");
+        assert!(summary.reserve_claim_asset.starts_with("xudt:"));
+        assert_eq!(summary.reserve_claim_before, 50);
+        assert_eq!(summary.reserve_claim_after, 30);
+        assert_eq!(summary.external_input, 0);
+        assert_eq!(summary.withdrawal, 20);
+        assert_factory_splice_contract_witness(&package, &summary);
+    }
+
+    #[test]
+    fn writes_reads_and_validates_factory_splice_package() {
+        let package =
+            fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "morph-factory-splice-package-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let path = write_factory_splice_package(&dir, &package).unwrap();
+        let loaded = read_factory_splice_package(&path).unwrap();
+
+        assert_eq!(loaded.signing_digest, package.signing_digest);
+        assert_eq!(
+            loaded.summary().unwrap().contract_witness_len,
+            FACTORY_SPLICE_WITNESS_V1_LEN
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validates_factory_reduced_splice_package() {
+        let package =
+            fixture_factory_reduced_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.kind, "splice_in");
+        assert_eq!(summary.old_update_number, 1);
+        assert_eq!(summary.new_update_number, 2);
+        assert_eq!(summary.reserve_claim_before, 50);
+        assert_eq!(summary.reserve_claim_after, 70);
+        assert_eq!(summary.external_input, 20);
+        assert_eq!(summary.withdrawal, 0);
+        assert_eq!(summary.participant_keys, 2);
+        assert_eq!(summary.signature_threshold, 2);
+        assert_eq!(summary.signatures, 1);
+        assert_eq!(summary.proof_siblings, 256);
+        assert_factory_reduced_splice_contract_witness(&package, &summary);
+    }
+
+    #[test]
+    fn validates_factory_reduced_xudt_splice_out_package() {
+        let package = fixture_factory_reduced_splice_package_with_kind(
+            FixtureFactorySpliceKind::XudtSpliceOut,
+        )
+        .unwrap();
+        let summary = package.summary().unwrap();
+
+        assert_eq!(summary.kind, "splice_out");
+        assert!(summary.reserve_claim_asset.starts_with("xudt:"));
+        assert_eq!(summary.reserve_claim_before, 50);
+        assert_eq!(summary.reserve_claim_after, 30);
+        assert_eq!(summary.external_input, 0);
+        assert_eq!(summary.withdrawal, 20);
+        assert_eq!(summary.signatures, 1);
+        assert_eq!(summary.proof_siblings, 256);
+        assert_factory_reduced_splice_contract_witness(&package, &summary);
+    }
+
+    #[test]
+    fn writes_reads_and_validates_factory_reduced_splice_package() {
+        let package =
+            fixture_factory_reduced_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "morph-factory-reduced-splice-package-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let path = write_factory_reduced_splice_package(&dir, &package).unwrap();
+        let loaded = read_factory_reduced_splice_package(&path).unwrap();
+
+        assert_eq!(loaded.signing_digest, package.signing_digest);
+        let loaded_summary = loaded.summary().unwrap();
+        assert_eq!(loaded_summary.proof_siblings, 256);
+        assert_eq!(
+            loaded_summary.contract_witness_len,
+            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_factory_reduced_splice_sibling_mismatch() {
+        let mut package =
+            fixture_factory_reduced_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        package.merkle_update_package.proof_siblings[0].hash = hex_prefixed(&[8u8; 32]);
+        package.merkle_update_package.non_interference_digest =
+            package.merkle_update_package.compute_digest().unwrap();
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("factory Merkle update proof failed")
+        );
+    }
+
+    #[test]
+    fn rejects_factory_reduced_splice_missing_authorised_signature() {
+        let mut package =
+            fixture_factory_reduced_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        package.signatures.clear();
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("signatures must cover exactly the authorised participants")
+        );
+    }
+
+    fn assert_factory_splice_contract_witness(
+        package: &StoredFactorySplicePackage,
+        summary: &FactorySplicePackageSummary,
+    ) {
+        assert_eq!(summary.contract_witness_len, FACTORY_SPLICE_WITNESS_V1_LEN);
+        let summary_bytes = decode_hex_exact(
+            &summary.contract_witness_hex,
+            FACTORY_SPLICE_WITNESS_V1_LEN,
+            "contract_witness_hex",
+        )
+        .unwrap();
+        let transition = package.validate().unwrap();
+        assert_eq!(
+            summary_bytes,
+            contract_witness_bytes_from_transition(&transition).unwrap()
+        );
+
+        let parsed = FactorySpliceWitnessV1::parse(&summary_bytes).unwrap();
+        let header = parsed.header().unwrap();
+        let signature = parsed.factory_signature().unwrap();
+        let old_vault = parsed.old_vault().unwrap();
+        let new_vault = parsed.new_vault().unwrap();
+        let deltas = parsed.deltas().unwrap();
+
+        assert_eq!(
+            header.signing_digest(),
+            hex32_bytes(&summary.signing_digest).unwrap()
+        );
+        assert_eq!(
+            header.vault_delta_commitment(),
+            hex32_bytes(&summary.vault_delta_commitment)
+                .unwrap()
+                .as_slice()
+        );
+        assert_eq!(
+            old_vault.factory_id(),
+            hex32_bytes(&summary.factory_id).unwrap().as_slice()
+        );
+        assert_eq!(
+            new_vault.factory_id(),
+            hex32_bytes(&summary.factory_id).unwrap().as_slice()
+        );
+        assert_eq!(deltas.delta_count(), package.vault_deltas.len() as u16);
+        morph_script_common::verify_factory_splice_signatures(&header, &signature).unwrap();
+    }
+
+    fn assert_factory_reduced_splice_contract_witness(
+        package: &StoredFactoryReducedSplicePackage,
+        summary: &FactoryReducedSplicePackageSummary,
+    ) {
+        assert_eq!(
+            summary.contract_witness_len,
+            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+        );
+        let summary_bytes = decode_hex_exact(
+            &summary.contract_witness_hex,
+            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
+            "contract_witness_hex",
+        )
+        .unwrap();
+        let transition = package.validate().unwrap();
+        assert_eq!(
+            summary_bytes,
+            contract_reduced_splice_witness_bytes_from_transition(&transition).unwrap()
+        );
+
+        let parsed = FactoryReducedSpliceWitnessV1::parse(&summary_bytes).unwrap();
+        let header = parsed.header().unwrap();
+        let merkle_update = parsed.merkle_update().unwrap();
+        let old_vault = parsed.old_vault().unwrap();
+        let new_vault = parsed.new_vault().unwrap();
+        let deltas = parsed.deltas().unwrap();
+
+        assert_eq!(
+            header.signing_digest(),
+            hex32_bytes(&summary.signing_digest).unwrap()
+        );
+        assert_eq!(merkle_update.sibling_hash(255).len(), BYTE32_LEN);
+        assert_eq!(
+            old_vault.factory_id(),
+            hex32_bytes(&summary.factory_id).unwrap().as_slice()
+        );
+        assert_eq!(
+            new_vault.factory_id(),
+            hex32_bytes(&summary.factory_id).unwrap().as_slice()
+        );
+        assert_eq!(deltas.delta_count(), package.vault_deltas.len() as u16);
+
+        let factory_participants = reduced_splice_factory_participants_commitment(package);
+        let old_header_raw = factory_state_header_wire_bytes_for_test(
+            &hex32_bytes(&summary.factory_id).unwrap(),
+            summary.old_update_number,
+            &hex32_bytes(&summary.old_state_root).unwrap(),
+            &factory_participants,
+            &hex32_bytes(&summary.old_access_manifest_root).unwrap(),
+            &[0u8; 32],
+        );
+        let new_header_raw = factory_state_header_wire_bytes_for_test(
+            &hex32_bytes(&summary.factory_id).unwrap(),
+            summary.new_update_number,
+            &hex32_bytes(&summary.new_state_root).unwrap(),
+            &factory_participants,
+            &hex32_bytes(&summary.new_access_manifest_root).unwrap(),
+            &hex32_bytes(&summary.non_interference_digest).unwrap(),
+        );
+        let old_header = morph_script_common::FactoryStateHeaderV1::parse(&old_header_raw).unwrap();
+        let new_header = morph_script_common::FactoryStateHeaderV1::parse(&new_header_raw).unwrap();
+        morph_script_common::verify_factory_reduced_splice_update(
+            &old_header,
+            &new_header,
+            &parsed,
+        )
+        .unwrap();
+    }
+
+    fn reduced_splice_factory_participants_commitment(
+        package: &StoredFactoryReducedSplicePackage,
+    ) -> Bytes32 {
+        assert_eq!(package.participant_keys.len(), 2);
+        let participant_0 = hex32_bytes(&package.participant_keys[0].participant).unwrap();
+        let participant_1 = hex32_bytes(&package.participant_keys[1].participant).unwrap();
+        let pubkey_0 =
+            decode_hex_exact(&package.participant_keys[0].pubkey_sec1, 33, "pubkey_sec1").unwrap();
+        let pubkey_1 =
+            decode_hex_exact(&package.participant_keys[1].pubkey_sec1, 33, "pubkey_sec1").unwrap();
+        morph_script_common::factory_participants_commitment_v1(
+            package.signature_threshold,
+            &[
+                (participant_0.as_slice(), pubkey_0.as_slice()),
+                (participant_1.as_slice(), pubkey_1.as_slice()),
+            ],
+        )
+    }
+
+    fn factory_state_header_wire_bytes_for_test(
+        factory_id: &Bytes32,
+        update_number: u64,
+        state_root: &Bytes32,
+        participants_commitment: &Bytes32,
+        access_manifest_root: &Bytes32,
+        non_interference_digest: &Bytes32,
+    ) -> [u8; morph_script_common::FACTORY_STATE_HEADER_V1_LEN] {
+        let mut raw = [0u8; morph_script_common::FACTORY_STATE_HEADER_V1_LEN];
+        put_u16(&mut raw, 0, 1);
+        raw[2..34].fill(2);
+        put_u16(
+            &mut raw,
+            34,
+            morph_script_common::SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        );
+        raw[36..68].copy_from_slice(factory_id);
+        put_u64(&mut raw, 68, update_number);
+        raw[76..108].copy_from_slice(state_root);
+        raw[108..140].copy_from_slice(participants_commitment);
+        raw[140..172].copy_from_slice(access_manifest_root);
+        raw[172..204].copy_from_slice(non_interference_digest);
+        raw[204..236].fill(8);
+        put_u16(&mut raw, 236, 1);
+        raw
+    }
+
+    #[test]
+    fn rejects_factory_splice_vault_delta_mismatch() {
+        let mut package =
+            fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        package.vault_deltas[0].new_amount -= 1;
+        package.vault_delta_commitment = hex_prefixed(&factory_vault_delta_commitment_v1(
+            &package
+                .vault_deltas
+                .iter()
+                .map(StoredFactoryVaultDelta::to_delta)
+                .collect::<Result<Vec<_>>>()
+                .unwrap(),
+        ));
+        package.signing_digest = hex_prefixed(&package.header().unwrap().signing_digest());
+        let digest = hex32_bytes(&package.signing_digest).unwrap();
+        for signature in &mut package.signatures {
+            let key = if signature.participant == hex_prefixed(&bytes32(1)) {
+                SigningKey::from_slice(&[1u8; 32]).unwrap()
+            } else {
+                SigningKey::from_slice(&[2u8; 32]).unwrap()
+            };
+            *signature = sign_factory_digest(
+                &signature.participant,
+                &signature.pubkey_sec1,
+                &key,
+                &digest,
+            )
+            .unwrap();
+        }
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("factory splice transition check failed")
+        );
     }
 
     #[test]

@@ -55,6 +55,83 @@ settlement descriptors, and `SponsorPolicyV1`. The contracts still parse
 fixed-width bytes directly; the schema is treated as the public wire-boundary
 record until generated Molecule code is introduced.
 
+The first bilateral splicing layer is host-side. `morph-core` models a signed
+`SpliceHeader` with old/new funding anchors, old/new funding epochs, vault
+descriptor commitments, a base state number, and an asset-delta commitment.
+`VaultDescriptorV2` carries canonical CKB and xUDT vault balances, and
+`SpliceAssetDelta` makes external contribution, withdrawal, and signed CKB fee
+amounts explicit. The validator accepts CKB splice-in/splice-out and xUDT
+splice-in/splice-out fixtures only when the current active StateCell context
+matches the signed header, the funding epoch advances, participant signatures
+verify, the old and new vault descriptors match the signed deltas, withdrawal
+outputs match the delta descriptor, and the remaining post-splice vault still
+covers the latest settlement descriptor. `morph-cli` exposes this as
+`print-splice-fixture --kind splice-in|splice-out|xudt-splice-in|xudt-splice-out`
+and `validate-splice-package` for deterministic review. `morph-script-common` also
+has fixed-width parsers and digest helpers for `SpliceHeaderV1`,
+`SpliceSignatureWitnessV1`, `SpliceVaultDescriptorV2`, and
+`SpliceAssetDeltasV1`, matching the draft Molecule schema.
+`SpliceStateTransitionWitnessV1` packages those pieces into one fixed-width
+1017-byte witness blob, and `verify_splice_state_transition_bundle` checks the
+current active StateHeader, post-splice active StateHeader, splice header,
+signatures, old/new vault descriptors, and asset deltas together. The CLI
+validation path derives the same 1017-byte contract witness from the structured
+JSON package and exposes it as `contract_witness_hex`. The splice package now
+also carries the complete current StateHeader fields, letting the CLI derive
+`current_state_header_hex` and the post-splice `next_state_header_hex` with the
+new funding anchor. Transaction builders can therefore reuse one encoding path
+for both StateHeader bytes and the splice witness. `morph-state-type` now has a
+conservative two-group splice bridge: the old funding-anchor type script can
+retire an active StateCell only when a `SpliceStateTransitionWitnessV1` proves
+the post-splice active StateHeader, and the new funding-anchor type script can
+create a nonzero active StateCell only when it finds the matching old input and
+the same proof verifies. The bridge requires the peer StateCell type script to
+have the same code hash and hash type, the same args suffix, and only the first
+32-byte funding anchor changed. `morph-vault-lock` applies the matching vault
+side bridge for active-state spends: it loads the same splice witness, finds the
+post-splice StateCell under the peer funding anchor, verifies the bundled
+state transition, requires old vault group inputs to equal the old CKB/xUDT
+vault descriptor, and requires outputs locked by the new vault script anchor to
+equal the new vault descriptor. CKB-VM coverage now exercises valid CKB
+splice-in and splice-out bridges, rejects a wrong-channel splice header, and
+rejects a transaction that preserves total capacity while underfunding the new
+vault. `devnet save-splice-package` now creates signed CKB splice-in/splice-out
+packages and live xUDT splice-in/splice-out packages from an active
+StateCell/VaultCell pair. `devnet apply-splice --splice-package
+<path>` checks that package against the same live cells, recreates the new
+StateCell and VaultCell under the new funding anchor, preserves typed xUDT
+vault data when present, inserts the fixed-width splice witness, pays external
+CKB/fees and typed withdrawal carrier capacity from an owner cell, and reports
+the post-splice out points. For splice-out, the package and apply reports expose
+`withdrawal_payout_policy: participant_signature_pubkey`, the selected
+participant pubkey, and the actual withdrawal lock hash, making the
+participant-owned payout rule reviewable from JSON artifacts. The smoke
+assertion treats that payout evidence as mandatory for splice-out apply
+artifacts. `devnet splice-in-smoke`, `devnet splice-out-smoke`,
+`devnet xudt-splice-in-smoke`, and `devnet xudt-splice-out-smoke` now exercise
+those live paths through post-splice sponsor funding and settling-state
+publication. The xUDT splice-in smoke mints the external owner-controlled typed
+input first, then consumes it during splice apply. Signed StateCell publication
+now permits participant-authorised settlement descriptor updates, so those
+smokes publish a descriptor matching the post-splice vault and finalise the
+channel. `devnet splice-negative-smoke` now derives live signed splice packages
+and confirms rejection for stale funding epochs, wrong channel ids, wrong vault
+type applications, insufficient remaining value, tampered xUDT deltas, and
+signed-fee leakage before any malformed splice reaches acceptance. The V1 splice
+rule set is intentionally conservative: splice packages are based on a
+quiescent base state number, use fixed-width CKB/CKB+xUDT typed deltas, and
+send splice-out withdrawals to participant-derived secp256k1 locks rather than
+arbitrary operator payout locks. Funding epoch is treated as explicit state
+semantics; the final V1 wire target is a `StateHeaderV2` with `funding_epoch`
+and vault-set commitments, while the current StateHeaderV1 bridge remains the
+compatibility path exercised by devnet evidence. `morph-script-common` already
+exposes the fixed-width `StateHeaderV2` parser and
+`verify_splice_state_transition_bundle_v2`, which requires the current header's
+epoch/vault-set commitment to match the old splice side and the next header's
+epoch/vault-set commitment to match the new splice side. `morph-core` mirrors
+that target with `StateHeaderV2` signing bytes and invariant coverage for epoch
+and vault-set binding.
+
 The vault lock verifies the bilateral CKB settlement descriptor: two sorted
 recipient lock hashes and exact output capacities. It also supports the devnet
 CKB+xUDT descriptor, which binds the canonical xUDT type hash and exact token
@@ -68,6 +145,20 @@ that produce a settling Morph State Cell for the policy's channel, authorised
 state-number interval, and expected StateType hash. Arbitrary output data that
 looks like a StateHeader is not enough. This keeps sponsor capacity out of
 arbitrary transfers and out of fake-publication fee drains.
+
+The current safety-kernel candidate closes the local P0/P1 boundary gaps that
+were previously documented as target properties. Vault finalisation is
+authorised by an authentic current Morph StateCell with the expected StateType
+and StateLock identity, not by bytes that decode as a `StateHeader`. State
+finalisation and active splice retirement require an input whose VaultCell
+commitment matches the retiring StateHeader payload commitment, so StateCells
+cannot be retired while orphaning channel value. Finalisation maturity uses
+canonical relative-block CKB `since`; CLI options are relative block counts and
+are encoded before transaction construction. A single-right sparse Merkle proof
+proves locality only, so the plain reduced Merkle update path accepts
+value-right decreases; value-right increases need full consent or a
+vault-delta-bound splice path. See [`../SECURITY-FIXES.md`](../SECURITY-FIXES.md)
+for the closeout matrix and negative tests.
 
 Factory mode now has both a host-side predicate and a conservative devnet state
 track. A factory-local update is described as changes to a set of participant
@@ -96,11 +187,15 @@ one-signer reduced signature, the local child StateCell evidence, the
 settlement descriptor, and the factory vault release. `morph-factory-type`
 checks the FactoryStateHeader transition and child materialisation, while
 `morph-factory-vault-lock` enforces reserve conservation.
-CKB-VM tests cover both the CKB and CKB+xUDT reduced-exit child-vault shapes,
-including typed amount and type mismatch rejection.
-`factory-reduced-exit-smoke` and `factory-reduced-xudt-exit-smoke` publish
-this path on devnet, then use the ordinary child-channel publication and
-finalisation flow.
+CKB-VM tests cover the active CKB and xUDT reduced-exit child-vault shapes,
+release-quantity binding, rejection of typed ReserveClaim releases through the
+CKB-only path, child xUDT amount/type mismatches, claim asset-type mismatches,
+and FactoryVault typed-change mismatches. `factory-reduced-exit-smoke` and
+`factory-reduced-xudt-exit-smoke` publish the active reduced-exit paths on
+devnet, then use the ordinary child-channel publication and finalisation flow.
+The xUDT smoke covers partial typed FactoryVault change, full release with
+CKB-only change, one-sided child settlement, and tampered child-token amount
+rejection.
 
 The CLI can now serialise that predicate as a deterministic factory update
 package. `print-factory-fixture` emits a sample package with a
@@ -137,6 +232,36 @@ live FactoryStateCell before rebuilding the transaction. In both modes, the
 FactoryStateCell capacity stays unchanged and fees are paid from a normal owner
 cell.
 
+The conservative M6 factory-splice layer starts at the host/package boundary
+and now has an initial M6.1 contract witness bridge. `morph-core` models a
+signed factory splice header, factory vault descriptors, and fixed CKB/xUDT
+vault deltas. Validation requires exactly one participant reserve claim to move
+by the same amount as the FactoryVaultCell delta: splice-in adds external
+reserve and increases the claim, while splice-out decreases the claim and
+releases the same amount. The CLI exposes this through
+`print-factory-splice-fixture --kind splice-in|splice-out|xudt-splice-in|xudt-splice-out`
+and `validate-factory-splice-package`. Smoke reports decode
+`morph.factory_splice_package.v1` artifacts as factory-splice evidence, and the
+validator derives the contract-facing `FactorySpliceWitnessV1` bytes as
+`contract_witness_hex`. `devnet save-factory-splice-package` can capture a live
+conservative FactoryStateCell/FactoryVaultCell pair into the same signed
+package format when the live state root matches the V1 reserve-claim shape, and
+`devnet apply-factory-splice` consumes that package with the fixed witness
+against the live factory state/vault pair. The CKB factory splice smoke
+wrappers now run live package capture, apply the splice, and then materialise a
+child channel from the post-splice FactoryVaultCell with full-participant
+authorisation. The xUDT factory splice smoke wrappers do the same for typed
+FactoryVaultCells, including an external participant-owned xUDT input for
+splice-in and participant-owned withdrawal output for splice-out.
+The reduced CKB and xUDT factory splice smoke wrappers exercise the same live
+flows with `FactoryReducedSpliceWitnessV1`, one authorised participant
+signature, and the 256-sibling sparse-Merkle reserve-claim proof.
+`morph-script-common` parses the fixed-width `FactorySpliceWitnessV1`,
+`morph-factory-type` accepts signed all-participant factory splice updates, and
+`morph-factory-vault-lock` checks the touched FactoryVaultCell amount against
+the signed delta. Reduced sparse-Merkle factory-splice witnesses are covered by
+the same package, devnet smoke, summary, and budget paths.
+
 The conservative factory-local exit path now materialises a bilateral child
 channel on devnet without claiming reduced-signature proof mode. The transaction
 consumes the current FactoryStateCell, the FactoryVaultCell, and a normal owner
@@ -165,11 +290,18 @@ confirmation depth, runtime window, polling interval, fee, explicit sponsor
 usage, auto-funded sponsor rotation, auto-sponsor capacity, and devnet mining
 requirements. This keeps deployment assumptions in an auditable file rather
 than relying only on command-line convention.
+This operator policy is distinct from the V1 sponsor lock's script-enforced
+boundary. On chain, sponsor spending is bounded by expected state type,
+channel/state-number range, fee caps, and clean sponsor change. Runtime fields
+such as expiry, sponsor source, scan cadence, and webhook policy are
+watchtower/operator policy until a future design gives the script verifiable
+evidence for them.
 The same scanner can append JSONL alerts for older-state detection,
-publication submission, and idle scans. It can also POST the same structured
-alert to a policy-gated HTTP webhook. The local JSONL sink remains useful for
-deterministic devnet review; the webhook path is for operator integration
-without changing channel scripts.
+publication submission, confirmed splice detection, stale splice-package
+selection, splice-aware publication, and idle scans. It can also POST the same
+structured alert to a policy-gated HTTP webhook. The local JSONL sink remains
+useful for deterministic devnet review; the webhook path is for operator
+integration without changing channel scripts.
 The multi-channel config runner has both a single-pass form and a bounded loop
 form. The loop does not introduce a separate trust model: every pass uses the
 same policy checks, package validation, confirmation-depth scan, cursor file,
@@ -186,11 +318,18 @@ process manager rather than becoming its own process manager.
 ## Current Non-Goals
 
 - No routing, gossip, path finding, or liquidity discovery.
-- No multi-right or variable-depth reduced-signature proof bundle yet. The
-  implemented on-chain paths are fixed-width: CKB/CKB+xUDT reserve-claim
-  reduced exits and a single-right 256-sibling sparse Merkle update.
+- Multi-right and variable-depth reduced-signature proof bundles are deferred
+  beyond the current roadmap. The implemented on-chain paths are fixed-width:
+  CKB and xUDT reserve-claim reduced exits plus a single-right 256-sibling
+  sparse Merkle update.
 - No generic descriptor runtime.
+- No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
+  state number; concurrent splice/off-chain-update interleaving is deferred.
+- No arbitrary splice-out payout locks. V1 withdrawals are participant-owned;
+  explicit payout-lock allowlists are deferred to V1.1 policy work.
 - No base-layer CKB change.
+- Watchtower splice integration covers package funding-anchor selection, cursor
+  resume metadata, and stale pre-splice package alerts.
 
 ## Devnet Acceptance Criteria
 
@@ -223,7 +362,8 @@ A devnet demonstration is acceptable only when it includes:
 - a supervisor-friendly watchtower service mode with health-file output,
   stop-file shutdown, error backoff, and consecutive-error limits;
 - watchtower JSONL and HTTP webhook alerts for older-state detection,
-  publication submission, and idle scans;
+  publication submission, splice detection, stale splice package selection,
+  splice-aware publication, and idle scans;
 - a conservative all-participant factory state package with verified nested
   non-interference digest and signatures;
 - a conservative factory type script that accepts canonical factory creation,
@@ -238,6 +378,9 @@ A devnet demonstration is acceptable only when it includes:
 - a factory CKB+xUDT negative smoke proving that conserved token supply is not
   enough when the child vault amount disagrees with the committed local-exit
   descriptor;
+- a splice negative smoke proving malformed or mismatched splice packages are
+  rejected for stale epoch, wrong channel, wrong vault type, remaining-value
+  shortfall, xUDT delta tampering, and signed-fee leakage;
 - a reusable factory local-exit evidence package that binds the updated
   FactoryStateHeader, embedded factory signatures, child StateHeader,
   settlement descriptor, output indices, and local-exit digest;
@@ -246,10 +389,14 @@ A devnet demonstration is acceptable only when it includes:
   through the fixed 256-sibling proof witness;
 - a smoke summary report that preserves cycle, size, status, deployed script
   hashes, deployed script outpoints, watchtower alert events, proof-shape
-  budget profiles, and expected script-error evidence for review;
+  budget profiles for reduced-rights, sparse Merkle, and reduced-exit
+  witnesses, and expected script-error evidence for review;
 - smoke assertions that compare deployed script hashes with the local RISC-V
-  contract binaries and require the watchtower older-state/publication alerts
-  before accepting a run as current evidence;
+  contract binaries and require watchtower older-state, publication,
+  splice-detected, and stale splice-package alerts before accepting a run as
+  current evidence;
+- smoke budget assertions that can gate factory proof-profile sibling count,
+  witness length, node-estimated cycles, and transaction byte size;
 - smoke comparison gates for transaction-set, status, cycle, and byte-size
   regressions between completed devnet runs;
 - CI fixture checks for bilateral state fixtures, factory update/state/local

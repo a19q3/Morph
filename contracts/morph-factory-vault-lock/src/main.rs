@@ -18,8 +18,11 @@ use morph_script_common::{
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
     FACTORY_LOCAL_EXIT_WITNESS_V1_LEN, FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN,
     FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
-    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryStateHeaderV1, Result,
-    ScriptError, read_u128,
+    FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN,
+    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedSpliceWitnessV1,
+    FactorySpliceWitnessV1, FactoryStateHeaderV1, FactoryVaultDeltaV1, FactoryVaultDeltasV1,
+    Result, ScriptError, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u128,
+    verify_factory_reduced_splice_update, verify_factory_splice_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -61,18 +64,19 @@ fn main() -> Result<()> {
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
-    let child_vault_capacity = if input_type_raw.len() == FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
+    if input_type_raw.len() == FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
         || input_type_raw.len() == FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN
     {
         let witness = FactoryLocalExitWitnessV1::parse(input_type_raw.as_ref())?;
         if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
             return Err(ScriptError::FactoryLocalExitMismatch);
         }
-        validate_child_vault(
+        let child_release = validate_child_vault(
             witness.vault_output_index(),
             witness.vault_lock_hash(),
             witness.settlement_descriptor(),
-        )?
+        )?;
+        validate_factory_reserve_conservation(child_release.capacity)?;
     } else if input_type_raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
         || input_type_raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
     {
@@ -81,16 +85,46 @@ fn main() -> Result<()> {
         if new_header.non_interference_digest() != digest.as_slice() {
             return Err(ScriptError::FactoryReducedProofMismatch);
         }
-        validate_child_vault(
+        let child_release = validate_child_vault(
             witness.vault_output_index(),
             witness.vault_lock_hash(),
             witness.settlement_descriptor(),
-        )?
+        )?;
+        match child_release.xudt_type_hash {
+            Some(_) => {
+                if child_release.xudt_amount != witness.release_quantity() {
+                    return Err(ScriptError::FactoryReserveMismatch);
+                }
+            }
+            None => {
+                if child_release.capacity as u128 != witness.release_quantity() {
+                    return Err(ScriptError::FactoryReserveMismatch);
+                }
+            }
+        }
+        validate_factory_reduced_exit_reserve_conservation(&child_release)?;
+    } else if input_type_raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
+        let witness = FactorySpliceWitnessV1::parse(input_type_raw.as_ref())?;
+        verify_factory_splice_update(&old_header, &new_header, &witness)?;
+        let deltas = witness.deltas()?;
+        validate_factory_splice_vault_deltas(&deltas)?;
+    } else if input_type_raw.len() == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN {
+        let witness = FactoryReducedSpliceWitnessV1::parse(input_type_raw.as_ref())?;
+        verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
+        let deltas = witness.deltas()?;
+        validate_factory_splice_vault_deltas(&deltas)?;
     } else {
         return Err(ScriptError::ParticipantWitnessEncoding);
-    };
-    validate_factory_reserve_conservation(child_vault_capacity)?;
+    }
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+#[derive(Clone, Copy)]
+struct ChildVaultRelease {
+    capacity: u64,
+    xudt_type_hash: Option<[u8; BYTE32_LEN]>,
+    xudt_amount: u128,
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -133,7 +167,7 @@ fn validate_child_vault(
     vault_output_index: u32,
     expected_vault_lock_hash: &[u8],
     settlement_descriptor: &[u8],
-) -> Result<u64> {
+) -> Result<ChildVaultRelease> {
     let vault_index = vault_output_index as usize;
     let vault_lock_hash =
         load_cell_lock_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
@@ -152,7 +186,10 @@ fn validate_child_vault(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_ckb_child_vault(settlement_descriptor: &[u8], vault_index: usize) -> Result<u64> {
+fn validate_ckb_child_vault(
+    settlement_descriptor: &[u8],
+    vault_index: usize,
+) -> Result<ChildVaultRelease> {
     let descriptor = BilateralCkbSettlementDescriptorV1::parse(settlement_descriptor)?;
     let expected_capacity = descriptor.total_capacity();
     let vault_data =
@@ -170,11 +207,18 @@ fn validate_ckb_child_vault(settlement_descriptor: &[u8], vault_index: usize) ->
     if vault_capacity != expected_capacity {
         return Err(ScriptError::SettlementOutputMismatch);
     }
-    Ok(expected_capacity)
+    Ok(ChildVaultRelease {
+        capacity: expected_capacity,
+        xudt_type_hash: None,
+        xudt_amount: 0,
+    })
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_xudt_child_vault(settlement_descriptor: &[u8], vault_index: usize) -> Result<u64> {
+fn validate_xudt_child_vault(
+    settlement_descriptor: &[u8],
+    vault_index: usize,
+) -> Result<ChildVaultRelease> {
     let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(settlement_descriptor)?;
     let vault_type =
         load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
@@ -182,12 +226,15 @@ fn validate_xudt_child_vault(settlement_descriptor: &[u8], vault_index: usize) -
     if vault_type.as_slice() != descriptor.xudt_type_hash() {
         return Err(ScriptError::XudtTypeMismatch);
     }
+    let mut type_hash = [0u8; BYTE32_LEN];
+    type_hash.copy_from_slice(vault_type.as_slice());
     let vault_data =
         load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if vault_data.len() != 16 {
         return Err(ScriptError::XudtAmountEncoding);
     }
-    if read_u128(&vault_data, 0) != descriptor.total_xudt_amount() {
+    let xudt_amount = read_u128(&vault_data, 0);
+    if xudt_amount != descriptor.total_xudt_amount() {
         return Err(ScriptError::SettlementOutputMismatch);
     }
     let expected_capacity = descriptor.total_capacity();
@@ -196,7 +243,83 @@ fn validate_xudt_child_vault(settlement_descriptor: &[u8], vault_index: usize) -
     if vault_capacity != expected_capacity {
         return Err(ScriptError::SettlementOutputMismatch);
     }
-    Ok(expected_capacity)
+    Ok(ChildVaultRelease {
+        capacity: expected_capacity,
+        xudt_type_hash: Some(type_hash),
+        xudt_amount,
+    })
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_splice_vault_deltas(deltas: &FactoryVaultDeltasV1) -> Result<()> {
+    let input_capacity = single_group_capacity(Source::GroupInput)?;
+    let input_type =
+        load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+
+    let current_lock_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+    let output_index = single_output_index_by_lock_hash(&current_lock_hash)?;
+    let output_capacity =
+        load_cell_capacity(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_type =
+        load_cell_type_hash(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_data =
+        load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+
+    for index in 0..deltas.delta_count() as usize {
+        let delta = deltas.delta(index)?;
+        validate_factory_splice_cell_delta(
+            &delta,
+            input_capacity,
+            input_type.as_ref().map(|hash| hash.as_slice()),
+            input_data.as_slice(),
+            output_capacity,
+            output_type.as_ref().map(|hash| hash.as_slice()),
+            output_data.as_slice(),
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+#[allow(clippy::too_many_arguments)]
+fn validate_factory_splice_cell_delta(
+    delta: &FactoryVaultDeltaV1,
+    input_capacity: u64,
+    input_type: Option<&[u8]>,
+    input_data: &[u8],
+    output_capacity: u64,
+    output_type: Option<&[u8]>,
+    output_data: &[u8],
+) -> Result<()> {
+    match delta.asset_kind() {
+        VAULT_ASSET_KIND_CKB_V1 => {
+            if input_type.is_some()
+                || output_type.is_some()
+                || !input_data.is_empty()
+                || !output_data.is_empty()
+                || input_capacity as u128 != delta.old_amount()
+                || output_capacity as u128 != delta.new_amount()
+            {
+                return Err(ScriptError::FactorySpliceProofMismatch);
+            }
+        }
+        VAULT_ASSET_KIND_XUDT_V1 => {
+            if input_type != Some(delta.asset_type()) || output_type != Some(delta.asset_type()) {
+                return Err(ScriptError::XudtTypeMismatch);
+            }
+            if input_data.len() != 16 || output_data.len() != 16 {
+                return Err(ScriptError::XudtAmountEncoding);
+            }
+            if read_u128(input_data, 0) != delta.old_amount()
+                || read_u128(output_data, 0) != delta.new_amount()
+            {
+                return Err(ScriptError::FactorySpliceProofMismatch);
+            }
+        }
+        _ => return Err(ScriptError::FactorySpliceProofEncoding),
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -214,19 +337,87 @@ fn validate_factory_reserve_conservation(child_vault_capacity: u64) -> Result<()
 }
 
 #[cfg(target_arch = "riscv64")]
-fn single_output_capacity_by_lock_hash(expected_lock_hash: &[u8]) -> Result<u64> {
+fn validate_factory_reduced_exit_reserve_conservation(release: &ChildVaultRelease) -> Result<()> {
+    let input_capacity = single_group_capacity(Source::GroupInput)?;
+    let input_type =
+        load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+
+    let current_lock_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+    let output_index = single_output_index_by_lock_hash(&current_lock_hash)?;
+    let output_capacity =
+        load_cell_capacity(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_type =
+        load_cell_type_hash(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_data =
+        load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+
+    let expected_input = output_capacity
+        .checked_add(release.capacity)
+        .ok_or(ScriptError::CapacityUnderflow)?;
+    if input_capacity != expected_input {
+        return Err(ScriptError::FactoryReserveMismatch);
+    }
+
+    match release.xudt_type_hash {
+        None => {
+            if input_type.is_some()
+                || output_type.is_some()
+                || !input_data.is_empty()
+                || !output_data.is_empty()
+            {
+                return Err(ScriptError::FactoryReserveMismatch);
+            }
+        }
+        Some(type_hash) => {
+            let input_type = input_type.ok_or(ScriptError::XudtTypeMismatch)?;
+            if input_type.as_slice() != type_hash.as_slice() {
+                return Err(ScriptError::XudtTypeMismatch);
+            }
+            if input_data.len() != 16 {
+                return Err(ScriptError::XudtAmountEncoding);
+            }
+            let input_amount = read_u128(&input_data, 0);
+            if input_amount < release.xudt_amount {
+                return Err(ScriptError::FactoryReserveMismatch);
+            }
+            let remaining_amount = input_amount - release.xudt_amount;
+            match output_type {
+                Some(output_type) => {
+                    if remaining_amount == 0 || output_type.as_slice() != type_hash.as_slice() {
+                        return Err(ScriptError::XudtTypeMismatch);
+                    }
+                    if output_data.len() != 16 {
+                        return Err(ScriptError::XudtAmountEncoding);
+                    }
+                    if read_u128(&output_data, 0) != remaining_amount {
+                        return Err(ScriptError::FactoryReserveMismatch);
+                    }
+                }
+                None => {
+                    if remaining_amount != 0 || !output_data.is_empty() {
+                        return Err(ScriptError::FactoryReserveMismatch);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn single_output_index_by_lock_hash(expected_lock_hash: &[u8]) -> Result<usize> {
     let mut found = None;
     let mut index = 0;
     loop {
         match load_cell_lock_hash(index, Source::Output) {
             Ok(lock_hash) => {
                 if lock_hash.as_slice() == expected_lock_hash {
-                    let capacity = load_cell_capacity(index, Source::Output)
-                        .map_err(|_| ScriptError::Encoding)?;
                     if found.is_some() {
                         return Err(ScriptError::FactoryReserveMismatch);
                     }
-                    found = Some(capacity);
+                    found = Some(index);
                 }
                 index += 1;
             }
@@ -235,6 +426,12 @@ fn single_output_capacity_by_lock_hash(expected_lock_hash: &[u8]) -> Result<u64>
         }
     }
     found.ok_or(ScriptError::FactoryReserveMismatch)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn single_output_capacity_by_lock_hash(expected_lock_hash: &[u8]) -> Result<u64> {
+    let index = single_output_index_by_lock_hash(expected_lock_hash)?;
+    load_cell_capacity(index, Source::Output).map_err(|_| ScriptError::Encoding)
 }
 
 #[cfg(target_arch = "riscv64")]

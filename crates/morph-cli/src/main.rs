@@ -4,20 +4,25 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use devnet::{
+    ApplyFactoryReducedSpliceOptions, ApplyFactorySpliceOptions, ApplySpliceOptions,
     CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, FactoryExitAuthorisation,
-    FactoryExitChannelOptions, FactoryExitChannelTamper, FactoryMerkleUpdateSmokeOptions,
-    FactoryReducedExitSmokeOptions, FactoryReducedRightsSmokeOptions,
-    FactoryReducedXudtExitSmokeOptions, FactorySmokeOptions, FactoryXudtNegativeSmokeOptions,
-    FactoryXudtSmokeOptions, FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions,
-    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions,
-    PublishStateOptions, SaveFactoryMerkleUpdatePackageOptions,
-    SaveFactoryReducedRightsPackageOptions, SaveFactoryStatePackageOptions,
-    SaveStatePackageOptions, SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions,
-    SupersedeSmokeOptions, UpdateFactoryOptions, WatchLatestStatePackageOptions,
-    XudtNegativeSmokeOptions, XudtSmokeOptions,
+    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, DevnetSpliceAsset, DevnetSpliceKind,
+    FactoryExitAuthorisation, FactoryExitChannelOptions, FactoryExitChannelTamper,
+    FactoryMerkleUpdateSmokeOptions, FactoryReducedExitSmokeOptions,
+    FactoryReducedRightsSmokeOptions, FactoryReducedXudtExitSmokeOptions,
+    FactoryReducedXudtNegativeExitSmokeOptions, FactorySmokeOptions, FactorySpliceSmokeOptions,
+    FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions, FactoryXudtSpliceSmokeOptions,
+    FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions, FundSponsorOptions,
+    OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions, PublishStateOptions,
+    SaveFactoryMerkleUpdatePackageOptions, SaveFactoryReducedRightsPackageOptions,
+    SaveFactoryReducedSplicePackageOptions, SaveFactorySplicePackageOptions,
+    SaveFactoryStatePackageOptions, SaveSplicePackageOptions, SaveStatePackageOptions,
+    SpliceNegativeSmokeOptions, SpliceSmokeOptions, SponsorBudgetNegativeSmokeOptions,
+    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
+    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
+    XudtSpliceSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -29,6 +34,7 @@ mod factory_packages;
 mod packages;
 mod rpc;
 mod smoke_report;
+mod splice_packages;
 mod watch_alert;
 mod watch_config;
 mod watch_policy;
@@ -39,6 +45,34 @@ mod watch_policy;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SpliceFixtureKindArg {
+    SpliceIn,
+    SpliceOut,
+    XudtSpliceIn,
+    XudtSpliceOut,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FactorySpliceFixtureKindArg {
+    SpliceIn,
+    SpliceOut,
+    XudtSpliceIn,
+    XudtSpliceOut,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CkbSpliceKindArg {
+    SpliceIn,
+    SpliceOut,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SpliceAssetArg {
+    Ckb,
+    Xudt,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -62,6 +96,24 @@ enum Command {
     PrintFactoryMerkleUpdateFixture,
     /// Print a valid factory local-exit evidence package fixture.
     PrintFactoryLocalExitFixture,
+    /// Print a valid conservative factory splice package fixture.
+    PrintFactorySpliceFixture {
+        /// Fixture shape to print.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: FactorySpliceFixtureKindArg,
+    },
+    /// Print a sparse-Merkle reduced factory splice package fixture.
+    PrintFactoryReducedSpliceFixture {
+        /// Fixture shape to print.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: FactorySpliceFixtureKindArg,
+    },
+    /// Print a valid bilateral splice package fixture.
+    PrintSpliceFixture {
+        /// Fixture shape to print.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: SpliceFixtureKindArg,
+    },
     /// Print a sample watchtower operator policy.
     PrintWatchPolicyFixture,
     /// Print a sample multi-channel watchtower config.
@@ -125,6 +177,30 @@ enum Command {
     /// Validate a factory local-exit evidence package.
     ValidateFactoryLocalExitPackage {
         /// Path to the factory local-exit package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a conservative factory splice package.
+    ValidateFactorySplicePackage {
+        /// Path to the factory splice package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a sparse-Merkle reduced factory splice package.
+    ValidateFactoryReducedSplicePackage {
+        /// Path to the reduced factory splice package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a bilateral splice package.
+    ValidateSplicePackage {
+        /// Path to the splice package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -313,7 +389,7 @@ enum DevnetCommand {
         /// Absolute fee to reserve for the open-channel transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before finalisation.
+        /// Relative block count required before finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -477,6 +553,146 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Save a conservative factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
+    SaveFactorySplicePackage {
+        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in V1.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// Current FactoryVaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_vault_out_point: String,
+        /// Factory splice direction.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: CkbSpliceKindArg,
+        /// Asset delta to encode in the factory splice package.
+        #[arg(long, value_enum, default_value = "ckb")]
+        asset: SpliceAssetArg,
+        /// Net CKB amount added to or withdrawn from the factory vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        ckb_amount: u64,
+        /// Net xUDT amount added to or withdrawn from the factory vault. Required with --asset xudt.
+        #[arg(long)]
+        xudt_amount: Option<u128>,
+        /// New factory update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// Directory where factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a reduced sparse-Merkle factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
+    SaveFactoryReducedSplicePackage {
+        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in V1.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced splice.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// Current FactoryVaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_vault_out_point: String,
+        /// Factory splice direction.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: CkbSpliceKindArg,
+        /// Asset delta to encode in the reduced factory splice package.
+        #[arg(long, value_enum, default_value = "ckb")]
+        asset: SpliceAssetArg,
+        /// Net CKB amount added to or withdrawn from the factory vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        ckb_amount: u64,
+        /// Net xUDT amount added to or withdrawn from the factory vault. Required with --asset xudt.
+        #[arg(long)]
+        xudt_amount: Option<u128>,
+        /// New factory update number. Defaults to old_update_number + 1.
+        #[arg(long)]
+        update_number: Option<u64>,
+        /// Directory where reduced factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a validated conservative factory splice package.
+    ApplyFactorySplice {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// Current FactoryVaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_vault_out_point: String,
+        /// Signed factory splice package JSON.
+        #[arg(long)]
+        factory_splice_package: std::path::PathBuf,
+        /// External owner-controlled xUDT input, formatted as <tx-hash>:<index>. Required for xUDT splice-in.
+        #[arg(long)]
+        xudt_input_out_point: Option<String>,
+        /// Absolute transaction fee, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a validated reduced sparse-Merkle factory splice package.
+    ApplyFactoryReducedSplice {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_out_point: String,
+        /// Current FactoryVaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        factory_vault_out_point: String,
+        /// Signed reduced factory splice package JSON.
+        #[arg(long)]
+        factory_reduced_splice_package: std::path::PathBuf,
+        /// External owner-controlled xUDT input, formatted as <tx-hash>:<index>. Required for xUDT splice-in.
+        #[arg(long)]
+        xudt_input_out_point: Option<String>,
+        /// Absolute transaction fee, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Save a sparse Merkle factory update package without broadcasting it.
     SaveFactoryMerkleUpdatePackage {
         /// Devnet Alice factory signing key. Alice is the touched participant in the single-right proof.
@@ -602,6 +818,470 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Run open -> save factory splice package -> apply -> child exit for CKB reserve addition.
+    FactorySpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Initial reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// CKB amount added to the factory vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        splice_amount: u64,
+        /// Capacity released from the post-splice factory reserve into the child channel vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> save factory splice package -> apply -> child exit for CKB reserve withdrawal.
+    FactorySpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Initial reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// CKB amount withdrawn from the factory vault, in shannons.
+        #[arg(long, default_value_t = 7_000_000_000)]
+        splice_amount: u64,
+        /// Capacity released from the post-splice factory reserve into the child channel vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> save reduced factory splice package -> apply -> child exit for CKB reserve addition.
+    FactoryReducedSpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Initial reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// CKB amount added to the factory vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        splice_amount: u64,
+        /// Capacity released from the post-splice factory reserve into the child channel vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where reduced factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> save reduced factory splice package -> apply -> child exit for CKB reserve withdrawal.
+    FactoryReducedSpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Initial reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// CKB amount withdrawn from the factory vault, in shannons.
+        #[arg(long, default_value_t = 7_000_000_000)]
+        splice_amount: u64,
+        /// Capacity released from the post-splice factory reserve into the child channel vault.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where reduced factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> xUDT factory splice package -> apply -> typed child exit for reserve addition.
+    FactoryXudtSpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Net xUDT amount added to the factory vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Capacity released from the post-splice factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> xUDT factory splice package -> apply -> typed child exit for reserve withdrawal.
+    FactoryXudtSpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Net xUDT amount withdrawn from the factory vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Capacity released from the post-splice factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> reduced xUDT factory splice package -> apply -> typed child exit for reserve addition.
+    FactoryReducedXudtSpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Net xUDT amount added to the factory vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Capacity released from the post-splice factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where reduced factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> reduced xUDT factory splice package -> apply -> typed child exit for reserve withdrawal.
+    FactoryReducedXudtSpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Net xUDT amount withdrawn from the factory vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Capacity released from the post-splice factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT reserve amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where reduced factory splice packages are stored.
+        #[arg(long, default_value = "target/morph-factory-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Run open -> sparse Merkle package -> package update for a larger factory rights tree.
     FactoryMerkleUpdateSmoke {
         /// Directory containing the built RISC-V contract binaries.
@@ -681,7 +1361,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -730,16 +1410,74 @@ enum DevnetCommand {
         /// Bob's final xUDT settlement amount.
         #[arg(long, default_value_t = 400_000u128)]
         bob_xudt_amount: u128,
+        /// Extra xUDT kept in the factory vault change after the child vault release.
+        #[arg(long, default_value_t = 0u128)]
+        factory_vault_xudt_surplus: u128,
         /// Capacity placed under the child channel sponsor lock.
         #[arg(long, default_value_t = 50_000_000_000)]
         sponsor_capacity: u64,
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run reduced CKB+xUDT child-vault amount mismatch rejection smoke.
+    FactoryReducedXudtNegativeExitSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that controls funded local-devnet cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob factory/channel key used to prove full membership.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the FactoryStateCell, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        factory_capacity: u64,
+        /// Reserve capacity placed under the FactoryVaultCell, in shannons.
+        #[arg(long, default_value_t = 300_000_000_000)]
+        factory_vault_capacity: u64,
+        /// Capacity released from the factory reserve into the child xUDT vault.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        child_vault_capacity: u64,
+        /// Alice's child-channel descriptor capacity. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's child-channel descriptor capacity. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's final xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's final xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under the child channel sponsor lock.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee paid by each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count required before child-channel finalisation.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after accepted broadcasts. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Emit machine-readable JSON.
@@ -791,7 +1529,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -849,7 +1587,7 @@ enum DevnetCommand {
         /// Absolute fee paid by each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -913,7 +1651,7 @@ enum DevnetCommand {
         /// Absolute fee paid by a normal owner cell, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required before child-channel finalisation.
+        /// Relative block count required before child-channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -954,6 +1692,85 @@ enum DevnetCommand {
         #[arg(long, conflicts_with = "state_number")]
         state_package: Option<std::path::PathBuf>,
         /// Absolute fee paid by the SponsorCell, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save a signed splice package from the live StateCell/VaultCell pair.
+    SaveSplicePackage {
+        /// Devnet Alice channel signing key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel signing key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Current active StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// Current VaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        vault_out_point: String,
+        /// CKB splice direction.
+        #[arg(long, value_enum, default_value = "splice-in")]
+        kind: CkbSpliceKindArg,
+        /// Asset delta to encode in the splice package.
+        #[arg(long, value_enum, default_value = "ckb")]
+        asset: SpliceAssetArg,
+        /// Net CKB amount added to or withdrawn from the vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        ckb_amount: u64,
+        /// Net xUDT amount added to or withdrawn from the vault. Required with --asset xudt.
+        #[arg(long)]
+        xudt_amount: Option<u128>,
+        /// Signed CKB fee reserved inside a splice-in delta. Must be 0 for splice-out.
+        #[arg(long, default_value_t = 0)]
+        signed_fee: u64,
+        /// Funding epoch of the current live StateCell.
+        #[arg(long, default_value_t = 0)]
+        old_funding_epoch: u64,
+        /// Funding epoch assigned to the post-splice StateCell. Defaults to old + 1.
+        #[arg(long)]
+        new_funding_epoch: Option<u64>,
+        /// Splice sequence number. Defaults to the post-splice funding epoch.
+        #[arg(long)]
+        splice_number: Option<u64>,
+        /// Directory where signed splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Apply a validated splice package to the live StateCell/VaultCell pair.
+    ApplySplice {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key that pays splice external CKB and transaction fees.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Current active StateCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        state_out_point: String,
+        /// Current VaultCell out point, formatted as <tx-hash>:<index>.
+        #[arg(long)]
+        vault_out_point: String,
+        /// Signed splice package JSON.
+        #[arg(long)]
+        splice_package: std::path::PathBuf,
+        /// External owner-controlled xUDT input, formatted as <tx-hash>:<index>. Required for xUDT splice-in.
+        #[arg(long)]
+        xudt_input_out_point: Option<String>,
+        /// Absolute transaction fee, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
@@ -1260,7 +2077,7 @@ enum DevnetCommand {
         /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
         #[arg(long)]
         bob_capacity: Option<u64>,
-        /// Raw relative-since value placed on the StateCell input.
+        /// Relative block count encoded onto the StateCell input.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Absolute fee paid from the state-carrier refund, in shannons.
@@ -1269,6 +2086,272 @@ enum DevnetCommand {
         /// Mine this many blocks after broadcasting. Use 0 to only submit to tx-pool.
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> CKB splice-in -> sponsor top-up -> post-splice publish on devnet.
+    SpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Initial capacity placed under the channel vault lock, in shannons.
+        #[arg(long, default_value_t = 20_000_000_000)]
+        vault_capacity: u64,
+        /// Net CKB amount added to the vault, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        splice_amount: u64,
+        /// Alice's initial descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's initial descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count used by channel scripts.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> CKB splice-out -> sponsor top-up -> post-splice publish on devnet.
+    SpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Initial capacity placed under the channel vault lock, in shannons.
+        #[arg(long, default_value_t = 24_000_000_000)]
+        vault_capacity: u64,
+        /// Net CKB amount withdrawn from the vault, in shannons.
+        #[arg(long, default_value_t = 7_000_000_000)]
+        splice_amount: u64,
+        /// Alice's initial descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's initial descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count used by channel scripts.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> xUDT splice-in -> sponsor top-up -> post-splice publish on devnet.
+    XudtSpliceInSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the xUDT vault lock, in shannons.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        vault_capacity: u64,
+        /// Net xUDT amount added to the vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count used by channel scripts.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run open -> xUDT splice-out -> sponsor top-up -> post-splice publish on devnet.
+    XudtSpliceOutSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Capacity placed under the xUDT vault lock, in shannons.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        vault_capacity: u64,
+        /// Net xUDT amount withdrawn from the vault.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for each transaction, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count used by channel scripts.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Prove live devnet rejects malformed and mismatched splice packages.
+    SpliceNegativeSmoke {
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
+        #[arg(
+            long,
+            env = "MORPH_DEVNET_PRIVATE_KEY",
+            default_value = DEFAULT_DEVNET_PRIVATE_KEY
+        )]
+        private_key: String,
+        /// Devnet Alice channel key.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        alice_private_key: String,
+        /// Devnet Bob channel key.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        bob_private_key: String,
+        /// Initial capacity placed under both test vault locks, in shannons.
+        #[arg(long, default_value_t = 40_000_000_000)]
+        vault_capacity: u64,
+        /// Net CKB amount used for splice-in/out negative packages, in shannons.
+        #[arg(long, default_value_t = 1_000_000_000)]
+        splice_amount: u64,
+        /// Net xUDT amount used for xUDT splice-out tampering.
+        #[arg(long, default_value_t = 100_000u128)]
+        splice_xudt_amount: u128,
+        /// Alice's descriptor capacity, in shannons. Must be paired with --bob-capacity.
+        #[arg(long)]
+        alice_capacity: Option<u64>,
+        /// Bob's descriptor capacity, in shannons. Must be paired with --alice-capacity.
+        #[arg(long)]
+        bob_capacity: Option<u64>,
+        /// Alice's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 600_000u128)]
+        alice_xudt_amount: u128,
+        /// Bob's initial xUDT settlement amount.
+        #[arg(long, default_value_t = 400_000u128)]
+        bob_xudt_amount: u128,
+        /// Capacity placed under each sponsor lock, in shannons.
+        #[arg(long, default_value_t = 50_000_000_000)]
+        sponsor_capacity: u64,
+        /// Absolute fee used for setup and rejected apply attempts, in shannons.
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        /// Relative block count used by channel scripts.
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        /// Mine this many blocks after accepted setup broadcasts. Rejected attempts never mine.
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        /// Directory where signed and tampered splice packages are stored.
+        #[arg(long, default_value = "target/morph-splice-packages")]
+        store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -1306,7 +2389,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1349,7 +2432,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value required by channel finalisation.
+        /// Relative block count required by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -1398,7 +2481,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1447,7 +2530,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -1490,7 +2573,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each broadcast. Use 0 to only submit to tx-pool.
@@ -1533,7 +2616,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Use 0 to only submit to tx-pool.
@@ -1576,7 +2659,7 @@ enum DevnetCommand {
         /// Absolute fee used for each transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
         fee: u64,
-        /// Raw relative-since value used by channel finalisation.
+        /// Relative block count used by channel finalisation.
         #[arg(long, default_value_t = 4)]
         finalise_since: u64,
         /// Mine this many blocks after each accepted broadcast. Must be greater than zero.
@@ -1625,6 +2708,57 @@ fn main() -> Result<()> {
         }
         Command::PrintFactoryLocalExitFixture => {
             let package = packages::fixture_factory_local_exit_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintFactorySpliceFixture { kind } => {
+            let package = factory_packages::fixture_factory_splice_package_with_kind(match kind {
+                FactorySpliceFixtureKindArg::SpliceIn => {
+                    factory_packages::FixtureFactorySpliceKind::CkbSpliceIn
+                }
+                FactorySpliceFixtureKindArg::SpliceOut => {
+                    factory_packages::FixtureFactorySpliceKind::CkbSpliceOut
+                }
+                FactorySpliceFixtureKindArg::XudtSpliceIn => {
+                    factory_packages::FixtureFactorySpliceKind::XudtSpliceIn
+                }
+                FactorySpliceFixtureKindArg::XudtSpliceOut => {
+                    factory_packages::FixtureFactorySpliceKind::XudtSpliceOut
+                }
+            })?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintFactoryReducedSpliceFixture { kind } => {
+            let package =
+                factory_packages::fixture_factory_reduced_splice_package_with_kind(match kind {
+                    FactorySpliceFixtureKindArg::SpliceIn => {
+                        factory_packages::FixtureFactorySpliceKind::CkbSpliceIn
+                    }
+                    FactorySpliceFixtureKindArg::SpliceOut => {
+                        factory_packages::FixtureFactorySpliceKind::CkbSpliceOut
+                    }
+                    FactorySpliceFixtureKindArg::XudtSpliceIn => {
+                        factory_packages::FixtureFactorySpliceKind::XudtSpliceIn
+                    }
+                    FactorySpliceFixtureKindArg::XudtSpliceOut => {
+                        factory_packages::FixtureFactorySpliceKind::XudtSpliceOut
+                    }
+                })?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintSpliceFixture { kind } => {
+            let package = splice_packages::fixture_package_with_kind(match kind {
+                SpliceFixtureKindArg::SpliceIn => splice_packages::FixtureSpliceKind::SpliceIn,
+                SpliceFixtureKindArg::SpliceOut => splice_packages::FixtureSpliceKind::SpliceOut,
+                SpliceFixtureKindArg::XudtSpliceIn => {
+                    splice_packages::FixtureSpliceKind::XudtSpliceIn
+                }
+                SpliceFixtureKindArg::XudtSpliceOut => {
+                    splice_packages::FixtureSpliceKind::XudtSpliceOut
+                }
+            })?;
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
@@ -1753,6 +2887,7 @@ fn main() -> Result<()> {
                     "non_interference_digest={}",
                     summary.non_interference_digest
                 );
+                println!("witness_len={}", summary.witness_len);
             }
             Ok(())
         }
@@ -1824,6 +2959,144 @@ fn main() -> Result<()> {
                 println!("descriptor_version={}", summary.descriptor_version);
                 println!("state_output_index={}", summary.state_output_index);
                 println!("vault_output_index={}", summary.vault_output_index);
+            }
+            Ok(())
+        }
+        Command::ValidateFactorySplicePackage { path, json } => {
+            let package = factory_packages::read_factory_splice_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory splice package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("kind={}", summary.kind);
+                println!("old_update_number={}", summary.old_update_number);
+                println!("new_update_number={}", summary.new_update_number);
+                println!("old_state_root={}", summary.old_state_root);
+                println!("new_state_root={}", summary.new_state_root);
+                println!(
+                    "old_access_manifest_root={}",
+                    summary.old_access_manifest_root
+                );
+                println!(
+                    "new_access_manifest_root={}",
+                    summary.new_access_manifest_root
+                );
+                println!("signing_digest={}", summary.signing_digest);
+                println!("vault_delta_commitment={}", summary.vault_delta_commitment);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+                println!(
+                    "reserve_claim_participant={}",
+                    summary.reserve_claim_participant
+                );
+                println!(
+                    "reserve_claim_subchannel={}",
+                    summary.reserve_claim_subchannel
+                );
+                println!("reserve_claim_asset={}", summary.reserve_claim_asset);
+                println!("reserve_claim_before={}", summary.reserve_claim_before);
+                println!("reserve_claim_after={}", summary.reserve_claim_after);
+                println!("vault_old_amount={}", summary.vault_old_amount);
+                println!("vault_new_amount={}", summary.vault_new_amount);
+                println!("external_input={}", summary.external_input);
+                println!("withdrawal={}", summary.withdrawal);
+                println!("signature_threshold={}", summary.signature_threshold);
+                println!("signatures={}", summary.signatures);
+                println!("contract_witness_len={}", summary.contract_witness_len);
+                println!("contract_witness_hex={}", summary.contract_witness_hex);
+            }
+            Ok(())
+        }
+        Command::ValidateFactoryReducedSplicePackage { path, json } => {
+            let package = factory_packages::read_factory_reduced_splice_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("reduced factory splice package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("kind={}", summary.kind);
+                println!("old_update_number={}", summary.old_update_number);
+                println!("new_update_number={}", summary.new_update_number);
+                println!("old_state_root={}", summary.old_state_root);
+                println!("new_state_root={}", summary.new_state_root);
+                println!(
+                    "old_access_manifest_root={}",
+                    summary.old_access_manifest_root
+                );
+                println!(
+                    "new_access_manifest_root={}",
+                    summary.new_access_manifest_root
+                );
+                println!("signing_digest={}", summary.signing_digest);
+                println!("vault_delta_commitment={}", summary.vault_delta_commitment);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+                println!(
+                    "reserve_claim_participant={}",
+                    summary.reserve_claim_participant
+                );
+                println!(
+                    "reserve_claim_subchannel={}",
+                    summary.reserve_claim_subchannel
+                );
+                println!("reserve_claim_asset={}", summary.reserve_claim_asset);
+                println!("reserve_claim_before={}", summary.reserve_claim_before);
+                println!("reserve_claim_after={}", summary.reserve_claim_after);
+                println!("vault_old_amount={}", summary.vault_old_amount);
+                println!("vault_new_amount={}", summary.vault_new_amount);
+                println!("external_input={}", summary.external_input);
+                println!("withdrawal={}", summary.withdrawal);
+                println!("participant_keys={}", summary.participant_keys);
+                println!("signature_threshold={}", summary.signature_threshold);
+                println!("signatures={}", summary.signatures);
+                println!("proof_siblings={}", summary.proof_siblings);
+                println!("contract_witness_len={}", summary.contract_witness_len);
+                println!("contract_witness_hex={}", summary.contract_witness_hex);
+            }
+            Ok(())
+        }
+        Command::ValidateSplicePackage { path, json } => {
+            let package = splice_packages::read_splice_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("splice package ok");
+                println!("channel_id={}", summary.channel_id);
+                println!("kind={}", summary.kind);
+                println!("base_state_number={}", summary.base_state_number);
+                println!("old_funding_epoch={}", summary.old_funding_epoch);
+                println!("new_funding_epoch={}", summary.new_funding_epoch);
+                println!("splice_number={}", summary.splice_number);
+                println!("signing_digest={}", summary.signing_digest);
+                println!("asset_delta_commitment={}", summary.asset_delta_commitment);
+                println!("deltas={}", summary.deltas);
+                println!("withdrawals={}", summary.withdrawals);
+                println!(
+                    "withdrawal_payout_policy={}",
+                    summary.withdrawal_payout_policy
+                );
+                if let Some(pubkey) = &summary.withdrawal_participant_pubkey_sec1 {
+                    println!("withdrawal_participant_pubkey_sec1={pubkey}");
+                }
+                println!(
+                    "remaining_settlement_assets={}",
+                    summary.remaining_settlement_assets
+                );
+                println!("contract_witness_len={}", summary.contract_witness_len);
+                println!("contract_witness_hex={}", summary.contract_witness_hex);
+                println!(
+                    "current_state_header_hex={}",
+                    summary.current_state_header_hex
+                );
+                println!("next_state_header_hex={}", summary.next_state_header_hex);
             }
             Ok(())
         }
@@ -1913,6 +3186,7 @@ fn main() -> Result<()> {
                 println!("factory_proof_profiles={}", report.factory_proof_profiles);
                 println!("factory_reduced_exits={}", report.factory_reduced_exits);
                 println!("factory_local_exits={}", report.factory_local_exits);
+                println!("factory_splices={}", report.factory_splices);
                 if let Some(budget) = &report.budget {
                     println!("budget_total_cycles={}", budget.total_estimated_cycles);
                     println!("budget_max_tx_cycles={}", budget.max_estimated_cycles);
@@ -1925,6 +3199,18 @@ fn main() -> Result<()> {
                             transaction.path,
                             transaction.estimated_cycles,
                             transaction.tx_size_bytes
+                        );
+                    }
+                    for profile in &budget.proof_profiles {
+                        println!(
+                            "budget_proof={} {} {} siblings={} witness_len={} cycles={} bytes={}",
+                            profile.check,
+                            profile.transaction_path,
+                            profile.proof_kind,
+                            profile.proof_siblings,
+                            profile.witness_len,
+                            profile.estimated_cycles,
+                            profile.tx_size_bytes
                         );
                     }
                 }
@@ -2119,6 +3405,16 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 print_metrics(&report.metrics);
                 for hash in report.mined_blocks {
                     println!("mined_block={hash}");
+                }
+                for tx in report.transactions {
+                    println!(
+                        "deploy_tx={} status={} scripts={} tx_size_bytes={} estimated_cycles={}",
+                        tx.tx_hash,
+                        tx.status,
+                        tx.script_names.join(","),
+                        tx.metrics.tx_size_bytes,
+                        tx.metrics.estimated_cycles
+                    );
                 }
                 for script in report.scripts {
                     println!(
@@ -2471,6 +3767,240 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 );
             }
         }
+        DevnetCommand::SaveFactorySplicePackage {
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            kind,
+            asset,
+            ckb_amount,
+            xudt_amount,
+            update_number,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_factory_splice_package(
+                &rpc,
+                SaveFactorySplicePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    factory_vault_out_point,
+                    kind: match kind {
+                        CkbSpliceKindArg::SpliceIn => DevnetSpliceKind::SpliceIn,
+                        CkbSpliceKindArg::SpliceOut => DevnetSpliceKind::SpliceOut,
+                    },
+                    asset: match asset {
+                        SpliceAssetArg::Ckb => DevnetSpliceAsset::Ckb,
+                        SpliceAssetArg::Xudt => DevnetSpliceAsset::Xudt,
+                    },
+                    ckb_amount,
+                    xudt_amount,
+                    update_number,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("factory_id={}", report.factory_id);
+                println!("kind={}", report.kind);
+                println!("asset={}", report.asset);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!("old_vault_amount={}", report.old_vault_amount);
+                println!("new_vault_amount={}", report.new_vault_amount);
+                println!("external_input={}", report.external_input);
+                println!("withdrawal={}", report.withdrawal);
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("contract_witness_len={}", report.contract_witness_len);
+            }
+        }
+        DevnetCommand::SaveFactoryReducedSplicePackage {
+            alice_private_key,
+            bob_private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            kind,
+            asset,
+            ckb_amount,
+            xudt_amount,
+            update_number,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_factory_reduced_splice_package(
+                &rpc,
+                SaveFactoryReducedSplicePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    factory_out_point,
+                    factory_vault_out_point,
+                    kind: match kind {
+                        CkbSpliceKindArg::SpliceIn => DevnetSpliceKind::SpliceIn,
+                        CkbSpliceKindArg::SpliceOut => DevnetSpliceKind::SpliceOut,
+                    },
+                    asset: match asset {
+                        SpliceAssetArg::Ckb => DevnetSpliceAsset::Ckb,
+                        SpliceAssetArg::Xudt => DevnetSpliceAsset::Xudt,
+                    },
+                    ckb_amount,
+                    xudt_amount,
+                    update_number,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("factory_id={}", report.factory_id);
+                println!("kind={}", report.kind);
+                println!("asset={}", report.asset);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!("old_vault_amount={}", report.old_vault_amount);
+                println!("new_vault_amount={}", report.new_vault_amount);
+                println!("external_input={}", report.external_input);
+                println!("withdrawal={}", report.withdrawal);
+                println!("proof_siblings={}", report.proof_siblings);
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("contract_witness_len={}", report.contract_witness_len);
+            }
+        }
+        DevnetCommand::ApplyFactorySplice {
+            contracts_dir,
+            private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            factory_splice_package,
+            xudt_input_out_point,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::apply_factory_splice(
+                &rpc,
+                ApplyFactorySpliceOptions {
+                    contracts_dir,
+                    private_key,
+                    factory_out_point,
+                    factory_vault_out_point,
+                    factory_splice_package,
+                    xudt_input_out_point,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("factory_id={}", report.factory_id);
+                println!("kind={}", report.kind);
+                println!("asset={}", report.asset);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.factory_out_point.tx_hash, report.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.factory_vault_out_point.tx_hash, report.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("fee_change_capacity={}", report.fee_change_capacity);
+                println!("fee={}", report.fee);
+                println!("factory_splice_package={}", report.factory_splice_package);
+                println!("contract_witness_len={}", report.contract_witness_len);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::ApplyFactoryReducedSplice {
+            contracts_dir,
+            private_key,
+            factory_out_point,
+            factory_vault_out_point,
+            factory_reduced_splice_package,
+            xudt_input_out_point,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::apply_factory_reduced_splice(
+                &rpc,
+                ApplyFactoryReducedSpliceOptions {
+                    contracts_dir,
+                    private_key,
+                    factory_out_point,
+                    factory_vault_out_point,
+                    factory_reduced_splice_package,
+                    xudt_input_out_point,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("factory_id={}", report.factory_id);
+                println!("kind={}", report.kind);
+                println!("asset={}", report.asset);
+                println!("old_update_number={}", report.old_update_number);
+                println!("new_update_number={}", report.new_update_number);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.factory_out_point.tx_hash, report.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.factory_vault_out_point.tx_hash, report.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("fee_change_capacity={}", report.fee_change_capacity);
+                println!("fee={}", report.fee);
+                println!(
+                    "factory_reduced_splice_package={}",
+                    report.factory_splice_package
+                );
+                println!("contract_witness_len={}", report.contract_witness_len);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
         DevnetCommand::SaveFactoryMerkleUpdatePackage {
             alice_private_key,
             bob_private_key,
@@ -2657,6 +4187,564 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
             }
         }
+        DevnetCommand::FactorySpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_splice_smoke(
+                &rpc,
+                FactorySpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceIn,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!("apply_tx_hash={}", report.apply.tx_hash);
+                println!("apply_status={}", report.apply.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.apply.factory_vault_out_point.tx_hash,
+                    report.apply.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("contract_witness_len={}", report.apply.contract_witness_len);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("exit_status={}", report.exit.status);
+                println!(
+                    "child_state_out_point={}:{}",
+                    report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+                );
+                println!(
+                    "child_vault_out_point={}:{}",
+                    report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+                );
+                println!(
+                    "post_exit_factory_vault_out_point={}:{}",
+                    report.exit.factory_vault_out_point.tx_hash,
+                    report.exit.factory_vault_out_point.index
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.apply.metrics);
+                print_metrics(&report.exit.metrics);
+                for hash in report.apply.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for hash in report.exit.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FactorySpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_splice_smoke(
+                &rpc,
+                FactorySpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceOut,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!("apply_tx_hash={}", report.apply.tx_hash);
+                println!("apply_status={}", report.apply.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.apply.factory_vault_out_point.tx_hash,
+                    report.apply.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("contract_witness_len={}", report.apply.contract_witness_len);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("exit_status={}", report.exit.status);
+                println!(
+                    "child_state_out_point={}:{}",
+                    report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+                );
+                println!(
+                    "child_vault_out_point={}:{}",
+                    report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+                );
+                println!(
+                    "post_exit_factory_vault_out_point={}:{}",
+                    report.exit.factory_vault_out_point.tx_hash,
+                    report.exit.factory_vault_out_point.index
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.apply.metrics);
+                print_metrics(&report.exit.metrics);
+                for hash in report.apply.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for hash in report.exit.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FactoryReducedSpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_reduced_splice_smoke(
+                &rpc,
+                FactorySpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceIn,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!("proof_siblings={}", report.package.proof_siblings);
+                println!("apply_tx_hash={}", report.apply.tx_hash);
+                println!("apply_status={}", report.apply.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.apply.factory_vault_out_point.tx_hash,
+                    report.apply.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("contract_witness_len={}", report.apply.contract_witness_len);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("exit_status={}", report.exit.status);
+                println!(
+                    "child_state_out_point={}:{}",
+                    report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+                );
+                println!(
+                    "child_vault_out_point={}:{}",
+                    report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+                );
+                println!(
+                    "post_exit_factory_vault_out_point={}:{}",
+                    report.exit.factory_vault_out_point.tx_hash,
+                    report.exit.factory_vault_out_point.index
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.apply.metrics);
+                print_metrics(&report.exit.metrics);
+                for hash in report.apply.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for hash in report.exit.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FactoryReducedSpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_reduced_splice_smoke(
+                &rpc,
+                FactorySpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceOut,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("factory_id={}", report.open.factory_id);
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("package_path={}", report.package.path);
+                println!("proof_siblings={}", report.package.proof_siblings);
+                println!("apply_tx_hash={}", report.apply.tx_hash);
+                println!("apply_status={}", report.apply.status);
+                println!(
+                    "factory_out_point={}:{}",
+                    report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+                );
+                println!(
+                    "factory_vault_out_point={}:{}",
+                    report.apply.factory_vault_out_point.tx_hash,
+                    report.apply.factory_vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!("contract_witness_len={}", report.apply.contract_witness_len);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("exit_status={}", report.exit.status);
+                println!(
+                    "child_state_out_point={}:{}",
+                    report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+                );
+                println!(
+                    "child_vault_out_point={}:{}",
+                    report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+                );
+                println!(
+                    "post_exit_factory_vault_out_point={}:{}",
+                    report.exit.factory_vault_out_point.tx_hash,
+                    report.exit.factory_vault_out_point.index
+                );
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.apply.metrics);
+                print_metrics(&report.exit.metrics);
+                for hash in report.apply.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+                for hash in report.exit.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
+        DevnetCommand::FactoryXudtSpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_xudt_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_xudt_splice_smoke(
+                &rpc,
+                FactoryXudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceIn,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_xudt_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_factory_xudt_splice_smoke_report(&report);
+            }
+        }
+        DevnetCommand::FactoryXudtSpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_xudt_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_xudt_splice_smoke(
+                &rpc,
+                FactoryXudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceOut,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_xudt_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_factory_xudt_splice_smoke_report(&report);
+            }
+        }
+        DevnetCommand::FactoryReducedXudtSpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_xudt_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_reduced_xudt_splice_smoke(
+                &rpc,
+                FactoryXudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceIn,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_xudt_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_factory_reduced_xudt_splice_smoke_report(&report);
+            }
+        }
+        DevnetCommand::FactoryReducedXudtSpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            splice_xudt_amount,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::factory_reduced_xudt_splice_smoke(
+                &rpc,
+                FactoryXudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceOut,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    splice_xudt_amount,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print_factory_reduced_xudt_splice_smoke_report(&report);
+            }
+        }
         DevnetCommand::FactoryMerkleUpdateSmoke {
             contracts_dir,
             private_key,
@@ -2784,6 +4872,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             bob_capacity,
             alice_xudt_amount,
             bob_xudt_amount,
+            factory_vault_xudt_surplus,
             sponsor_capacity,
             fee,
             finalise_since,
@@ -2793,6 +4882,85 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             let report = devnet::factory_reduced_xudt_exit_smoke(
                 &rpc,
                 FactoryReducedXudtExitSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    factory_capacity,
+                    factory_vault_capacity,
+                    child_vault_capacity,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    factory_vault_xudt_surplus,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("factory_id={}", report.open.factory_id);
+                println!(
+                    "xudt_type_hash={}",
+                    report.exit.xudt_type_hash.as_deref().unwrap_or_default()
+                );
+                println!("open_tx_hash={}", report.open.tx_hash);
+                println!("exit_tx_hash={}", report.exit.tx_hash);
+                println!("publish_tx_hash={}", report.publish.tx_hash);
+                println!("finalise_tx_hash={}", report.finalise.tx_hash);
+                println!(
+                    "factory_vault_change_xudt_amount={}",
+                    report
+                        .exit
+                        .factory_vault_change_xudt_amount
+                        .unwrap_or_default()
+                );
+                println!(
+                    "alice_xudt_amount={}",
+                    report.exit.alice_xudt_amount.unwrap_or_default()
+                );
+                println!(
+                    "bob_xudt_amount={}",
+                    report.exit.bob_xudt_amount.unwrap_or_default()
+                );
+                if let Some(reduced) = &report.exit.reduced_exit {
+                    println!("release_quantity={}", reduced.release_quantity);
+                    println!("witness_len={}", reduced.witness_len);
+                    println!(
+                        "non_interference_digest={}",
+                        reduced.non_interference_digest
+                    );
+                }
+                print_metrics(&report.open.metrics);
+                print_metrics(&report.exit.metrics);
+                print_metrics(&report.finalise.metrics);
+            }
+        }
+        DevnetCommand::FactoryReducedXudtNegativeExitSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            factory_capacity,
+            factory_vault_capacity,
+            child_vault_capacity,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::factory_reduced_xudt_negative_exit_smoke(
+                &rpc,
+                FactoryReducedXudtNegativeExitSmokeOptions {
                     contracts_dir,
                     private_key,
                     alice_private_key,
@@ -2814,25 +4982,25 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 println!("factory_id={}", report.open.factory_id);
-                println!(
-                    "xudt_type_hash={}",
-                    report.exit.xudt_type_hash.as_deref().unwrap_or_default()
-                );
                 println!("open_tx_hash={}", report.open.tx_hash);
-                println!("exit_tx_hash={}", report.exit.tx_hash);
-                println!("publish_tx_hash={}", report.publish.tx_hash);
-                println!("finalise_tx_hash={}", report.finalise.tx_hash);
-                if let Some(reduced) = &report.exit.reduced_exit {
-                    println!("release_quantity={}", reduced.release_quantity);
-                    println!("witness_len={}", reduced.witness_len);
-                    println!(
-                        "non_interference_digest={}",
-                        reduced.non_interference_digest
-                    );
-                }
+                println!(
+                    "expected_child_xudt_amount={}",
+                    report.expected_child_xudt_amount
+                );
+                println!(
+                    "rejected_child_xudt_amount={}",
+                    report.rejected_child_xudt_amount
+                );
+                println!(
+                    "script_failure={}",
+                    report
+                        .script_failure
+                        .morph_error
+                        .as_deref()
+                        .unwrap_or("unknown")
+                );
+                println!("rejection={}", report.rejection);
                 print_metrics(&report.open.metrics);
-                print_metrics(&report.exit.metrics);
-                print_metrics(&report.finalise.metrics);
             }
         }
         DevnetCommand::FactoryXudtSmoke {
@@ -3140,6 +5308,154 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
             }
         }
+        DevnetCommand::SaveSplicePackage {
+            alice_private_key,
+            bob_private_key,
+            state_out_point,
+            vault_out_point,
+            kind,
+            asset,
+            ckb_amount,
+            xudt_amount,
+            signed_fee,
+            old_funding_epoch,
+            new_funding_epoch,
+            splice_number,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::save_splice_package(
+                &rpc,
+                SaveSplicePackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    state_out_point,
+                    vault_out_point,
+                    kind: match kind {
+                        CkbSpliceKindArg::SpliceIn => DevnetSpliceKind::SpliceIn,
+                        CkbSpliceKindArg::SpliceOut => DevnetSpliceKind::SpliceOut,
+                    },
+                    asset: match asset {
+                        SpliceAssetArg::Ckb => DevnetSpliceAsset::Ckb,
+                        SpliceAssetArg::Xudt => DevnetSpliceAsset::Xudt,
+                    },
+                    ckb_amount,
+                    xudt_amount,
+                    signed_fee,
+                    old_funding_epoch,
+                    new_funding_epoch,
+                    splice_number,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("kind={}", report.kind);
+                println!("channel_id={}", report.package.channel_id);
+                println!("old_funding_anchor={}", report.package.old_funding_anchor);
+                println!("new_funding_anchor={}", report.package.new_funding_anchor);
+                println!("old_funding_epoch={}", report.old_funding_epoch);
+                println!("new_funding_epoch={}", report.new_funding_epoch);
+                println!("splice_number={}", report.splice_number);
+                println!("asset={}", report.asset);
+                println!("ckb_amount={}", report.ckb_amount);
+                if let Some(amount) = report.xudt_amount {
+                    println!("xudt_amount={amount}");
+                }
+                if let Some(type_hash) = &report.xudt_type_hash {
+                    println!("xudt_type_hash={type_hash}");
+                }
+                println!("old_vault_capacity={}", report.old_vault_capacity);
+                println!("new_vault_capacity={}", report.new_vault_capacity);
+                if let Some(amount) = report.old_xudt_amount {
+                    println!("old_xudt_amount={amount}");
+                }
+                if let Some(amount) = report.new_xudt_amount {
+                    println!("new_xudt_amount={amount}");
+                }
+                println!("signing_digest={}", report.package.signing_digest);
+                println!("contract_witness_len={}", report.contract_witness_len);
+            }
+        }
+        DevnetCommand::ApplySplice {
+            contracts_dir,
+            private_key,
+            state_out_point,
+            vault_out_point,
+            splice_package,
+            xudt_input_out_point,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::apply_splice(
+                &rpc,
+                ApplySpliceOptions {
+                    contracts_dir,
+                    private_key,
+                    state_out_point,
+                    vault_out_point,
+                    splice_package,
+                    xudt_input_out_point,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                if let Some(block_number) = report.block_number {
+                    println!("block_number={block_number}");
+                }
+                if let Some(block_hash) = &report.block_hash {
+                    println!("block_hash={block_hash}");
+                }
+                println!("channel_id={}", report.channel_id);
+                println!("old_funding_anchor={}", report.old_funding_anchor);
+                println!("new_funding_anchor={}", report.new_funding_anchor);
+                println!("old_funding_epoch={}", report.old_funding_epoch);
+                println!("new_funding_epoch={}", report.new_funding_epoch);
+                println!("splice_number={}", report.splice_number);
+                println!("old_state_number={}", report.old_state_number);
+                println!("new_state_number={}", report.new_state_number);
+                println!(
+                    "state_out_point={}:{}",
+                    report.state_out_point.tx_hash, report.state_out_point.index
+                );
+                println!(
+                    "vault_out_point={}:{}",
+                    report.vault_out_point.tx_hash, report.vault_out_point.index
+                );
+                if let Some(out_point) = &report.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!(
+                    "withdrawal_payout_policy={}",
+                    report.withdrawal_payout_policy
+                );
+                if let Some(pubkey) = &report.withdrawal_participant_pubkey_sec1 {
+                    println!("withdrawal_participant_pubkey_sec1={pubkey}");
+                }
+                if let Some(lock_hash) = &report.withdrawal_lock_hash {
+                    println!("withdrawal_lock_hash={lock_hash}");
+                }
+                println!("fee_change_capacity={}", report.fee_change_capacity);
+                println!("fee={}", report.fee);
+                println!("splice_package={}", report.splice_package);
+                println!("contract_witness_len={}", report.contract_witness_len);
+                print_metrics(&report.metrics);
+                for hash in report.mined_blocks {
+                    println!("mined_block={hash}");
+                }
+            }
+        }
         DevnetCommand::SaveStatePackage {
             alice_private_key,
             bob_private_key,
@@ -3325,6 +5641,10 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     "package_state_number={}",
                     report.selected_package.package.state_number
                 );
+                println!(
+                    "package_funding_anchor={}",
+                    report.selected_package.package.funding_anchor
+                );
                 if let Some(sponsor_top_up) = &report.sponsor_top_up {
                     println!("sponsor_top_up_tx={}", sponsor_top_up.tx_hash);
                     println!(
@@ -3336,6 +5656,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 if let Some(observed) = &report.observed {
                     println!("observed_out_point={}", observed.out_point);
                     println!("observed_state_number={}", observed.state_number);
+                    println!("observed_funding_anchor={}", observed.funding_anchor);
                     println!("observed_confirmations={}", observed.confirmations);
                 }
                 if let Some(publication) = &report.publication {
@@ -3601,6 +5922,425 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         output.capacity,
                         output.lock_hash
                     );
+                }
+            }
+        }
+        DevnetCommand::SpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            splice_amount,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::splice_smoke(
+                &rpc,
+                SpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceIn,
+                    vault_capacity,
+                    splice_amount,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("open_tx={}", report.open.tx_hash);
+                println!("splice_package={}", report.package.path);
+                println!("apply_tx={}", report.apply.tx_hash);
+                println!(
+                    "post_splice_state_out_point={}:{}",
+                    report.apply.state_out_point.tx_hash, report.apply.state_out_point.index
+                );
+                println!(
+                    "post_splice_vault_out_point={}:{}",
+                    report.apply.vault_out_point.tx_hash, report.apply.vault_out_point.index
+                );
+                println!(
+                    "post_splice_sponsor_tx={}",
+                    report.post_splice_sponsor.tx_hash
+                );
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!("channel_id={}", report.apply.channel_id);
+                println!("new_funding_anchor={}", report.apply.new_funding_anchor);
+                println!("new_vault_capacity={}", report.package.new_vault_capacity);
+                println!("publish_status={}", report.publish.status);
+                if let Some(finalise) = &report.finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                if let Some(finalise) = &report.xudt_finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                println!(
+                    "cycles=open:{} apply:{} sponsor:{} publish:{}",
+                    report.open.metrics.estimated_cycles,
+                    report.apply.metrics.estimated_cycles,
+                    report.post_splice_sponsor.metrics.estimated_cycles,
+                    report.publish.metrics.estimated_cycles
+                );
+            }
+        }
+        DevnetCommand::SpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            splice_amount,
+            alice_capacity,
+            bob_capacity,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::splice_smoke(
+                &rpc,
+                SpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    kind: DevnetSpliceKind::SpliceOut,
+                    vault_capacity,
+                    splice_amount,
+                    alice_capacity,
+                    bob_capacity,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("open_tx={}", report.open.tx_hash);
+                println!("splice_package={}", report.package.path);
+                println!("apply_tx={}", report.apply.tx_hash);
+                println!(
+                    "post_splice_state_out_point={}:{}",
+                    report.apply.state_out_point.tx_hash, report.apply.state_out_point.index
+                );
+                println!(
+                    "post_splice_vault_out_point={}:{}",
+                    report.apply.vault_out_point.tx_hash, report.apply.vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!(
+                    "post_splice_sponsor_tx={}",
+                    report.post_splice_sponsor.tx_hash
+                );
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!("channel_id={}", report.apply.channel_id);
+                println!("new_funding_anchor={}", report.apply.new_funding_anchor);
+                println!("new_vault_capacity={}", report.package.new_vault_capacity);
+                println!("publish_status={}", report.publish.status);
+                if let Some(finalise) = &report.finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                if let Some(finalise) = &report.xudt_finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                println!(
+                    "cycles=open:{} apply:{} sponsor:{} publish:{}",
+                    report.open.metrics.estimated_cycles,
+                    report.apply.metrics.estimated_cycles,
+                    report.post_splice_sponsor.metrics.estimated_cycles,
+                    report.publish.metrics.estimated_cycles
+                );
+            }
+        }
+        DevnetCommand::XudtSpliceInSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            splice_xudt_amount,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::xudt_splice_in_smoke(
+                &rpc,
+                XudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    splice_xudt_amount,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("open_tx={}", report.open.tx_hash);
+                if let Some(external_xudt) = &report.external_xudt {
+                    println!("external_xudt_tx={}", external_xudt.tx_hash);
+                    println!(
+                        "external_xudt_out_point={}:{}",
+                        external_xudt.cell_out_point.tx_hash, external_xudt.cell_out_point.index
+                    );
+                }
+                println!("splice_package={}", report.package.path);
+                println!(
+                    "xudt_type_hash={}",
+                    report.package.xudt_type_hash.as_deref().unwrap_or_default()
+                );
+                println!(
+                    "xudt_amount={}",
+                    report.package.xudt_amount.unwrap_or_default()
+                );
+                println!(
+                    "new_xudt_amount={}",
+                    report.package.new_xudt_amount.unwrap_or_default()
+                );
+                println!("apply_tx={}", report.apply.tx_hash);
+                println!(
+                    "post_splice_state_out_point={}:{}",
+                    report.apply.state_out_point.tx_hash, report.apply.state_out_point.index
+                );
+                println!(
+                    "post_splice_vault_out_point={}:{}",
+                    report.apply.vault_out_point.tx_hash, report.apply.vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!(
+                    "post_splice_sponsor_tx={}",
+                    report.post_splice_sponsor.tx_hash
+                );
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!("channel_id={}", report.apply.channel_id);
+                println!("new_funding_anchor={}", report.apply.new_funding_anchor);
+                println!("new_vault_capacity={}", report.package.new_vault_capacity);
+                println!("publish_status={}", report.publish.status);
+                if let Some(finalise) = &report.finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                if let Some(finalise) = &report.xudt_finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                println!(
+                    "cycles=open:{} apply:{} sponsor:{} publish:{}",
+                    report.open.metrics.estimated_cycles,
+                    report.apply.metrics.estimated_cycles,
+                    report.post_splice_sponsor.metrics.estimated_cycles,
+                    report.publish.metrics.estimated_cycles
+                );
+            }
+        }
+        DevnetCommand::XudtSpliceOutSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            splice_xudt_amount,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::xudt_splice_out_smoke(
+                &rpc,
+                XudtSpliceSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    splice_xudt_amount,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("kind={}", report.kind);
+                println!("open_tx={}", report.open.tx_hash);
+                println!("splice_package={}", report.package.path);
+                println!(
+                    "xudt_type_hash={}",
+                    report.package.xudt_type_hash.as_deref().unwrap_or_default()
+                );
+                println!(
+                    "xudt_amount={}",
+                    report.package.xudt_amount.unwrap_or_default()
+                );
+                println!(
+                    "new_xudt_amount={}",
+                    report.package.new_xudt_amount.unwrap_or_default()
+                );
+                println!("apply_tx={}", report.apply.tx_hash);
+                println!(
+                    "post_splice_state_out_point={}:{}",
+                    report.apply.state_out_point.tx_hash, report.apply.state_out_point.index
+                );
+                println!(
+                    "post_splice_vault_out_point={}:{}",
+                    report.apply.vault_out_point.tx_hash, report.apply.vault_out_point.index
+                );
+                if let Some(out_point) = &report.apply.withdrawal_out_point {
+                    println!(
+                        "withdrawal_out_point={}:{}",
+                        out_point.tx_hash, out_point.index
+                    );
+                }
+                println!(
+                    "post_splice_sponsor_tx={}",
+                    report.post_splice_sponsor.tx_hash
+                );
+                println!("publish_tx={}", report.publish.tx_hash);
+                println!("channel_id={}", report.apply.channel_id);
+                println!("new_funding_anchor={}", report.apply.new_funding_anchor);
+                println!("new_vault_capacity={}", report.package.new_vault_capacity);
+                println!("publish_status={}", report.publish.status);
+                if let Some(finalise) = &report.finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                if let Some(finalise) = &report.xudt_finalise {
+                    println!("finalise_tx={}", finalise.tx_hash);
+                    println!("finalise_status={}", finalise.status);
+                }
+                println!(
+                    "cycles=open:{} apply:{} sponsor:{} publish:{}",
+                    report.open.metrics.estimated_cycles,
+                    report.apply.metrics.estimated_cycles,
+                    report.post_splice_sponsor.metrics.estimated_cycles,
+                    report.publish.metrics.estimated_cycles
+                );
+            }
+        }
+        DevnetCommand::SpliceNegativeSmoke {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            vault_capacity,
+            splice_amount,
+            splice_xudt_amount,
+            alice_capacity,
+            bob_capacity,
+            alice_xudt_amount,
+            bob_xudt_amount,
+            sponsor_capacity,
+            fee,
+            finalise_since,
+            mine_blocks,
+            store_dir,
+            json,
+        } => {
+            let report = devnet::splice_negative_smoke(
+                &rpc,
+                SpliceNegativeSmokeOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    vault_capacity,
+                    splice_amount,
+                    splice_xudt_amount,
+                    alice_capacity,
+                    bob_capacity,
+                    alice_xudt_amount,
+                    bob_xudt_amount,
+                    sponsor_capacity,
+                    fee,
+                    finalise_since,
+                    mine_blocks,
+                    store_dir,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("ckb_open_tx={}", report.ckb_open.tx_hash);
+                println!("xudt_open_tx={}", report.xudt_open.tx_hash);
+                println!("ckb_splice_package={}", report.ckb_package.path);
+                println!("xudt_splice_package={}", report.xudt_package.path);
+                println!(
+                    "signed_fee_splice_package={}",
+                    report.signed_fee_package.path
+                );
+                for rejection in &report.rejections {
+                    println!(
+                        "rejected_case={} stage={} package={}",
+                        rejection.case, rejection.stage, rejection.rejected_package
+                    );
+                    println!("rejection={}", rejection.rejection);
                 }
             }
         }
@@ -3987,6 +6727,161 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_factory_xudt_splice_smoke_report(report: &devnet::FactoryXudtSpliceSmokeReport) {
+    println!("kind={}", report.kind);
+    println!("factory_id={}", report.open.factory_id);
+    println!(
+        "xudt_type_hash={}",
+        report.exit.xudt_type_hash.as_deref().unwrap_or_default()
+    );
+    println!("open_tx_hash={}", report.open.tx_hash);
+    if let Some(external_xudt) = &report.external_xudt {
+        println!("external_xudt_tx_hash={}", external_xudt.tx_hash);
+        println!(
+            "external_xudt_out_point={}:{}",
+            external_xudt.cell_out_point.tx_hash, external_xudt.cell_out_point.index
+        );
+    }
+    println!("package_path={}", report.package.path);
+    println!("apply_tx_hash={}", report.apply.tx_hash);
+    println!("apply_status={}", report.apply.status);
+    println!(
+        "factory_out_point={}:{}",
+        report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+    );
+    println!(
+        "factory_vault_out_point={}:{}",
+        report.apply.factory_vault_out_point.tx_hash, report.apply.factory_vault_out_point.index
+    );
+    if let Some(out_point) = &report.apply.withdrawal_out_point {
+        println!(
+            "withdrawal_out_point={}:{}",
+            out_point.tx_hash, out_point.index
+        );
+    }
+    println!("contract_witness_len={}", report.apply.contract_witness_len);
+    println!("exit_tx_hash={}", report.exit.tx_hash);
+    println!("exit_status={}", report.exit.status);
+    println!(
+        "child_state_out_point={}:{}",
+        report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+    );
+    println!(
+        "child_vault_out_point={}:{}",
+        report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+    );
+    println!(
+        "child_xudt_amount={}",
+        report.exit.child_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "alice_xudt_amount={}",
+        report.exit.alice_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "bob_xudt_amount={}",
+        report.exit.bob_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "post_exit_factory_vault_out_point={}:{}",
+        report.exit.factory_vault_out_point.tx_hash, report.exit.factory_vault_out_point.index
+    );
+    if let Some(amount) = report.exit.factory_vault_change_xudt_amount {
+        println!("factory_vault_change_xudt_amount={amount}");
+    }
+    print_metrics(&report.open.metrics);
+    if let Some(external_xudt) = &report.external_xudt {
+        print_metrics(&external_xudt.metrics);
+    }
+    print_metrics(&report.apply.metrics);
+    print_metrics(&report.exit.metrics);
+    for hash in &report.apply.mined_blocks {
+        println!("mined_block={hash}");
+    }
+    for hash in &report.exit.mined_blocks {
+        println!("mined_block={hash}");
+    }
+}
+
+fn print_factory_reduced_xudt_splice_smoke_report(
+    report: &devnet::FactoryReducedXudtSpliceSmokeReport,
+) {
+    println!("kind={}", report.kind);
+    println!("factory_id={}", report.open.factory_id);
+    println!(
+        "xudt_type_hash={}",
+        report.exit.xudt_type_hash.as_deref().unwrap_or_default()
+    );
+    println!("open_tx_hash={}", report.open.tx_hash);
+    if let Some(external_xudt) = &report.external_xudt {
+        println!("external_xudt_tx_hash={}", external_xudt.tx_hash);
+        println!(
+            "external_xudt_out_point={}:{}",
+            external_xudt.cell_out_point.tx_hash, external_xudt.cell_out_point.index
+        );
+    }
+    println!("package_path={}", report.package.path);
+    println!("proof_siblings={}", report.package.proof_siblings);
+    println!("apply_tx_hash={}", report.apply.tx_hash);
+    println!("apply_status={}", report.apply.status);
+    println!(
+        "factory_out_point={}:{}",
+        report.apply.factory_out_point.tx_hash, report.apply.factory_out_point.index
+    );
+    println!(
+        "factory_vault_out_point={}:{}",
+        report.apply.factory_vault_out_point.tx_hash, report.apply.factory_vault_out_point.index
+    );
+    if let Some(out_point) = &report.apply.withdrawal_out_point {
+        println!(
+            "withdrawal_out_point={}:{}",
+            out_point.tx_hash, out_point.index
+        );
+    }
+    println!("contract_witness_len={}", report.apply.contract_witness_len);
+    println!("exit_tx_hash={}", report.exit.tx_hash);
+    println!("exit_status={}", report.exit.status);
+    println!(
+        "child_state_out_point={}:{}",
+        report.exit.state_out_point.tx_hash, report.exit.state_out_point.index
+    );
+    println!(
+        "child_vault_out_point={}:{}",
+        report.exit.vault_out_point.tx_hash, report.exit.vault_out_point.index
+    );
+    println!(
+        "child_xudt_amount={}",
+        report.exit.child_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "alice_xudt_amount={}",
+        report.exit.alice_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "bob_xudt_amount={}",
+        report.exit.bob_xudt_amount.unwrap_or_default()
+    );
+    println!(
+        "post_exit_factory_vault_out_point={}:{}",
+        report.exit.factory_vault_out_point.tx_hash, report.exit.factory_vault_out_point.index
+    );
+    if let Some(amount) = report.exit.factory_vault_change_xudt_amount {
+        println!("factory_vault_change_xudt_amount={amount}");
+    }
+    print_metrics(&report.open.metrics);
+    if let Some(external_xudt) = &report.external_xudt {
+        print_metrics(&external_xudt.metrics);
+    }
+    print_metrics(&report.apply.metrics);
+    print_metrics(&report.exit.metrics);
+    for hash in &report.apply.mined_blocks {
+        println!("mined_block={hash}");
+    }
+    for hash in &report.exit.mined_blocks {
+        println!("mined_block={hash}");
+    }
 }
 
 fn print_metrics(metrics: &devnet::TransactionMetrics) {
