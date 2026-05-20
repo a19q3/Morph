@@ -34,6 +34,9 @@ evidence from mainnet or a mainnet-like environment.
 
 - Pass the devnet stateful production-scenario suite with watchtower restart,
   cursor, stale-splice-package, and multi-operator-local evidence.
+- Current local evidence: the devnet stateful suite passed at `3814453`,
+  including watchtower cursor, stale-splice-package, service-mode, and local
+  multi-operator-shaped checks.
 - Exercise restart and cursor recovery after bilateral splice and factory splice
   transitions.
 - Require funding-anchor-aware package selection, stale pre-splice package
@@ -41,7 +44,7 @@ evidence from mainnet or a mainnet-like environment.
 - Document key custody, health-file monitoring, webhook delivery failure
   handling, and supervised restart expectations.
 - Test at least two independent watchtower operators against the same channel
-  package set before raising value limits.
+  package set in mainnet-like operations before raising value limits.
 
 ## P1 Hardening
 
@@ -57,6 +60,8 @@ evidence from mainnet or a mainnet-like environment.
 ### Supply-Chain Gate
 
 - `make supply-chain` must pass before release.
+- Current local evidence: `make supply-chain` passed at `3814453`; a mainnet
+  release candidate still requires current release/CI revalidation.
 - `cargo audit` checks RustSec advisories against `Cargo.lock`.
 - `cargo deny check` enforces allowed licenses, crate sources, and banned
   OpenSSL dependencies through `deny.toml`.

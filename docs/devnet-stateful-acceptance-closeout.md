@@ -29,9 +29,13 @@ assertions over the existing on-chain smoke matrix. It records:
 
 ## Source Baseline
 
-- Implementation commit at run time: `17e1964`
+- Final committed baseline: `3814453`
+- Artifact run-time commit: `17e1964`
 - Working tree at run time: dirty because this stateful suite was under
-  implementation.
+  implementation before the final commit.
+- The artifact records the implementation-in-progress state that produced the
+  evidence. `17e1964` is therefore the run-time artifact commit, not the final
+  committed baseline for this closeout.
 - Stateful evidence artifact:
   `target/devnet-stateful-e2e/20260520T135931Z`
 - Stateful scenario artifact:

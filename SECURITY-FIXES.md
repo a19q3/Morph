@@ -1,14 +1,19 @@
 # Security Fixes Closeout
 
+This is a historical safety-kernel closeout for baseline `8944bf7`. It is
+superseded for current devnet release-candidate status by the stateful closeout
+at `3814453` in
+[`docs/devnet-stateful-acceptance-closeout.md`](docs/devnet-stateful-acceptance-closeout.md).
+
 This note records the local P0/P1 safety-boundary fixes for the V1 safety
 kernel candidate. It is intended as reviewer context for the security-fix
 baseline commit.
 
-Current status: the known local P0/P1 safety-kernel blockers are addressed in
-the implementation baseline, making this a V1 safety-kernel audit candidate.
-This is not a mainnet-ready or production-ready claim; value limits still
-require external diff review, mainnet-like evidence, supply-chain gates, and
-operational readiness sign-off.
+Status at this closeout: the known local P0/P1 safety-kernel blockers were
+addressed in the implementation baseline, making this a V1 safety-kernel audit
+candidate. This was not a mainnet-ready or production-ready claim; value limits
+still required external diff review, mainnet-like evidence, supply-chain
+revalidation, operational readiness sign-off, and value-limit policy.
 
 Implementation safety-boundary baseline: `8944bf7`.
 
@@ -140,7 +145,8 @@ The local verification run for this closeout passed:
 - `make fmt-check`
 - `git diff --check`
 
-Supply-chain status: `make supply-chain` was attempted twice during closeout,
-but `cargo audit` could not fetch the RustSec advisory database because the
-GitHub request failed with an IO error. This remains a mainnet-readiness
-blocker, not a V1 safety-kernel audit-candidate blocker.
+Historical supply-chain status for this closeout: `make supply-chain` was
+attempted twice, but `cargo audit` could not fetch the RustSec advisory
+database because the GitHub request failed with an IO error. Later evidence:
+`make supply-chain` passed in the devnet stateful closeout at `3814453`.
+Mainnet release still requires release/CI supply-chain revalidation.

@@ -146,19 +146,20 @@ state-number interval, and expected StateType hash. Arbitrary output data that
 looks like a StateHeader is not enough. This keeps sponsor capacity out of
 arbitrary transfers and out of fake-publication fee drains.
 
-The current safety-kernel candidate closes the local P0/P1 boundary gaps that
-were previously documented as target properties. Vault finalisation is
-authorised by an authentic current Morph StateCell with the expected StateType
-and StateLock identity, not by bytes that decode as a `StateHeader`. State
-finalisation and active splice retirement require an input whose VaultCell
-commitment matches the retiring StateHeader payload commitment, so StateCells
-cannot be retired while orphaning channel value. Finalisation maturity uses
-canonical relative-block CKB `since`; CLI options are relative block counts and
-are encoded before transaction construction. A single-right sparse Merkle proof
-proves locality only, so the plain reduced Merkle update path accepts
-value-right decreases; value-right increases need full consent or a
-vault-delta-bound splice path. See [`../SECURITY-FIXES.md`](../SECURITY-FIXES.md)
-for the closeout matrix and negative tests.
+The safety-kernel boundary fixes are part of the current Devnet V1
+release-candidate baseline, and that baseline has stateful devnet audit
+acceptance. Vault finalisation is authorised by an authentic current Morph
+StateCell with the expected StateType and StateLock identity, not by bytes that
+decode as a `StateHeader`. State finalisation and active splice retirement
+require an input whose VaultCell commitment matches the retiring StateHeader
+payload commitment, so StateCells cannot be retired while orphaning channel
+value. Finalisation maturity uses canonical relative-block CKB `since`; CLI
+options are relative block counts and are encoded before transaction
+construction. A single-right sparse Merkle proof proves locality only, so the
+plain reduced Merkle update path accepts value-right decreases; value-right
+increases need full consent or a vault-delta-bound splice path. See
+[`../SECURITY-FIXES.md`](../SECURITY-FIXES.md) for the historical P0/P1
+safety-kernel closeout matrix and negative tests.
 
 Factory mode now has both a host-side predicate and a conservative devnet state
 track. A factory-local update is described as changes to a set of participant

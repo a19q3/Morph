@@ -233,6 +233,26 @@ Deferred beyond the current roadmap:
 - empirical budget profiles for larger, multi-right, or variable-depth proof
   shapes beyond the current fixed-width smoke witnesses.
 
+## M4.5: Devnet Stateful Acceptance
+
+Status: implemented as the devnet acceptance layer, not as mainnet readiness.
+
+- `scripts/devnet-stateful-e2e.sh` and
+  `scripts/devnet-stateful-scenarios.sh` group the real devnet smoke evidence
+  into production-shaped lifecycle scenarios.
+- `devnet-stateful-report`, `devnet-stateful-assert`, and
+  `devnet-stateful-compare` summarise scenario status, enforce required
+  committed checks and exact expected failures, and detect audit-family status
+  regressions.
+- `docs/devnet-audit-profile.example.json` maps discovered protocol risk
+  classes to required coverage tags, scenarios, committed checks, expected
+  failures, and budget gates.
+- The closeout is recorded in
+  [`docs/devnet-stateful-acceptance-closeout.md`](devnet-stateful-acceptance-closeout.md).
+  Mainnet-like fee/reorg evidence, external xUDT compatibility, external
+  review, production watchtower operations, and value-limit policy remain in
+  [`docs/mainnet-readiness.md`](mainnet-readiness.md).
+
 ## M5: Bilateral Splicing And Dynamic Funding
 
 Status: implemented for the conservative V1 scope. The core crate now models
