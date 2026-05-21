@@ -70,9 +70,7 @@ pub struct DevnetStatefulAssertionReport {
 pub struct DevnetStatefulAssertionOptions<'a> {
     pub budget_limits: Option<&'a DevnetSmokeBudgetLimits>,
     pub audit_profile: Option<&'a DevnetAuditProfile>,
-    pub contracts_dir: Option<&'a Path>,
-    pub allow_dirty_artifact: bool,
-    pub allow_stale_artifact: bool,
+    pub contracts_dir: &'a Path,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,11 +268,7 @@ pub fn assert_default_devnet_stateful(
 ) -> Result<DevnetStatefulAssertionReport> {
     let summary = summarize_devnet_stateful_with_audit(dir, options.audit_profile)?;
     assert_stateful_summary(&summary)?;
-    assert_stateful_artifact_fresh(
-        &summary,
-        options.allow_dirty_artifact,
-        options.allow_stale_artifact,
-    )?;
+    assert_stateful_artifact_fresh(&summary)?;
     assert_audit_families(&summary, options.audit_profile, options.budget_limits)?;
     let smoke_report = if let Some(smoke) = &summary.smoke {
         let smoke_dir = dir.join("smoke");
@@ -589,29 +583,55 @@ fn assert_stateful_summary(summary: &DevnetStatefulSummary) -> Result<()> {
     Ok(())
 }
 
-fn assert_stateful_artifact_fresh(
+fn assert_stateful_artifact_fresh(summary: &DevnetStatefulSummary) -> Result<()> {
+    let current_git = current_git_state()?;
+    assert_stateful_artifact_fresh_against(summary, &current_git)
+}
+
+#[derive(Debug, Clone)]
+struct CurrentGitState {
+    commit: String,
+    dirty: bool,
+}
+
+fn assert_stateful_artifact_fresh_against(
     summary: &DevnetStatefulSummary,
-    allow_dirty_artifact: bool,
-    allow_stale_artifact: bool,
+    current_git: &CurrentGitState,
 ) -> Result<()> {
-    if !allow_dirty_artifact {
-        ensure!(
-            summary.manifest.get("git_dirty").map(String::as_str) == Some("false"),
-            "stateful artifact was produced from a dirty working tree"
-        );
-    }
-    if !allow_stale_artifact {
-        let artifact_commit = summary
-            .manifest
-            .get("git_commit")
-            .ok_or_else(|| anyhow!("stateful artifact manifest is missing git_commit"))?;
-        let current_commit = current_git_commit_short()?;
-        ensure!(
-            artifact_commit == &current_commit,
-            "stateful artifact commit {artifact_commit} does not match current HEAD {current_commit}"
-        );
-    }
+    ensure!(
+        summary.manifest.get("git_dirty").map(String::as_str) == Some("false"),
+        "stateful artifact was produced from a dirty working tree"
+    );
+    ensure!(
+        !current_git.dirty,
+        "current working tree is dirty; rerun from a clean tree"
+    );
+    let artifact_commit = summary
+        .manifest
+        .get("git_commit")
+        .ok_or_else(|| anyhow!("stateful artifact manifest is missing git_commit"))?;
+    ensure!(
+        artifact_commit == &current_git.commit,
+        "stateful artifact commit {artifact_commit} does not match current HEAD {}",
+        current_git.commit
+    );
     Ok(())
+}
+
+fn current_git_state() -> Result<CurrentGitState> {
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .context("failed to run git status --porcelain")?;
+    ensure!(
+        status.status.success(),
+        "git status --porcelain failed: {}",
+        String::from_utf8_lossy(&status.stderr).trim()
+    );
+    Ok(CurrentGitState {
+        commit: current_git_commit_short()?,
+        dirty: !String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+    })
 }
 
 fn current_git_commit_short() -> Result<String> {
@@ -1042,9 +1062,12 @@ mod tests {
             .manifest
             .insert("git_dirty".to_string(), "true".to_string());
 
-        let err = assert_stateful_artifact_fresh(&summary, false, true).unwrap_err();
+        let current_git = CurrentGitState {
+            commit: "abc1234".to_string(),
+            dirty: false,
+        };
+        let err = assert_stateful_artifact_fresh_against(&summary, &current_git).unwrap_err();
         assert!(err.to_string().contains("dirty working tree"));
-        assert!(assert_stateful_artifact_fresh(&summary, true, true).is_ok());
     }
 
     #[test]
@@ -1065,9 +1088,47 @@ mod tests {
             .manifest
             .insert("git_dirty".to_string(), "false".to_string());
 
-        let err = assert_stateful_artifact_fresh(&summary, false, false).unwrap_err();
+        let current_git = CurrentGitState {
+            commit: current_git_commit_short().unwrap(),
+            dirty: false,
+        };
+        let err = assert_stateful_artifact_fresh_against(&summary, &current_git).unwrap_err();
         assert!(err.to_string().contains("does not match current HEAD"));
-        assert!(assert_stateful_artifact_fresh(&summary, false, true).is_ok());
+    }
+
+    #[test]
+    fn rejects_dirty_current_worktree_by_default() {
+        let mut summary = summary_with_scenario(StatefulScenarioSummary {
+            scenario_id: "scenario-a".to_string(),
+            category: "test".to_string(),
+            description: "test".to_string(),
+            references: vec!["a.json".to_string()],
+            required_committed_checks: vec![],
+            expected_failures: vec![],
+            coverage: vec![],
+        });
+        summary
+            .manifest
+            .insert("git_commit".to_string(), "abc1234".to_string());
+        summary
+            .manifest
+            .insert("git_dirty".to_string(), "false".to_string());
+        let current_git = CurrentGitState {
+            commit: "abc1234".to_string(),
+            dirty: true,
+        };
+
+        let err = assert_stateful_artifact_fresh_against(&summary, &current_git).unwrap_err();
+        assert!(err.to_string().contains("current working tree is dirty"));
+
+        summary
+            .manifest
+            .insert("git_dirty".to_string(), "true".to_string());
+        let err = assert_stateful_artifact_fresh_against(&summary, &current_git).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("artifact was produced from a dirty")
+        );
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

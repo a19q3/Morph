@@ -175,10 +175,9 @@ make smoke-assert
 ```
 
 `devnet-smoke-assert` compares deployed script data hashes with the local
-RISC-V binaries in `target/riscv64imac-unknown-none-elf/release` by default.
-Use `--contracts-dir` for another build directory, or
-`--skip-contract-hash-check` only when reviewing archived smoke output without
-the matching binaries. The same command can enforce absolute smoke budgets:
+RISC-V binaries in `target/riscv64imac-unknown-none-elf/release`. Use
+`--contracts-dir` for another build directory. The same command can enforce
+absolute smoke budgets:
 
 ```sh
 cargo run -q -p morph-cli -- devnet-smoke-assert \

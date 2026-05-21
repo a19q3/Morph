@@ -1,7 +1,9 @@
 # Devnet Stateful Production Scenario Acceptance
 
-Status: Devnet stateful acceptance evidence passed locally, including the
-generalized audit profile and supply-chain gate.
+Status: historical devnet stateful acceptance evidence passed locally, including
+the generalized audit profile and supply-chain gate. Contract boundary fixes
+after this recorded run require a fresh clean `make devnet-stateful-e2e` artifact
+before this closeout can be used as current release evidence again.
 
 This is not a mainnet-ready or production real-assets-ready claim. The suite is
 the devnet acceptance layer for production-shaped stateful lifecycles and

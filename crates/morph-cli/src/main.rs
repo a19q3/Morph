@@ -224,9 +224,6 @@ enum Command {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Skip checking deployed script hashes against local contract binaries.
-        #[arg(long)]
-        skip_contract_hash_check: bool,
         /// JSON file with absolute smoke budgets for totals and named transactions.
         #[arg(long)]
         budget_profile: Option<std::path::PathBuf>,
@@ -302,15 +299,6 @@ enum Command {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Skip checking deployed script hashes against local contract binaries.
-        #[arg(long)]
-        skip_contract_hash_check: bool,
-        /// Allow asserting artifacts produced from a dirty working tree.
-        #[arg(long)]
-        allow_dirty_artifact: bool,
-        /// Allow asserting artifacts from a different git commit than current HEAD.
-        #[arg(long)]
-        allow_stale_artifact: bool,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -3170,7 +3158,6 @@ fn main() -> Result<()> {
         Command::DevnetSmokeAssert {
             dir,
             contracts_dir,
-            skip_contract_hash_check,
             budget_profile,
             max_total_cycles,
             max_tx_cycles,
@@ -3178,7 +3165,6 @@ fn main() -> Result<()> {
             max_tx_bytes,
             json,
         } => {
-            let contracts_dir = (!skip_contract_hash_check).then_some(contracts_dir.as_path());
             let mut budget_limits = if let Some(path) = budget_profile {
                 smoke_report::read_smoke_budget_profile(&path)?
             } else {
@@ -3199,11 +3185,11 @@ fn main() -> Result<()> {
             let report = if budget_limits.has_any_limit() {
                 smoke_report::assert_default_devnet_smoke_with_budget(
                     &dir,
-                    contracts_dir,
+                    contracts_dir.as_path(),
                     Some(&budget_limits),
                 )?
             } else {
-                smoke_report::assert_default_devnet_smoke(&dir, contracts_dir)?
+                smoke_report::assert_default_devnet_smoke(&dir, contracts_dir.as_path())?
             };
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
@@ -3323,9 +3309,6 @@ fn main() -> Result<()> {
             budget_profile,
             audit_profile,
             contracts_dir,
-            skip_contract_hash_check,
-            allow_dirty_artifact,
-            allow_stale_artifact,
             json,
         } => {
             let budget_limits = budget_profile
@@ -3333,19 +3316,12 @@ fn main() -> Result<()> {
                 .map(stateful_report::read_stateful_budget_profile)
                 .transpose()?;
             let audit_profile = stateful_report::read_audit_profile(&audit_profile)?;
-            let contracts_dir = if skip_contract_hash_check {
-                None
-            } else {
-                Some(contracts_dir.as_path())
-            };
             let report = stateful_report::assert_default_devnet_stateful(
                 &dir,
                 stateful_report::DevnetStatefulAssertionOptions {
                     budget_limits: budget_limits.as_ref(),
                     audit_profile: Some(&audit_profile),
-                    contracts_dir,
-                    allow_dirty_artifact,
-                    allow_stale_artifact,
+                    contracts_dir: contracts_dir.as_path(),
                 },
             )?;
             if json {

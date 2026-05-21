@@ -21,8 +21,9 @@ use morph_script_common::{
     FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN,
     FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedSpliceWitnessV1,
     FactorySpliceWitnessV1, FactoryStateHeaderV1, FactoryVaultDeltaV1, FactoryVaultDeltasV1,
-    Result, ScriptError, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u128,
-    verify_factory_reduced_splice_update, verify_factory_splice_update,
+    FactoryVaultDescriptorV1, Result, ScriptError, VAULT_ASSET_KIND_CKB_V1,
+    VAULT_ASSET_KIND_XUDT_V1, read_u128, verify_factory_reduced_splice_update,
+    verify_factory_splice_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -106,13 +107,17 @@ fn main() -> Result<()> {
     } else if input_type_raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
         let witness = FactorySpliceWitnessV1::parse(input_type_raw.as_ref())?;
         verify_factory_splice_update(&old_header, &new_header, &witness)?;
+        let old_vault = witness.old_vault()?;
+        let new_vault = witness.new_vault()?;
         let deltas = witness.deltas()?;
-        validate_factory_splice_vault_deltas(&deltas)?;
+        validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
     } else if input_type_raw.len() == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN {
         let witness = FactoryReducedSpliceWitnessV1::parse(input_type_raw.as_ref())?;
         verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
+        let old_vault = witness.old_vault()?;
+        let new_vault = witness.new_vault()?;
         let deltas = witness.deltas()?;
-        validate_factory_splice_vault_deltas(&deltas)?;
+        validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
     } else {
         return Err(ScriptError::ParticipantWitnessEncoding);
     }
@@ -251,7 +256,18 @@ fn validate_xudt_child_vault(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_factory_splice_vault_deltas(deltas: &FactoryVaultDeltasV1) -> Result<()> {
+#[derive(Clone, Copy)]
+struct FactoryVaultMaterialisedAssets {
+    ckb_amount: u128,
+    xudt: Option<([u8; BYTE32_LEN], u128)>,
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_splice_vault_deltas(
+    old_vault: &FactoryVaultDescriptorV1,
+    new_vault: &FactoryVaultDescriptorV1,
+    deltas: &FactoryVaultDeltasV1,
+) -> Result<()> {
     let input_capacity = single_group_capacity(Source::GroupInput)?;
     let input_type =
         load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
@@ -266,6 +282,19 @@ fn validate_factory_splice_vault_deltas(deltas: &FactoryVaultDeltasV1) -> Result
     let output_data =
         load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
 
+    validate_factory_vault_descriptor_materialisation(
+        old_vault,
+        input_capacity,
+        input_type.as_ref().map(|hash| hash.as_slice()),
+        input_data.as_slice(),
+    )?;
+    validate_factory_vault_descriptor_materialisation(
+        new_vault,
+        output_capacity,
+        output_type.as_ref().map(|hash| hash.as_slice()),
+        output_data.as_slice(),
+    )?;
+
     for index in 0..deltas.delta_count() as usize {
         let delta = deltas.delta(index)?;
         validate_factory_splice_cell_delta(
@@ -279,6 +308,77 @@ fn validate_factory_splice_vault_deltas(deltas: &FactoryVaultDeltasV1) -> Result
         )?;
     }
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_vault_descriptor_materialisation(
+    descriptor: &FactoryVaultDescriptorV1,
+    capacity: u64,
+    type_hash: Option<&[u8]>,
+    data: &[u8],
+) -> Result<()> {
+    let assets = factory_vault_descriptor_assets(descriptor)?;
+    let expected_capacity =
+        u64::try_from(assets.ckb_amount).map_err(|_| ScriptError::FactorySpliceProofMismatch)?;
+    if capacity != expected_capacity {
+        return Err(ScriptError::FactorySpliceProofMismatch);
+    }
+
+    match assets.xudt {
+        None => {
+            if type_hash.is_some() || !data.is_empty() {
+                return Err(ScriptError::FactorySpliceProofMismatch);
+            }
+        }
+        Some((expected_type_hash, expected_amount)) => {
+            let type_hash = type_hash.ok_or(ScriptError::XudtTypeMismatch)?;
+            if type_hash != expected_type_hash.as_slice() {
+                return Err(ScriptError::XudtTypeMismatch);
+            }
+            if data.len() != 16 {
+                return Err(ScriptError::XudtAmountEncoding);
+            }
+            if read_u128(data, 0) != expected_amount {
+                return Err(ScriptError::FactorySpliceProofMismatch);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn factory_vault_descriptor_assets(
+    descriptor: &FactoryVaultDescriptorV1,
+) -> Result<FactoryVaultMaterialisedAssets> {
+    let mut ckb_amount = None;
+    let mut xudt = None;
+
+    for index in 0..descriptor.asset_count() as usize {
+        let asset = descriptor.asset(index)?;
+        match asset.asset_kind() {
+            VAULT_ASSET_KIND_CKB_V1 => {
+                if ckb_amount.is_some() {
+                    return Err(ScriptError::FactorySpliceProofMismatch);
+                }
+                ckb_amount = Some(asset.amount());
+            }
+            VAULT_ASSET_KIND_XUDT_V1 => {
+                if xudt.is_some() {
+                    return Err(ScriptError::FactorySpliceProofMismatch);
+                }
+                let mut asset_type = [0u8; BYTE32_LEN];
+                asset_type.copy_from_slice(asset.asset_type());
+                xudt = Some((asset_type, asset.amount()));
+            }
+            _ => return Err(ScriptError::FactorySpliceProofEncoding),
+        }
+    }
+
+    Ok(FactoryVaultMaterialisedAssets {
+        ckb_amount: ckb_amount.ok_or(ScriptError::FactorySpliceProofMismatch)?,
+        xudt,
+    })
 }
 
 #[cfg(target_arch = "riscv64")]

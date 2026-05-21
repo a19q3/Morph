@@ -496,21 +496,19 @@ pub fn read_smoke_budget_profile(path: &Path) -> Result<DevnetSmokeBudgetLimits>
 
 pub fn assert_default_devnet_smoke(
     dir: &Path,
-    contracts_dir: Option<&Path>,
+    contracts_dir: &Path,
 ) -> Result<DevnetSmokeAssertionReport> {
     assert_default_devnet_smoke_with_budget(dir, contracts_dir, None)
 }
 
 pub fn assert_default_devnet_smoke_with_budget(
     dir: &Path,
-    contracts_dir: Option<&Path>,
+    contracts_dir: &Path,
     budget_limits: Option<&DevnetSmokeBudgetLimits>,
 ) -> Result<DevnetSmokeAssertionReport> {
     let summary = summarize_devnet_smoke(dir)?;
     assert_devnet_smoke_summary(&summary)?;
-    if let Some(contracts_dir) = contracts_dir {
-        assert_deployed_script_hashes(&summary, contracts_dir)?;
-    }
+    assert_deployed_script_hashes(&summary, contracts_dir)?;
     let budget = budget_limits
         .filter(|limits| limits.has_any_limit())
         .map(|limits| assert_smoke_budget(&summary, limits))
@@ -523,7 +521,7 @@ pub fn assert_default_devnet_smoke_with_budget(
         committed_count: summary.totals.committed_count,
         expected_script_failures: EXPECTED_SCRIPT_FAILURES.len(),
         deployed_scripts: summary.deployed_scripts.len(),
-        deployed_script_hashes_verified: contracts_dir.is_some(),
+        deployed_script_hashes_verified: true,
         watchtower_alerts: summary.watchtower_alerts.len(),
         watchtower_publication_alerts: summary
             .watchtower_alerts

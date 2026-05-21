@@ -183,14 +183,11 @@ generalized audit profile in
 [docs/devnet-audit-profile.example.json](docs/devnet-audit-profile.example.json)
 so each protocol risk family has required scenario tags, committed transaction
 evidence, exact negative-path failures, and budget coverage.
-To rebuild or assert a previous run:
+To rebuild a fresh run or inspect previous run metadata:
 
 ```sh
 cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
-cargo run -p morph-cli -- devnet-smoke-assert --dir target/devnet-smoke/<run>
 make smoke-report
-make smoke-assert
-make smoke-assert-budget
 cargo run -p morph-cli -- devnet-smoke-compare \
   --baseline target/devnet-smoke/<old-run> \
   --candidate target/devnet-smoke/<new-run> \
@@ -207,6 +204,10 @@ cargo run -p morph-cli -- devnet-stateful-assert \
   --audit-profile docs/devnet-audit-profile.example.json \
   --budget-profile docs/devnet-stateful-budget.example.json
 ```
+
+`devnet-smoke-assert` and `devnet-stateful-assert` are current-release gates:
+they require local contract hashes to match the artifact, and stateful assertions
+also require a clean artifact at current `HEAD` with a clean worktree.
 
 For community-facing explanations with diagrams and less protocol vocabulary,
 see the [English tutorial](docs/morph-channel-tutorial.md) and

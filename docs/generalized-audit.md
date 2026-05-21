@@ -22,6 +22,7 @@ with schema `morph.devnet_audit_profile.v1`.
 | Descriptor changes can drift away from signed state | Descriptor evolution is signed and finalise uses the current authentic commitment | `signed_descriptor_evolution` |
 | Merkle locality proof is treated as minting authority | Non-interference proves locality only, not value creation | `non_interference_not_authorisation` |
 | Reserve claim delta and child-vault release are not equal | Factory value-bearing rights, FactoryVault, and child vault deltas are bound | `factory_value_delta_binding` |
+| FactoryVault splice checks signed token delta but not the full materialised Cell shape | Signed FactoryVault descriptors bind actual lock, capacity, type, and amount on-chain | `factory_value_delta_binding`, `typed_asset_binding` |
 | xUDT amount/type/change can mismatch while total supply appears conserved | Typed asset identity, amount, descriptor, child vault, and FactoryVault change agree | `typed_asset_binding` |
 | Sponsor script policy and operator policy are conflated | Script-enforced sponsor bounds are separated from watchtower/operator policy | `sponsor_policy_boundary` |
 | Watchtower selects stale or fake authority after restart or splice | Watchtower detection and cursor recovery are funding-anchor aware | `watchtower_authority_and_cursor` |
