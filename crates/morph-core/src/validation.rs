@@ -340,7 +340,12 @@ pub fn validate_sponsor_policy(policy: &SponsorPolicy, spend: &SponsorSpend) -> 
     if spend.fee > policy.max_fee_per_tx {
         return Err(MorphError::SponsorFeeTooHigh);
     }
-    if policy.already_spent.saturating_add(spend.fee) > policy.max_total_fee {
+    if policy
+        .already_spent
+        .checked_add(spend.fee)
+        .ok_or(MorphError::SponsorBudgetExceeded)?
+        > policy.max_total_fee
+    {
         return Err(MorphError::SponsorBudgetExceeded);
     }
     if !spend.operation.is_publication_or_challenge() {

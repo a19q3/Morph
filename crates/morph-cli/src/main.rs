@@ -299,6 +299,18 @@ enum Command {
         /// JSON file defining generalized devnet audit family requirements.
         #[arg(long, default_value = "docs/devnet-audit-profile.example.json")]
         audit_profile: std::path::PathBuf,
+        /// Directory containing the built RISC-V contract binaries.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        /// Skip checking deployed script hashes against local contract binaries.
+        #[arg(long)]
+        skip_contract_hash_check: bool,
+        /// Allow asserting artifacts produced from a dirty working tree.
+        #[arg(long)]
+        allow_dirty_artifact: bool,
+        /// Allow asserting artifacts from a different git commit than current HEAD.
+        #[arg(long)]
+        allow_stale_artifact: bool,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -3310,6 +3322,10 @@ fn main() -> Result<()> {
             dir,
             budget_profile,
             audit_profile,
+            contracts_dir,
+            skip_contract_hash_check,
+            allow_dirty_artifact,
+            allow_stale_artifact,
             json,
         } => {
             let budget_limits = budget_profile
@@ -3317,10 +3333,20 @@ fn main() -> Result<()> {
                 .map(stateful_report::read_stateful_budget_profile)
                 .transpose()?;
             let audit_profile = stateful_report::read_audit_profile(&audit_profile)?;
+            let contracts_dir = if skip_contract_hash_check {
+                None
+            } else {
+                Some(contracts_dir.as_path())
+            };
             let report = stateful_report::assert_default_devnet_stateful(
                 &dir,
-                budget_limits.as_ref(),
-                Some(&audit_profile),
+                stateful_report::DevnetStatefulAssertionOptions {
+                    budget_limits: budget_limits.as_ref(),
+                    audit_profile: Some(&audit_profile),
+                    contracts_dir,
+                    allow_dirty_artifact,
+                    allow_stale_artifact,
+                },
             )?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);

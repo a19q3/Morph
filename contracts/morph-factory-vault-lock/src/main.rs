@@ -76,7 +76,7 @@ fn main() -> Result<()> {
             witness.vault_lock_hash(),
             witness.settlement_descriptor(),
         )?;
-        validate_factory_reserve_conservation(child_release.capacity)?;
+        validate_factory_reduced_exit_reserve_conservation(&child_release)?;
     } else if input_type_raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
         || input_type_raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
     {
@@ -191,7 +191,7 @@ fn validate_ckb_child_vault(
     vault_index: usize,
 ) -> Result<ChildVaultRelease> {
     let descriptor = BilateralCkbSettlementDescriptorV1::parse(settlement_descriptor)?;
-    let expected_capacity = descriptor.total_capacity();
+    let expected_capacity = descriptor.checked_total_capacity()?;
     let vault_data =
         load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if !vault_data.is_empty() {
@@ -234,10 +234,10 @@ fn validate_xudt_child_vault(
         return Err(ScriptError::XudtAmountEncoding);
     }
     let xudt_amount = read_u128(&vault_data, 0);
-    if xudt_amount != descriptor.total_xudt_amount() {
+    if xudt_amount != descriptor.checked_total_xudt_amount()? {
         return Err(ScriptError::SettlementOutputMismatch);
     }
-    let expected_capacity = descriptor.total_capacity();
+    let expected_capacity = descriptor.checked_total_capacity()?;
     let vault_capacity =
         load_cell_capacity(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     if vault_capacity != expected_capacity {
@@ -318,20 +318,6 @@ fn validate_factory_splice_cell_delta(
             }
         }
         _ => return Err(ScriptError::FactorySpliceProofEncoding),
-    }
-    Ok(())
-}
-
-#[cfg(target_arch = "riscv64")]
-fn validate_factory_reserve_conservation(child_vault_capacity: u64) -> Result<()> {
-    let input_capacity = single_group_capacity(Source::GroupInput)?;
-    let current_lock_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
-    let output_capacity = single_output_capacity_by_lock_hash(&current_lock_hash)?;
-    let expected_input = output_capacity
-        .checked_add(child_vault_capacity)
-        .ok_or(ScriptError::CapacityUnderflow)?;
-    if input_capacity != expected_input {
-        return Err(ScriptError::FactoryReserveMismatch);
     }
     Ok(())
 }
@@ -426,12 +412,6 @@ fn single_output_index_by_lock_hash(expected_lock_hash: &[u8]) -> Result<usize> 
         }
     }
     found.ok_or(ScriptError::FactoryReserveMismatch)
-}
-
-#[cfg(target_arch = "riscv64")]
-fn single_output_capacity_by_lock_hash(expected_lock_hash: &[u8]) -> Result<u64> {
-    let index = single_output_index_by_lock_hash(expected_lock_hash)?;
-    load_cell_capacity(index, Source::Output).map_err(|_| ScriptError::Encoding)
 }
 
 #[cfg(target_arch = "riscv64")]

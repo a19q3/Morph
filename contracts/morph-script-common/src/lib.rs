@@ -2148,7 +2148,7 @@ fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -
             if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1 {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
-            if descriptor.total_capacity() as u128 != witness.release_quantity() {
+            if descriptor.checked_total_capacity()? as u128 != witness.release_quantity() {
                 return Err(ScriptError::FactoryReducedProofMismatch);
             }
         }
@@ -2158,7 +2158,7 @@ fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -
             if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
-            if descriptor.total_xudt_amount() != witness.release_quantity() {
+            if descriptor.checked_total_xudt_amount()? != witness.release_quantity() {
                 return Err(ScriptError::FactoryReducedProofMismatch);
             }
         }
@@ -3158,6 +3158,7 @@ impl<'a> BilateralCkbSettlementDescriptorV1<'a> {
         if descriptor.lock_hash(0) >= descriptor.lock_hash(1) {
             return Err(ScriptError::SettlementDescriptorEncoding);
         }
+        descriptor.checked_total_capacity()?;
         Ok(descriptor)
     }
 
@@ -3182,7 +3183,13 @@ impl<'a> BilateralCkbSettlementDescriptorV1<'a> {
     }
 
     pub fn total_capacity(&self) -> u64 {
-        self.capacity(0).saturating_add(self.capacity(1))
+        self.checked_total_capacity().unwrap_or(u64::MAX)
+    }
+
+    pub fn checked_total_capacity(&self) -> Result<u64> {
+        self.capacity(0)
+            .checked_add(self.capacity(1))
+            .ok_or(ScriptError::SettlementDescriptorEncoding)
     }
 
     pub fn commitment(&self) -> [u8; 32] {
@@ -3210,6 +3217,8 @@ impl<'a> BilateralCkbXudtSettlementDescriptorV1<'a> {
         if descriptor.lock_hash(0) >= descriptor.lock_hash(1) {
             return Err(ScriptError::SettlementDescriptorEncoding);
         }
+        descriptor.checked_total_capacity()?;
+        descriptor.checked_total_xudt_amount()?;
         Ok(descriptor)
     }
 
@@ -3252,11 +3261,23 @@ impl<'a> BilateralCkbXudtSettlementDescriptorV1<'a> {
     }
 
     pub fn total_capacity(&self) -> u64 {
-        self.capacity(0).saturating_add(self.capacity(1))
+        self.checked_total_capacity().unwrap_or(u64::MAX)
+    }
+
+    pub fn checked_total_capacity(&self) -> Result<u64> {
+        self.capacity(0)
+            .checked_add(self.capacity(1))
+            .ok_or(ScriptError::SettlementDescriptorEncoding)
     }
 
     pub fn total_xudt_amount(&self) -> u128 {
-        self.xudt_amount(0).saturating_add(self.xudt_amount(1))
+        self.checked_total_xudt_amount().unwrap_or(u128::MAX)
+    }
+
+    pub fn checked_total_xudt_amount(&self) -> Result<u128> {
+        self.xudt_amount(0)
+            .checked_add(self.xudt_amount(1))
+            .ok_or(ScriptError::SettlementDescriptorEncoding)
     }
 
     pub fn commitment(&self) -> [u8; 32] {
@@ -6306,6 +6327,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_bilateral_ckb_descriptor_capacity_overflow() {
+        let raw = descriptor_bytes([1u8; 32], u64::MAX, [2u8; 32], 1);
+
+        assert_eq!(
+            BilateralCkbSettlementDescriptorV1::parse(&raw).unwrap_err(),
+            ScriptError::SettlementDescriptorEncoding
+        );
+    }
+
+    #[test]
     fn parses_and_commits_bilateral_ckb_xudt_descriptor() {
         let raw = ckb_xudt_descriptor_bytes([9u8; 32], [2u8; 32], 200, 3, [1u8; 32], 100, 7);
         let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(&raw).unwrap();
@@ -6325,6 +6356,17 @@ mod tests {
         assert_eq!(
             descriptor.commitment(),
             settlement_descriptor_commitment_v1(&raw)
+        );
+    }
+
+    #[test]
+    fn rejects_bilateral_ckb_xudt_descriptor_token_overflow() {
+        let raw =
+            ckb_xudt_descriptor_bytes([9u8; 32], [2u8; 32], 200, u128::MAX, [1u8; 32], 100, 1);
+
+        assert_eq!(
+            BilateralCkbXudtSettlementDescriptorV1::parse(&raw).unwrap_err(),
+            ScriptError::SettlementDescriptorEncoding
         );
     }
 }

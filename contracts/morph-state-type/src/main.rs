@@ -9,7 +9,7 @@ use ckb_std::ckb_types::prelude::*;
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    QueryIter, load_cell_capacity, load_cell_data, load_cell_lock_hash,
+    QueryIter, load_cell_capacity, load_cell_data, load_cell_lock, load_cell_lock_hash,
     load_cell_occupied_capacity, load_cell_type, load_cell_type_hash, load_input, load_script,
     load_script_hash, load_witness_args,
 };
@@ -96,6 +96,7 @@ fn validate_create(
     if new_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::NewStateNotSettling);
     }
+    validate_output_lock_args_bind_output_type(0, Source::GroupOutput)?;
     if new_header.state_number() != 0
         || find_splice_witness_raw(expected_funding_anchor, false).is_ok()
     {
@@ -141,6 +142,7 @@ fn validate_splice_create(
         splice_header.old_funding_anchor(),
     )?;
     let old_header = StateHeaderV1::parse(&old_data)?;
+    validate_state_lock_continuity(old_index, Source::Input, 0, Source::GroupOutput)?;
     verify_splice_state_transition_bundle(&old_header, new_header, &witness)
 }
 
@@ -167,6 +169,7 @@ fn validate_splice_retire(
         splice_header.new_funding_anchor(),
     )?;
     let new_header = StateHeaderV1::parse(&new_data)?;
+    validate_state_lock_continuity(0, Source::GroupInput, new_index, Source::Output)?;
     verify_splice_state_transition_bundle(old_header, &new_header, &witness)
 }
 
@@ -206,6 +209,7 @@ fn validate_supersede(
         return Err(ScriptError::HeaderContextChanged);
     }
     validate_participant_authorisation(&new_header)?;
+    validate_output_lock_preserved()?;
 
     let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
     let occupied =
@@ -214,6 +218,46 @@ fn validate_supersede(
         return Err(ScriptError::OutputBelowOccupiedCapacity);
     }
 
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_output_lock_preserved() -> Result<()> {
+    let input_lock = load_cell_lock(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output_lock = load_cell_lock(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input_lock != output_lock {
+        return Err(ScriptError::StateTypeMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_state_lock_continuity(
+    old_index: usize,
+    old_source: Source,
+    new_index: usize,
+    new_source: Source,
+) -> Result<()> {
+    let old_lock = load_cell_lock(old_index, old_source).map_err(|_| ScriptError::Encoding)?;
+    let new_lock = load_cell_lock(new_index, new_source).map_err(|_| ScriptError::Encoding)?;
+    if old_lock.code_hash() != new_lock.code_hash() || old_lock.hash_type() != new_lock.hash_type()
+    {
+        return Err(ScriptError::StateTypeMismatch);
+    }
+    validate_output_lock_args_bind_output_type(old_index, old_source)?;
+    validate_output_lock_args_bind_output_type(new_index, new_source)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_output_lock_args_bind_output_type(index: usize, source: Source) -> Result<()> {
+    let type_hash = load_cell_type_hash(index, source)
+        .map_err(|_| ScriptError::Encoding)?
+        .ok_or(ScriptError::StateTypeMismatch)?;
+    let lock = load_cell_lock(index, source).map_err(|_| ScriptError::Encoding)?;
+    let lock_args = lock.args().raw_data();
+    if lock_args.as_ref() != type_hash.as_slice() {
+        return Err(ScriptError::StateTypeMismatch);
+    }
     Ok(())
 }
 

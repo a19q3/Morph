@@ -39,7 +39,7 @@ fn main() -> Result<()> {
     validate_sponsored_state(&policy)?;
 
     let sponsor_in = sum_group_capacity(Source::GroupInput)?;
-    let sponsor_out = sum_outputs_by_lock_hash(policy.change_lock())?;
+    let sponsor_out = sum_clean_outputs_by_lock_hash(policy.change_lock())?;
     let fee = sponsor_in
         .checked_sub(sponsor_out)
         .ok_or(ScriptError::CapacityUnderflow)?;
@@ -47,7 +47,12 @@ fn main() -> Result<()> {
     if fee > policy.max_fee_per_tx() {
         return Err(ScriptError::SponsorFeeTooHigh);
     }
-    if policy.already_spent().saturating_add(fee) > policy.max_total_fee() {
+    if policy
+        .already_spent()
+        .checked_add(fee)
+        .ok_or(ScriptError::SponsorBudgetExceeded)?
+        > policy.max_total_fee()
+    {
         return Err(ScriptError::SponsorBudgetExceeded);
     }
     Ok(())
@@ -110,7 +115,9 @@ fn sum_group_capacity(source: Source) -> Result<u64> {
     loop {
         match load_cell_capacity(index, source) {
             Ok(capacity) => {
-                sum = sum.saturating_add(capacity);
+                sum = sum
+                    .checked_add(capacity)
+                    .ok_or(ScriptError::CapacityUnderflow)?;
                 index += 1;
             }
             Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
@@ -121,16 +128,25 @@ fn sum_group_capacity(source: Source) -> Result<u64> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn sum_outputs_by_lock_hash(expected: &[u8]) -> Result<u64> {
+fn sum_clean_outputs_by_lock_hash(expected: &[u8]) -> Result<u64> {
     let mut sum = 0u64;
     let mut index = 0;
     loop {
         match load_cell_lock_hash(index, Source::Output) {
             Ok(lock_hash) => {
                 if lock_hash.as_slice() == expected {
+                    let type_hash = load_cell_type_hash(index, Source::Output)
+                        .map_err(|_| ScriptError::Encoding)?;
+                    let data =
+                        load_cell_data(index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+                    if type_hash.is_some() || !data.is_empty() {
+                        return Err(ScriptError::SponsorBudgetExceeded);
+                    }
                     let capacity = load_cell_capacity(index, Source::Output)
                         .map_err(|_| ScriptError::Encoding)?;
-                    sum = sum.saturating_add(capacity);
+                    sum = sum
+                        .checked_add(capacity)
+                        .ok_or(ScriptError::CapacityUnderflow)?;
                 }
                 index += 1;
             }

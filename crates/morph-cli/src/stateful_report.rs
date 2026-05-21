@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use serde::{Deserialize, Serialize};
@@ -63,6 +64,15 @@ pub struct DevnetStatefulAssertionReport {
     pub expected_failures: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smoke: Option<DevnetSmokeAssertionReport>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DevnetStatefulAssertionOptions<'a> {
+    pub budget_limits: Option<&'a DevnetSmokeBudgetLimits>,
+    pub audit_profile: Option<&'a DevnetAuditProfile>,
+    pub contracts_dir: Option<&'a Path>,
+    pub allow_dirty_artifact: bool,
+    pub allow_stale_artifact: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -256,22 +266,23 @@ pub fn read_stateful_budget_profile(path: &Path) -> Result<DevnetSmokeBudgetLimi
 
 pub fn assert_default_devnet_stateful(
     dir: &Path,
-    budget_limits: Option<&DevnetSmokeBudgetLimits>,
-    audit_profile: Option<&DevnetAuditProfile>,
+    options: DevnetStatefulAssertionOptions<'_>,
 ) -> Result<DevnetStatefulAssertionReport> {
-    let summary = summarize_devnet_stateful_with_audit(dir, audit_profile)?;
+    let summary = summarize_devnet_stateful_with_audit(dir, options.audit_profile)?;
     assert_stateful_summary(&summary)?;
-    assert_audit_families(&summary, audit_profile, budget_limits)?;
+    assert_stateful_artifact_fresh(
+        &summary,
+        options.allow_dirty_artifact,
+        options.allow_stale_artifact,
+    )?;
+    assert_audit_families(&summary, options.audit_profile, options.budget_limits)?;
     let smoke_report = if let Some(smoke) = &summary.smoke {
         let smoke_dir = dir.join("smoke");
-        let report = if budget_limits
-            .map(DevnetSmokeBudgetLimits::has_any_limit)
-            .unwrap_or(false)
-        {
-            smoke_report::assert_default_devnet_smoke_with_budget(&smoke_dir, None, budget_limits)?
-        } else {
-            smoke_report::assert_default_devnet_smoke(&smoke_dir, None)?
-        };
+        let report = smoke_report::assert_default_devnet_smoke_with_budget(
+            &smoke_dir,
+            options.contracts_dir,
+            options.budget_limits,
+        )?;
         ensure!(
             smoke.totals.transaction_count == report.transaction_count,
             "stateful smoke transaction count changed during assertion"
@@ -576,6 +587,44 @@ fn assert_stateful_summary(summary: &DevnetStatefulSummary) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn assert_stateful_artifact_fresh(
+    summary: &DevnetStatefulSummary,
+    allow_dirty_artifact: bool,
+    allow_stale_artifact: bool,
+) -> Result<()> {
+    if !allow_dirty_artifact {
+        ensure!(
+            summary.manifest.get("git_dirty").map(String::as_str) == Some("false"),
+            "stateful artifact was produced from a dirty working tree"
+        );
+    }
+    if !allow_stale_artifact {
+        let artifact_commit = summary
+            .manifest
+            .get("git_commit")
+            .ok_or_else(|| anyhow!("stateful artifact manifest is missing git_commit"))?;
+        let current_commit = current_git_commit_short()?;
+        ensure!(
+            artifact_commit == &current_commit,
+            "stateful artifact commit {artifact_commit} does not match current HEAD {current_commit}"
+        );
+    }
+    Ok(())
+}
+
+fn current_git_commit_short() -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .context("failed to run git rev-parse --short HEAD")?;
+    ensure!(
+        output.status.success(),
+        "git rev-parse --short HEAD failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn assert_audit_families(
@@ -972,6 +1021,53 @@ mod tests {
         assert_eq!(deltas[0].id, "family-a");
         assert_eq!(deltas[0].baseline_passed, Some(true));
         assert_eq!(deltas[0].candidate_passed, Some(false));
+    }
+
+    #[test]
+    fn rejects_dirty_stateful_artifact_by_default() {
+        let mut summary = summary_with_scenario(StatefulScenarioSummary {
+            scenario_id: "scenario-a".to_string(),
+            category: "test".to_string(),
+            description: "test".to_string(),
+            references: vec!["a.json".to_string()],
+            required_committed_checks: vec![],
+            expected_failures: vec![],
+            coverage: vec![],
+        });
+        summary.manifest.insert(
+            "git_commit".to_string(),
+            current_git_commit_short().unwrap(),
+        );
+        summary
+            .manifest
+            .insert("git_dirty".to_string(), "true".to_string());
+
+        let err = assert_stateful_artifact_fresh(&summary, false, true).unwrap_err();
+        assert!(err.to_string().contains("dirty working tree"));
+        assert!(assert_stateful_artifact_fresh(&summary, true, true).is_ok());
+    }
+
+    #[test]
+    fn rejects_stale_stateful_artifact_by_default() {
+        let mut summary = summary_with_scenario(StatefulScenarioSummary {
+            scenario_id: "scenario-a".to_string(),
+            category: "test".to_string(),
+            description: "test".to_string(),
+            references: vec!["a.json".to_string()],
+            required_committed_checks: vec![],
+            expected_failures: vec![],
+            coverage: vec![],
+        });
+        summary
+            .manifest
+            .insert("git_commit".to_string(), "0000000".to_string());
+        summary
+            .manifest
+            .insert("git_dirty".to_string(), "false".to_string());
+
+        let err = assert_stateful_artifact_fresh(&summary, false, false).unwrap_err();
+        assert!(err.to_string().contains("does not match current HEAD"));
+        assert!(assert_stateful_artifact_fresh(&summary, false, true).is_ok());
     }
 
     fn temp_dir(name: &str) -> std::path::PathBuf {

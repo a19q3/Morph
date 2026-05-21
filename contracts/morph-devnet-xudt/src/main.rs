@@ -66,7 +66,9 @@ fn sum_group_amount(source: Source) -> Result<(usize, u128)> {
                     return Err(ScriptError::XudtAmountEncoding);
                 }
                 count += 1;
-                amount = amount.saturating_add(read_u128(&data, 0));
+                amount = amount
+                    .checked_add(read_u128(&data, 0))
+                    .ok_or(ScriptError::XudtConservationMismatch)?;
                 index += 1;
             }
             Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,

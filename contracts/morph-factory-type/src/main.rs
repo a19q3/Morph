@@ -273,7 +273,7 @@ fn validate_child_vault_shape(
             }
             let vault_capacity = load_cell_capacity(vault_index, Source::Output)
                 .map_err(|_| ScriptError::Encoding)?;
-            if vault_capacity != descriptor.total_capacity() {
+            if vault_capacity != descriptor.checked_total_capacity()? {
                 return Err(ScriptError::SettlementOutputMismatch);
             }
         }
@@ -293,12 +293,12 @@ fn validate_child_vault_shape(
             if vault_data.len() != 16 {
                 return Err(ScriptError::XudtAmountEncoding);
             }
-            if read_u128(&vault_data, 0) != descriptor.total_xudt_amount() {
+            if read_u128(&vault_data, 0) != descriptor.checked_total_xudt_amount()? {
                 return Err(ScriptError::SettlementOutputMismatch);
             }
             let vault_capacity = load_cell_capacity(vault_index, Source::Output)
                 .map_err(|_| ScriptError::Encoding)?;
-            if vault_capacity != descriptor.total_capacity() {
+            if vault_capacity != descriptor.checked_total_capacity()? {
                 return Err(ScriptError::SettlementOutputMismatch);
             }
         }
