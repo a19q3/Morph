@@ -8841,6 +8841,31 @@ struct BuiltXudtFinalise {
     alice_output: CellOutput,
     bob_output: CellOutput,
     refund_output: CellOutput,
+    alice_output_data_len: usize,
+    bob_output_data_len: usize,
+}
+
+fn xudt_settlement_output(
+    lock: Script,
+    xudt_type: &Script,
+    capacity: u64,
+    descriptor_amount: u128,
+    output_amount: u128,
+) -> (CellOutput, Bytes) {
+    if descriptor_amount == 0 && output_amount == 0 {
+        let output = CellOutput::new_builder()
+            .capacity(capacity)
+            .lock(lock)
+            .build();
+        (output, Bytes::new())
+    } else {
+        let output = CellOutput::new_builder()
+            .capacity(capacity)
+            .lock(lock)
+            .type_(Some(xudt_type.clone()).pack())
+            .build();
+        (output, xudt_amount_bytes(output_amount))
+    }
 }
 
 fn build_xudt_finalise_transaction(
@@ -8902,24 +8927,26 @@ fn build_xudt_finalise_transaction(
         options.alice_capacity,
         options.bob_capacity,
     )?;
+    let (alice_output, alice_output_data) = xudt_settlement_output(
+        alice_lock,
+        &xudt_type,
+        alice_capacity,
+        options.alice_xudt_amount,
+        output_amounts.0,
+    );
+    let (bob_output, bob_output_data) = xudt_settlement_output(
+        bob_lock,
+        &xudt_type,
+        bob_capacity,
+        options.bob_xudt_amount,
+        output_amounts.1,
+    );
     ensure_output_capacity(
         "alice xUDT settlement",
-        &CellOutput::new_builder()
-            .capacity(alice_capacity)
-            .lock(alice_lock.clone())
-            .type_(Some(xudt_type.clone()).pack())
-            .build(),
-        16,
+        &alice_output,
+        alice_output_data.len(),
     )?;
-    ensure_output_capacity(
-        "bob xUDT settlement",
-        &CellOutput::new_builder()
-            .capacity(bob_capacity)
-            .lock(bob_lock.clone())
-            .type_(Some(xudt_type.clone()).pack())
-            .build(),
-        16,
-    )?;
+    ensure_output_capacity("bob xUDT settlement", &bob_output, bob_output_data.len())?;
     let descriptor = bilateral_ckb_xudt_descriptor(
         xudt_type_hash,
         alice_lock_hash,
@@ -8953,16 +8980,6 @@ fn build_xudt_finalise_transaction(
     let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
     let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
 
-    let alice_output = CellOutput::new_builder()
-        .capacity(alice_capacity)
-        .lock(alice_lock)
-        .type_(Some(xudt_type.clone()).pack())
-        .build();
-    let bob_output = CellOutput::new_builder()
-        .capacity(bob_capacity)
-        .lock(bob_lock)
-        .type_(Some(xudt_type).pack())
-        .build();
     let refund_output = CellOutput::new_builder()
         .capacity(state_refund_capacity)
         .lock(owner_lock)
@@ -8978,8 +8995,8 @@ fn build_xudt_finalise_transaction(
         .output(alice_output.clone())
         .output(bob_output.clone())
         .output(refund_output.clone())
-        .output_data(xudt_amount_bytes(output_amounts.0).pack())
-        .output_data(xudt_amount_bytes(output_amounts.1).pack())
+        .output_data(alice_output_data.clone().pack())
+        .output_data(bob_output_data.clone().pack())
         .output_data(Bytes::new().pack())
         .witness(empty_witness())
         .witness(witness_with_input_type(Bytes::copy_from_slice(&descriptor)))
@@ -9000,6 +9017,8 @@ fn build_xudt_finalise_transaction(
         alice_output,
         bob_output,
         refund_output,
+        alice_output_data_len: alice_output_data.len(),
+        bob_output_data_len: bob_output_data.len(),
     })
 }
 
@@ -9044,8 +9063,8 @@ fn xudt_finalise_report(
         metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
         outputs: vec![
-            output_report("alice", 0, &build.alice_output, 16),
-            output_report("bob", 1, &build.bob_output, 16),
+            output_report("alice", 0, &build.alice_output, build.alice_output_data_len),
+            output_report("bob", 1, &build.bob_output, build.bob_output_data_len),
             output_report("state-refund", 2, &build.refund_output, 0),
         ],
     }
@@ -12435,6 +12454,28 @@ mod tests {
         let lock_from_pubkey = secp256k1_lock_from_pubkey(&pubkey).unwrap();
 
         assert_eq!(lock_from_pubkey, lock_from_key);
+    }
+
+    #[test]
+    fn xudt_settlement_output_uses_plain_cell_for_zero_descriptor_amount() {
+        let key = parse_privkey(DEFAULT_ALICE_PRIVATE_KEY).unwrap();
+        let lock = secp256k1_lock(&key).unwrap();
+        let xudt_type = data1_script(H256::from([0x42; BYTE32_LEN]), Bytes::new());
+
+        let (zero_output, zero_data) =
+            xudt_settlement_output(lock.clone(), &xudt_type, 10_000_000_000, 0, 0);
+        assert!(zero_output.type_().to_opt().is_none());
+        assert!(zero_data.is_empty());
+
+        let (positive_output, positive_data) =
+            xudt_settlement_output(lock.clone(), &xudt_type, 10_000_000_000, 1, 1);
+        assert!(positive_output.type_().to_opt().is_some());
+        assert_eq!(positive_data.as_ref(), &1u128.to_le_bytes());
+
+        let (tampered_output, tampered_data) =
+            xudt_settlement_output(lock, &xudt_type, 10_000_000_000, 0, 1);
+        assert!(tampered_output.type_().to_opt().is_some());
+        assert_eq!(tampered_data.as_ref(), &1u128.to_le_bytes());
     }
 
     #[test]

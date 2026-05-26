@@ -1030,6 +1030,44 @@ fn rejects_xudt_amount_mismatch() {
 }
 
 #[test]
+fn rejects_xudt_amount_overflow_in_partition_totals() {
+    let mut tx = good_partition();
+    tx.inputs
+        .push(ClassifiedCell::xudt(bytes32(42), 1_000, 700, u128::MAX));
+    tx.outputs
+        .push(ClassifiedCell::xudt(bytes32(42), 1_000, 700, u128::MAX));
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::XudtNotConserved);
+}
+
+#[test]
+fn rejects_reserve_refund_overflow_in_partition_totals() {
+    let tx = PartitionedTransaction {
+        inputs: vec![ClassifiedCell::channel_reserve(u64::MAX, 700)],
+        outputs: vec![ClassifiedCell::channel_reserve(u64::MAX, 700)],
+        tx_fee: 0,
+        authorised_reserve_refund: 1,
+    };
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::ReserveNotConserved);
+}
+
+#[test]
+fn rejects_sponsor_output_exceeding_input_without_fee_underflow() {
+    let tx = PartitionedTransaction {
+        inputs: vec![ClassifiedCell::sponsor(100, 50)],
+        outputs: vec![ClassifiedCell::sponsor(101, 50)],
+        tx_fee: 0,
+        authorised_reserve_refund: 0,
+    };
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::SponsorFeeMismatch);
+}
+
+#[test]
 fn rejects_sponsor_change_contamination() {
     let mut tx = good_partition();
     tx.outputs[4].carries_registered_xudt = true;

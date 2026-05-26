@@ -889,11 +889,11 @@ pub fn validate_partition_conservation(
     fold_cells(&tx.inputs, registry, true, &mut totals)?;
     fold_cells(&tx.outputs, registry, false, &mut totals)?;
 
-    if totals
+    let reserve_out_with_refund = totals
         .reserve_out
-        .saturating_add(tx.authorised_reserve_refund)
-        != totals.reserve_in
-    {
+        .checked_add(tx.authorised_reserve_refund)
+        .ok_or(MorphError::ReserveNotConserved)?;
+    if reserve_out_with_refund != totals.reserve_in {
         return Err(MorphError::ReserveNotConserved);
     }
     if totals.business_ckb_in != totals.business_ckb_out {
@@ -906,7 +906,11 @@ pub fn validate_partition_conservation(
             return Err(MorphError::XudtNotConserved);
         }
     }
-    if totals.sponsor_in.saturating_sub(totals.sponsor_out) != tx.tx_fee {
+    let sponsor_fee = totals
+        .sponsor_in
+        .checked_sub(totals.sponsor_out)
+        .ok_or(MorphError::SponsorFeeMismatch)?;
+    if sponsor_fee != tx.tx_fee {
         return Err(MorphError::SponsorFeeMismatch);
     }
     for output in &tx.outputs {
@@ -1376,18 +1380,28 @@ fn fold_cells(
         match &cell.class {
             CellClass::ChannelReserve => {
                 if input {
-                    totals.reserve_in = totals.reserve_in.saturating_add(cell.capacity);
+                    totals.reserve_in = totals
+                        .reserve_in
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::ReserveNotConserved)?;
                 } else {
-                    totals.reserve_out = totals.reserve_out.saturating_add(cell.capacity);
+                    totals.reserve_out = totals
+                        .reserve_out
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::ReserveNotConserved)?;
                 }
             }
             CellClass::BusinessCkb => {
                 if input {
-                    totals.business_ckb_in =
-                        totals.business_ckb_in.saturating_add(cell.business_ckb);
+                    totals.business_ckb_in = totals
+                        .business_ckb_in
+                        .checked_add(cell.business_ckb)
+                        .ok_or(MorphError::BusinessCkbNotConserved)?;
                 } else {
-                    totals.business_ckb_out =
-                        totals.business_ckb_out.saturating_add(cell.business_ckb);
+                    totals.business_ckb_out = totals
+                        .business_ckb_out
+                        .checked_add(cell.business_ckb)
+                        .ok_or(MorphError::BusinessCkbNotConserved)?;
                 }
             }
             CellClass::BusinessXudt(asset_type) => {
@@ -1400,13 +1414,21 @@ fn fold_cells(
                     &mut totals.xudt_out
                 };
                 let amount = target.entry(*asset_type).or_default();
-                *amount = amount.saturating_add(cell.xudt_amount);
+                *amount = amount
+                    .checked_add(cell.xudt_amount)
+                    .ok_or(MorphError::XudtNotConserved)?;
             }
             CellClass::Sponsor => {
                 if input {
-                    totals.sponsor_in = totals.sponsor_in.saturating_add(cell.capacity);
+                    totals.sponsor_in = totals
+                        .sponsor_in
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::SponsorFeeMismatch)?;
                 } else {
-                    totals.sponsor_out = totals.sponsor_out.saturating_add(cell.capacity);
+                    totals.sponsor_out = totals
+                        .sponsor_out
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::SponsorFeeMismatch)?;
                 }
             }
             CellClass::StateCarrier | CellClass::Unrelated => {}
