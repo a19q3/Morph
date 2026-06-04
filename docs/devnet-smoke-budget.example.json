@@ -1,5 +1,6 @@
 {
   "schema": "morph.devnet_smoke_budget.v1",
+  "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. The v1 suffixes do not denote the active protocol baseline; factory witnesses are interpreted through WitnessEnvelopeV2 on the post-V1 implementation line.",
   "max_total_cycles": 1200000000,
   "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
