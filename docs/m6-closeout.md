@@ -12,13 +12,13 @@ dispatch design.
 The current post-V1 implementation line at commit `a2059ba` wraps factory
 authorisation bodies in `WitnessEnvelopeV2`. The `*V1` names below remain useful
 as package/body schema names and evidence labels, but factory contracts now
-dispatch by envelope kind and checked body digest rather than by raw fixed-width
-witness length.
+dispatch by envelope kind and checked body digest rather than by the old
+top-level fixed-length witness convention.
 
 ## Done
 
 - `morph-core` models signed `FactorySpliceHeader`,
-  `FactoryVaultDescriptorV1`, and fixed factory vault deltas.
+  `FactoryVaultDescriptorV1`, and typed factory vault deltas.
 - Host validation accepts CKB and xUDT factory splice-in/out only when one
   participant reserve claim changes by exactly the signed FactoryVaultCell
   delta.
@@ -92,8 +92,8 @@ witness length.
 
 ## Production Posture
 
-M6 closed the production-shaped evidence for the conservative historical V1
-body scope: quiescent factory splice, fixed CKB/CKB+xUDT vault deltas,
+M6 closed the production-shaped evidence for the conservative historical body
+scope: quiescent factory splice, typed CKB/CKB+xUDT vault deltas,
 all-participant or one-authorised reserve-claim proof shapes,
 participant-owned splice-out policy, and explicit package-to-contract witness
 bytes. Current release posture must be read through the active V2 envelope
