@@ -127,10 +127,11 @@ From `target/devnet-stateful-e2e/20260520T135931Z/scenarios/smoke/deploy-contrac
 - `summary.md`, `summary.json`, `summary-check.json`, and
   `summary-budget-check.json`.
 
-The `.v1` suffix on `morph.devnet_stateful_scenario.v1` is the scenario
-artifact schema version. It is not a claim that this closeout is current
-protocol evidence for the post-V1 `WitnessEnvelopeV2` factory authorisation
-line.
+The `.v1` suffix on `morph.devnet_stateful_scenario.v1` is only the scenario
+artifact schema version. It is not a protocol or witness-version label. Current
+factory authorisation is read through the bounded `WitnessEnvelopeV2`
+kind/body/digest envelope, and this historical closeout needs fresh rerun
+evidence before it can serve as current release evidence again.
 
 The assertion command fails unless every required scenario is present, every
 referenced artifact exists, every required positive transaction is committed,
