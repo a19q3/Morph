@@ -1,5 +1,6 @@
 {
   "schema": "morph.devnet_audit_profile.v1",
+  "description": "Audit profile schema is a devnet evidence taxonomy label. The v1 suffix does not denote the active protocol baseline; current factory authorisation is interpreted through WitnessEnvelopeV2 on the post-V1 implementation line.",
   "families": [
     {
       "id": "state_authority_authenticity",
