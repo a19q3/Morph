@@ -1,130 +1,175 @@
 # Morph Channel
 
-Morph Channel is an implementation workspace for a CKB Cell-native channel
-construction based on stable funding identity, moving signed state evidence,
-sponsored publication, and partition conservation.
+Morph Channel is a CKB-native payment-channel and factory-channel prototype.
+It explores how channel state, vault assets, sponsored publication, and factory
+reserve rights can be represented directly as CKB Cells without changing CKB
+consensus.
 
-This repository is intentionally conservative. The first milestone is a
-devnet-testable bilateral channel path. Factory proof mode is represented in
-the data model, package validation, and a conservative full-participant factory
-type script. Conservative factory-local exit materialisation is implemented on
-devnet; bounded reduced-signature factory exits now have fixed-layout body
-coverage in CKB-VM tests and devnet smoke for the reserve-claim path.
+The repository is not mainnet software. It is a devnet implementation and
+research workbench with executable protocol checks, CKB script tests, local
+smoke tests, and stateful acceptance reports.
 
-## Status
+## The Idea
 
-Current implementation stage:
+CKB already gives us programmable Cells, lock scripts, type scripts, capacity,
+and finality. Morph Channel uses those primitives to build a channel system in
+which the chain stores only the latest enforceable evidence, while most state
+movement remains off chain.
 
-- `morph-core`: protocol objects and validation invariants for state
-  supersession, sponsor policy, vault settlement, and partition conservation.
-  It also includes the first host-side bilateral splice model: signed funding
-  epoch transitions, CKB/xUDT vault descriptors, asset-delta commitments, and
-  splice-in/splice-out validation. The factory reserve repartition model now
-  validates conservative factory splice-in/out transitions where one
-  participant reserve claim changes exactly with the CKB or xUDT
-  FactoryVaultCell delta.
-- `morph-script-common`: shared fixed-layout parsers and digest helpers for the
-  current CKB script wire objects, now including the initial splice header,
-  splice signature witness, vault descriptor, asset-delta shapes, the bundled
-  splice state-transition witness, a shared splice verifier, and bounded
-  factory witness body verifiers carried by `WitnessEnvelopeV2`.
-- `morph-cli`: local smoke tooling for fixture generation, invariant checks,
-  native CKB devnet JSON-RPC checks, contract deployment, channel opening,
-  state publication, vault finalisation, and per-transaction cycle/size
-  reporting from the node. It also stores reusable signed state packages for
-  watchtower-style publication and validates optional watchtower operator
-  policies before confirmed-block scanning. Watchtower runs can be driven from
-  a multi-channel JSON config, either as one scan pass or as a bounded loop
-  that reuses persisted cursors, while the signing key remains a runtime
-  argument or environment variable. Watchtower alerts can be written to JSONL
-  and posted to a policy-gated HTTP webhook. Factory local-exit reports include
-  a reusable evidence package that can be independently validated. Splice
-  fixture commands can print and validate reusable host-side splice-in,
-  splice-out, and xUDT splice-out packages; devnet can now save and apply
-  live-matching CKB splice packages plus xUDT splice-in/out packages against an
-  active StateCell/VaultCell pair. Factory splice fixture commands print and
-  validate signed all-participant CKB/xUDT reserve-repartition packages and
-  export `WitnessEnvelopeV2`-wrapped `FactorySpliceWitnessV1` body bytes as
-  `contract_witness_hex`.
-- `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
-  spending to the expected state type script.
-- `contracts/morph-state-type`: no-std CKB type script for one-live-State-Cell
-  progression, funding-anchor binding, monotonic settling publication, and the
-  StateCell side of the old/new funding-anchor splice bridge.
-- `contracts/morph-factory-type`: no-std CKB type script for conservative
-  one-live-FactoryStateCell progression with full-participant signatures and
-  local-exit evidence checks. It also supports a bounded reduced-rights proof
-  path where one authorised participant may reduce only their own committed
-  factory rights while all other rights remain unchanged, plus a bounded
-  reduced-exit proof for reserve-claim release into a materialised child
-  channel.
-- `contracts/morph-factory-vault-lock`: no-std CKB lock script for factory
-  reserve conservation during conservative and reduced-exit child-channel
-  materialisation, with initial factory splice vault-delta checks for touched
-  CKB/xUDT FactoryVaultCells.
-- `contracts/morph-vault-lock`: no-std CKB lock script for vault settlement
-  gated by a unique current settling State Cell and relative `since`, plus the
-  old/new vault side of the splice funding-anchor bridge.
-- `contracts/morph-sponsor-lock`: no-std CKB lock script for bounded sponsor
-  fee spending, state-number policy checks, and clean sponsor change.
-- `contracts/morph-devnet-xudt`: no-std devnet xUDT script used to test
-  token-bearing vault settlement without depending on an external issuer.
+The core model is simple:
 
-This is not mainnet software. The current baseline is the post-V1 V2-envelope
-devnet line with local production-scenario acceptance: known local P0/P1
-safety-boundary blockers are addressed and the generalized stateful audit gate
-passes locally. It is not mainnet-ready or production real-assets-ready; value
-limits still require external diff review, mainnet-like fee/reorg evidence,
-release/CI supply-chain revalidation, operational readiness sign-off, and a
-value-limit policy. It is a production-oriented implementation repository with
-tests that turn the paper's audit matrix into executable checks. Participant
-state signatures are verified in both host-side invariants and the
-`morph-state-type` CKB script; conservative factory state signatures are
-verified by `morph-factory-type`. The current devnet path opens a channel,
-publishes a signed settling state using sponsor capacity, supersedes it with a
-higher signed state, and finalises the vault without modifying CKB consensus.
-It also opens a conservative factory, advances its state, materialises plain
-CKB and CKB+xUDT child bilateral channels from the factory reserve, and then
-publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
-local test asset into the vault and settle exact token balances through the
-same StateCell and VaultCell authority model.
-The reduced-signature factory work is deliberately narrow at this stage:
-CKB-VM tests and devnet smoke cover bounded body schemas for claim-reducing
-rights updates and CKB/xUDT reserve-claim reduced exits. The xUDT
-reduced-exit smoke covers typed child-vault and FactoryVault change binding,
-including partial, full, one-sided, and tampered child-token amount cases.
-Sparse Merkle update packages and a bounded no-std Merkle witness body now cover
-the first general proof-bundle step for larger
-factories, including a devnet smoke path that updates one right through the
-256-sibling proof. Smoke summaries bind the current bounded reduced-rights,
-sparse Merkle, CKB reduced-exit, and xUDT reduced-exit proof shapes to their
-witness sizes and node-estimated transaction budgets. Larger, multi-right, and
-variable-depth proof profiles are deferred beyond this roadmap slice.
+- a **State Cell** is the public pointer to the channel's latest on-chain
+  status;
+- a **Vault Cell** holds the assets that the channel controls;
+- participants sign newer states off chain;
+- a participant or watchtower can publish a newer signed state when needed;
+- the vault can be finalised only against the current settling state;
+- sponsor capacity can pay publication fees without letting the sponsor steal
+  channel value;
+- factory cells can hold shared reserve rights and materialise child channels
+  when a participant exits or repartitions reserve.
+
+The design goal is not to hide all complexity. It is to make each boundary
+auditable: who signed, which state is current, which vault assets are conserved,
+which reserve right changed, and which script is responsible for rejecting an
+invalid transition.
+
+## What Is Implemented
+
+The current factory witness design uses `WitnessEnvelopeV2`. Factory scripts
+dispatch by envelope kind, bounded body length, and checked body digest. Some
+body and JSON schema names still end in `V1`; those names identify fixed-layout
+body schemas, not the current authorisation boundary.
+
+Implemented locally:
+
+- bilateral CKB channels with state publication, supersession, relative-since
+  vault finalisation, and sponsored publication;
+- CKB+xUDT settlement through the same State Cell and Vault Cell authority
+  model;
+- splice-in and splice-out flows that move a channel across funding anchors
+  while preserving signed state semantics;
+- watchtower-style package publication with cursor persistence, policy checks,
+  JSONL alerts, and optional webhook alerts;
+- conservative factory state updates signed by all factory participants;
+- factory local exits that materialise child bilateral channels;
+- bounded reduced-rights, reduced-exit, sparse-Merkle update, and reduced-splice
+  factory proof bodies carried by `WitnessEnvelopeV2`;
+- local devnet smoke reports and stateful acceptance reports that bind protocol
+  scenarios to transaction evidence, cycle budgets, and expected negative-path
+  failures.
+
+Open release gates remain: external review, mainnet-like fee and reorg
+evidence, release/CI supply-chain revalidation, operational runbooks,
+multi-operator watchtower evidence, and an explicit value-limit policy.
+
+## Business Flow
+
+### 1. Open A Channel
+
+Alice and Bob create a State Cell and a Vault Cell. The State Cell records the
+channel identity, state number, funding anchor, vault-set commitment, settlement
+descriptor commitment, and participant authorisation context. The Vault Cell
+holds the actual CKB or xUDT assets.
+
+From a user perspective, this is the deposit step: funds become controlled by
+channel rules rather than by a normal wallet lock.
+
+### 2. Move State Off Chain
+
+Participants exchange signed state updates. A newer state number supersedes an
+older one. Most updates do not touch the chain.
+
+This is the ordinary payment-channel experience: the business state changes
+quickly, while the chain is only needed for opening, dispute/publication,
+splicing, and final settlement.
+
+### 3. Publish When Necessary
+
+If the channel needs to settle, or if a participant must prove the latest known
+state, a signed package can be published to a new State Cell. Sponsor capacity
+may pay the transaction fee, but the sponsor script enforces strict budget and
+clean-change rules.
+
+Watchtower tooling can monitor confirmed State Cells and publish matching saved
+packages. It refuses stale packages after a funding-anchor change, which matters
+after splice operations.
+
+### 4. Finalise The Vault
+
+After the required relative `since` window, the Vault Cell can be spent only if
+it matches the current settling State Cell and the committed settlement
+descriptor. CKB and xUDT settlement paths both check exact recipient and asset
+amount semantics.
+
+This is the withdrawal step: channel-controlled assets return to ordinary
+recipient cells according to the latest enforceable state.
+
+### 5. Splice Without Restarting The Channel
+
+A splice changes the funding anchor and vault set while preserving the channel's
+logical identity and state progression. Splice-in adds assets; splice-out
+withdraws assets. The old and new State/Vault pairs are linked by signed
+transition evidence.
+
+In business terms, users can resize the channel without closing and reopening
+the whole relationship.
+
+### 6. Use A Factory For Many Child Channels
+
+A factory groups reserve rights under a Factory State Cell and Factory Vault
+Cell. Conservative updates require all factory participants. Reduced paths prove
+that only a bounded touched right changed while the rest of the factory state
+remained committed.
+
+Factory exits can materialise child bilateral channels. Factory splice paths
+can repartition CKB or xUDT reserve. The current contract-facing witness surface
+uses `WitnessEnvelopeV2`, so the scripts first authenticate the envelope and
+then parse the specific fixed-layout body.
 
 ## Repository Layout
 
 ```text
-crates/morph-core      Protocol data model and deterministic validation.
-crates/morph-cli       Local CLI for fixtures and smoke checks.
-contracts/             CKB script crates and deployment plan.
-schemas/               Molecule schema draft for the on-chain wire format.
-docs/                  Devnet and implementation notes.
+crates/morph-core      Protocol objects, signing digests, and invariants.
+crates/morph-cli       Fixture tooling, package validators, devnet operations,
+                       watchtower commands, and report generation.
+contracts/             no-std CKB scripts and shared script parsers.
+schemas/               Molecule schema draft for the wire format.
+docs/                  Devnet, implementation, readiness, and tutorial notes.
+scripts/               Devnet, smoke, and environment helpers.
 ```
 
+Important scripts:
+
+- `morph-state-type`: one-live-State-Cell progression and signed state checks;
+- `morph-state-lock`: State Cell lock boundary;
+- `morph-vault-lock`: vault settlement and splice vault checks;
+- `morph-sponsor-lock`: bounded sponsor fee spending;
+- `morph-factory-type`: factory state progression, signatures, reduced proofs,
+  exits, and envelope dispatch;
+- `morph-factory-vault-lock`: factory reserve conservation;
+- `morph-devnet-xudt`: local xUDT issuer/conservation script for devnet tests.
+
 ## Quick Start
+
+Run the local checks:
 
 ```sh
 make ci
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p morph-cli -- validate-fixture
 make fixture-checks
 make build-contracts
 make contract-tests
+```
+
+Check the devnet environment:
+
+```sh
 scripts/check-devnet-env.sh
 ```
 
-With a local devnet node running through `scripts/devnet-node.sh`:
+With a local CKB devnet node running through `scripts/devnet-node.sh`:
 
 ```sh
 cargo run -p morph-cli -- devnet check
@@ -132,177 +177,26 @@ cargo run -p morph-cli -- devnet mine --blocks 1
 cargo run -p morph-cli -- devnet deploy-contracts
 cargo run -p morph-cli -- devnet open-channel
 cargo run -p morph-cli -- devnet supersede-smoke
-cargo run -p morph-cli -- devnet finalise-since-negative-smoke
-cargo run -p morph-cli -- devnet sponsor-budget-negative-smoke
-cargo run -p morph-cli -- devnet competing-spend-smoke
 cargo run -p morph-cli -- devnet xudt-smoke
-cargo run -p morph-cli -- devnet xudt-negative-smoke
 cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
 cargo run -p morph-cli -- devnet factory-merkle-update-smoke
 cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
-cargo run -p morph-cli -- devnet factory-xudt-negative-smoke
 make devnet-smoke
 make devnet-e2e
-```
-
-The devnet path is documented in [docs/devnet.md](docs/devnet.md). JSON reports
-include CKB `estimate_cycles` output and serialized transaction size for each
-deployment, open, publication, sponsor top-up, supersession, factory local
-exit, splice, watchtower, and finalisation transaction, including
-finalise-since, sponsor budget, competing-spend, asymmetric CKB, one-sided
-xUDT, CKB+xUDT, factory splice, and factory CKB+xUDT negative smoke paths.
-`scripts/devnet-smoke.sh` runs the real local checks and devnet smoke paths,
-then writes the JSON, log, `summary.md`, and `summary.json` artefacts under
-`target/devnet-smoke/`. After a successful run it refreshes
-`target/devnet-smoke/latest` to point at the completed run, unless that path is
-a real directory or file. Summary generation also validates any factory
-local-exit evidence package and factory Merkle update evidence embedded in the
-smoke JSON, extracts deployed script outpoints and data hashes, derives
-proof-shape budget profiles, and records watchtower JSONL alerts, including
-auto-sponsor, direct sponsor, config-loop, and stale pre-splice package guard
-paths. The script
-asserts that the expected negative-path failures, deployed scripts, local
-contract binary hashes, watchtower alert events, and factory update/exit
-evidence are present. `devnet-smoke-assert` can also enforce absolute
-cycle/byte budgets for completed smoke runs, including per-transaction and
-proof-profile budgets from
-[docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
-Factory splice apply transactions are included in those proof profiles, binding
-`FactorySpliceWitnessV1` body length inside `WitnessEnvelopeV2` to the recorded
-cycle and byte metrics.
-For release closeout, `scripts/devnet-e2e.sh` starts a fresh real CKB devnet
-from the parent `../ckb` tree, runs only the on-chain smoke path with local
-`cargo test`/testtool checks skipped, and applies the smoke budget profile to
-the resulting chain artefacts.
-`scripts/devnet-stateful-e2e.sh` runs the production-scenario acceptance layer
-on a fresh devnet. It writes scenario records under
-`target/devnet-stateful-e2e/<run>/scenarios/`, keeps the underlying smoke tree
-as `scenarios/smoke/`, and asserts long-lifecycle channel, splice, factory,
-watchtower, sponsor, xUDT, and negative attack-shaped paths through
-`devnet-stateful-assert`. The stateful assertion layer also loads the
-generalized audit profile in
-[docs/devnet-audit-profile.example.json](docs/devnet-audit-profile.example.json)
-so each protocol risk family has required scenario tags, committed transaction
-evidence, exact negative-path failures, and budget coverage.
-To rebuild a fresh run or inspect previous run metadata:
-
-```sh
-cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/<run>
-make smoke-report
-cargo run -p morph-cli -- devnet-smoke-compare \
-  --baseline target/devnet-smoke/<old-run> \
-  --candidate target/devnet-smoke/<new-run> \
-  --fail-on-transaction-set-change \
-  --fail-on-status-change \
-  --max-abs-total-byte-delta 0 \
-  --max-abs-tx-byte-delta 0
 make devnet-stateful-e2e
-cargo run -p morph-cli -- devnet-stateful-report \
-  --dir target/devnet-stateful-e2e/latest/scenarios \
-  --audit-profile docs/devnet-audit-profile.example.json
-cargo run -p morph-cli -- devnet-stateful-assert \
-  --dir target/devnet-stateful-e2e/latest/scenarios \
-  --audit-profile docs/devnet-audit-profile.example.json \
-  --budget-profile docs/devnet-stateful-budget.example.json
 ```
 
-`devnet-smoke-assert` and `devnet-stateful-assert` are current-release gates:
-they require local contract hashes to match the artifact, and stateful assertions
-also require a clean artifact at current `HEAD` with a clean worktree.
+The generated reports live under `target/devnet-smoke/` and
+`target/devnet-stateful-e2e/`. The `latest` symlink points to the most recent
+successful run when it is safe to refresh.
 
-For community-facing explanations with diagrams and less protocol vocabulary,
-see the [English tutorial](docs/morph-channel-tutorial.md) and
-[Chinese tutorial](docs/morph-channel-tutorial.zh.md).
-The release-blocking production checklist is tracked in
-[docs/mainnet-readiness.md](docs/mainnet-readiness.md).
+## Common CLI Workflows
 
-For watchtower-style deployments, generate an operator policy and pass it to
-the scanner before it publishes any package:
-
-```sh
-cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
-cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
-cargo run -p morph-cli -- print-watch-config-fixture > target/watch-config.json
-cargo run -p morph-cli -- validate-watch-config target/watch-config.json
-cargo run -p morph-cli -- devnet watch-latest-package \
-  --channel-id "$CHANNEL_ID" \
-  --from-block "$OPEN_BLOCK_NUMBER" \
-  --detection-depth 3 \
-  --auto-fund-sponsor \
-  --private-key-file target/watchtower-owner.key \
-  --watch-policy target/watch-policy.json \
-  --alert-file target/watch-alerts.jsonl \
-  --alert-webhook-url http://127.0.0.1:9000/morph-alerts \
-  --json
-```
-
-For multiple channels, use a watchtower config and run one bounded scan pass.
-Relative paths inside the config are resolved relative to the config file, and
-private keys are intentionally kept outside the config:
-
-```sh
-cargo run -p morph-cli -- devnet watch-config-once \
-  --config target/watch-config.json \
-  --private-key-file target/watchtower-owner.key \
-  --json
-cargo run -p morph-cli -- devnet watch-config-loop \
-  --config target/watch-config.json \
-  --private-key-file target/watchtower-owner.key \
-  --passes 10 \
-  --sleep-ms 1000 \
-  --json
-cargo run -p morph-cli -- devnet watch-config-service \
-  --config target/watch-config.json \
-  --private-key-file target/watchtower-owner.key \
-  --health-file target/watchtower-health.json \
-  --stop-file target/watchtower.stop \
-  --json
-```
-
-The watchtower commands also accept `MORPH_DEVNET_PRIVATE_KEY_FILE`; this is
-preferred over placing the sponsor key in shell history or a process list.
-The service form runs in the foreground for process supervisors, updates a
-JSON health file, backs off after failed passes, and stops cleanly when the
-stop file appears. Watch cursors remember the last observed funding anchor, and
-the scanner only publishes packages whose funding anchor matches the confirmed
-StateCell, emitting splice-specific alerts when a saved package belongs to a
-different anchor.
-The sponsor lock's script-enforced boundary is intentionally narrower than the
-watchtower operator policy. On chain it checks state type, channel/state number
-range, fee caps, clean sponsor change, and rejects finite script-level expiry
-values. Runtime fields such as expiry windows, sponsor source, cadence, and
-webhook policy are operator/watchtower policy until a future
-script-verifiable design exists.
-
-For the factory research track, the CLI can also print and validate a
-host-side non-interference package, its conservative all-participant signed
-state package, and a host-side authorised-participant reduced package. The
-devnet CLI also includes `open-factory`,
-`update-factory`, `factory-exit-channel`, and `factory-xudt-smoke` for the
-conservative on-chain path, plus `factory-reduced-rights-smoke`,
-`factory-reduced-exit-smoke`, and `factory-reduced-xudt-exit-smoke` for the
-bounded one-signer proof paths. `devnet
-save-factory-splice-package` captures a live
-conservative FactoryStateCell/FactoryVaultCell pair as a signed
-`morph.factory_splice_package.v1` artifact, and `devnet apply-factory-splice`
-applies that package against the live factory state/vault pair.
-`devnet factory-splice-in-smoke`, `devnet factory-splice-out-smoke`,
-`devnet factory-xudt-splice-in-smoke`, and
-`devnet factory-xudt-splice-out-smoke` wrap those paths through live package
-capture, apply, and post-splice child-channel materialisation.
-`factory-xudt-negative-smoke` proves that a child
-xUDT vault amount must match the committed local-exit descriptor even when
-overall xUDT supply is conserved:
+Generate and validate reusable state and factory packages:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json
 cargo run -p morph-cli -- validate-factory-package target/factory-update.json --json
-cargo run -p morph-cli -- print-factory-state-fixture > target/factory-state.json
-cargo run -p morph-cli -- validate-factory-state-package target/factory-state.json --json
-cargo run -p morph-cli -- print-reduced-factory-state-fixture \
-  > target/factory-state-reduced.json
-cargo run -p morph-cli -- validate-factory-state-package \
-  target/factory-state-reduced.json --json
 cargo run -p morph-cli -- print-factory-reduced-rights-fixture \
   > target/factory-reduced-rights.json
 cargo run -p morph-cli -- validate-factory-reduced-rights-package \
@@ -315,70 +209,67 @@ cargo run -p morph-cli -- print-factory-merkle-update-fixture \
   > target/factory-merkle-update.json
 cargo run -p morph-cli -- validate-factory-merkle-update-package \
   target/factory-merkle-update.json --json
-cargo run -p morph-cli -- print-factory-local-exit-fixture \
-  > target/factory-local-exit.json
-cargo run -p morph-cli -- validate-factory-local-exit-package \
-  target/factory-local-exit.json --json
-cargo run -p morph-cli -- print-factory-splice-fixture --kind splice-in \
-  > target/factory-splice-in.json
-cargo run -p morph-cli -- validate-factory-splice-package \
-  target/factory-splice-in.json --json
-cargo run -p morph-cli -- print-factory-splice-fixture --kind xudt-splice-out \
-  > target/factory-xudt-splice-out.json
-cargo run -p morph-cli -- validate-factory-splice-package \
-  target/factory-xudt-splice-out.json --json
-cargo run -p morph-cli -- print-factory-reduced-splice-fixture --kind splice-in \
-  > target/factory-reduced-splice-in.json
-cargo run -p morph-cli -- validate-factory-reduced-splice-package \
-  target/factory-reduced-splice-in.json --json
-cargo run -p morph-cli -- print-factory-reduced-splice-fixture --kind xudt-splice-out \
-  > target/factory-reduced-xudt-splice-out.json
-cargo run -p morph-cli -- validate-factory-reduced-splice-package \
-  target/factory-reduced-xudt-splice-out.json --json
-cargo run -p morph-cli -- devnet factory-splice-in-smoke --json
-cargo run -p morph-cli -- devnet factory-splice-out-smoke --json
-cargo run -p morph-cli -- devnet factory-reduced-splice-in-smoke --json
-cargo run -p morph-cli -- devnet factory-reduced-splice-out-smoke --json
-cargo run -p morph-cli -- devnet factory-reduced-xudt-splice-in-smoke --json
-cargo run -p morph-cli -- devnet factory-reduced-xudt-splice-out-smoke --json
-cargo run -p morph-cli -- devnet factory-xudt-splice-in-smoke --json
-cargo run -p morph-cli -- devnet factory-xudt-splice-out-smoke --json
-cargo run -p morph-cli -- print-splice-fixture --kind splice-in > target/splice.json
-cargo run -p morph-cli -- validate-splice-package target/splice.json --json
-cargo run -p morph-cli -- print-splice-fixture --kind splice-out \
-  > target/splice-out.json
-cargo run -p morph-cli -- validate-splice-package target/splice-out.json --json
-cargo run -p morph-cli -- print-splice-fixture --kind xudt-splice-in \
-  > target/xudt-splice-in.json
-cargo run -p morph-cli -- validate-splice-package \
-  target/xudt-splice-in.json --json
+```
+
+Generate splice packages:
+
+```sh
+cargo run -p morph-cli -- print-splice-fixture --kind splice-in \
+  > target/splice-in.json
+cargo run -p morph-cli -- validate-splice-package target/splice-in.json --json
 cargo run -p morph-cli -- print-splice-fixture --kind xudt-splice-out \
   > target/xudt-splice-out.json
 cargo run -p morph-cli -- validate-splice-package \
   target/xudt-splice-out.json --json
 ```
 
-The splice package validator derives the encoded
-`SpliceStateTransitionWitnessV1` body and reports it as `contract_witness_hex`,
-alongside fixed-layout current/next StateHeader bytes, and the conservative
-participant-signature withdrawal payout policy for transaction-builder
-integration.
-The factory splice package validator likewise derives `WitnessEnvelopeV2` bytes
-carrying a `FactorySpliceWitnessV1` body as `contract_witness_hex`, so
-transaction builders can pass the validated package evidence directly into the
-factory type/vault script parsers.
-The reduced factory splice validator emits the sparse-Merkle host proof shape
-and `WitnessEnvelopeV2` bytes carrying `FactoryReducedSpliceWitnessV1` as
-`contract_witness_hex`: one reserve claim, 256 proof siblings, unchanged access
-roots, the full participant key commitment, and one authorised participant
-signature over the factory splice header.
-Splice-out package summaries expose `withdrawal_payout_policy:
-participant_signature_pubkey`, and live apply reports include the exact
-participant pubkey and lock hash used for the withdrawal output. `devnet
-save-splice-package` builds a live-matching CKB or xUDT splice-in/out package
-from an active StateCell/VaultCell pair, and `devnet apply-splice
---splice-package <path>` consumes that package with a fresh owner fee input. The
-`devnet splice-in-smoke`, `devnet splice-out-smoke`,
-`devnet xudt-splice-in-smoke`, and `devnet xudt-splice-out-smoke` commands wrap
-those paths through post-splice sponsor funding, descriptor-updated state
-publication, and finalisation.
+Run watchtower-style publication:
+
+```sh
+cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
+cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
+cargo run -p morph-cli -- print-watch-config-fixture > target/watch-config.json
+cargo run -p morph-cli -- validate-watch-config target/watch-config.json
+cargo run -p morph-cli -- devnet watch-config-once \
+  --config target/watch-config.json \
+  --private-key-file target/watchtower-owner.key \
+  --json
+```
+
+Compare smoke reports:
+
+```sh
+cargo run -p morph-cli -- devnet-smoke-report --dir target/devnet-smoke/latest
+cargo run -p morph-cli -- devnet-smoke-compare \
+  --baseline target/devnet-smoke/<old-run> \
+  --candidate target/devnet-smoke/<new-run> \
+  --fail-on-transaction-set-change \
+  --fail-on-status-change \
+  --max-abs-total-byte-delta 0 \
+  --max-abs-tx-byte-delta 0
+```
+
+## Reading Guide
+
+- [Devnet guide](docs/devnet.md): local node setup, smoke paths, report
+  generation, and assertion gates.
+- [Implementation notes](docs/implementation.md): protocol objects, script
+  boundary, factory witness envelope, and invariant coverage.
+- [Roadmap](docs/roadmap.md): milestone status and deferred work.
+- [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
+  production or real-assets claim.
+- [English tutorial](docs/morph-channel-tutorial.md): a gentler introduction
+  with diagrams.
+- [Chinese tutorial](docs/morph-channel-tutorial.zh.md): Chinese-language
+  walkthrough.
+
+## Maturity
+
+Morph Channel should be read as a serious devnet research implementation, not
+as production infrastructure. The useful evidence today is local and
+executable: invariant tests, CKB script tests, smoke reports, stateful
+acceptance reports, and negative-path assertions.
+
+The next maturity step is external validation: independent review, repeated
+devnet runs under realistic fee and reorg conditions, CI-backed release
+artefacts, operational runbooks, and conservative value limits.
