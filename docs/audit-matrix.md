@@ -2,6 +2,11 @@
 
 The paper's audit matrix is represented in `crates/morph-core/tests/invariants.rs`.
 
+This matrix is read against the current post-V1 V2-envelope implementation
+line. Remaining `*V1` fixture and witness names identify bounded body/package
+schemas or historical policy labels; factory script authorisation is dispatched
+through `WitnessEnvelopeV2`, not through raw fixed-width witness length.
+
 | Invariant | Current executable check |
 | --- | --- |
 | One live State Cell controls the channel pointer | `accepts_valid_state_supersession`, `rejects_stale_or_equal_state_number` |
@@ -17,7 +22,7 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 | Vault outputs match the signed settlement descriptor | `accepts_signed_settlement_descriptor_update`, `state_type_accepts_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Splice transitions preserve StateCell/VaultCell funding epochs | `state_and_vault_accept_splice_in_bridge`, `state_and_vault_accept_splice_out_bridge`, `state_and_vault_reject_splice_wrong_channel_header`, `vault_lock_rejects_splice_new_vault_capacity_mismatch` |
 | Authentic StateCell authority gates value and monitoring | `vault_lock_rejects_fake_state_header_without_state_type`, `state_type_rejects_standalone_settling_close_without_matching_vault`, `state_type_rejects_standalone_active_splice_retire_without_matching_vault`, `watchtower_state_detection_requires_authentic_state_scripts` |
-| Splice-out payouts stay participant-owned in V1 | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
+| Splice-out payouts stay participant-owned in the conservative splice policy | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
 | Reserve and business CKB are not confused | `rejects_business_ckb_confusion` |
 | xUDT value is conserved by canonical type script | `rejects_xudt_type_mismatch`, `rejects_xudt_amount_mismatch` |
@@ -87,8 +92,8 @@ Implemented devnet-level checks:
 - splice negative smoke coverage for stale funding epoch, wrong channel id,
   wrong vault type, insufficient remaining vault value, tampered xUDT delta, and
   signed-fee leakage rejections;
-- conservative splice V1 policy: quiescent base state number, explicit
-  funding-epoch semantics, fixed-width typed deltas, and participant-owned
+- conservative splice policy: quiescent base state number, explicit
+  funding-epoch semantics, bounded typed deltas, and participant-owned
   splice-out payouts;
 - smoke assertions that require older-state detection, publication-submitted,
   splice-detected, and stale splice-package watchtower alert evidence in the
@@ -129,23 +134,25 @@ Implemented devnet-level checks:
 - bounded reduced factory exits on devnet through `factory-reduced-exit-smoke`,
   followed by ordinary child-channel publication and finalisation in
   `scripts/devnet-smoke.sh`.
-- xUDT reduced-exit V1 is active at the contract/CKB-VM layer. Executable checks
-  include `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`,
+- the xUDT reduced-exit body schema is active at the contract/CKB-VM layer.
+  Executable checks include
+  `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`,
   `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`,
   `factory_type_rejects_reduced_exit_xudt_amount_mismatch`,
   `factory_type_rejects_reduced_exit_xudt_type_mismatch`,
   `factory_type_rejects_reduced_exit_xudt_claim_asset_type_mismatch`,
   `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`, and
   `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`.
-- xUDT reduced-exit V1 is active at the devnet smoke layer through
+- the xUDT reduced-exit body schema is active at the devnet smoke layer through
   `factory-reduced-xudt-exit-smoke`,
   `factory-reduced-xudt-exit-full-smoke`,
   `factory-reduced-xudt-exit-one-sided-smoke`, and
   `factory-reduced-xudt-negative-exit-smoke`.
 - Finite sponsor expiry windows, sponsor source, scan cadence, and webhook
-  policy are operator/watchtower policy in V1. Finite script-level expiry is
-  rejected by the sponsor lock; the remaining runtime bounds are covered by
-  host/operator policy checks, not by sponsor-lock script claims.
+  policy are operator/watchtower policy in the current conservative scope.
+  Finite script-level expiry is rejected by the sponsor lock; the remaining
+  runtime bounds are covered by host/operator policy checks, not by sponsor-lock
+  script claims.
 
 Implemented factory checks:
 
