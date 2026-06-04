@@ -1,9 +1,15 @@
 # Mainnet Readiness
 
-This repository remains devnet-first. The current implementation baseline is a
-Devnet V1 release candidate, not a mainnet-ready or production-ready release. A
-mainnet release candidate should not be cut until the items below have current
-evidence from mainnet or a mainnet-like environment.
+This repository remains devnet-first. The current implementation baseline is
+the post-V1 V2-envelope devnet line, not a mainnet-ready or production-ready
+release. A mainnet release candidate should not be cut until the items below
+have current evidence from mainnet or a mainnet-like environment.
+
+The historical Devnet V1 release-candidate evidence remains useful background,
+but it is no longer the active baseline for factory witness dispatch. Current
+factory authorisation uses `WitnessEnvelopeV2` with bounded body schemas; V1
+suffixes that remain in package and witness names identify body/schema history,
+not a raw fixed-width top-level dispatch contract.
 
 ## P0 Release Blockers
 
@@ -34,7 +40,7 @@ evidence from mainnet or a mainnet-like environment.
 
 - Pass the devnet stateful production-scenario suite with watchtower restart,
   cursor, stale-splice-package, and multi-operator-local evidence.
-- Current local evidence: the devnet stateful suite passed at `3814453`,
+- Historical local evidence: the devnet stateful suite passed at `3814453`,
   including watchtower cursor, stale-splice-package, service-mode, and local
   multi-operator-shaped checks.
 - Exercise restart and cursor recovery after bilateral splice and factory splice
@@ -60,7 +66,7 @@ evidence from mainnet or a mainnet-like environment.
 ### Supply-Chain Gate
 
 - `make supply-chain` must pass before release.
-- Current local evidence: `make supply-chain` passed at `3814453`; a mainnet
+- Historical local evidence: `make supply-chain` passed at `3814453`; a mainnet
   release candidate still requires current release/CI revalidation.
 - `cargo audit` checks RustSec advisories against `Cargo.lock`.
 - `cargo deny check` enforces allowed licenses, crate sources, and banned
@@ -88,11 +94,11 @@ evidence from mainnet or a mainnet-like environment.
 - If implementation intentionally leads the paper, the delta must be captured in
   a closeout document before external review.
 
-## Deferred Beyond V1
+## Deferred Beyond Current Conservative Scope
 
 - Generic descriptor runtime.
 - Concurrent unconfirmed splice updates.
 - Arbitrary splice-out payout locks without an explicit allowlist design.
 - Multi-right or variable-depth reduced-signature proof bundles beyond the
-  current fixed-width witnesses.
+  current bounded V2-envelope body schemas.
 - Routing, gossip, path finding, and liquidity discovery.
