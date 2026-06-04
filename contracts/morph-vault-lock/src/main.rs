@@ -19,8 +19,9 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_ACTIVE,
     PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitnessV1, SpliceVaultDescriptorV2,
-    StateHeaderV1, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u64, read_u128,
-    validate_relative_block_since, vault_cell_commitment_v1, verify_splice_state_transition_bundle,
+    StateHeaderV2, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u64, read_u128,
+    validate_relative_block_since, vault_cell_commitment_v1,
+    verify_splice_state_transition_bundle_v2,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -65,7 +66,7 @@ fn main() -> Result<()> {
         state_lock_code_hash,
         state_lock_hash_type,
     )?;
-    let header = StateHeaderV1::parse(&state_data)?;
+    let header = StateHeaderV2::parse(&state_data)?;
     if header.phase() == PHASE_ACTIVE {
         validate_splice_vault_spend(
             &script,
@@ -322,7 +323,7 @@ fn find_unique_state_input(
     loop {
         match load_cell_data(index, Source::Input) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV1::parse(&data)
+                if let Ok(header) = StateHeaderV2::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
                     && state_cell_scripts_match(
                         index,
@@ -353,7 +354,7 @@ fn find_unique_state_input(
 fn validate_splice_vault_spend(
     current_script: &ckb_std::ckb_types::packed::Script,
     state_index: usize,
-    old_header: &StateHeaderV1,
+    old_header: &StateHeaderV2,
     expected_funding_anchor: &[u8],
     expected_lock_code_hash: &[u8],
     expected_lock_hash_type: u8,
@@ -368,8 +369,8 @@ fn validate_splice_vault_spend(
         expected_lock_code_hash,
         expected_lock_hash_type,
     )?;
-    let new_header = StateHeaderV1::parse(&new_data)?;
-    verify_splice_state_transition_bundle(old_header, &new_header, &witness)?;
+    let new_header = StateHeaderV2::parse(&new_data)?;
+    verify_splice_state_transition_bundle_v2(old_header, &new_header, &witness)?;
 
     let old_vault = witness.old_vault()?;
     let new_vault = witness.new_vault()?;
@@ -427,7 +428,7 @@ fn find_unique_state_output_for_splice(
     loop {
         match load_cell_data(index, Source::Output) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV1::parse(&data)
+                if let Ok(header) = StateHeaderV2::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
                     && state_type_script_matches_anchor(
                         &base_type,

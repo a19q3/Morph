@@ -16,14 +16,13 @@ use ckb_std::{default_alloc, entry};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FACTORY_LOCAL_EXIT_WITNESS_V1_LEN, FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN,
-    FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN,
-    FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN,
     FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedSpliceWitnessV1,
     FactorySpliceWitnessV1, FactoryStateHeaderV1, FactoryVaultDeltaV1, FactoryVaultDeltasV1,
     FactoryVaultDescriptorV1, Result, ScriptError, VAULT_ASSET_KIND_CKB_V1,
-    VAULT_ASSET_KIND_XUDT_V1, read_u128, verify_factory_reduced_splice_update,
-    verify_factory_splice_update,
+    VAULT_ASSET_KIND_XUDT_V1, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, WitnessEnvelopeV2, read_u128,
+    verify_factory_reduced_splice_update, verify_factory_splice_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -58,68 +57,70 @@ fn main() -> Result<()> {
         .input_type()
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
-    let input_type_raw = input_type.raw_data();
+    let input_type_data = input_type.raw_data();
+    let envelope = WitnessEnvelopeV2::parse(input_type_data.as_ref())?;
+    let input_type_raw = envelope.body();
 
     let old_header = find_unique_factory_state(Source::Input, factory_id, factory_type_hash)?;
     let new_header = find_unique_factory_state(Source::Output, factory_id, factory_type_hash)?;
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
-    if input_type_raw.len() == FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
-        || input_type_raw.len() == FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN
-    {
-        let witness = FactoryLocalExitWitnessV1::parse(input_type_raw.as_ref())?;
-        if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
-            return Err(ScriptError::FactoryLocalExitMismatch);
+    match envelope.kind() {
+        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2 => {
+            let witness = FactoryLocalExitWitnessV1::parse(input_type_raw)?;
+            if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
+                return Err(ScriptError::FactoryLocalExitMismatch);
+            }
+            let child_release = validate_child_vault(
+                witness.vault_output_index(),
+                witness.vault_lock_hash(),
+                witness.settlement_descriptor(),
+            )?;
+            validate_factory_reduced_exit_reserve_conservation(&child_release)?;
         }
-        let child_release = validate_child_vault(
-            witness.vault_output_index(),
-            witness.vault_lock_hash(),
-            witness.settlement_descriptor(),
-        )?;
-        validate_factory_reduced_exit_reserve_conservation(&child_release)?;
-    } else if input_type_raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
-        || input_type_raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
-    {
-        let witness = FactoryReducedExitWitnessV1::parse(input_type_raw.as_ref())?;
-        let digest = witness.non_interference_digest(&old_header, &new_header)?;
-        if new_header.non_interference_digest() != digest.as_slice() {
-            return Err(ScriptError::FactoryReducedProofMismatch);
-        }
-        let child_release = validate_child_vault(
-            witness.vault_output_index(),
-            witness.vault_lock_hash(),
-            witness.settlement_descriptor(),
-        )?;
-        match child_release.xudt_type_hash {
-            Some(_) => {
-                if child_release.xudt_amount != witness.release_quantity() {
-                    return Err(ScriptError::FactoryReserveMismatch);
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2 => {
+            let witness = FactoryReducedExitWitnessV1::parse(input_type_raw)?;
+            let digest = witness.non_interference_digest(&old_header, &new_header)?;
+            if new_header.non_interference_digest() != digest.as_slice() {
+                return Err(ScriptError::FactoryReducedProofMismatch);
+            }
+            let child_release = validate_child_vault(
+                witness.vault_output_index(),
+                witness.vault_lock_hash(),
+                witness.settlement_descriptor(),
+            )?;
+            match child_release.xudt_type_hash {
+                Some(_) => {
+                    if child_release.xudt_amount != witness.release_quantity() {
+                        return Err(ScriptError::FactoryReserveMismatch);
+                    }
+                }
+                None => {
+                    if child_release.capacity as u128 != witness.release_quantity() {
+                        return Err(ScriptError::FactoryReserveMismatch);
+                    }
                 }
             }
-            None => {
-                if child_release.capacity as u128 != witness.release_quantity() {
-                    return Err(ScriptError::FactoryReserveMismatch);
-                }
-            }
+            validate_factory_reduced_exit_reserve_conservation(&child_release)?;
         }
-        validate_factory_reduced_exit_reserve_conservation(&child_release)?;
-    } else if input_type_raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
-        let witness = FactorySpliceWitnessV1::parse(input_type_raw.as_ref())?;
-        verify_factory_splice_update(&old_header, &new_header, &witness)?;
-        let old_vault = witness.old_vault()?;
-        let new_vault = witness.new_vault()?;
-        let deltas = witness.deltas()?;
-        validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
-    } else if input_type_raw.len() == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN {
-        let witness = FactoryReducedSpliceWitnessV1::parse(input_type_raw.as_ref())?;
-        verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
-        let old_vault = witness.old_vault()?;
-        let new_vault = witness.new_vault()?;
-        let deltas = witness.deltas()?;
-        validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
-    } else {
-        return Err(ScriptError::ParticipantWitnessEncoding);
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2 => {
+            let witness = FactorySpliceWitnessV1::parse(input_type_raw)?;
+            verify_factory_splice_update(&old_header, &new_header, &witness)?;
+            let old_vault = witness.old_vault()?;
+            let new_vault = witness.new_vault()?;
+            let deltas = witness.deltas()?;
+            validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2 => {
+            let witness = FactoryReducedSpliceWitnessV1::parse(input_type_raw)?;
+            verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
+            let old_vault = witness.old_vault()?;
+            let new_vault = witness.new_vault()?;
+            let deltas = witness.deltas()?;
+            validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
+        }
+        _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
     Ok(())
 }

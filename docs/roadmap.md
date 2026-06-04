@@ -329,8 +329,7 @@ Protocol objects to add:
   descriptor, and optional sponsor policy hints.
 - `StateHeaderV2` with an explicit `funding_epoch` field plus funding/vault-set
   commitments, so state signatures bind both the stable channel id and the
-  current funding configuration. The current StateHeaderV1 bridge remains a
-  compatibility stepping stone until this wire-format upgrade lands.
+  current funding configuration.
 - `VaultDescriptorV2`: typed vector of CKB and xUDT vault partitions so splice
   deltas can be checked without ad hoc per-asset fields.
 
@@ -418,7 +417,7 @@ Acceptance criteria:
   implemented for the StateCell/VaultCell bridge;
 - CKB-VM tests reject wrong-channel splice headers and tampered new-vault
   outputs; `StateHeaderV2` parser/verifier tests bind explicit funding epochs
-  and old/new vault-set commitments for the final V1 wire target;
+  and old/new vault-set commitments for the active channel wire target;
 - CKB+xUDT tests reject same-supply but wrong-recipient/token-amount splice
   outputs;
 - devnet smoke demonstrates splice-in, post-splice state publication, and
@@ -462,11 +461,12 @@ decrease, xUDT type drift, tampered vault change, stale update numbers, and
 invalid signatures. `morph-cli` can print and validate
 `morph.factory_splice_package.v1` fixtures, and smoke summaries decode those
 packages as auditable factory-splice evidence. The validator now derives
-fixed-width `FactorySpliceWitnessV1` bytes as `contract_witness_hex`, giving
-transaction builders a direct bridge from package evidence to script witness
-encoding. `devnet save-factory-splice-package` now captures a live
+`WitnessEnvelopeV2` bytes containing a `FactorySpliceWitnessV1` body as
+`contract_witness_hex`, giving transaction builders a direct bridge from
+package evidence to script witness encoding. `devnet
+save-factory-splice-package` now captures a live
 conservative FactoryStateCell/FactoryVaultCell pair into that package format,
-and `devnet apply-factory-splice` applies the package with the fixed witness
+and `devnet apply-factory-splice` applies the package with the envelope witness
 against both factory scripts. `devnet factory-splice-in-smoke` and
 `devnet factory-splice-out-smoke` wrap the CKB path end-to-end: open a factory,
 capture a live splice package, apply it, and then materialise a child channel
@@ -474,10 +474,10 @@ from the post-splice FactoryVaultCell. `devnet factory-xudt-splice-in-smoke`
 and `devnet factory-xudt-splice-out-smoke` now run the same flow for typed
 FactoryVaultCells, including an external participant-owned xUDT input for
 splice-in and participant-owned withdrawal output for splice-out.
-The Molecule schema records the
-fixed-width M6 wire target, and the M6 contract witness bridge is closed for
-the conservative V1 scope:
-`morph-script-common` now parses and verifies `FactorySpliceWitnessV1`,
+The Molecule schema records the bounded M6 wire target, and the M6 contract
+witness bridge is closed for the conservative V1 body scope:
+`morph-script-common` now parses `WitnessEnvelopeV2` and verifies the
+`FactorySpliceWitnessV1` body,
 `morph-factory-type` accepts signed all-participant factory splice updates, and
 `morph-factory-vault-lock` checks the touched CKB/xUDT FactoryVaultCell delta
 against the signed witness. Smoke summaries now emit all-participant
@@ -488,9 +488,10 @@ exists as `FactoryReducedSpliceTransition` plus
 `morph.factory_reduced_splice_package.v1`: one reserve claim is proved by a
 single-right Merkle proof, the package carries the full participant key
 commitment, and only the authorised participant signs the factory splice header.
-The contract bridge now parses fixed-width `FactoryReducedSpliceWitnessV1`
-bytes, verifies the sparse Merkle right transition, and keeps access roots
-unchanged for this reduced proof path. CKB-VM tests exercise the reduced
+The contract bridge now parses `WitnessEnvelopeV2` carrying
+`FactoryReducedSpliceWitnessV1` bytes, verifies the sparse Merkle right
+transition, and keeps access roots unchanged for this reduced proof path.
+CKB-VM tests exercise the reduced
 factory splice bridge end to end: valid type+vault acceptance, sparse-Merkle
 sibling tamper rejection, and FactoryVaultCell capacity-mismatch rejection.
 

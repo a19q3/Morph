@@ -17,13 +17,13 @@ use morph_core::{
     validate_splice_transition, vault_descriptor_commitment_v2,
 };
 use morph_script_common::{
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_V1_LEN,
+    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_V1_LEN,
     SPLICE_ASSET_DELTAS_V1_LEN, SPLICE_HEADER_V1_LEN, SPLICE_SIGNATURE_COUNT_V1,
     SPLICE_SIGNATURE_THRESHOLD_V1, SPLICE_SIGNATURE_WITNESS_V1_LEN,
     SPLICE_SIGNATURE_WITNESS_VERSION_V1, SPLICE_STATE_TRANSITION_WITNESS_V1_LEN,
     SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1, SPLICE_VAULT_ASSET_AMOUNT_V2_LEN,
-    SPLICE_VAULT_DESCRIPTOR_V2_LEN, STATE_HEADER_V1_LEN, SpliceStateTransitionWitnessV1,
-    VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1,
+    SPLICE_VAULT_DESCRIPTOR_V2_LEN, STATE_HEADER_V2_LEN, SpliceStateTransitionWitnessV1,
+    StateHeaderV2Input, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, encode_state_header_v2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -333,8 +333,8 @@ impl StoredSplicePackage {
     pub fn summary(&self) -> Result<SplicePackageSummary> {
         let transition = self.validate()?;
         let contract_witness = self.contract_witness_bytes()?;
-        let current_state_header = state_header_wire_bytes(&transition.current_state.header);
-        let next_state_header = state_header_wire_bytes(&next_state_header_for_splice(&transition));
+        let current_state_header = current_state_header_wire_bytes(&transition)?;
+        let next_state_header = next_state_header_wire_bytes(&transition)?;
         let (withdrawal_payout_policy, withdrawal_participant_pubkey_sec1) =
             withdrawal_payout_summary(&self.withdrawals, &self.signatures);
         Ok(SplicePackageSummary {
@@ -363,16 +363,14 @@ impl StoredSplicePackage {
         contract_witness_bytes_from_transition(&transition)
     }
 
-    pub fn current_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V1_LEN]> {
+    pub fn current_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V2_LEN]> {
         let transition = self.validate()?;
-        Ok(state_header_wire_bytes(&transition.current_state.header))
+        current_state_header_wire_bytes(&transition)
     }
 
-    pub fn next_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V1_LEN]> {
+    pub fn next_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V2_LEN]> {
         let transition = self.validate()?;
-        Ok(state_header_wire_bytes(&next_state_header_for_splice(
-            &transition,
-        )))
+        next_state_header_wire_bytes(&transition)
     }
 
     pub fn file_name(&self) -> String {
@@ -1097,24 +1095,50 @@ fn next_state_header_for_splice(transition: &SpliceTransition) -> StateHeader {
     header
 }
 
-fn state_header_wire_bytes(header: &StateHeader) -> [u8; STATE_HEADER_V1_LEN] {
-    let mut raw = [0u8; STATE_HEADER_V1_LEN];
-    put_u16(&mut raw, 0, header.protocol_version);
-    raw[2..34].copy_from_slice(&header.chain_id);
-    put_u16(&mut raw, 34, header.signature_scheme_id);
-    raw[36..68].copy_from_slice(&header.channel_id);
-    raw[68..100].copy_from_slice(&header.funding_anchor);
-    put_u64(&mut raw, 100, header.state_number);
-    raw[108] = mode_wire_byte(header.mode);
-    raw[109] = phase_wire_byte(header.phase);
-    raw[110..142].copy_from_slice(&header.participants_commitment);
-    raw[142..174].copy_from_slice(&header.asset_registry_commitment);
-    raw[174..206].copy_from_slice(&header.settlement_descriptor_commitment);
-    put_u16(&mut raw, 206, header.descriptor_version);
-    raw[208..240].copy_from_slice(&header.payload_commitment);
-    raw[240..272].copy_from_slice(&header.challenge_policy_commitment);
-    put_u16(&mut raw, 272, header.state_layout_version);
-    raw
+fn current_state_header_wire_bytes(
+    transition: &SpliceTransition,
+) -> Result<[u8; STATE_HEADER_V2_LEN]> {
+    state_header_wire_bytes_v2(
+        &transition.current_state.header,
+        transition.header.old_funding_epoch,
+        &vault_descriptor_commitment_v2(&transition.old_vault),
+    )
+}
+
+fn next_state_header_wire_bytes(
+    transition: &SpliceTransition,
+) -> Result<[u8; STATE_HEADER_V2_LEN]> {
+    state_header_wire_bytes_v2(
+        &next_state_header_for_splice(transition),
+        transition.header.new_funding_epoch,
+        &vault_descriptor_commitment_v2(&transition.new_vault),
+    )
+}
+
+fn state_header_wire_bytes_v2(
+    header: &StateHeader,
+    funding_epoch: u64,
+    vault_set_commitment: &[u8; BYTE32_LEN],
+) -> Result<[u8; STATE_HEADER_V2_LEN]> {
+    Ok(encode_state_header_v2(&StateHeaderV2Input {
+        protocol_version: header.protocol_version,
+        chain_id: header.chain_id,
+        signature_scheme_id: header.signature_scheme_id,
+        channel_id: header.channel_id,
+        funding_epoch,
+        funding_anchor: header.funding_anchor,
+        vault_set_commitment: *vault_set_commitment,
+        state_number: header.state_number,
+        mode: mode_wire_byte(header.mode),
+        phase: phase_wire_byte(header.phase),
+        participants_commitment: header.participants_commitment,
+        asset_registry_commitment: header.asset_registry_commitment,
+        settlement_descriptor_commitment: header.settlement_descriptor_commitment,
+        descriptor_version: header.descriptor_version,
+        payload_commitment: header.payload_commitment,
+        challenge_policy_commitment: header.challenge_policy_commitment,
+        state_layout_version: 2,
+    }))
 }
 
 fn contract_witness_bytes_from_transition(transition: &SpliceTransition) -> Result<Vec<u8>> {
@@ -1518,11 +1542,11 @@ mod tests {
 
         let parsed = SpliceStateTransitionWitnessV1::parse(&witness_bytes).unwrap();
         let transition = package.validate().unwrap();
-        let current_raw = state_header_wire_bytes(&transition.current_state.header);
-        let next_raw = state_header_wire_bytes(&next_state_header_for_splice(&transition));
-        let current = morph_script_common::StateHeaderV1::parse(&current_raw).unwrap();
-        let next = morph_script_common::StateHeaderV1::parse(&next_raw).unwrap();
-        morph_script_common::verify_splice_state_transition_bundle(&current, &next, &parsed)
+        let current_raw = current_state_header_wire_bytes(&transition).unwrap();
+        let next_raw = next_state_header_wire_bytes(&transition).unwrap();
+        let current = morph_script_common::StateHeaderV2::parse(&current_raw).unwrap();
+        let next = morph_script_common::StateHeaderV2::parse(&next_raw).unwrap();
+        morph_script_common::verify_splice_state_transition_bundle_v2(&current, &next, &parsed)
             .unwrap();
     }
 
@@ -1544,22 +1568,22 @@ mod tests {
         assert_eq!(
             decode_hex_exact(
                 &summary.current_state_header_hex,
-                STATE_HEADER_V1_LEN,
+                STATE_HEADER_V2_LEN,
                 "current_state_header_hex"
             )
             .unwrap()
             .len(),
-            STATE_HEADER_V1_LEN
+            STATE_HEADER_V2_LEN
         );
         assert_eq!(
             decode_hex_exact(
                 &summary.next_state_header_hex,
-                STATE_HEADER_V1_LEN,
+                STATE_HEADER_V2_LEN,
                 "next_state_header_hex"
             )
             .unwrap()
             .len(),
-            STATE_HEADER_V1_LEN
+            STATE_HEADER_V2_LEN
         );
         let digest = hex32_bytes(&summary.signing_digest).unwrap();
         for signature in &package.signatures {

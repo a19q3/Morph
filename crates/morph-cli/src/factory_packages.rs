@@ -33,6 +33,9 @@ use morph_script_common::{
     FACTORY_VAULT_ASSET_AMOUNT_V1_LEN, FACTORY_VAULT_DELTA_V1_LEN, FACTORY_VAULT_DELTAS_V1_LEN,
     FACTORY_VAULT_DESCRIPTOR_V1_LEN, FactoryReducedSpliceWitnessV1, FactorySpliceWitnessV1,
     VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2,
+    WITNESS_ENVELOPE_V2_LEN, WITNESS_ENVELOPE_V2_MAGIC, WITNESS_ENVELOPE_VERSION_V2,
+    WitnessEnvelopeV2, witness_envelope_body_commitment_v2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2845,7 +2848,7 @@ fn contract_witness_bytes_from_transition(transition: &FactorySpliceTransition) 
     parsed
         .deltas()
         .map_err(|err| anyhow::anyhow!("encoded factory splice deltas are invalid: {err:?}"))?;
-    Ok(raw)
+    witness_envelope_v2(WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, &raw)
 }
 
 fn contract_reduced_splice_witness_bytes_from_transition(
@@ -2891,6 +2894,24 @@ fn contract_reduced_splice_witness_bytes_from_transition(
     parsed.deltas().map_err(|err| {
         anyhow::anyhow!("encoded reduced factory splice deltas are invalid: {err:?}")
     })?;
+    witness_envelope_v2(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, &raw)
+}
+
+fn witness_envelope_v2(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
+    let body_len: u32 = body
+        .len()
+        .try_into()
+        .context("factory witness body length does not fit in u32")?;
+    let mut raw = vec![0u8; WITNESS_ENVELOPE_V2_LEN + body.len()];
+    raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
+    put_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+    put_u16(&mut raw, 10, kind);
+    put_u16(&mut raw, 12, 0);
+    put_u32(&mut raw, 14, body_len);
+    raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(kind, body));
+    raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
+    WitnessEnvelopeV2::parse(&raw)
+        .map_err(|err| anyhow::anyhow!("encoded factory witness envelope is invalid: {err:?}"))?;
     Ok(raw)
 }
 
@@ -3202,6 +3223,10 @@ fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
     raw[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
 
+fn put_u32(raw: &mut [u8], offset: usize, value: u32) {
+    raw[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
 fn put_u64(raw: &mut [u8], offset: usize, value: u64) {
     raw[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
@@ -3376,7 +3401,7 @@ mod tests {
         assert_eq!(loaded.signing_digest, package.signing_digest);
         assert_eq!(
             loaded.summary().unwrap().contract_witness_len,
-            FACTORY_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3440,7 +3465,7 @@ mod tests {
         assert_eq!(loaded_summary.proof_siblings, 256);
         assert_eq!(
             loaded_summary.contract_witness_len,
-            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3480,10 +3505,13 @@ mod tests {
         package: &StoredFactorySplicePackage,
         summary: &FactorySplicePackageSummary,
     ) {
-        assert_eq!(summary.contract_witness_len, FACTORY_SPLICE_WITNESS_V1_LEN);
+        assert_eq!(
+            summary.contract_witness_len,
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN
+        );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            FACTORY_SPLICE_WITNESS_V1_LEN,
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN,
             "contract_witness_hex",
         )
         .unwrap();
@@ -3493,7 +3521,9 @@ mod tests {
             contract_witness_bytes_from_transition(&transition).unwrap()
         );
 
-        let parsed = FactorySpliceWitnessV1::parse(&summary_bytes).unwrap();
+        let envelope = WitnessEnvelopeV2::parse(&summary_bytes).unwrap();
+        assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2);
+        let parsed = FactorySpliceWitnessV1::parse(envelope.body()).unwrap();
         let header = parsed.header().unwrap();
         let signature = parsed.factory_signature().unwrap();
         let old_vault = parsed.old_vault().unwrap();
@@ -3528,11 +3558,11 @@ mod tests {
     ) {
         assert_eq!(
             summary.contract_witness_len,
-            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
         );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
+            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
             "contract_witness_hex",
         )
         .unwrap();
@@ -3542,7 +3572,12 @@ mod tests {
             contract_reduced_splice_witness_bytes_from_transition(&transition).unwrap()
         );
 
-        let parsed = FactoryReducedSpliceWitnessV1::parse(&summary_bytes).unwrap();
+        let envelope = WitnessEnvelopeV2::parse(&summary_bytes).unwrap();
+        assert_eq!(
+            envelope.kind(),
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2
+        );
+        let parsed = FactoryReducedSpliceWitnessV1::parse(envelope.body()).unwrap();
         let header = parsed.header().unwrap();
         let merkle_update = parsed.merkle_update().unwrap();
         let old_vault = parsed.old_vault().unwrap();

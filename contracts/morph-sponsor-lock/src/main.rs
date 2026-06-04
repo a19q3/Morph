@@ -12,7 +12,7 @@ use ckb_std::high_level::{
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
-use morph_script_common::{PHASE_SETTLING, Result, ScriptError, SponsorPolicyV1, StateHeaderV1};
+use morph_script_common::{PHASE_SETTLING, Result, ScriptError, SponsorPolicyV1, StateHeaderV2};
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -73,7 +73,7 @@ fn validate_sponsored_state(policy: &SponsorPolicyV1) -> Result<()> {
     loop {
         match load_cell_data(index, Source::Output) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV1::parse(&data) {
+                if let Ok(header) = StateHeaderV2::parse(&data) {
                     if header.channel_id() == policy.channel_id() {
                         if found {
                             return Err(ScriptError::StateCellAmbiguous);

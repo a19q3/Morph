@@ -18,12 +18,15 @@ use morph_script_common::{
     FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryLocalExitWitnessV1,
     FactoryMerkleUpdateWitnessV1, FactoryReducedRightsWitnessV1, FactorySignatureWitnessV1,
     FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
-    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V1_LEN, StateHeaderV1,
-    blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, STATE_HEADER_V2_LEN, StateHeaderV2,
+    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+    WITNESS_ENVELOPE_V2_LEN, WITNESS_ENVELOPE_V2_MAGIC, WITNESS_ENVELOPE_VERSION_V2,
+    WitnessEnvelopeV2, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
     factory_participants_commitment_v1, participants_commitment_v1,
     settlement_descriptor_commitment_v1, verify_bilateral_state_signatures,
     verify_factory_merkle_update, verify_factory_state_signatures,
-    verify_reduced_factory_rights_update,
+    verify_reduced_factory_rights_update, witness_envelope_body_commitment_v2,
 };
 #[cfg(test)]
 use morph_script_common::{
@@ -184,12 +187,22 @@ impl FactoryStateCellUpdatePackage {
         }
     }
 
-    pub fn witness_bytes(&self) -> Result<Vec<u8>> {
-        match self {
-            Self::Full(package) => package.witness_bytes(),
-            Self::ReducedRights(package) => package.witness_bytes(),
-            Self::MerkleUpdate(package) => package.witness_bytes(),
-        }
+    pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
+        let (kind, body) = match self {
+            Self::Full(package) => (
+                WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+                package.witness_bytes()?,
+            ),
+            Self::ReducedRights(package) => (
+                WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
+                package.witness_bytes()?,
+            ),
+            Self::MerkleUpdate(package) => (
+                WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+                package.witness_bytes()?,
+            ),
+        };
+        factory_witness_envelope_v2(kind, &body)
     }
 
     pub fn factory_id(&self) -> &str {
@@ -395,7 +408,7 @@ impl StoredStatePackage {
     }
 
     pub fn header_bytes(&self) -> Result<Vec<u8>> {
-        decode_hex_exact(&self.header_hex, STATE_HEADER_V1_LEN, "header_hex")
+        decode_hex_exact(&self.header_hex, STATE_HEADER_V2_LEN, "header_hex")
     }
 
     pub fn witness_bytes(&self) -> Result<Vec<u8>> {
@@ -1536,7 +1549,7 @@ pub fn fixture_factory_local_exit_package() -> Result<StoredFactoryLocalExitPack
     let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
     let child_channel_id = [31u8; BYTE32_LEN];
     let funding_anchor = [32u8; BYTE32_LEN];
-    let mut state_header = vec![0u8; STATE_HEADER_V1_LEN];
+    let mut state_header = vec![0u8; STATE_HEADER_V2_LEN];
     put_u16(&mut state_header, 0, 1);
     state_header[2..34].copy_from_slice(&[30u8; BYTE32_LEN]);
     put_u16(
@@ -1545,20 +1558,22 @@ pub fn fixture_factory_local_exit_package() -> Result<StoredFactoryLocalExitPack
         SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
     );
     state_header[36..68].copy_from_slice(&child_channel_id);
-    state_header[68..100].copy_from_slice(&funding_anchor);
-    put_u64(&mut state_header, 100, 0);
-    state_header[108] = 0;
-    state_header[109] = PHASE_ACTIVE;
-    state_header[110..142].copy_from_slice(&participants_commitment_v1(2, &participant_pubkeys));
-    state_header[142..174]
-        .copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V1"]));
-    state_header[174..206].copy_from_slice(&descriptor_commitment);
-    put_u16(&mut state_header, 206, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
-    state_header[208..240].copy_from_slice(&script_blake2b256(&[
+    put_u64(&mut state_header, 68, 0);
+    state_header[76..108].copy_from_slice(&funding_anchor);
+    state_header[108..140].copy_from_slice(&funding_anchor);
+    put_u64(&mut state_header, 140, 0);
+    state_header[148] = 1;
+    state_header[149] = PHASE_ACTIVE;
+    state_header[150..182].copy_from_slice(&participants_commitment_v1(2, &participant_pubkeys));
+    state_header[182..214]
+        .copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V2"]));
+    state_header[214..246].copy_from_slice(&descriptor_commitment);
+    put_u16(&mut state_header, 246, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
+    state_header[248..280].copy_from_slice(&script_blake2b256(&[
         b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD_V1",
     ]));
-    state_header[240..272].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_CHALLENGE_POLICY_V1"]));
-    put_u16(&mut state_header, 272, 1);
+    state_header[280..312].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_CHALLENGE_POLICY_V2"]));
+    put_u16(&mut state_header, 312, 2);
 
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
@@ -1776,8 +1791,8 @@ pub fn canonical_hex32(value: &str) -> Result<String> {
     Ok(hex_prefixed(&bytes))
 }
 
-fn parse_header(raw: &[u8]) -> Result<StateHeaderV1<'_>> {
-    StateHeaderV1::parse(raw).map_err(|err| anyhow!("invalid state header encoding: {err:?}"))
+fn parse_header(raw: &[u8]) -> Result<StateHeaderV2<'_>> {
+    StateHeaderV2::parse(raw).map_err(|err| anyhow!("invalid state header encoding: {err:?}"))
 }
 
 fn parse_witness(raw: &[u8]) -> Result<BilateralSignatureWitnessV1<'_>> {
@@ -2290,7 +2305,7 @@ fn factory_local_exit_witness_bytes(
         2 + FACTORY_SIGNATURE_WITNESS_V1_LEN
             + 8
             + 3 * BYTE32_LEN
-            + STATE_HEADER_V1_LEN
+            + STATE_HEADER_V2_LEN
             + descriptor.len()
     ];
     put_u16(&mut raw, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
@@ -2307,8 +2322,8 @@ fn factory_local_exit_witness_bytes(
     offset += BYTE32_LEN;
     raw[offset..offset + BYTE32_LEN].copy_from_slice(state_lock_hash);
     offset += BYTE32_LEN;
-    raw[offset..offset + STATE_HEADER_V1_LEN].copy_from_slice(state_header);
-    offset += STATE_HEADER_V1_LEN;
+    raw[offset..offset + STATE_HEADER_V2_LEN].copy_from_slice(state_header);
+    offset += STATE_HEADER_V2_LEN;
     raw[offset..offset + descriptor.len()].copy_from_slice(descriptor);
     raw
 }
@@ -2328,6 +2343,24 @@ fn now_unix_ms() -> Result<u64> {
         .as_millis()
         .try_into()
         .context("unix time does not fit in u64 milliseconds")
+}
+
+fn factory_witness_envelope_v2(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
+    let body_len: u32 = body
+        .len()
+        .try_into()
+        .context("factory witness body length does not fit in u32")?;
+    let mut raw = vec![0u8; WITNESS_ENVELOPE_V2_LEN + body.len()];
+    raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
+    put_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+    put_u16(&mut raw, 10, kind);
+    put_u16(&mut raw, 12, 0);
+    put_u32(&mut raw, 14, body_len);
+    raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(kind, body));
+    raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
+    WitnessEnvelopeV2::parse(&raw)
+        .map_err(|err| anyhow!("encoded factory witness envelope is invalid: {err:?}"))?;
+    Ok(raw)
 }
 
 fn put_u16(out: &mut [u8], offset: usize, value: u16) {
@@ -2540,21 +2573,23 @@ mod tests {
         let mut entries = [(pubkey(&alice), alice), (pubkey(&bob), bob)];
         entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-        let mut header = vec![0u8; STATE_HEADER_V1_LEN];
+        let mut header = vec![0u8; STATE_HEADER_V2_LEN];
         put_u16(&mut header, 0, 1);
         header[2..34].copy_from_slice(&[7u8; BYTE32_LEN]);
         put_u16(&mut header, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1);
         header[36..68].copy_from_slice(&[8u8; BYTE32_LEN]);
-        header[68..100].copy_from_slice(&[9u8; BYTE32_LEN]);
-        put_u64(&mut header, 100, state_number);
-        header[108] = 0;
-        header[109] = PHASE_SETTLING;
+        put_u64(&mut header, 68, 0);
+        header[76..108].copy_from_slice(&[9u8; BYTE32_LEN]);
+        header[108..140].copy_from_slice(&[10u8; BYTE32_LEN]);
+        put_u64(&mut header, 140, state_number);
+        header[148] = 1;
+        header[149] = PHASE_SETTLING;
         let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
-        header[110..142].copy_from_slice(&participants_commitment_v1(2, &pubkeys));
-        put_u16(&mut header, 206, 1);
-        put_u16(&mut header, 272, 1);
+        header[150..182].copy_from_slice(&participants_commitment_v1(2, &pubkeys));
+        put_u16(&mut header, 246, 1);
+        put_u16(&mut header, 312, 2);
 
-        let parsed = StateHeaderV1::parse(&header).unwrap();
+        let parsed = StateHeaderV2::parse(&header).unwrap();
         let digest = parsed.signing_digest();
         let mut witness = vec![0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
         put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);

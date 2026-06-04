@@ -5,8 +5,9 @@ use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 
 pub const BYTE32_LEN: usize = 32;
-pub const STATE_HEADER_V1_LEN: usize = 274;
 pub const STATE_HEADER_V2_LEN: usize = 314;
+pub const WITNESS_ENVELOPE_V2_MAGIC: &[u8; 8] = b"MORPHW2!";
+pub const WITNESS_ENVELOPE_V2_LEN: usize = 8 + 2 + 2 + 2 + 4 + BYTE32_LEN;
 pub const FACTORY_STATE_HEADER_V1_LEN: usize = 238;
 pub const SPONSOR_POLICY_V1_LEN: usize = 144;
 pub const SPLICE_HEADER_V1_LEN: usize = 325;
@@ -57,7 +58,7 @@ pub const FACTORY_REDUCED_EXIT_COMMON_V1_LEN: usize = 8
     + BYTE32_LEN
     + BYTE32_LEN
     + BYTE32_LEN
-    + STATE_HEADER_V1_LEN;
+    + STATE_HEADER_V2_LEN;
 pub const FACTORY_REDUCED_EXIT_WITNESS_V1_LEN: usize = FACTORY_REDUCED_EXIT_COMMON_V1_LEN
     + BILATERAL_CKB_DESCRIPTOR_V1_LEN
     + 2 * FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN;
@@ -71,7 +72,7 @@ pub const FACTORY_LOCAL_EXIT_WITNESS_V1_LEN: usize = 2
     + BYTE32_LEN
     + BYTE32_LEN
     + BYTE32_LEN
-    + STATE_HEADER_V1_LEN
+    + STATE_HEADER_V2_LEN
     + BILATERAL_CKB_DESCRIPTOR_V1_LEN;
 pub const FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN: usize = 2
     + FACTORY_SIGNATURE_WITNESS_V1_LEN
@@ -80,7 +81,7 @@ pub const FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN: usize = 2
     + BYTE32_LEN
     + BYTE32_LEN
     + BYTE32_LEN
-    + STATE_HEADER_V1_LEN
+    + STATE_HEADER_V2_LEN
     + BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN;
 pub const FACTORY_SPLICE_HEADER_V1_LEN: usize = 275;
 pub const FACTORY_VAULT_ASSET_AMOUNT_V1_LEN: usize = 1 + BYTE32_LEN + 16;
@@ -128,8 +129,16 @@ pub const FACTORY_RIGHT_KIND_SPONSOR_BUDGET_CLAIM: u8 = 4;
 pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1: u16 = 1;
 pub const FACTORY_SPLICE_WITNESS_VERSION_V1: u16 = 1;
 pub const FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1: u16 = 5;
-pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
+pub const WITNESS_ENVELOPE_VERSION_V2: u16 = 2;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2: u16 = 1;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2: u16 = 2;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2: u16 = 3;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2: u16 = 4;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2: u16 = 5;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2: u16 = 6;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2: u16 = 7;
 pub const STATE_DOMAIN_V2: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V2";
+pub const WITNESS_ENVELOPE_BODY_DOMAIN_V2: &[u8] = b"CKB_MORPH_WITNESS_ENVELOPE_BODY_V2";
 pub const SPLICE_HEADER_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_HEADER_V1";
 pub const SPLICE_DELTA_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_DELTA_V1";
 pub const VAULT_DESCRIPTOR_DOMAIN_V2: &[u8] = b"CKB_MORPH_VAULT_DESCRIPTOR_V2";
@@ -203,104 +212,57 @@ pub enum ScriptError {
     FactorySpliceProofEncoding = 42,
     FactorySpliceProofMismatch = 43,
     SponsorPolicyUnsupported = 44,
+    WitnessEnvelopeEncoding = 45,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StateHeaderV1<'a> {
+pub struct StateHeaderV2<'a> {
     raw: &'a [u8],
-}
-
-impl<'a> StateHeaderV1<'a> {
-    pub fn parse(raw: &'a [u8]) -> Result<Self> {
-        if raw.len() != STATE_HEADER_V1_LEN {
-            return Err(ScriptError::Encoding);
-        }
-        Ok(Self { raw })
-    }
-
-    pub fn protocol_version(&self) -> u16 {
-        read_u16(self.raw, 0)
-    }
-
-    pub fn chain_id(&self) -> &'a [u8] {
-        field(self.raw, 2, 32)
-    }
-
-    pub fn signature_scheme_id(&self) -> u16 {
-        read_u16(self.raw, 34)
-    }
-
-    pub fn channel_id(&self) -> &'a [u8] {
-        field(self.raw, 36, 32)
-    }
-
-    pub fn funding_anchor(&self) -> &'a [u8] {
-        field(self.raw, 68, 32)
-    }
-
-    pub fn state_number(&self) -> u64 {
-        read_u64(self.raw, 100)
-    }
-
-    pub fn mode(&self) -> u8 {
-        self.raw[108]
-    }
-
-    pub fn phase(&self) -> u8 {
-        self.raw[109]
-    }
-
-    pub fn participants_commitment(&self) -> &'a [u8] {
-        field(self.raw, 110, 32)
-    }
-
-    pub fn asset_registry_commitment(&self) -> &'a [u8] {
-        field(self.raw, 142, 32)
-    }
-
-    pub fn settlement_descriptor_commitment(&self) -> &'a [u8] {
-        field(self.raw, 174, 32)
-    }
-
-    pub fn descriptor_version(&self) -> u16 {
-        read_u16(self.raw, 206)
-    }
-
-    pub fn payload_commitment(&self) -> &'a [u8] {
-        field(self.raw, 208, 32)
-    }
-
-    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
-        field(self.raw, 240, 32)
-    }
-
-    pub fn state_layout_version(&self) -> u16 {
-        read_u16(self.raw, 272)
-    }
-
-    pub fn signing_digest(&self) -> [u8; 32] {
-        blake2b256(&[STATE_DOMAIN_V1, self.raw])
-    }
-
-    pub fn same_context_except_progress(&self, next: &Self) -> bool {
-        self.protocol_version() == next.protocol_version()
-            && self.chain_id() == next.chain_id()
-            && self.signature_scheme_id() == next.signature_scheme_id()
-            && self.channel_id() == next.channel_id()
-            && self.funding_anchor() == next.funding_anchor()
-            && self.mode() == next.mode()
-            && self.participants_commitment() == next.participants_commitment()
-            && self.asset_registry_commitment() == next.asset_registry_commitment()
-            && self.challenge_policy_commitment() == next.challenge_policy_commitment()
-            && self.state_layout_version() == next.state_layout_version()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StateHeaderV2<'a> {
-    raw: &'a [u8],
+pub struct StateHeaderV2Input {
+    pub protocol_version: u16,
+    pub chain_id: [u8; BYTE32_LEN],
+    pub signature_scheme_id: u16,
+    pub channel_id: [u8; BYTE32_LEN],
+    pub funding_epoch: u64,
+    pub funding_anchor: [u8; BYTE32_LEN],
+    pub vault_set_commitment: [u8; BYTE32_LEN],
+    pub state_number: u64,
+    pub mode: u8,
+    pub phase: u8,
+    pub participants_commitment: [u8; BYTE32_LEN],
+    pub asset_registry_commitment: [u8; BYTE32_LEN],
+    pub settlement_descriptor_commitment: [u8; BYTE32_LEN],
+    pub descriptor_version: u16,
+    pub payload_commitment: [u8; BYTE32_LEN],
+    pub challenge_policy_commitment: [u8; BYTE32_LEN],
+    pub state_layout_version: u16,
+}
+
+pub fn encode_state_header_v2(input: &StateHeaderV2Input) -> [u8; STATE_HEADER_V2_LEN] {
+    let mut raw = [0u8; STATE_HEADER_V2_LEN];
+    write_u16(&mut raw, 0, input.protocol_version);
+    raw[2..34].copy_from_slice(&input.chain_id);
+    write_u16(&mut raw, 34, input.signature_scheme_id);
+    raw[36..68].copy_from_slice(&input.channel_id);
+    write_u64(&mut raw, 68, input.funding_epoch);
+    raw[76..108].copy_from_slice(&input.funding_anchor);
+    raw[108..140].copy_from_slice(&input.vault_set_commitment);
+    write_u64(&mut raw, 140, input.state_number);
+    raw[148] = input.mode;
+    raw[149] = input.phase;
+    raw[150..182].copy_from_slice(&input.participants_commitment);
+    raw[182..214].copy_from_slice(&input.asset_registry_commitment);
+    raw[214..246].copy_from_slice(&input.settlement_descriptor_commitment);
+    write_u16(&mut raw, 246, input.descriptor_version);
+    raw[248..280].copy_from_slice(&input.payload_commitment);
+    raw[280..312].copy_from_slice(&input.challenge_policy_commitment);
+    write_u16(&mut raw, 312, input.state_layout_version);
+    raw
 }
 
 impl<'a> StateHeaderV2<'a> {
@@ -396,6 +358,116 @@ impl<'a> StateHeaderV2<'a> {
             && self.asset_registry_commitment() == next.asset_registry_commitment()
             && self.challenge_policy_commitment() == next.challenge_policy_commitment()
             && self.state_layout_version() == next.state_layout_version()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WitnessEnvelopeV2<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> WitnessEnvelopeV2<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() < WITNESS_ENVELOPE_V2_LEN {
+            return Err(ScriptError::WitnessEnvelopeEncoding);
+        }
+        let envelope = Self { raw };
+        if envelope.magic() != WITNESS_ENVELOPE_V2_MAGIC
+            || envelope.version() != WITNESS_ENVELOPE_VERSION_V2
+            || envelope.flags() != 0
+            || !is_known_witness_envelope_kind_v2(envelope.kind())
+        {
+            return Err(ScriptError::WitnessEnvelopeEncoding);
+        }
+        let body_len = envelope.body_len() as usize;
+        if raw.len() != WITNESS_ENVELOPE_V2_LEN + body_len {
+            return Err(ScriptError::WitnessEnvelopeEncoding);
+        }
+        if !witness_envelope_body_len_allowed_v2(envelope.kind(), body_len) {
+            return Err(ScriptError::WitnessEnvelopeEncoding);
+        }
+        if envelope.body_commitment() != envelope.compute_body_commitment().as_slice() {
+            return Err(ScriptError::WitnessEnvelopeEncoding);
+        }
+        Ok(envelope)
+    }
+
+    pub fn magic(&self) -> &'a [u8] {
+        field(self.raw, 0, WITNESS_ENVELOPE_V2_MAGIC.len())
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 8)
+    }
+
+    pub fn kind(&self) -> u16 {
+        read_u16(self.raw, 10)
+    }
+
+    pub fn flags(&self) -> u16 {
+        read_u16(self.raw, 12)
+    }
+
+    pub fn body_len(&self) -> u32 {
+        read_u32(self.raw, 14)
+    }
+
+    pub fn body_commitment(&self) -> &'a [u8] {
+        field(self.raw, 18, BYTE32_LEN)
+    }
+
+    pub fn body(&self) -> &'a [u8] {
+        field(self.raw, WITNESS_ENVELOPE_V2_LEN, self.body_len() as usize)
+    }
+
+    pub fn compute_body_commitment(&self) -> [u8; BYTE32_LEN] {
+        witness_envelope_body_commitment_v2(self.kind(), self.body())
+    }
+}
+
+pub fn witness_envelope_body_commitment_v2(kind: u16, body: &[u8]) -> [u8; BYTE32_LEN] {
+    blake2b256(&[WITNESS_ENVELOPE_BODY_DOMAIN_V2, &kind.to_le_bytes(), body])
+}
+
+pub fn witness_envelope_len_v2(body_len: usize) -> usize {
+    WITNESS_ENVELOPE_V2_LEN + body_len
+}
+
+pub fn is_known_witness_envelope_kind_v2(kind: u16) -> bool {
+    matches!(
+        kind,
+        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2
+            | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2
+    )
+}
+
+pub fn witness_envelope_body_len_allowed_v2(kind: u16, body_len: usize) -> bool {
+    match kind {
+        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2 => body_len == FACTORY_SIGNATURE_WITNESS_V1_LEN,
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2 => {
+            body_len == FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2 => {
+            body_len == FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2 => {
+            body_len == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
+                || body_len == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2 => {
+            body_len == FACTORY_LOCAL_EXIT_WITNESS_V1_LEN
+                || body_len == FACTORY_LOCAL_EXIT_XUDT_WITNESS_V1_LEN
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2 => body_len == FACTORY_SPLICE_WITNESS_V1_LEN,
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2 => {
+            body_len == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+        }
+        _ => false,
     }
 }
 
@@ -556,17 +628,6 @@ impl<'a> SpliceHeaderV1<'a> {
         blake2b256(&[SPLICE_HEADER_DOMAIN_V1, self.raw])
     }
 
-    pub fn matches_current_state(&self, current: &StateHeaderV1) -> bool {
-        self.protocol_version() == current.protocol_version()
-            && self.chain_id() == current.chain_id()
-            && self.signature_scheme_id() == current.signature_scheme_id()
-            && self.channel_id() == current.channel_id()
-            && self.old_funding_anchor() == current.funding_anchor()
-            && self.base_state_number() == current.state_number()
-            && self.participants_commitment() == current.participants_commitment()
-            && self.challenge_policy_commitment() == current.challenge_policy_commitment()
-    }
-
     pub fn matches_current_state_v2(&self, current: &StateHeaderV2) -> bool {
         self.protocol_version() == current.protocol_version()
             && self.chain_id() == current.chain_id()
@@ -632,7 +693,7 @@ impl<'a> BilateralSignatureWitnessV1<'a> {
 }
 
 pub fn verify_bilateral_state_signatures(
-    header: &StateHeaderV1,
+    header: &StateHeaderV2,
     witness: &BilateralSignatureWitnessV1,
 ) -> Result<()> {
     if header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1 {
@@ -733,44 +794,6 @@ pub fn verify_splice_signatures(
             .map_err(|_| ScriptError::InvalidParticipantSignature)?;
     }
     Ok(())
-}
-
-pub fn verify_splice_state_transition(
-    current_state: &StateHeaderV1,
-    next_state: &StateHeaderV1,
-    splice_header: &SpliceHeaderV1,
-    witness: &SpliceSignatureWitnessV1,
-    old_vault: &SpliceVaultDescriptorV2,
-    new_vault: &SpliceVaultDescriptorV2,
-    deltas: &SpliceAssetDeltasV1,
-) -> Result<()> {
-    if current_state.phase() != PHASE_ACTIVE || next_state.phase() != PHASE_ACTIVE {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    if !splice_header.matches_current_state(current_state) {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    if !state_context_matches_splice_next(current_state, next_state, splice_header) {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    if splice_header.new_funding_epoch() <= splice_header.old_funding_epoch()
-        || splice_header.new_funding_anchor() == splice_header.old_funding_anchor()
-    {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    if old_vault.funding_anchor() != splice_header.old_funding_anchor()
-        || new_vault.funding_anchor() != splice_header.new_funding_anchor()
-    {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    if old_vault.commitment()?.as_slice() != splice_header.old_vault_commitment()
-        || new_vault.commitment()?.as_slice() != splice_header.new_vault_commitment()
-        || deltas.commitment()?.as_slice() != splice_header.asset_delta_commitment()
-    {
-        return Err(ScriptError::SpliceProofMismatch);
-    }
-    verify_splice_signatures(splice_header, witness)?;
-    verify_splice_delta_set(splice_header.kind(), old_vault, new_vault, deltas)
 }
 
 pub fn verify_splice_state_transition_v2(
@@ -882,27 +905,6 @@ impl<'a> SpliceStateTransitionWitnessV1<'a> {
     }
 }
 
-pub fn verify_splice_state_transition_bundle(
-    current_state: &StateHeaderV1,
-    next_state: &StateHeaderV1,
-    witness: &SpliceStateTransitionWitnessV1,
-) -> Result<()> {
-    let splice_header = witness.header()?;
-    let signatures = witness.signatures()?;
-    let old_vault = witness.old_vault()?;
-    let new_vault = witness.new_vault()?;
-    let deltas = witness.deltas()?;
-    verify_splice_state_transition(
-        current_state,
-        next_state,
-        &splice_header,
-        &signatures,
-        &old_vault,
-        &new_vault,
-        &deltas,
-    )
-}
-
 pub fn verify_splice_state_transition_bundle_v2(
     current_state: &StateHeaderV2,
     next_state: &StateHeaderV2,
@@ -922,27 +924,6 @@ pub fn verify_splice_state_transition_bundle_v2(
         &new_vault,
         &deltas,
     )
-}
-
-fn state_context_matches_splice_next(
-    current_state: &StateHeaderV1,
-    next_state: &StateHeaderV1,
-    splice_header: &SpliceHeaderV1,
-) -> bool {
-    current_state.protocol_version() == next_state.protocol_version()
-        && current_state.chain_id() == next_state.chain_id()
-        && current_state.signature_scheme_id() == next_state.signature_scheme_id()
-        && current_state.channel_id() == next_state.channel_id()
-        && next_state.funding_anchor() == splice_header.new_funding_anchor()
-        && current_state.state_number() == next_state.state_number()
-        && current_state.mode() == next_state.mode()
-        && current_state.participants_commitment() == next_state.participants_commitment()
-        && current_state.asset_registry_commitment() == next_state.asset_registry_commitment()
-        && current_state.settlement_descriptor_commitment()
-            == next_state.settlement_descriptor_commitment()
-        && current_state.descriptor_version() == next_state.descriptor_version()
-        && current_state.challenge_policy_commitment() == next_state.challenge_policy_commitment()
-        && current_state.state_layout_version() == next_state.state_layout_version()
 }
 
 fn state_context_matches_splice_next_v2(
@@ -1833,7 +1814,7 @@ impl<'a> FactoryReducedExitWitnessV1<'a> {
         if witness.signed_count() != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1 {
             return Err(ScriptError::FactoryReducedProofEncoding);
         }
-        StateHeaderV1::parse(witness.exit_state_header())?;
+        StateHeaderV2::parse(witness.exit_state_header())?;
         match witness.settlement_descriptor().len() {
             BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
                 BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
@@ -1945,7 +1926,7 @@ impl<'a> FactoryReducedExitWitnessV1<'a> {
         field(
             self.raw,
             factory_reduced_exit_state_header_offset(),
-            STATE_HEADER_V1_LEN,
+            STATE_HEADER_V2_LEN,
         )
     }
 
@@ -2132,7 +2113,7 @@ pub fn verify_reduced_factory_exit_update(
 }
 
 fn validate_reduced_exit_local_evidence(witness: &FactoryReducedExitWitnessV1) -> Result<()> {
-    let exit_header = StateHeaderV1::parse(witness.exit_state_header())?;
+    let exit_header = StateHeaderV2::parse(witness.exit_state_header())?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
@@ -2259,7 +2240,7 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
             return Err(ScriptError::ParticipantWitnessEncoding);
         }
         FactorySignatureWitnessV1::parse(witness.factory_signature_bytes())?;
-        StateHeaderV1::parse(witness.exit_state_header())?;
+        StateHeaderV2::parse(witness.exit_state_header())?;
         match witness.settlement_descriptor().len() {
             BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
                 BilateralCkbSettlementDescriptorV1::parse(witness.settlement_descriptor())?;
@@ -2320,13 +2301,13 @@ impl<'a> FactoryLocalExitWitnessV1<'a> {
         field(
             self.raw,
             2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN,
-            STATE_HEADER_V1_LEN,
+            STATE_HEADER_V2_LEN,
         )
     }
 
     pub fn settlement_descriptor(&self) -> &'a [u8] {
         let offset =
-            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN + STATE_HEADER_V1_LEN;
+            2 + FACTORY_SIGNATURE_WITNESS_V1_LEN + 8 + 3 * BYTE32_LEN + STATE_HEADER_V2_LEN;
         field(self.raw, offset, self.raw.len() - offset)
     }
 
@@ -3611,10 +3592,18 @@ pub fn read_u16(raw: &[u8], offset: usize) -> u16 {
     u16::from_le_bytes(bytes)
 }
 
+pub fn write_u16(raw: &mut [u8], offset: usize, value: u16) {
+    raw[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
 pub fn read_u64(raw: &[u8], offset: usize) -> u64 {
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&raw[offset..offset + 8]);
     u64::from_le_bytes(bytes)
+}
+
+pub fn write_u64(raw: &mut [u8], offset: usize, value: u64) {
+    raw[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 pub fn read_u32(raw: &[u8], offset: usize) -> u32 {
@@ -3623,10 +3612,18 @@ pub fn read_u32(raw: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes)
 }
 
+pub fn write_u32(raw: &mut [u8], offset: usize, value: u32) {
+    raw[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
 pub fn read_u128(raw: &[u8], offset: usize) -> u128 {
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&raw[offset..offset + 16]);
     u128::from_le_bytes(bytes)
+}
+
+pub fn write_u128(raw: &mut [u8], offset: usize, value: u128) {
+    raw[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
 }
 
 pub fn field(raw: &[u8], offset: usize, len: usize) -> &[u8] {
@@ -3880,7 +3877,7 @@ fn factory_reduced_exit_state_header_offset() -> usize {
 }
 
 fn factory_reduced_exit_descriptor_offset() -> usize {
-    factory_reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN
+    factory_reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN
 }
 
 fn factory_reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
@@ -4350,7 +4347,7 @@ mod tests {
         key0: &SigningKey,
         key1: &SigningKey,
         release_quantity: u128,
-        exit_state_header: &[u8; STATE_HEADER_V1_LEN],
+        exit_state_header: &[u8; STATE_HEADER_V2_LEN],
         settlement_descriptor: &[u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN],
         before: &[[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
         after: &[[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
@@ -4401,7 +4398,7 @@ mod tests {
             ..factory_reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
             .fill(13);
         raw[factory_reduced_exit_state_header_offset()
-            ..factory_reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN]
+            ..factory_reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN]
             .copy_from_slice(exit_state_header);
         raw[factory_reduced_exit_descriptor_offset()
             ..factory_reduced_exit_descriptor_offset() + BILATERAL_CKB_DESCRIPTOR_V1_LEN]
@@ -4485,16 +4482,16 @@ mod tests {
 
         let release_capacity: u64 = release_quantity.try_into().unwrap();
         let settlement_descriptor = descriptor_bytes([1u8; 32], release_capacity, [2u8; 32], 0);
-        let mut exit_state_header = header_bytes(0, PHASE_ACTIVE);
+        let mut exit_state_header = header_v2_bytes(0, PHASE_ACTIVE, 0);
         if descriptor_commitment_valid {
-            exit_state_header[174..206]
+            exit_state_header[214..246]
                 .copy_from_slice(&settlement_descriptor_commitment_v1(&settlement_descriptor));
         } else {
-            exit_state_header[174..206].fill(99);
+            exit_state_header[214..246].fill(99);
         }
         put_u16(
             &mut exit_state_header,
-            206,
+            246,
             BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
         );
 
@@ -4608,26 +4605,6 @@ mod tests {
 
     fn put_u128(raw: &mut [u8], offset: usize, value: u128) {
         raw[offset..offset + 16].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn header_bytes(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V1_LEN] {
-        let mut raw = [0u8; STATE_HEADER_V1_LEN];
-        put_u16(&mut raw, 0, 1);
-        raw[2..34].fill(2);
-        put_u16(&mut raw, 34, 1);
-        raw[36..68].fill(3);
-        raw[68..100].fill(4);
-        put_u64(&mut raw, 100, state_number);
-        raw[108] = 1;
-        raw[109] = phase;
-        raw[110..142].fill(5);
-        raw[142..174].fill(6);
-        raw[174..206].fill(7);
-        put_u16(&mut raw, 206, 1);
-        raw[208..240].fill(8);
-        raw[240..272].fill(9);
-        put_u16(&mut raw, 272, 1);
-        raw
     }
 
     fn header_v2_bytes(
@@ -5141,36 +5118,6 @@ mod tests {
     }
 
     #[test]
-    fn state_header_parser_rejects_wrong_length() {
-        assert_eq!(
-            StateHeaderV1::parse(&[0u8; STATE_HEADER_V1_LEN - 1]).unwrap_err(),
-            ScriptError::Encoding
-        );
-    }
-
-    #[test]
-    fn state_header_fields_are_fixed_width() {
-        let raw = header_bytes(42, PHASE_SETTLING);
-        let header = StateHeaderV1::parse(&raw).unwrap();
-
-        assert_eq!(header.protocol_version(), 1);
-        assert_eq!(header.chain_id(), &[2u8; 32]);
-        assert_eq!(header.signature_scheme_id(), 1);
-        assert_eq!(header.channel_id(), &[3u8; 32]);
-        assert_eq!(header.funding_anchor(), &[4u8; 32]);
-        assert_eq!(header.state_number(), 42);
-        assert_eq!(header.mode(), 1);
-        assert_eq!(header.phase(), PHASE_SETTLING);
-        assert_eq!(header.participants_commitment(), &[5u8; 32]);
-        assert_eq!(header.asset_registry_commitment(), &[6u8; 32]);
-        assert_eq!(header.settlement_descriptor_commitment(), &[7u8; 32]);
-        assert_eq!(header.descriptor_version(), 1);
-        assert_eq!(header.payload_commitment(), &[8u8; 32]);
-        assert_eq!(header.challenge_policy_commitment(), &[9u8; 32]);
-        assert_eq!(header.state_layout_version(), 1);
-    }
-
-    #[test]
     fn state_header_v2_parser_rejects_wrong_length() {
         assert_eq!(
             StateHeaderV2::parse(&[0u8; STATE_HEADER_V2_LEN - 1]).unwrap_err(),
@@ -5203,25 +5150,6 @@ mod tests {
     }
 
     #[test]
-    fn state_context_allows_progress_but_rejects_identity_change() {
-        let old_raw = header_bytes(1, 1);
-        let mut new_raw = header_bytes(9, PHASE_SETTLING);
-        new_raw[208..240].fill(10);
-
-        let old = StateHeaderV1::parse(&old_raw).unwrap();
-        let new = StateHeaderV1::parse(&new_raw).unwrap();
-        assert!(old.same_context_except_progress(&new));
-
-        new_raw[174] = 11;
-        let changed_descriptor = StateHeaderV1::parse(&new_raw).unwrap();
-        assert!(old.same_context_except_progress(&changed_descriptor));
-
-        new_raw[68] = 99;
-        let changed_anchor = StateHeaderV1::parse(&new_raw).unwrap();
-        assert!(!old.same_context_except_progress(&changed_anchor));
-    }
-
-    #[test]
     fn state_header_v2_context_binds_epoch_and_vault_set() {
         let old_raw = header_v2_bytes(1, 1, 7);
         let mut new_raw = header_v2_bytes(9, PHASE_SETTLING, 7);
@@ -5243,7 +5171,7 @@ mod tests {
     }
 
     #[test]
-    fn state_header_v2_digest_is_domain_and_epoch_separated() {
+    fn state_header_v2_digest_is_epoch_separated() {
         let mut raw = header_v2_bytes(42, PHASE_SETTLING, 1);
         let header = StateHeaderV2::parse(&raw).unwrap();
         let digest_epoch_1 = header.signing_digest();
@@ -5251,10 +5179,6 @@ mod tests {
         put_u64(&mut raw, 68, 2);
         let header_epoch_2 = StateHeaderV2::parse(&raw).unwrap();
         assert_ne!(digest_epoch_1, header_epoch_2.signing_digest());
-
-        let v1 = header_bytes(42, PHASE_SETTLING);
-        let v1_header = StateHeaderV1::parse(&v1).unwrap();
-        assert_ne!(digest_epoch_1, v1_header.signing_digest());
     }
 
     #[test]
@@ -5330,11 +5254,6 @@ mod tests {
         assert_eq!(header.participants_commitment(), participants.as_slice());
         assert_eq!(header.challenge_policy_commitment(), &[9u8; BYTE32_LEN]);
 
-        let mut state_raw = header_bytes(7, PHASE_ACTIVE);
-        state_raw[110..142].copy_from_slice(&participants);
-        let current = StateHeaderV1::parse(&state_raw).unwrap();
-        assert!(header.matches_current_state(&current));
-
         let mut state_v2_raw = header_v2_bytes(7, PHASE_ACTIVE, 0);
         state_v2_raw[108..140].copy_from_slice(header.old_vault_commitment());
         state_v2_raw[150..182].copy_from_slice(&participants);
@@ -5344,10 +5263,6 @@ mod tests {
         state_v2_raw[68] = 1;
         let changed_epoch_v2 = StateHeaderV2::parse(&state_v2_raw).unwrap();
         assert!(!header.matches_current_state_v2(&changed_epoch_v2));
-
-        state_raw[68] = 99;
-        let changed_anchor = StateHeaderV1::parse(&state_raw).unwrap();
-        assert!(!header.matches_current_state(&changed_anchor));
     }
 
     #[test]
@@ -5437,16 +5352,18 @@ mod tests {
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
         let witness = SpliceSignatureWitnessV1::parse(&witness_raw).unwrap();
 
-        let mut current_raw = header_bytes(7, PHASE_ACTIVE);
-        current_raw[110..142].copy_from_slice(&participants);
-        let current = StateHeaderV1::parse(&current_raw).unwrap();
+        let mut current_raw = header_v2_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeaderV2::parse(&current_raw).unwrap();
 
-        let mut next_raw = header_bytes(7, PHASE_ACTIVE);
-        next_raw[68..100].fill(10);
-        next_raw[110..142].copy_from_slice(&participants);
-        let next = StateHeaderV1::parse(&next_raw).unwrap();
+        let mut next_raw = header_v2_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        let next = StateHeaderV2::parse(&next_raw).unwrap();
 
-        verify_splice_state_transition(
+        verify_splice_state_transition_v2(
             &current,
             &next,
             &splice_header,
@@ -5478,7 +5395,7 @@ mod tests {
             &[10u8; BYTE32_LEN]
         );
         assert_eq!(bundle.deltas().unwrap().delta_count(), 2);
-        verify_splice_state_transition_bundle(&current, &next, &bundle).unwrap();
+        verify_splice_state_transition_bundle_v2(&current, &next, &bundle).unwrap();
 
         let mut wrong_version = bundle_raw;
         put_u16(&mut wrong_version, 0, 2);
@@ -5491,7 +5408,7 @@ mod tests {
         bad_nested_header[splice_transition_header_offset() + 164] = 99;
         let bad_bundle = SpliceStateTransitionWitnessV1::parse(&bad_nested_header).unwrap();
         assert_eq!(
-            verify_splice_state_transition_bundle(&current, &next, &bad_bundle).unwrap_err(),
+            verify_splice_state_transition_bundle_v2(&current, &next, &bad_bundle).unwrap_err(),
             ScriptError::SpliceProofEncoding
         );
     }
@@ -5608,16 +5525,18 @@ mod tests {
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
         let witness = SpliceSignatureWitnessV1::parse(&witness_raw).unwrap();
 
-        let mut current_raw = header_bytes(7, PHASE_ACTIVE);
-        current_raw[110..142].copy_from_slice(&participants);
-        let current = StateHeaderV1::parse(&current_raw).unwrap();
-        let mut next_raw = header_bytes(7, PHASE_ACTIVE);
-        next_raw[68..100].fill(11);
-        next_raw[110..142].copy_from_slice(&participants);
-        let next = StateHeaderV1::parse(&next_raw).unwrap();
+        let mut current_raw = header_v2_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeaderV2::parse(&current_raw).unwrap();
+        let mut next_raw = header_v2_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(11);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        let next = StateHeaderV2::parse(&next_raw).unwrap();
 
         assert_eq!(
-            verify_splice_state_transition(
+            verify_splice_state_transition_v2(
                 &current,
                 &next,
                 &splice_header,
@@ -5665,16 +5584,18 @@ mod tests {
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
         let witness = SpliceSignatureWitnessV1::parse(&witness_raw).unwrap();
 
-        let mut current_raw = header_bytes(7, PHASE_ACTIVE);
-        current_raw[110..142].copy_from_slice(&participants);
-        let current = StateHeaderV1::parse(&current_raw).unwrap();
-        let mut next_raw = header_bytes(7, PHASE_ACTIVE);
-        next_raw[68..100].fill(10);
-        next_raw[110..142].copy_from_slice(&participants);
-        let next = StateHeaderV1::parse(&next_raw).unwrap();
+        let mut current_raw = header_v2_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeaderV2::parse(&current_raw).unwrap();
+        let mut next_raw = header_v2_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        let next = StateHeaderV2::parse(&next_raw).unwrap();
 
         assert_eq!(
-            verify_splice_state_transition(
+            verify_splice_state_transition_v2(
                 &current,
                 &next,
                 &splice_header,
@@ -5796,10 +5717,9 @@ mod tests {
     }
 
     #[test]
-    fn molecule_schema_names_all_active_fixed_width_v1_objects() {
+    fn molecule_schema_names_all_active_fixed_width_objects() {
         let schema = include_str!("../../../schemas/morph.mol");
         for expected in [
-            "StateHeaderV1: 274 bytes",
             "StateHeaderV2: 314 bytes",
             "SpliceHeaderV1: 325 bytes",
             "SpliceSignatureWitnessV1: 198 bytes",
@@ -5827,7 +5747,6 @@ mod tests {
             "FactoryVaultDeltasV1: 196 bytes",
             "FactorySpliceWitnessV1: 999 bytes",
             "FactoryReducedSpliceWitnessV1: 9457 bytes",
-            "struct StateHeaderV1",
             "struct StateHeaderV2",
             "struct SpliceHeaderV1",
             "struct SpliceSignatureWitnessV1",
@@ -5883,11 +5802,11 @@ mod tests {
         let mut entries = [pubkey(&key0), pubkey(&key1)];
         entries.sort();
 
-        let mut raw = header_bytes(7, PHASE_SETTLING);
+        let mut raw = header_v2_bytes(7, PHASE_SETTLING, 1);
         let commitment =
             participants_commitment_v1(2, &[entries[0].as_slice(), entries[1].as_slice()]);
-        raw[110..142].copy_from_slice(&commitment);
-        let header = StateHeaderV1::parse(&raw).unwrap();
+        raw[150..182].copy_from_slice(&commitment);
+        let header = StateHeaderV2::parse(&raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &header.signing_digest());
         let witness = BilateralSignatureWitnessV1::parse(&witness_raw).unwrap();
 
@@ -5901,11 +5820,11 @@ mod tests {
         let mut entries = [pubkey(&key0), pubkey(&key1)];
         entries.sort();
 
-        let mut raw = header_bytes(7, PHASE_SETTLING);
+        let mut raw = header_v2_bytes(7, PHASE_SETTLING, 1);
         let commitment =
             participants_commitment_v1(2, &[entries[0].as_slice(), entries[1].as_slice()]);
-        raw[110..142].copy_from_slice(&commitment);
-        let header = StateHeaderV1::parse(&raw).unwrap();
+        raw[150..182].copy_from_slice(&commitment);
+        let header = StateHeaderV2::parse(&raw).unwrap();
         let mut witness_raw = signed_bilateral_witness(&key0, &key1, &header.signing_digest());
         witness_raw[BILATERAL_SIGNATURE_WITNESS_V1_LEN - 1] ^= 1;
         let witness = BilateralSignatureWitnessV1::parse(&witness_raw).unwrap();
@@ -5966,6 +5885,114 @@ mod tests {
             verify_factory_state_signatures(&header, &witness).unwrap_err(),
             ScriptError::InvalidParticipantSignature
         );
+    }
+
+    #[test]
+    fn witness_envelope_v2_rejects_malformed_headers_and_bodies() {
+        let body = signed_factory_witness(
+            [1u8; 32],
+            &signing_key(1),
+            [2u8; 32],
+            &signing_key(2),
+            &[9u8; 32],
+        );
+        let raw = signature_witness_envelope_bytes(&body);
+        let envelope = WitnessEnvelopeV2::parse(&raw).unwrap();
+        assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2);
+        assert_eq!(envelope.body(), body.as_slice());
+
+        let mut bad_magic = raw;
+        bad_magic[0] ^= 1;
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_magic).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_version = raw;
+        write_u16(&mut bad_version, 8, WITNESS_ENVELOPE_VERSION_V2 + 1);
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_version).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_kind = raw;
+        write_u16(&mut bad_kind, 10, 99);
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_kind).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_flags = raw;
+        write_u16(&mut bad_flags, 12, 1);
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_flags).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_len = raw;
+        write_u32(
+            &mut bad_len,
+            14,
+            FACTORY_SIGNATURE_WITNESS_V1_LEN as u32 + 1,
+        );
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_len).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_commitment = raw;
+        bad_commitment[18] ^= 1;
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_commitment).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let mut bad_body = raw;
+        let last = bad_body.len() - 1;
+        bad_body[last] ^= 1;
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&bad_body).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+
+        let short = short_signature_witness_envelope_bytes();
+        assert_eq!(
+            WitnessEnvelopeV2::parse(&short).unwrap_err(),
+            ScriptError::WitnessEnvelopeEncoding
+        );
+    }
+
+    fn signature_witness_envelope_bytes(
+        body: &[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN],
+    ) -> [u8; WITNESS_ENVELOPE_V2_LEN + FACTORY_SIGNATURE_WITNESS_V1_LEN] {
+        let mut raw = [0u8; WITNESS_ENVELOPE_V2_LEN + FACTORY_SIGNATURE_WITNESS_V1_LEN];
+        raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
+        write_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+        write_u16(&mut raw, 10, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2);
+        write_u16(&mut raw, 12, 0);
+        write_u32(&mut raw, 14, FACTORY_SIGNATURE_WITNESS_V1_LEN as u32);
+        raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            body,
+        ));
+        raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
+        raw
+    }
+
+    fn short_signature_witness_envelope_bytes() -> [u8; WITNESS_ENVELOPE_V2_LEN + 10] {
+        let body = [0u8; 10];
+        let mut raw = [0u8; WITNESS_ENVELOPE_V2_LEN + 10];
+        raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
+        write_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+        write_u16(&mut raw, 10, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2);
+        write_u16(&mut raw, 12, 0);
+        write_u32(&mut raw, 14, body.len() as u32);
+        raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            &body,
+        ));
+        raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(&body);
+        raw
     }
 
     #[test]
@@ -6208,7 +6235,7 @@ mod tests {
         assert_eq!(witness.vault_lock_hash(), &[12u8; 32]);
         assert_eq!(witness.state_lock_hash(), &[13u8; 32]);
         assert_eq!(
-            StateHeaderV1::parse(witness.exit_state_header())
+            StateHeaderV2::parse(witness.exit_state_header())
                 .unwrap()
                 .phase(),
             PHASE_ACTIVE

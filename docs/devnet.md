@@ -810,11 +810,14 @@ separate from channel state authority.
 
 ## Contract Milestone
 
-The contract implementation uses fixed-width headers and a narrow witness
-format. It deliberately does not start from a generic VM-like descriptor:
+The contract implementation uses fixed-width headers and bounded witness
+bodies. Factory authorisation witnesses are carried through a
+`WitnessEnvelopeV2` prefix, so factory contracts dispatch by envelope kind
+rather than raw byte length. The implementation deliberately does not start
+from a generic VM-like descriptor:
 
 ```text
-StateHeaderV1
+StateHeaderV2
 FactoryStateHeaderV1
 BilateralSignatureWitnessV1
 FactorySignatureWitnessV1
@@ -823,6 +826,7 @@ FactoryReducedExitWitnessV1
 FactoryReducedExitXudtWitnessV1
 FactoryLocalExitWitnessV1
 FactoryLocalExitXudtWitnessV1
+WitnessEnvelopeV2
 SponsorPolicyV1
 BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
@@ -833,9 +837,9 @@ the reduced-exit witness. It is active in contract/CKB-VM and devnet smoke
 coverage.
 
 The draft Molecule schema in `schemas/morph.mol` records these active wire
-objects and their fixed byte lengths. The devnet contracts still parse the
-bytes directly; generated Molecule code is a later hardening step, not a
-consensus or node requirement.
+objects, fixed body lengths, and the 50-byte `WitnessEnvelopeV2` header. The
+devnet contracts still parse the bytes directly; generated Molecule code is a
+later hardening step, not a consensus or node requirement.
 
 The conservative factory path is now executable on devnet. It is deliberately
 small: one FactoryStateCell, two named participants, all-participant signatures,
@@ -1140,13 +1144,15 @@ the digest bound into the updated FactoryStateHeader. The factory-splice
 package validator checks the M6 reserve-repartition rule: one participant
 reserve claim must increase or decrease by exactly the CKB/xUDT factory-vault
 delta signed into the package. `validate-factory-splice-package` also reports
-the fixed-width `FactorySpliceWitnessV1` as `contract_witness_hex`.
+the `WitnessEnvelopeV2` containing `FactorySpliceWitnessV1` as
+`contract_witness_hex`.
 The reduced factory-splice package validator keeps the same reserve/vault delta
 rule but replaces the full rights set with one sparse-Merkle reserve-claim proof
 and requires exactly the authorised participant signature over the factory
-splice header. It also emits fixed-width `FactoryReducedSpliceWitnessV1` bytes
-as `contract_witness_hex`; this reduced contract path keeps the access manifest
-root unchanged because the sparse proof only proves the rights-root transition.
+splice header. It also emits a `WitnessEnvelopeV2` containing
+`FactoryReducedSpliceWitnessV1` as `contract_witness_hex`; this reduced
+contract path keeps the access manifest root unchanged because the sparse proof
+only proves the rights-root transition.
 
 A live FactoryStateCell/FactoryVaultCell pair can now be captured into the same
 package format and then applied with the contract-facing witness:
@@ -1218,8 +1224,9 @@ a bounded reduced-rights witness that proves old/new rights roots, access
 roots, non-interference digest, and one authorised signature for a
 claim-reducing update; attempted claim inflation is rejected in CKB-VM tests.
 For larger factories it accepts `FactoryMerkleUpdateWitnessV1`, a fixed
-256-sibling sparse Merkle proof for one authorised right transition, and
-rejects sibling tampering. In the conservative local-exit path it verifies the
+256-sibling sparse Merkle proof body inside `WitnessEnvelopeV2` for one
+authorised right transition, and rejects sibling tampering. In the conservative
+local-exit path it verifies the
 child channel evidence committed by the factory header, including xUDT
 child-vault type and amount checks, while `morph-factory-vault-lock` enforces
 reserve conservation. The devnet CLI now also publishes the bounded

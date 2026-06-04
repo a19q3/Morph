@@ -13,7 +13,9 @@ The core crate models those boundaries without assuming CKB mempool replacement
 semantics. A publication transaction is a reconstructible carrier for state
 evidence and sponsor authorisation.
 
-The contract crates now implement the fixed-width V1 subset for devnet:
+The contract crates now implement the V2 devnet wire target: active channel
+state uses `StateHeaderV2`, while factory authorisation witnesses use a
+bounded `WitnessEnvelopeV2` carrying one fixed-width V1 body:
 
 - State type: consumes exactly one State Cell and recreates exactly one newer
   settling State Cell under the same funding anchor and channel context; it can
@@ -41,19 +43,21 @@ The contract crates now implement the fixed-width V1 subset for devnet:
 The state type script verifies the bilateral V1 participant witness: two sorted
 compressed secp256k1 public keys, two ECDSA signatures over the canonical state
 header digest, and a participant commitment that must match the signed header.
-The factory type script verifies a related but stricter V1 witness: two sorted
-participant ids, their compressed secp256k1 public keys, and one signature per
-participant over the canonical factory-state digest. Sponsor inputs and fee
-selection remain outside those state-signature domains.
+The factory type script first parses `WitnessEnvelopeV2` and authenticates the
+body commitment, kind, flags, and bounded body length. It then verifies the
+kind-specific V1 body: full participant signatures, reduced rights, sparse
+Merkle updates, reduced exits, local exits, factory splices, or reduced factory
+splices. Sponsor inputs and fee selection remain outside those
+state-signature domains.
 
 The draft Molecule schema in `schemas/morph.mol` now names every active
-fixed-width V1 object used by the devnet contracts: `StateHeaderV1`,
+fixed-width object used by the devnet contracts: `StateHeaderV2`,
 `FactoryStateHeaderV1`, `BilateralSignatureWitnessV1`,
 `FactorySignatureWitnessV1`, `FactoryRightV1`,
 `FactoryReducedRightsWitnessV1`, `FactoryLocalExitWitnessV1`, CKB and CKB+xUDT
-settlement descriptors, and `SponsorPolicyV1`. The contracts still parse
-fixed-width bytes directly; the schema is treated as the public wire-boundary
-record until generated Molecule code is introduced.
+settlement descriptors, `SponsorPolicyV1`, and `WitnessEnvelopeV2`. The
+contracts still parse byte slices directly; the schema is treated as the public
+wire-boundary record until generated Molecule code is introduced.
 
 The first bilateral splicing layer is host-side. `morph-core` models a signed
 `SpliceHeader` with old/new funding anchors, old/new funding epochs, vault
@@ -122,10 +126,9 @@ rule set is intentionally conservative: splice packages are based on a
 quiescent base state number, use fixed-width CKB/CKB+xUDT typed deltas, and
 send splice-out withdrawals to participant-derived secp256k1 locks rather than
 arbitrary operator payout locks. Funding epoch is treated as explicit state
-semantics; the final V1 wire target is a `StateHeaderV2` with `funding_epoch`
-and vault-set commitments, while the current StateHeaderV1 bridge remains the
-compatibility path exercised by devnet evidence. `morph-script-common` already
-exposes the fixed-width `StateHeaderV2` parser and
+semantics; the active channel wire target is `StateHeaderV2` with
+`funding_epoch` and vault-set commitments. `morph-script-common` exposes the
+fixed-width `StateHeaderV2` parser and
 `verify_splice_state_transition_bundle_v2`, which requires the current header's
 epoch/vault-set commitment to match the old splice side and the next header's
 epoch/vault-set commitment to match the new splice side. `morph-core` mirrors
@@ -243,11 +246,12 @@ releases the same amount. The CLI exposes this through
 `print-factory-splice-fixture --kind splice-in|splice-out|xudt-splice-in|xudt-splice-out`
 and `validate-factory-splice-package`. Smoke reports decode
 `morph.factory_splice_package.v1` artifacts as factory-splice evidence, and the
-validator derives the contract-facing `FactorySpliceWitnessV1` bytes as
-`contract_witness_hex`. `devnet save-factory-splice-package` can capture a live
+validator derives the contract-facing `WitnessEnvelopeV2` containing a
+`FactorySpliceWitnessV1` body as `contract_witness_hex`. `devnet
+save-factory-splice-package` can capture a live
 conservative FactoryStateCell/FactoryVaultCell pair into the same signed
 package format when the live state root matches the V1 reserve-claim shape, and
-`devnet apply-factory-splice` consumes that package with the fixed witness
+`devnet apply-factory-splice` consumes that package with the envelope witness
 against the live factory state/vault pair. The CKB factory splice smoke
 wrappers now run live package capture, apply the splice, and then materialise a
 child channel from the post-splice FactoryVaultCell with full-participant
@@ -257,7 +261,8 @@ splice-in and participant-owned withdrawal output for splice-out.
 The reduced CKB and xUDT factory splice smoke wrappers exercise the same live
 flows with `FactoryReducedSpliceWitnessV1`, one authorised participant
 signature, and the 256-sibling sparse-Merkle reserve-claim proof.
-`morph-script-common` parses the fixed-width `FactorySpliceWitnessV1`,
+`morph-script-common` parses the `WitnessEnvelopeV2` factory witness surface
+and the bounded fixed-width `FactorySpliceWitnessV1` body,
 `morph-factory-type` accepts signed all-participant factory splice updates, and
 `morph-factory-vault-lock` checks the touched FactoryVaultCell amount against
 the signed delta. Reduced sparse-Merkle factory-splice witnesses are covered by
@@ -323,9 +328,10 @@ Changing them requires a separate protocol or proof-shape update.
 
 - No routing, gossip, path finding, or liquidity discovery.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
-  beyond the current roadmap. The implemented on-chain paths are fixed-width:
-  CKB and xUDT reserve-claim reduced exits plus a single-right 256-sibling
-  sparse Merkle update.
+  beyond the current roadmap. The implemented proof bodies remain bounded: CKB
+  and xUDT reserve-claim reduced exits plus a single-right 256-sibling sparse
+  Merkle update, carried through `WitnessEnvelopeV2` when used as factory
+  contract witnesses.
 - No generic descriptor runtime.
 - No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
   state number; concurrent splice/off-chain-update interleaving is deferred.

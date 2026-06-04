@@ -20,13 +20,14 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
     BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
     BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
-    FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
-    FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FACTORY_SPLICE_WITNESS_V1_LEN, FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1,
-    FactoryReducedExitWitnessV1, FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1,
-    FactorySignatureWitnessV1, FactorySpliceWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
-    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV1, blake2b256, read_u128,
+    FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1, FactoryReducedExitWitnessV1,
+    FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1, FactorySignatureWitnessV1,
+    FactorySpliceWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
+    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV2,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, WitnessEnvelopeV2, blake2b256, read_u128,
     validate_factory_merkle_update_local_predicate, verify_factory_merkle_update,
     verify_factory_reduced_splice_update, verify_factory_splice_update,
     verify_factory_state_signatures, verify_reduced_factory_exit_update,
@@ -122,34 +123,43 @@ fn validate_participant_authorisation(
         .input_type()
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
-    let raw = input_type.raw_data();
-    if raw.len() == FACTORY_SIGNATURE_WITNESS_V1_LEN {
-        let witness = FactorySignatureWitnessV1::parse(raw.as_ref())?;
-        verify_factory_state_signatures(header, &witness)
-    } else if raw.len() == FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN {
-        let witness = FactoryReducedRightsWitnessV1::parse(raw.as_ref())?;
-        verify_reduced_factory_rights_update(old_header, header, &witness)
-    } else if raw.len() == FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN {
-        let witness = FactoryMerkleUpdateWitnessV1::parse(raw.as_ref())?;
-        verify_factory_merkle_update(old_header, header, &witness)?;
-        validate_factory_merkle_update_local_predicate(&witness)
-    } else if raw.len() == FACTORY_REDUCED_EXIT_WITNESS_V1_LEN
-        || raw.len() == FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN
-    {
-        let witness = FactoryReducedExitWitnessV1::parse(raw.as_ref())?;
-        verify_reduced_factory_exit_update(old_header, header, &witness)?;
-        validate_reduced_exit(header, &witness)
-    } else if raw.len() == FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN {
-        let witness = FactoryReducedSpliceWitnessV1::parse(raw.as_ref())?;
-        verify_factory_reduced_splice_update(old_header, header, &witness)
-    } else if raw.len() == FACTORY_SPLICE_WITNESS_V1_LEN {
-        let witness = FactorySpliceWitnessV1::parse(raw.as_ref())?;
-        verify_factory_splice_update(old_header, header, &witness)
-    } else {
-        let witness = FactoryLocalExitWitnessV1::parse(raw.as_ref())?;
-        let signatures = witness.factory_signature()?;
-        verify_factory_state_signatures(header, &signatures)?;
-        validate_local_exit(header, &witness)
+    let input_type_data = input_type.raw_data();
+    let envelope = WitnessEnvelopeV2::parse(input_type_data.as_ref())?;
+    let raw = envelope.body();
+    match envelope.kind() {
+        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2 => {
+            let witness = FactorySignatureWitnessV1::parse(raw)?;
+            verify_factory_state_signatures(header, &witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2 => {
+            let witness = FactoryReducedRightsWitnessV1::parse(raw)?;
+            verify_reduced_factory_rights_update(old_header, header, &witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2 => {
+            let witness = FactoryMerkleUpdateWitnessV1::parse(raw)?;
+            verify_factory_merkle_update(old_header, header, &witness)?;
+            validate_factory_merkle_update_local_predicate(&witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2 => {
+            let witness = FactoryReducedExitWitnessV1::parse(raw)?;
+            verify_reduced_factory_exit_update(old_header, header, &witness)?;
+            validate_reduced_exit(header, &witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2 => {
+            let witness = FactoryReducedSpliceWitnessV1::parse(raw)?;
+            verify_factory_reduced_splice_update(old_header, header, &witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2 => {
+            let witness = FactorySpliceWitnessV1::parse(raw)?;
+            verify_factory_splice_update(old_header, header, &witness)
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2 => {
+            let witness = FactoryLocalExitWitnessV1::parse(raw)?;
+            let signatures = witness.factory_signature()?;
+            verify_factory_state_signatures(header, &signatures)?;
+            validate_local_exit(header, &witness)
+        }
+        _ => Err(ScriptError::WitnessEnvelopeEncoding),
     }
 }
 
@@ -222,7 +232,7 @@ fn validate_exit_materialisation(
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
 
-    let exit_header = StateHeaderV1::parse(exit_state_header)?;
+    let exit_header = StateHeaderV2::parse(exit_state_header)?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
@@ -251,7 +261,7 @@ fn validate_exit_materialisation(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_child_vault_shape(
-    exit_header: StateHeaderV1,
+    exit_header: StateHeaderV2,
     descriptor_raw: &[u8],
     vault_index: usize,
 ) -> Result<()> {

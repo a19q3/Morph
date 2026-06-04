@@ -3,9 +3,8 @@
 M5 closes the conservative bilateral splice scope. The accepted V1 design is:
 
 - quiescent splice packages with an explicit base state number;
-- explicit funding-epoch semantics, with `StateHeaderV2` as the final V1 wire
-  target and the current `StateHeaderV1` script bridge retained for devnet
-  compatibility evidence;
+- explicit funding-epoch semantics, with `StateHeaderV2` as the active channel
+  wire target;
 - fixed-width CKB and CKB+xUDT asset delta descriptors;
 - participant-owned splice-out withdrawals, with arbitrary payout locks deferred
   beyond V1.
@@ -19,10 +18,8 @@ M5 closes the conservative bilateral splice scope. The accepted V1 design is:
 - `morph-script-common` exposes fixed-width parsers for the splice header,
   splice witness, old/new vault descriptors, asset deltas, bundled splice
   witness, and `StateHeaderV2`.
-- `verify_splice_state_transition_bundle` covers the active `StateHeaderV1`
-  old/new funding-anchor bridge. `verify_splice_state_transition_bundle_v2`
-  covers the final explicit-epoch target by binding old/new funding epochs to
-  old/new vault-set commitments.
+- `verify_splice_state_transition_bundle_v2` covers the explicit-epoch target by
+  binding old/new funding epochs to old/new vault-set commitments.
 - `morph-state-type` and `morph-vault-lock` accept the conservative
   old/new-anchor splice bridge and reject wrong-channel or malformed vault
   transitions in CKB-VM coverage.
@@ -45,8 +42,6 @@ M5 closes the conservative bilateral splice scope. The accepted V1 design is:
 
 ## Deferred
 
-- Full contract migration from `StateHeaderV1` bridge bytes to `StateHeaderV2`
-  state cells.
 - Concurrent unconfirmed splice updates while ordinary off-chain updates keep
   advancing.
 - Generic descriptor runtimes and arbitrary payout graphs.

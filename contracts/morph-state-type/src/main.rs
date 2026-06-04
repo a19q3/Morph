@@ -18,9 +18,9 @@ use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
     BYTE32_LEN, BilateralSignatureWitnessV1, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
-    SpliceStateTransitionWitnessV1, StateHeaderV1, blake2b256, read_u64,
+    SpliceStateTransitionWitnessV1, StateHeaderV2, blake2b256, read_u64,
     validate_relative_block_since, vault_cell_commitment_v1, verify_bilateral_state_signatures,
-    verify_splice_state_transition_bundle,
+    verify_splice_state_transition_bundle_v2,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -59,14 +59,14 @@ fn main() -> Result<()> {
     ) {
         (None, Some(new_data)) => validate_create(&script, &new_data, expected_funding_anchor)?,
         (Some(old_data), Some(new_data)) => {
-            let old_header = StateHeaderV1::parse(&old_data)?;
+            let old_header = StateHeaderV2::parse(&old_data)?;
             if old_header.funding_anchor() != expected_funding_anchor {
                 return Err(ScriptError::FundingAnchorMismatch);
             }
             validate_supersede(&old_header, &new_data, expected_funding_anchor)?;
         }
         (Some(old_data), None) => {
-            let old_header = StateHeaderV1::parse(&old_data)?;
+            let old_header = StateHeaderV2::parse(&old_data)?;
             if old_header.funding_anchor() != expected_funding_anchor {
                 return Err(ScriptError::FundingAnchorMismatch);
             }
@@ -88,7 +88,7 @@ fn validate_create(
     new_data: &[u8],
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
-    let new_header = StateHeaderV1::parse(new_data)?;
+    let new_header = StateHeaderV2::parse(new_data)?;
 
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
@@ -123,7 +123,7 @@ fn validate_group_output_capacity() -> Result<()> {
 #[cfg(target_arch = "riscv64")]
 fn validate_splice_create(
     current_script: &ckb_std::ckb_types::packed::Script,
-    new_header: &StateHeaderV1,
+    new_header: &StateHeaderV2,
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
     let witness_raw = find_splice_witness_raw(expected_funding_anchor, false)?;
@@ -141,15 +141,15 @@ fn validate_splice_create(
         Source::Input,
         splice_header.old_funding_anchor(),
     )?;
-    let old_header = StateHeaderV1::parse(&old_data)?;
+    let old_header = StateHeaderV2::parse(&old_data)?;
     validate_state_lock_continuity(old_index, Source::Input, 0, Source::GroupOutput)?;
-    verify_splice_state_transition_bundle(&old_header, new_header, &witness)
+    verify_splice_state_transition_bundle_v2(&old_header, new_header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]
 fn validate_splice_retire(
     current_script: &ckb_std::ckb_types::packed::Script,
-    old_header: &StateHeaderV1,
+    old_header: &StateHeaderV2,
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
     find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
@@ -168,9 +168,9 @@ fn validate_splice_retire(
         Source::Output,
         splice_header.new_funding_anchor(),
     )?;
-    let new_header = StateHeaderV1::parse(&new_data)?;
+    let new_header = StateHeaderV2::parse(&new_data)?;
     validate_state_lock_continuity(0, Source::GroupInput, new_index, Source::Output)?;
-    verify_splice_state_transition_bundle(old_header, &new_header, &witness)
+    verify_splice_state_transition_bundle_v2(old_header, &new_header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -190,11 +190,11 @@ fn validate_anchor_derivation(expected_funding_anchor: &[u8]) -> Result<()> {
 
 #[cfg(target_arch = "riscv64")]
 fn validate_supersede(
-    old_header: &StateHeaderV1,
+    old_header: &StateHeaderV2,
     new_data: &[u8],
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
-    let new_header = StateHeaderV1::parse(new_data)?;
+    let new_header = StateHeaderV2::parse(new_data)?;
 
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
@@ -262,7 +262,7 @@ fn validate_output_lock_args_bind_output_type(index: usize, source: Source) -> R
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_participant_authorisation(header: &StateHeaderV1) -> Result<()> {
+fn validate_participant_authorisation(header: &StateHeaderV2) -> Result<()> {
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::ParticipantWitnessMissing)?;
     let input_type = witness_args
@@ -275,7 +275,7 @@ fn validate_participant_authorisation(header: &StateHeaderV1) -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_finalise(old_header: &StateHeaderV1, finalise_since: Option<u64>) -> Result<()> {
+fn validate_finalise(old_header: &StateHeaderV2, finalise_since: Option<u64>) -> Result<()> {
     if old_header.phase() != PHASE_SETTLING {
         return Err(ScriptError::NewStateNotSettling);
     }
@@ -370,7 +370,7 @@ fn find_unique_state_cell(
     loop {
         match load_cell_data(index, source) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV1::parse(&data)
+                if let Ok(header) = StateHeaderV2::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
                     && state_type_script_matches_anchor(
                         current_script,

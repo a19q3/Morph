@@ -11,6 +11,11 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+const CKB_RPC_REQUEST_TIMEOUT_SECS: u64 = 90;
+const CKB_RPC_CONNECT_TIMEOUT_SECS: u64 = 10;
+const CKB_RPC_MAX_ATTEMPTS: usize = 4;
+const CKB_RPC_RETRY_BASE_DELAY_MS: u64 = 250;
+
 #[derive(Debug, Clone)]
 pub struct CkbRpcClient {
     url: String,
@@ -64,7 +69,8 @@ impl CkbRpcClient {
     pub fn new(url: impl Into<String>) -> Result<Self> {
         let url = url.into();
         let client = Client::builder()
-            .timeout(Duration::from_secs(20))
+            .timeout(Duration::from_secs(CKB_RPC_REQUEST_TIMEOUT_SECS))
+            .connect_timeout(Duration::from_secs(CKB_RPC_CONNECT_TIMEOUT_SECS))
             .build()
             .context("failed to build HTTP client")?;
         Ok(Self { url, client })
@@ -151,32 +157,65 @@ impl CkbRpcClient {
             "method": method,
             "params": params,
         });
-        let response = self
-            .client
-            .post(&self.url)
-            .json(&request)
-            .send()
-            .with_context(|| format!("failed to call CKB RPC at {}", self.url))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .context("failed to read CKB RPC response body")?;
-        if !status.is_success() {
-            bail!("CKB RPC HTTP error {status}: {body}");
+
+        for attempt in 1..=CKB_RPC_MAX_ATTEMPTS {
+            let response = match self.client.post(&self.url).json(&request).send() {
+                Ok(response) => response,
+                Err(err) => {
+                    if is_retryable_rpc_transport_error(&err) && attempt < CKB_RPC_MAX_ATTEMPTS {
+                        sleep_before_rpc_retry(attempt);
+                        continue;
+                    }
+                    return Err(err)
+                        .with_context(|| format!("failed to call CKB RPC at {}", self.url));
+                }
+            };
+            let status = response.status();
+            let body = response
+                .text()
+                .context("failed to read CKB RPC response body")?;
+            if !status.is_success() {
+                if is_retryable_rpc_status(status) && attempt < CKB_RPC_MAX_ATTEMPTS {
+                    sleep_before_rpc_retry(attempt);
+                    continue;
+                }
+                bail!("CKB RPC HTTP error {status}: {body}");
+            }
+            let response: RpcResponse<T> = serde_json::from_str(&body).with_context(|| {
+                format!("invalid JSON-RPC response for method {method}: {body}")
+            })?;
+            if let Some(error) = response.error {
+                bail!(
+                    "CKB RPC error {} on {method}: {}",
+                    error.code,
+                    error.message
+                );
+            }
+            return response
+                .result
+                .ok_or_else(|| anyhow!("CKB RPC response for {method} has no result"));
         }
-        let response: RpcResponse<T> = serde_json::from_str(&body)
-            .with_context(|| format!("invalid JSON-RPC response for method {method}: {body}"))?;
-        if let Some(error) = response.error {
-            bail!(
-                "CKB RPC error {} on {method}: {}",
-                error.code,
-                error.message
-            );
-        }
-        response
-            .result
-            .ok_or_else(|| anyhow!("CKB RPC response for {method} has no result"))
+
+        unreachable!("CKB RPC retry loop always returns before exhaustion")
     }
+}
+
+fn is_retryable_rpc_transport_error(error: &reqwest::Error) -> bool {
+    error.is_connect() || error.is_timeout()
+}
+
+fn is_retryable_rpc_status(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status,
+        reqwest::StatusCode::BAD_GATEWAY
+            | reqwest::StatusCode::SERVICE_UNAVAILABLE
+            | reqwest::StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn sleep_before_rpc_retry(attempt: usize) {
+    let delay_ms = CKB_RPC_RETRY_BASE_DELAY_MS.saturating_mul(1u64 << (attempt - 1));
+    std::thread::sleep(Duration::from_millis(delay_ms));
 }
 
 impl HeaderView {

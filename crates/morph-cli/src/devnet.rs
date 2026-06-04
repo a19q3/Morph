@@ -50,11 +50,15 @@ use morph_script_common::{
     FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
     FACTORY_SPARSE_MERKLE_DEPTH_V1, FACTORY_STATE_HEADER_V1_LEN, FactoryMerkleUpdateWitnessV1,
     FactoryReducedExitWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, PHASE_SETTLING,
-    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V1_LEN,
-    ScriptError, StateHeaderV1, blake2b256 as script_blake2b256, factory_local_exit_digest_v1,
-    factory_participants_commitment_v1, participants_commitment_v1, relative_block_since,
-    settlement_descriptor_commitment_v1, vault_cell_commitment_v1, verify_factory_merkle_update,
-    verify_reduced_factory_exit_update,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1, SPONSOR_POLICY_V1_LEN, STATE_HEADER_V2_LEN,
+    ScriptError, StateHeaderV2, StateHeaderV2Input, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+    WITNESS_ENVELOPE_V2_LEN, WITNESS_ENVELOPE_V2_MAGIC, WITNESS_ENVELOPE_VERSION_V2,
+    WitnessEnvelopeV2, blake2b256 as script_blake2b256, encode_state_header_v2,
+    factory_local_exit_digest_v1, factory_participants_commitment_v1, participants_commitment_v1,
+    relative_block_since, settlement_descriptor_commitment_v1, vault_cell_commitment_v1,
+    verify_factory_merkle_update, verify_reduced_factory_exit_update,
+    witness_envelope_body_commitment_v2,
 };
 use serde::Serialize;
 
@@ -1758,6 +1762,10 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let descriptor =
         bilateral_ckb_descriptor(alice_lock_hash, alice_capacity, bob_lock_hash, bob_capacity);
     let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let vault_set_commitment = vault_descriptor_commitment_v2(&VaultDescriptorV2 {
+        funding_anchor,
+        assets: live_vault_assets(u128::from(options.vault_capacity), None, None),
+    });
 
     let alice_pubkey = compressed_pubkey(&alice_key)?;
     let bob_pubkey = compressed_pubkey(&bob_key)?;
@@ -1773,6 +1781,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         chain_id,
         channel_id,
         funding_anchor,
+        vault_set_commitment,
         participants_commitment,
         settlement_descriptor_commitment: descriptor_commitment,
         descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
@@ -2181,7 +2190,7 @@ pub fn update_factory(
         let package = read_factory_state_cell_update_package(path)?;
         package.validate_against_current_header(&old_header)?;
         let header_bytes = package.new_header_bytes()?;
-        let witness_bytes = package.witness_bytes()?;
+        let witness_bytes = package.contract_witness_bytes()?;
         let package_header = FactoryStateHeaderV1::parse(&header_bytes)
             .map_err(|err| anyhow!("factory state package header is invalid: {err:?}"))?;
         ensure!(
@@ -2286,9 +2295,13 @@ pub fn update_factory(
             &options.alice_private_key,
             &options.bob_private_key,
         )?;
+        let contract_witness = factory_witness_envelope_v2(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            &signature_witness,
+        )?;
         (
             new_factory_data,
-            signature_witness.to_vec(),
+            contract_witness,
             new_update_number,
             state_root,
             access_manifest_root,
@@ -5398,40 +5411,6 @@ pub fn factory_exit_channel(
         descriptor_version = BILATERAL_CKB_DESCRIPTOR_VERSION_V1;
     }
     let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
-
-    let alice_pubkey = compressed_pubkey(&alice_key)?;
-    let bob_pubkey = compressed_pubkey(&bob_key)?;
-    let mut participant_pubkeys = [alice_pubkey, bob_pubkey];
-    participant_pubkeys.sort();
-    let participants_commitment =
-        participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
-    let challenge_policy_commitment = script_blake2b256(&[
-        b"CKB_MORPH_CHALLENGE_POLICY_V1",
-        &finalise_since.to_le_bytes(),
-    ]);
-    let mut state_header = initial_state_header(InitialStateHeader {
-        chain_id,
-        channel_id,
-        funding_anchor,
-        participants_commitment,
-        settlement_descriptor_commitment: descriptor_commitment,
-        descriptor_version,
-        challenge_policy_commitment,
-    });
-
-    let state_output_for_capacity = CellOutput::new_builder()
-        .lock(state_lock.clone())
-        .type_(Some(state_type.clone()).pack())
-        .build();
-    let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
-    let state_output = CellOutput::new_builder()
-        .capacity(state_capacity)
-        .lock(state_lock)
-        .type_(Some(state_type).pack())
-        .build();
-    let child_vault_type = child_xudt
-        .as_ref()
-        .map(|(xudt_type, _, _, _, _, _)| xudt_type.clone());
     let child_vault_xudt_amount = match (&child_xudt, options.tamper) {
         (
             Some((_, _, _, _, _, child_amount)),
@@ -5456,6 +5435,51 @@ pub fn factory_exit_channel(
             ));
         }
     };
+    let vault_set_commitment = vault_descriptor_commitment_v2(&VaultDescriptorV2 {
+        funding_anchor,
+        assets: live_vault_assets(
+            u128::from(options.vault_capacity),
+            child_xudt
+                .as_ref()
+                .map(|(_, xudt_type_hash, _, _, _, _)| *xudt_type_hash),
+            child_vault_xudt_amount,
+        ),
+    });
+
+    let alice_pubkey = compressed_pubkey(&alice_key)?;
+    let bob_pubkey = compressed_pubkey(&bob_key)?;
+    let mut participant_pubkeys = [alice_pubkey, bob_pubkey];
+    participant_pubkeys.sort();
+    let participants_commitment =
+        participants_commitment_v1(2, &[&participant_pubkeys[0], &participant_pubkeys[1]]);
+    let challenge_policy_commitment = script_blake2b256(&[
+        b"CKB_MORPH_CHALLENGE_POLICY_V1",
+        &finalise_since.to_le_bytes(),
+    ]);
+    let mut state_header = initial_state_header(InitialStateHeader {
+        chain_id,
+        channel_id,
+        funding_anchor,
+        vault_set_commitment,
+        participants_commitment,
+        settlement_descriptor_commitment: descriptor_commitment,
+        descriptor_version,
+        challenge_policy_commitment,
+    });
+
+    let state_output_for_capacity = CellOutput::new_builder()
+        .lock(state_lock.clone())
+        .type_(Some(state_type.clone()).pack())
+        .build();
+    let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
+    let state_output = CellOutput::new_builder()
+        .capacity(state_capacity)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let child_vault_type = child_xudt
+        .as_ref()
+        .map(|(xudt_type, _, _, _, _, _)| xudt_type.clone());
     let child_vault_data = child_xudt
         .as_ref()
         .map(|_| xudt_amount_bytes(child_vault_xudt_amount.expect("child xUDT amount present")))
@@ -5557,9 +5581,13 @@ pub fn factory_exit_channel(
                     &local_exit_witness,
                 )
                 .context("constructed factory local-exit package is invalid")?;
+                let contract_witness = factory_witness_envelope_v2(
+                    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+                    &local_exit_witness,
+                )?;
                 (
                     new_factory_data,
-                    local_exit_witness,
+                    contract_witness,
                     Some(local_exit_package),
                     None,
                     "full-participants".to_string(),
@@ -5602,9 +5630,13 @@ pub fn factory_exit_channel(
                     &state_header,
                     &descriptor,
                 )?;
+                let contract_witness = factory_witness_envelope_v2(
+                    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+                    &reduced.witness,
+                )?;
                 (
                     reduced.new_header,
-                    reduced.witness,
+                    contract_witness,
                     None,
                     Some(reduced.report),
                     "reduced-reserve-claim".to_string(),
@@ -5865,6 +5897,14 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         options.bob_xudt_amount,
     );
     let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let vault_set_commitment = vault_descriptor_commitment_v2(&VaultDescriptorV2 {
+        funding_anchor,
+        assets: live_vault_assets(
+            u128::from(options.vault_capacity),
+            Some(xudt_type_hash),
+            Some(total_xudt_amount),
+        ),
+    });
 
     let alice_pubkey = compressed_pubkey(&alice_key)?;
     let bob_pubkey = compressed_pubkey(&bob_key)?;
@@ -5880,6 +5920,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         chain_id,
         channel_id,
         funding_anchor,
+        vault_set_commitment,
         participants_commitment,
         settlement_descriptor_commitment: descriptor_commitment,
         descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
@@ -6154,7 +6195,7 @@ fn publish_state_with_descriptor_update(
     let sponsor_out_point = parse_out_point(&options.sponsor_out_point)?;
     let state_cell = load_live_cell(rpc, state_out_point.clone())?;
     let sponsor_cell = load_live_cell(rpc, sponsor_out_point.clone())?;
-    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let old_header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     let new_state_number = options
         .state_number
@@ -6191,7 +6232,7 @@ fn publish_state_with_descriptor_update(
             let header_bytes = package.header_bytes()?;
             let witness_bytes = package.witness_bytes()?;
             let package_state_number = {
-                let package_header = StateHeaderV1::parse(&header_bytes)
+                let package_header = StateHeaderV2::parse(&header_bytes)
                     .map_err(|err| anyhow!("state package header is invalid: {err:?}"))?;
                 ensure!(
                     old_header.same_context_except_progress(&package_header),
@@ -6217,8 +6258,8 @@ fn publish_state_with_descriptor_update(
             )
         } else {
             let mut new_state_data = state_cell.data.to_vec();
-            put_u64(&mut new_state_data, 100, new_state_number);
-            new_state_data[109] = PHASE_SETTLING;
+            put_u64(&mut new_state_data, 140, new_state_number);
+            new_state_data[149] = PHASE_SETTLING;
             if let Some(update) = descriptor_update {
                 apply_settlement_descriptor_update(
                     &mut new_state_data,
@@ -6304,7 +6345,7 @@ fn apply_settlement_descriptor_update(
     update: &SettlementDescriptorUpdate,
 ) -> Result<()> {
     ensure!(
-        state_data.len() == STATE_HEADER_V1_LEN,
+        state_data.len() == STATE_HEADER_V2_LEN,
         "state descriptor update requires a fixed-width StateHeader"
     );
     let alice_key = parse_privkey(alice_private_key)
@@ -6342,8 +6383,8 @@ fn apply_settlement_descriptor_update(
             BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
         )
     };
-    state_data[174..206].copy_from_slice(&descriptor_commitment);
-    put_u16(state_data, 206, descriptor_version);
+    state_data[214..246].copy_from_slice(&descriptor_commitment);
+    put_u16(state_data, 246, descriptor_version);
     Ok(())
 }
 
@@ -6353,7 +6394,7 @@ pub fn save_state_package(
 ) -> Result<SaveStatePackageReport> {
     let state_out_point = parse_out_point(&options.state_out_point)?;
     let state_cell = load_live_cell(rpc, state_out_point.clone())?;
-    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let old_header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     let new_state_number = options
         .state_number
@@ -6365,8 +6406,8 @@ pub fn save_state_package(
     );
 
     let mut new_state_data = state_cell.data.to_vec();
-    put_u64(&mut new_state_data, 100, new_state_number);
-    new_state_data[109] = PHASE_SETTLING;
+    put_u64(&mut new_state_data, 140, new_state_number);
+    new_state_data[149] = PHASE_SETTLING;
     let signature_witness = bilateral_signature_witness(
         &new_state_data,
         &options.alice_private_key,
@@ -6400,7 +6441,7 @@ pub fn save_splice_package(
     let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
     let live_xudt = live_vault_xudt_asset(&vault_cell)?;
 
-    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let old_header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     ensure!(
         old_header.phase() == PHASE_ACTIVE,
@@ -7158,7 +7199,7 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
     let owner_lock = secp256k1_lock(&owner_key)?;
     let state_out_point = parse_out_point(&options.state_out_point)?;
     let state_cell = load_live_cell(rpc, state_out_point)?;
-    let header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     let state_type_hash: [u8; 32] = state_cell
         .output
@@ -7279,7 +7320,7 @@ pub fn finalise_channel(
     let vault_out_point = parse_out_point(&options.vault_out_point)?;
     let state_cell = load_live_cell(rpc, state_out_point.clone())?;
     let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
-    let header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     ensure!(
         header.phase() == PHASE_SETTLING,
@@ -7442,7 +7483,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         state_cell.data.as_ref() == current_state_header,
         "splice package current StateHeader bytes do not match the live StateCell"
     );
-    let old_header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let old_header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     ensure!(
         old_header.phase() == PHASE_ACTIVE,
@@ -8901,7 +8942,7 @@ fn build_xudt_finalise_transaction(
     let vault_out_point = parse_out_point(&vault_out_point)?;
     let state_cell = load_live_cell(rpc, state_out_point.clone())?;
     let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
-    let header = StateHeaderV1::parse(state_cell.data.as_ref())
+    let header = StateHeaderV2::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     ensure!(
         header.phase() == PHASE_SETTLING,
@@ -10162,7 +10203,7 @@ fn observed_state_cells(
     let mut observed = Vec::new();
     for tx in &block.transactions {
         for (index, data) in tx.inner.outputs_data.iter().enumerate() {
-            let Ok(header) = StateHeaderV1::parse(data.as_bytes()) else {
+            let Ok(header) = StateHeaderV2::parse(data.as_bytes()) else {
                 continue;
             };
             if hex32(header.channel_id()) != channel_id {
@@ -10196,7 +10237,7 @@ fn observed_state_cells(
 
 fn is_authentic_observed_state_cell(
     output: &CellOutput,
-    header: &StateHeaderV1,
+    header: &StateHeaderV2,
     filter: &StateCellDetectionFilter,
 ) -> bool {
     let Some(type_script) = output.type_().to_opt() else {
@@ -10572,7 +10613,7 @@ fn bilateral_signature_witness(
     alice_private_key: &str,
     bob_private_key: &str,
 ) -> Result<[u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN]> {
-    let header = StateHeaderV1::parse(state_header)
+    let header = StateHeaderV2::parse(state_header)
         .map_err(|err| anyhow!("new state header is invalid: {err:?}"))?;
     let alice_key = k256_signing_key(alice_private_key)?;
     let bob_key = k256_signing_key(bob_private_key)?;
@@ -10987,21 +11028,21 @@ fn reduced_exit_initial_roots_with_descriptor(
     reserve_claim: ReducedExitReserveClaim,
     descriptor: &[u8],
 ) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
-    let mut state_header = [0u8; STATE_HEADER_V1_LEN];
+    let mut state_header = [0u8; STATE_HEADER_V2_LEN];
     put_u16(&mut state_header, 0, 1);
     put_u16(
         &mut state_header,
         34,
         SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
     );
-    state_header[109] = PHASE_ACTIVE;
+    state_header[149] = PHASE_ACTIVE;
     let descriptor_version = match descriptor.len() {
         BILATERAL_CKB_DESCRIPTOR_V1_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
         BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
         _ => return Err(anyhow!("unsupported reduced-exit descriptor length")),
     };
-    put_u16(&mut state_header, 206, descriptor_version);
-    state_header[174..206].copy_from_slice(&settlement_descriptor_commitment_v1(descriptor));
+    put_u16(&mut state_header, 246, descriptor_version);
+    state_header[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(descriptor));
     let witness = reduced_exit_witness_bytes(
         alice,
         bob,
@@ -11183,9 +11224,9 @@ fn reduced_exit_witness_bytes(
         "state lock hash must be 32 bytes"
     );
     ensure!(
-        state_header.len() == STATE_HEADER_V1_LEN,
+        state_header.len() == STATE_HEADER_V2_LEN,
         "exit state header must be {} bytes",
-        STATE_HEADER_V1_LEN
+        STATE_HEADER_V2_LEN
     );
     let witness_len = match descriptor.len() {
         BILATERAL_CKB_DESCRIPTOR_V1_LEN => FACTORY_REDUCED_EXIT_WITNESS_V1_LEN,
@@ -11239,7 +11280,7 @@ fn reduced_exit_witness_bytes(
     raw[reduced_exit_state_lock_hash_offset()..reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
         .copy_from_slice(state_lock_hash);
     raw[reduced_exit_state_header_offset()
-        ..reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN]
+        ..reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN]
         .copy_from_slice(state_header);
     raw[reduced_exit_descriptor_offset()..reduced_exit_descriptor_offset() + descriptor.len()]
         .copy_from_slice(descriptor);
@@ -11385,7 +11426,7 @@ fn reduced_exit_state_header_offset() -> usize {
 }
 
 fn reduced_exit_descriptor_offset() -> usize {
-    reduced_exit_state_header_offset() + STATE_HEADER_V1_LEN
+    reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN
 }
 
 fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
@@ -11428,9 +11469,9 @@ fn factory_local_exit_witness(
         "state lock hash must be 32 bytes"
     );
     ensure!(
-        state_header.len() == STATE_HEADER_V1_LEN,
+        state_header.len() == STATE_HEADER_V2_LEN,
         "exit state header must be {} bytes",
-        STATE_HEADER_V1_LEN
+        STATE_HEADER_V2_LEN
     );
     ensure!(
         descriptor.len() == BILATERAL_CKB_DESCRIPTOR_V1_LEN
@@ -11459,8 +11500,8 @@ fn factory_local_exit_witness(
     offset += BYTE32_LEN;
     witness[offset..offset + BYTE32_LEN].copy_from_slice(state_lock_hash);
     offset += BYTE32_LEN;
-    witness[offset..offset + STATE_HEADER_V1_LEN].copy_from_slice(state_header);
-    offset += STATE_HEADER_V1_LEN;
+    witness[offset..offset + STATE_HEADER_V2_LEN].copy_from_slice(state_header);
+    offset += STATE_HEADER_V2_LEN;
     witness[offset..offset + descriptor.len()].copy_from_slice(descriptor);
     Ok(witness)
 }
@@ -11512,7 +11553,7 @@ fn vault_lock_args(
 }
 
 fn set_state_payload_commitment(state_header: &mut [u8], commitment: [u8; BYTE32_LEN]) {
-    state_header[208..240].copy_from_slice(&commitment);
+    state_header[248..280].copy_from_slice(&commitment);
 }
 
 fn vault_cell_commitment_from_output(output: &CellOutput, data: &[u8]) -> [u8; BYTE32_LEN] {
@@ -11804,7 +11845,7 @@ fn factory_vault_amount(descriptor: &FactoryVaultDescriptorV1, asset: &VaultAsse
 }
 
 fn core_state_cell_from_live(
-    header: &StateHeaderV1<'_>,
+    header: &StateHeaderV2<'_>,
     cell: &LiveCellDetails,
 ) -> Result<CoreStateCell> {
     Ok(CoreStateCell {
@@ -12037,6 +12078,7 @@ struct InitialStateHeader {
     chain_id: [u8; 32],
     channel_id: [u8; 32],
     funding_anchor: [u8; 32],
+    vault_set_commitment: [u8; 32],
     participants_commitment: [u8; 32],
     settlement_descriptor_commitment: [u8; 32],
     descriptor_version: u16,
@@ -12054,26 +12096,26 @@ struct FactoryHeaderInput {
     challenge_policy_commitment: [u8; 32],
 }
 
-fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V1_LEN] {
-    let mut raw = [0u8; STATE_HEADER_V1_LEN];
-    put_u16(&mut raw, 0, 1);
-    raw[2..34].copy_from_slice(&input.chain_id);
-    put_u16(&mut raw, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1);
-    raw[36..68].copy_from_slice(&input.channel_id);
-    raw[68..100].copy_from_slice(&input.funding_anchor);
-    put_u64(&mut raw, 100, 0);
-    raw[108] = 1;
-    raw[109] = PHASE_ACTIVE;
-    raw[110..142].copy_from_slice(&input.participants_commitment);
-    raw[142..174].copy_from_slice(&script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V1"]));
-    raw[174..206].copy_from_slice(&input.settlement_descriptor_commitment);
-    put_u16(&mut raw, 206, input.descriptor_version);
-    raw[208..240].copy_from_slice(&script_blake2b256(&[
-        b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD_V1",
-    ]));
-    raw[240..272].copy_from_slice(&input.challenge_policy_commitment);
-    put_u16(&mut raw, 272, 1);
-    raw
+fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_V2_LEN] {
+    encode_state_header_v2(&StateHeaderV2Input {
+        protocol_version: 1,
+        chain_id: input.chain_id,
+        signature_scheme_id: SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+        channel_id: input.channel_id,
+        funding_epoch: 0,
+        funding_anchor: input.funding_anchor,
+        vault_set_commitment: input.vault_set_commitment,
+        state_number: 0,
+        mode: 1,
+        phase: PHASE_ACTIVE,
+        participants_commitment: input.participants_commitment,
+        asset_registry_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY_V2"]),
+        settlement_descriptor_commitment: input.settlement_descriptor_commitment,
+        descriptor_version: input.descriptor_version,
+        payload_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD_V1"]),
+        challenge_policy_commitment: input.challenge_policy_commitment,
+        state_layout_version: 2,
+    })
 }
 
 fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
@@ -12183,6 +12225,24 @@ fn ensure_output_capacity(name: &str, output: &CellOutput, data_len: usize) -> R
         occupied
     );
     Ok(())
+}
+
+fn factory_witness_envelope_v2(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
+    let body_len: u32 = body
+        .len()
+        .try_into()
+        .context("factory witness body length does not fit in u32")?;
+    let mut raw = vec![0u8; WITNESS_ENVELOPE_V2_LEN + body.len()];
+    raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
+    put_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+    put_u16(&mut raw, 10, kind);
+    put_u16(&mut raw, 12, 0);
+    put_u32(&mut raw, 14, body_len);
+    raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(kind, body));
+    raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
+    WitnessEnvelopeV2::parse(&raw)
+        .map_err(|err| anyhow!("encoded factory witness envelope is invalid: {err:?}"))?;
+    Ok(raw)
 }
 
 fn put_u16(raw: &mut [u8], offset: usize, value: u16) {
@@ -12563,12 +12623,13 @@ mod tests {
             chain_id: [0x44; BYTE32_LEN],
             channel_id: [0x55; BYTE32_LEN],
             funding_anchor,
+            vault_set_commitment: [0x99; BYTE32_LEN],
             participants_commitment: [0x66; BYTE32_LEN],
             settlement_descriptor_commitment: [0x77; BYTE32_LEN],
             descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
             challenge_policy_commitment: [0x88; BYTE32_LEN],
         });
-        let header = StateHeaderV1::parse(&header_bytes).unwrap();
+        let header = StateHeaderV2::parse(&header_bytes).unwrap();
         let state_type = data1_script(
             filter.state_type_code_hash.clone(),
             state_type_args(&funding_anchor, relative_block_since_arg(4).unwrap()),

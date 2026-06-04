@@ -5,10 +5,12 @@
 // on-chain wire boundary and should be generated once moleculec is available
 // in the devnet build environment.
 //
-// The devnet V1 scripts intentionally use fixed-width encodings. These lengths
-// are part of the audited transaction shape:
+// The active devnet V2 channel headers and V1 witness bodies intentionally use
+// fixed-width encodings. Factory authorisation witnesses are no longer
+// dispatched by raw body length: every factory contract witness is carried in a
+// WitnessEnvelopeV2 header followed by one bounded V1 body. These lengths are
+// part of the audited transaction shape:
 //
-// - StateHeaderV1: 274 bytes
 // - StateHeaderV2: 314 bytes
 // - SpliceHeaderV1: 325 bytes
 // - SpliceSignatureWitnessV1: 198 bytes
@@ -33,14 +35,35 @@
 // - FactoryVaultDeltasV1: 196 bytes
 // - FactorySpliceWitnessV1: 999 bytes
 // - FactoryReducedSpliceWitnessV1: 9457 bytes
+// - WitnessEnvelopeV2 header: 50 bytes
 // - BilateralCkbSettlementDescriptorV1: 84 bytes
 // - BilateralCkbXudtSettlementDescriptorV1: 148 bytes
 // - SponsorPolicyV1: 144 bytes
 
 array Byte32 [byte; 32];
+array WitnessEnvelopeMagicV2 [byte; 8];
 array FactoryMerkleProofSiblingsV1 [Byte32; 256];
 array Secp256k1CompressedPubkey [byte; 33];
 array EcdsaSignature [byte; 64];
+
+// WitnessEnvelopeV2 is a fixed 50-byte prefix followed by a bounded variable
+// body. body_commitment is blake2b256(domain, kind_le, body). The current
+// factory kind map is:
+// 1 FactorySignatureWitnessV1
+// 2 FactoryReducedRightsWitnessV1
+// 3 FactoryMerkleUpdateWitnessV1
+// 4 FactoryReducedExitWitnessV1 or FactoryReducedExitXudtWitnessV1
+// 5 FactoryLocalExitWitnessV1 or FactoryLocalExitXudtWitnessV1
+// 6 FactorySpliceWitnessV1
+// 7 FactoryReducedSpliceWitnessV1
+struct WitnessEnvelopeV2 {
+    magic: WitnessEnvelopeMagicV2,
+    version: uint16,
+    kind: uint16,
+    flags: uint16,
+    body_len: uint32,
+    body_commitment: Byte32,
+}
 
 struct OutPointRef {
     tx_hash: Byte32,
@@ -53,28 +76,6 @@ struct ChallengePolicyV1 {
     min_emergency_rebuilds: uint32,
 }
 
-struct StateHeaderV1 {
-    protocol_version: uint16,
-    chain_id: Byte32,
-    signature_scheme_id: uint16,
-    channel_id: Byte32,
-    funding_anchor: Byte32,
-    state_number: uint64,
-    mode: byte,
-    phase: byte,
-    participants_commitment: Byte32,
-    asset_registry_commitment: Byte32,
-    settlement_descriptor_commitment: Byte32,
-    descriptor_version: uint16,
-    payload_commitment: Byte32,
-    challenge_policy_commitment: Byte32,
-    state_layout_version: uint16,
-}
-
-// M5 final V1 target. Current devnet scripts still parse StateHeaderV1 while
-// the splice bridge is being hardened, but the funding epoch decision is closed:
-// the epoch is explicit signed state semantics, not only a value inferred from
-// the current vault out point.
 struct StateHeaderV2 {
     protocol_version: uint16,
     chain_id: Byte32,
@@ -277,7 +278,7 @@ struct FactoryReducedExitWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV1,
+    exit_state_header: StateHeaderV2,
     settlement_descriptor: BilateralCkbSettlementDescriptorV1,
     before_0: FactoryRightV1,
     before_1: FactoryRightV1,
@@ -317,7 +318,7 @@ struct FactoryReducedExitXudtWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV1,
+    exit_state_header: StateHeaderV2,
     settlement_descriptor: BilateralCkbXudtSettlementDescriptorV1,
     before_0: FactoryRightV1,
     before_1: FactoryRightV1,
@@ -349,7 +350,7 @@ struct FactoryLocalExitWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV1,
+    exit_state_header: StateHeaderV2,
     settlement_descriptor: BilateralCkbSettlementDescriptorV1,
 }
 
@@ -361,7 +362,7 @@ struct FactoryLocalExitXudtWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV1,
+    exit_state_header: StateHeaderV2,
     settlement_descriptor: BilateralCkbXudtSettlementDescriptorV1,
 }
 
