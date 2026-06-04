@@ -59,7 +59,9 @@ fn pubkey(key: &SigningKey) -> Vec<u8> {
 
 fn signature(key: &SigningKey, digest: &[u8; 32]) -> Vec<u8> {
     let sig: Signature = key.sign_prehash(digest).unwrap();
-    sig.to_bytes().as_slice().to_vec()
+    let signature_bytes = sig.to_bytes();
+    let signature_slice: &[u8] = signature_bytes.as_ref();
+    signature_slice.to_vec()
 }
 
 fn authorization_for(header: &mut StateHeader) -> StateAuthorization {

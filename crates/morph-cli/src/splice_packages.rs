@@ -1447,7 +1447,7 @@ fn sign_digest(pubkey: &[u8], key: &SigningKey, digest: &Bytes32) -> Result<Stor
         .map_err(|err| anyhow!("failed to sign splice digest: {err:?}"))?;
     Ok(StoredSpliceSignature {
         pubkey_sec1: hex_prefixed(pubkey),
-        signature: hex_prefixed(signature.to_bytes().as_slice()),
+        signature: hex_prefixed(signature.to_bytes().as_ref()),
     })
 }
 

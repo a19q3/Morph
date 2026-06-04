@@ -2216,8 +2216,9 @@ fn sign_reduced_rights_witness(
         let offset = reduced_participant_offset(index);
         if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
             let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            let signature_bytes = sig.to_bytes();
             witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
-                .copy_from_slice(sig.to_bytes().as_slice());
+                .copy_from_slice(signature_bytes.as_ref());
             return Ok(());
         }
     }
@@ -2242,8 +2243,9 @@ fn sign_merkle_update_witness(
         let offset = merkle_update_participant_offset(index);
         if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
             let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            let signature_bytes = sig.to_bytes();
             witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
-                .copy_from_slice(sig.to_bytes().as_slice());
+                .copy_from_slice(signature_bytes.as_ref());
             return Ok(());
         }
     }
@@ -2282,9 +2284,10 @@ fn signed_factory_witness(
         let sig: k256::ecdsa::Signature = key
             .sign_prehash(&digest)
             .map_err(|err| anyhow!("failed to sign factory local-exit fixture: {err:?}"))?;
+        let signature_bytes = sig.to_bytes();
         raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
             ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
-            .copy_from_slice(sig.to_bytes().as_slice());
+            .copy_from_slice(signature_bytes.as_ref());
     }
     Ok(raw)
 }
@@ -2599,9 +2602,10 @@ mod tests {
             let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
             witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
             let sig: Signature = key.sign_prehash(&digest).unwrap();
+            let signature_bytes = sig.to_bytes();
             witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
                 ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
-                .copy_from_slice(sig.to_bytes().as_slice());
+                .copy_from_slice(signature_bytes.as_ref());
         }
 
         StoredStatePackage::from_signed_state(&header, &witness, None).unwrap()
@@ -2648,9 +2652,10 @@ mod tests {
             witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
                 .copy_from_slice(pubkey);
             let sig: Signature = key.sign_prehash(&digest).unwrap();
+            let signature_bytes = sig.to_bytes();
             witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
                 ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
-                .copy_from_slice(sig.to_bytes().as_slice());
+                .copy_from_slice(signature_bytes.as_ref());
         }
 
         StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None).unwrap()

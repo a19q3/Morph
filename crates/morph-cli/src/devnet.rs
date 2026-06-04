@@ -6346,7 +6346,7 @@ fn apply_settlement_descriptor_update(
 ) -> Result<()> {
     ensure!(
         state_data.len() == STATE_HEADER_V2_LEN,
-        "state descriptor update requires a fixed-width StateHeader"
+        "state descriptor update requires a fixed-layout StateHeaderV2"
     );
     let alice_key = parse_privkey(alice_private_key)
         .with_context(|| "invalid Alice channel private key for descriptor update")?;
@@ -10604,7 +10604,8 @@ fn ecdsa_signature(key: &SigningKey, digest: &[u8; 32]) -> Result<[u8; ECDSA_SIG
         .sign_prehash(digest)
         .map_err(|err| anyhow!("failed to sign state digest: {err:?}"))?;
     let mut out = [0u8; ECDSA_SIGNATURE_LEN];
-    out.copy_from_slice(sig.to_bytes().as_slice());
+    let signature_bytes = sig.to_bytes();
+    out.copy_from_slice(signature_bytes.as_ref());
     Ok(out)
 }
 

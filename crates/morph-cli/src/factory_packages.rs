@@ -3255,7 +3255,7 @@ fn sign_factory_digest(
     Ok(StoredFactorySignature {
         participant: participant.to_string(),
         pubkey_sec1: pubkey_sec1.to_string(),
-        signature: hex_prefixed(signature.to_bytes().as_slice()),
+        signature: hex_prefixed(signature.to_bytes().as_ref()),
     })
 }
 

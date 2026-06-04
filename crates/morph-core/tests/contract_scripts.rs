@@ -249,7 +249,8 @@ fn pubkey(key: &SigningKey) -> [u8; COMPRESSED_SECP256K1_PUBKEY_LEN] {
 fn signature(key: &SigningKey, digest: &[u8; 32]) -> [u8; ECDSA_SIGNATURE_LEN] {
     let sig: Signature = key.sign_prehash(digest).unwrap();
     let mut out = [0u8; ECDSA_SIGNATURE_LEN];
-    out.copy_from_slice(sig.to_bytes().as_slice());
+    let signature_bytes = sig.to_bytes();
+    out.copy_from_slice(signature_bytes.as_ref());
     out
 }
 
