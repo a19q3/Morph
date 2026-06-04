@@ -196,7 +196,8 @@ The profile can set global ceilings, per-transaction ceilings keyed by summary
 `factory_reduced_exit_xudt_one_sided_reserve_claim_v1`. Factory splice apply
 transactions are also budgeted with `factory_splice_all_participants_ckb_v1`
 and `factory_splice_all_participants_xudt_v1`, binding
-`FactorySpliceWitnessV1` length to node-estimated cycles and transaction bytes.
+the `FactorySpliceWitnessV1` body length inside `WitnessEnvelopeV2` to
+node-estimated cycles and transaction bytes.
 For
 quick local experiments, the same limits can be supplied directly:
 
@@ -810,11 +811,11 @@ separate from channel state authority.
 
 ## Contract Milestone
 
-The contract implementation uses fixed-width headers and bounded witness
-bodies. Factory authorisation witnesses are carried through a
-`WitnessEnvelopeV2` prefix, so factory contracts dispatch by envelope kind
-rather than raw byte length. The implementation deliberately does not start
-from a generic VM-like descriptor:
+The contract implementation uses fixed-layout headers plus bounded witness body
+schemas. Factory authorisation witnesses are carried through a
+`WitnessEnvelopeV2` prefix, so factory contracts dispatch by envelope kind and
+body digest rather than raw byte length. The implementation deliberately does
+not start from a generic VM-like descriptor:
 
 ```text
 StateHeaderV2
@@ -832,21 +833,21 @@ BilateralCkbSettlementDescriptorV1
 BilateralCkbXudtSettlementDescriptorV1
 ```
 
-`FactoryReducedExitXudtWitnessV1` is the fixed-width xUDT descriptor variant of
-the reduced-exit witness. It is active in contract/CKB-VM and devnet smoke
-coverage.
+`FactoryReducedExitXudtWitnessV1` is the fixed-layout xUDT descriptor body
+variant of the reduced-exit witness. It is active in contract/CKB-VM and
+devnet smoke coverage through the V2 factory witness envelope.
 
 The draft Molecule schema in `schemas/morph.mol` records these active wire
-objects, fixed body lengths, and the 50-byte `WitnessEnvelopeV2` header. The
+objects, bounded body lengths, and the 50-byte `WitnessEnvelopeV2` header. The
 devnet contracts still parse the bytes directly; generated Molecule code is a
 later hardening step, not a consensus or node requirement.
 
 The conservative factory path is now executable on devnet. It is deliberately
 small: one FactoryStateCell, two named participants, all-participant signatures,
 one FactoryVaultCell, and monotonic update numbers. It can materialise a
-bilateral child channel under full factory-participant consent. A bounded
-reduced-signature reserve-claim exit is covered in CKB-VM tests; wiring that
-path into the devnet CLI remains open.
+bilateral child channel under full factory-participant consent. Bounded
+reduced-signature reserve-claim exits are covered in CKB-VM tests and in
+devnet smoke paths for CKB and xUDT child channels.
 
 Open a factory state cell:
 
@@ -1070,10 +1071,10 @@ script, a factory reserve lock, devnet factory open/update transactions,
 conservative factory-local exit materialisation into plain CKB and CKB+xUDT
 child bilateral channels, a bounded reduced-rights proof for claim-reducing
 factory updates, and bounded reduced-exit paths that release reserve claims into
-child CKB and CKB+xUDT channels. xUDT reduced-exit V1 is covered at the
-contract/CKB-VM and devnet smoke layers with typed child-vault and FactoryVault
-change binding.
-The current devnet roadmap covers the fixed-width reduced-rights,
+child CKB and CKB+xUDT channels. The xUDT reduced-exit body schema is covered
+at the contract/CKB-VM and devnet smoke layers with typed child-vault and
+FactoryVault change binding.
+The current devnet roadmap covers the V2-envelope bounded reduced-rights,
 sparse-Merkle, CKB reduced-exit, and xUDT reduced-exit smoke paths. General
 proof paths for larger factories remain deferred beyond this slice.
 
