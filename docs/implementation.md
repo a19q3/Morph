@@ -151,9 +151,9 @@ state-number interval, and expected StateType hash. Arbitrary output data that
 looks like a StateHeader is not enough. This keeps sponsor capacity out of
 arbitrary transfers and out of fake-publication fee drains.
 
-The safety-kernel boundary fixes come from the historical Devnet V1
-release-candidate baseline and remain part of the current post-V1 V2-envelope
-implementation. That baseline has stateful devnet audit acceptance. Vault
+The safety-kernel boundary fixes come from the historical devnet
+release-candidate evidence line and remain part of the current post-V1
+V2-envelope implementation. That baseline has stateful devnet audit acceptance. Vault
 finalisation is authorised by an authentic current Morph
 StateCell with the expected StateType and StateLock identity, not by bytes that
 decode as a `StateHeader`. State finalisation and active splice retirement
