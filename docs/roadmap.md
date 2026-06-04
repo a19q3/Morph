@@ -12,7 +12,7 @@ For current factory authorisation, `morph-factory-type` and
 `morph-factory-vault-lock` parse a bounded `WitnessEnvelopeV2` and dispatch on
 the envelope kind plus checked body digest. The remaining `*V1` names in factory
 sections identify bounded body schemas or JSON package schemas carried inside
-that V2 envelope, not raw witness-length dispatch.
+that V2 envelope, not the old top-level fixed-length witness convention.
 
 ## M0: Protocol Semantics
 
@@ -197,8 +197,8 @@ Status: implemented for the current V2-envelope factory witness boundary,
 covering bounded claim-reducing update bodies, single-right sparse Merkle update
 bodies, reserve-claim reduced-exit bodies, and devnet smoke-budget scope.
 The proof bodies remain fixed-layout conservative schemas, but the contract
-authorisation boundary no longer selects factory behaviour from raw witness
-length.
+authorisation boundary no longer selects factory behaviour from the old
+top-level fixed-length witness convention.
 
 Implemented:
 
@@ -251,8 +251,8 @@ Deferred beyond the current V2-envelope roadmap:
 
 - empirical budget profiles for larger, multi-right, or variable-depth proof
   shapes beyond the current bounded conservative body schemas. The old
-  fixed-width top-level factory dispatch is not a deferred item; it has been
-  replaced by `WitnessEnvelopeV2`.
+  top-level fixed-length factory dispatch convention is not a deferred item; it
+  has been replaced by `WitnessEnvelopeV2`.
 
 ## M4.5: Devnet Stateful Acceptance
 
