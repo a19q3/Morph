@@ -577,7 +577,7 @@ enum DevnetCommand {
     },
     /// Save a reduced-rights factory update package without broadcasting it.
     SaveFactoryReducedRightsPackage {
-        /// Devnet Alice factory signing key. Alice is the touched participant in the bounded V1 proof.
+        /// Devnet Alice factory signing key. Alice is the touched participant in the bounded reduced-rights proof body.
         #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced update.
@@ -601,7 +601,7 @@ enum DevnetCommand {
     },
     /// Save a conservative factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
     SaveFactorySplicePackage {
-        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in V1.
+        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in the factory splice body.
         #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
@@ -637,7 +637,7 @@ enum DevnetCommand {
     },
     /// Save a reduced sparse-Merkle factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
     SaveFactoryReducedSplicePackage {
-        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in V1.
+        /// Devnet Alice factory signing key. Alice owns the touched reserve claim in the reduced-splice body.
         #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced splice.
