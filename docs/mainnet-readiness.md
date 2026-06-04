@@ -1,105 +1,106 @@
 # Mainnet Readiness
 
-This repository remains devnet-first. The current implementation baseline is
-the post-V1 V2-envelope devnet line, not a mainnet-ready or production-ready
-release. A mainnet release candidate should not be cut until the items below
-have current evidence from mainnet or a mainnet-like environment.
+Morph Channel is not mainnet-ready and is not production real-assets software.
+This document explains what remains before any responsible production claim.
 
-The historical Devnet V1 release-candidate evidence remains useful background,
-but it is no longer the active baseline for factory witness dispatch. Current
-factory authorisation uses `WitnessEnvelopeV2` with bounded body schemas.
-Remaining `.v1` and `*V1` suffixes in package, proof-kind, and witness names
-identify schema/body history, not the active top-level factory dispatch
-contract.
+## Current Position
 
-## P0 Release Blockers
+```mermaid
+flowchart LR
+    A["Local protocol model"] --> B["Local CKB scripts"]
+    B --> C["Local devnet smoke"]
+    C --> D["Local stateful audit"]
+    D --> E["External review"]
+    E --> F["Operational readiness"]
+    F --> G["Conservative value limits"]
+```
 
-### Challenge Window Evidence
+The repository currently has local executable evidence through `morph-core`
+tests, CKB script tests, smoke reports, and stateful acceptance reports. That
+is necessary evidence, but it is not enough for mainnet.
 
-- Measure mainnet confirmation latency for publication, supersession, splice,
-  factory update, and finalisation transactions.
-- Record the observed values used for:
-  `detection_depth + poll_interval + build_time + confirmation_time + margin`.
-- Publish a conservative default challenge policy and reject operator policies
-  that fall below it.
-- Include reorg handling assumptions and required confirmation depth in the
-  release notes.
+## Readiness Gates
 
-### Fee Market Safety
+| Gate | Required evidence | Current status |
+| --- | --- | --- |
+| Independent protocol review | External review of state, vault, sponsor, splice, and factory rules. | Open. |
+| Independent script review | Review of no-std CKB parsing, cell selection, since handling, and error paths. | Open. |
+| Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Open. |
+| Mainnet-like fee evidence | Repeated runs under realistic fee pressure and transaction-size budgets. | Open. |
+| Reorg and delay evidence | Watchtower and publication behaviour under delayed observations and chain reorg scenarios. | Open. |
+| Multi-operator watchtower evidence | At least two independent operators following documented procedures. | Open. |
+| Operational runbooks | Key handling, package retention, alert response, rollback, incident response, and upgrade procedures. | Open. |
+| Value-limit policy | Explicit caps tied to evidence level and operator readiness. | Open. |
 
-- Run fee stress tests where emergency publication fees rise during the
-  challenge window.
-- Verify sponsor rotation can rebuild a publication carrier with a fresh fee
-  source without touching channel-owned value.
-- Define operator alerts for low sponsor budget, repeated publication failure,
-  and approaching challenge expiry.
-- Keep per-transaction and proof-profile cycle/byte budgets in
-  `docs/devnet-smoke-budget.example.json` aligned with measured mainnet fee
-  assumptions.
+## What Local Evidence Already Covers
 
-### Watchtower Operations
+```mermaid
+flowchart TB
+    T["Local evidence"] --> A["invariant tests"]
+    T --> B["CKB script tests"]
+    T --> C["devnet smoke reports"]
+    T --> D["stateful acceptance reports"]
+    T --> E["negative-path assertions"]
+```
 
-- Pass the devnet stateful production-scenario suite with watchtower restart,
-  cursor, stale-splice-package, and multi-operator-local evidence.
-- Historical local evidence: the devnet stateful suite passed at `3814453`,
-  including watchtower cursor, stale-splice-package, service-mode, and local
-  multi-operator-shaped checks.
-- Exercise restart and cursor recovery after bilateral splice and factory splice
-  transitions.
-- Require funding-anchor-aware package selection, stale pre-splice package
-  alerts, and persisted cursor metadata in smoke evidence.
-- Document key custody, health-file monitoring, webhook delivery failure
-  handling, and supervised restart expectations.
-- Test at least two independent watchtower operators against the same channel
-  package set in mainnet-like operations before raising value limits.
+Local evidence covers:
 
-## P1 Hardening
+- participant signatures over current state;
+- monotonic State Cell progression;
+- authentic State Cell requirements for vault finalisation;
+- sponsor budget and clean-change boundaries;
+- CKB and CKB+xUDT settlement descriptors;
+- splice funding-anchor and vault-set transitions;
+- factory full-participant signatures;
+- bounded reduced-rights, sparse-Merkle, reduced-exit, factory-splice, and
+  reduced-splice proof bodies carried by `WitnessEnvelopeV2`;
+- expected failure paths for malformed or attack-shaped transactions.
 
-### xUDT Compatibility Matrix
+## What Local Evidence Does Not Prove
 
-- Test canonical xUDT plus representative mainnet xUDT variants with additional
-  lock or type constraints.
-- Include negative cases where total token supply is conserved but the Morph
-  settlement descriptor, child vault amount, type hash, or participant-level
-  allocation is wrong.
-- Keep devnet-only issuer assumptions out of mainnet runbooks.
+Local devnet evidence does not prove:
 
-### Supply-Chain Gate
+- real network fee behaviour;
+- mempool and propagation behaviour under adversarial timing;
+- long-running watchtower operations;
+- operational safety of key custody;
+- reproducibility of release artefacts in a separate environment;
+- correctness under independent review;
+- safe value limits for real users.
 
-- `make supply-chain` must pass before release.
-- Historical local evidence: `make supply-chain` passed at `3814453`; a mainnet
-  release candidate still requires current release/CI revalidation.
-- `cargo audit` checks RustSec advisories against `Cargo.lock`.
-- `cargo deny check` enforces allowed licenses, crate sources, and banned
-  OpenSSL dependencies through `deny.toml`.
-- Current `cargo audit` ignores are limited to transitive CKB dependency
-  warnings for `paste` (`RUSTSEC-2024-0436`) and `rand 0.7`
-  (`RUSTSEC-2026-0097`, the current rand advisory; `RUSTSEC-2020-0097` is an
-  unrelated xcb advisory); remove them when upstream CKB crates update.
-- New advisory ignores require a documented reason in the Makefile or
-  `deny.toml`.
+## Minimum Production Checklist
 
-### Model Checking Slice
+Before any production or real-assets claim, the project needs:
 
-- Start with a small model for stale-state replacement, challenge expiry,
-  splice funding epochs, and factory non-interference.
-- Treat model checking as a supplement to the executable audit matrix, not a
-  replacement for CKB-VM and devnet smoke evidence.
+1. a reviewed release candidate commit;
+2. reproducible CKB script binaries and script hash manifest;
+3. clean CI results for Rust tests, contract tests, smoke assertions, stateful
+   assertions, clippy, and formatting;
+4. external review notes with all critical findings closed;
+5. repeated devnet/testnet runs with fee and delay profiles;
+6. watchtower runbooks and at least one independent operator rehearsal;
+7. documented incident response and emergency stop procedure;
+8. value caps that match the evidence level;
+9. clear user-facing risk disclosure.
 
-### Specification Sync
+## Value-Limit Posture
 
-- Every protocol-level change must update the relevant spec surface before or
-  alongside implementation:
-  `schemas/morph.mol`, `docs/implementation.md`, `docs/roadmap.md`, and the
-  executable audit matrix.
-- If implementation intentionally leads the paper, the delta must be captured in
-  a closeout document before external review.
+```mermaid
+flowchart LR
+    A["No external review"] --> B["No real assets"]
+    C["Review + repeatable release"] --> D["Tiny guarded limits"]
+    E["Operational evidence"] --> F["Gradual limit increases"]
+```
 
-## Deferred Beyond Current Conservative Scope
+The correct default is no real asset exposure. Value limits should increase
+only when evidence improves, and every increase should be tied to a dated
+release, review record, operator procedure, and observed run history.
 
-- Generic descriptor runtime.
-- Concurrent unconfirmed splice updates.
-- Arbitrary splice-out payout locks without an explicit allowlist design.
-- Multi-right or variable-depth reduced-signature proof bundles beyond the
-  current bounded V2-envelope body schemas.
-- Routing, gossip, path finding, and liquidity discovery.
+## Go / No-Go Summary
+
+| Question | Go condition |
+| --- | --- |
+| Can the current repo be used for local research? | Yes. |
+| Can it be used for devnet evidence generation? | Yes. |
+| Can it be used for mainnet real assets today? | No. |
+| What is the next readiness step? | External review plus reproducible release evidence. |

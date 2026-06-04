@@ -18,6 +18,15 @@ movement remains off chain.
 
 The core model is simple:
 
+```mermaid
+flowchart LR
+    A["Participants"] <-->|"signed states"| B["Off-chain updates"]
+    B --> S["State Cell<br/>latest enforceable evidence"]
+    S --> V["Vault Cell<br/>channel assets"]
+    P["Sponsor Cell<br/>fee budget"] --> S
+    V --> O["Settlement outputs"]
+```
+
 - a **State Cell** is the public pointer to the channel's latest on-chain
   status;
 - a **Vault Cell** holds the assets that the channel controls;
@@ -64,6 +73,17 @@ evidence, release/CI supply-chain revalidation, operational runbooks,
 multi-operator watchtower evidence, and an explicit value-limit policy.
 
 ## Business Flow
+
+```mermaid
+flowchart LR
+    O["Open"] --> U["Update off chain"]
+    U --> P["Publish if needed"]
+    P --> F["Finalise vault"]
+    U --> S["Splice"]
+    S --> U
+    O --> X["Factory reserve"]
+    X --> C["Child channel"]
+```
 
 ### 1. Open A Channel
 
