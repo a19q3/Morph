@@ -12,10 +12,10 @@ The default profile is
 [`docs/devnet-audit-profile.example.json`](devnet-audit-profile.example.json)
 with schema `morph.devnet_audit_profile.v1`.
 
-The `.v1` suffix here is the audit-profile schema version. It is not a claim
-that the current protocol baseline is the historical Devnet V1 release
-candidate; current factory authorisation is still read through the post-V1
-`WitnessEnvelopeV2` implementation line.
+The `.v1` suffix here is only the audit-profile schema version. It is not a
+protocol or witness-version label. On the current post-V1 implementation line,
+factory authorisation is read through the bounded `WitnessEnvelopeV2`
+kind/body/digest envelope.
 
 ## Found Issue To Executable Family
 
