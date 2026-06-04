@@ -16,8 +16,8 @@ or as current release evidence.
 
 The current post-V1 line is commit `a2059ba` on
 `arthur/v2-final-nonfixed-witness`. That line removes the factory contracts'
-fixed-width raw witness dispatch as the public authorisation boundary and
-replaces it with a bounded `WitnessEnvelopeV2` header:
+old top-level fixed-length witness convention as the public authorisation
+boundary and replaces it with a bounded `WitnessEnvelopeV2` header:
 
 - witness kind selects the factory authorisation path;
 - body length is bounded per kind instead of inferred from one global raw
@@ -95,8 +95,8 @@ From `target/devnet-e2e/20260520T100401Z/smoke/deploy-contracts.json`:
   `SettlementOutputMismatch`.
 - Remaining limitation: no generic descriptor runtime, no multi-right reduced
   proof, and no variable-depth proof in V1. The later V2 witness envelope
-  addresses fixed-width top-level factory dispatch, not these historical V1
-  proof-model limitations by itself.
+  addresses the old top-level fixed-length factory dispatch convention rather
+  than these historical V1 proof-model limitations by itself.
 
 ### Relative Since Devnet Maturity
 
