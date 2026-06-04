@@ -15,15 +15,15 @@ evidence and sponsor authorisation.
 
 The contract crates now implement the V2 devnet wire target: active channel
 state uses `StateHeaderV2`, while factory authorisation witnesses use a
-bounded `WitnessEnvelopeV2` carrying one fixed-width V1 body:
+bounded `WitnessEnvelopeV2` carrying one checked, kind-specific body schema:
 
 - State type: consumes exactly one State Cell and recreates exactly one newer
   settling State Cell under the same funding anchor and channel context; it can
   also close the state track after the configured relative `since` has matured.
 - Factory type: consumes exactly one FactoryStateCell and recreates exactly one
   newer FactoryStateCell under the same factory id and participant context; the
-  devnet V1 path is deliberately conservative and requires signatures from all
-  two factory participants for ordinary updates. It also accepts a bounded
+  conservative all-participant path requires signatures from both factory
+  participants for ordinary updates. It also accepts a bounded
   reduced-rights proof where one authorised participant may decrease only their
   own committed rights, while every other right remains unchanged and both the
   old and new roots are verified. For local exits, it still requires the
@@ -45,13 +45,14 @@ compressed secp256k1 public keys, two ECDSA signatures over the canonical state
 header digest, and a participant commitment that must match the signed header.
 The factory type script first parses `WitnessEnvelopeV2` and authenticates the
 body commitment, kind, flags, and bounded body length. It then verifies the
-kind-specific V1 body: full participant signatures, reduced rights, sparse
+kind-specific bounded body: full participant signatures, reduced rights, sparse
 Merkle updates, reduced exits, local exits, factory splices, or reduced factory
-splices. Sponsor inputs and fee selection remain outside those
+splices. The `*V1` suffix on these body types is now a schema name, not the
+top-level dispatch version. Sponsor inputs and fee selection remain outside those
 state-signature domains.
 
 The draft Molecule schema in `schemas/morph.mol` now names every active
-fixed-width object used by the devnet contracts: `StateHeaderV2`,
+bounded wire object used by the devnet contracts: `StateHeaderV2`,
 `FactoryStateHeaderV1`, `BilateralSignatureWitnessV1`,
 `FactorySignatureWitnessV1`, `FactoryRightV1`,
 `FactoryReducedRightsWitnessV1`, `FactoryLocalExitWitnessV1`, CKB and CKB+xUDT
@@ -149,9 +150,10 @@ state-number interval, and expected StateType hash. Arbitrary output data that
 looks like a StateHeader is not enough. This keeps sponsor capacity out of
 arbitrary transfers and out of fake-publication fee drains.
 
-The safety-kernel boundary fixes are part of the current Devnet V1
-release-candidate baseline, and that baseline has stateful devnet audit
-acceptance. Vault finalisation is authorised by an authentic current Morph
+The safety-kernel boundary fixes come from the historical Devnet V1
+release-candidate baseline and remain part of the current post-V1 V2-envelope
+implementation. That baseline has stateful devnet audit acceptance. Vault
+finalisation is authorised by an authentic current Morph
 StateCell with the expected StateType and StateLock identity, not by bytes that
 decode as a `StateHeader`. State finalisation and active splice retirement
 require an input whose VaultCell commitment matches the retiring StateHeader
@@ -181,11 +183,12 @@ digest/root mismatches are rejected. This is intentionally not a general
 Merkle factory proof and not a reduced-signature factory exit.
 
 The reduced factory-exit safety predicate is now represented both at the host
-layer and in a fixed-width on-chain witness. In the narrow reserve-claim case,
-exactly one authorised participant may release their own `ReserveClaim`; the
-release amount must match the before/after delta, and every other factory
-right must remain unchanged. The CLI can serialise this predicate as a
-`morph.factory_reduced_exit_package.v1` fixture and validate it independently.
+layer and in a V2-envelope-wrapped fixed-layout body. In the narrow
+reserve-claim case, exactly one authorised participant may release their own
+`ReserveClaim`; the release amount must match the before/after delta, and every
+other factory right must remain unchanged. The CLI can serialise this predicate
+as a `morph.factory_reduced_exit_package.v1` fixture and validate it
+independently.
 On chain, `FactoryReducedExitWitnessV1` binds the rights-root transition, the
 one-signer reduced signature, the local child StateCell evidence, the
 settlement descriptor, and the factory vault release. `morph-factory-type`
@@ -221,8 +224,8 @@ only the authorised participants sign the same style of digest.
 `validate-factory-state-package` verifies the nested update package, the
 participant-id/public-key bindings, the selected signature mode, the threshold,
 and every secp256k1 signature. This reduced factory-state fixture remains a
-host-side package; on-chain reduced publication uses the dedicated fixed-width
-reduced-rights and reduced-exit witnesses.
+host-side package; on-chain reduced publication uses dedicated
+`WitnessEnvelopeV2`-wrapped reduced-rights and reduced-exit bodies.
 
 For chain publication, the CLI also supports a narrower factory-state-cell
 package. It stores the exact `FactoryStateHeaderV1` bytes and the
@@ -323,8 +326,9 @@ process manager rather than becoming its own process manager.
 
 ## Current Non-Goals
 
-These are intentional V1 scope boundaries, not stale implementation gaps.
-Changing them requires a separate protocol or proof-shape update.
+These are intentional conservative scope boundaries inherited from the V1
+milestones, not stale implementation gaps. Changing them requires a separate
+protocol or proof-shape update.
 
 - No routing, gossip, path finding, or liquidity discovery.
 - Multi-right and variable-depth reduced-signature proof bundles are deferred
