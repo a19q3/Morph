@@ -5,7 +5,8 @@ The paper's audit matrix is represented in `crates/morph-core/tests/invariants.r
 This matrix is read against the current post-V1 V2-envelope implementation
 line. Remaining `*V1` fixture and witness names identify bounded body/package
 schemas or historical policy labels; factory script authorisation is dispatched
-through `WitnessEnvelopeV2`, not through raw fixed-width witness length.
+through `WitnessEnvelopeV2`, not through the old top-level fixed-length witness
+convention.
 
 | Invariant | Current executable check |
 | --- | --- |
