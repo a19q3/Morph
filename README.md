@@ -8,7 +8,7 @@ This repository is intentionally conservative. The first milestone is a
 devnet-testable bilateral channel path. Factory proof mode is represented in
 the data model, package validation, and a conservative full-participant factory
 type script. Conservative factory-local exit materialisation is implemented on
-devnet; bounded reduced-signature factory exits now have fixed-width script
+devnet; bounded reduced-signature factory exits now have fixed-layout body
 coverage in CKB-VM tests and devnet smoke for the reserve-claim path.
 
 ## Status
@@ -23,11 +23,11 @@ Current implementation stage:
   validates conservative factory splice-in/out transitions where one
   participant reserve claim changes exactly with the CKB or xUDT
   FactoryVaultCell delta.
-- `morph-script-common`: shared fixed-width parsers and digest helpers for the
+- `morph-script-common`: shared fixed-layout parsers and digest helpers for the
   current CKB script wire objects, now including the initial splice header,
   splice signature witness, vault descriptor, asset-delta shapes, the bundled
-  splice state-transition witness, a shared splice verifier, and the initial
-  fixed-width factory splice witness verifier.
+  splice state-transition witness, a shared splice verifier, and bounded
+  factory witness body verifiers carried by `WitnessEnvelopeV2`.
 - `morph-cli`: local smoke tooling for fixture generation, invariant checks,
   native CKB devnet JSON-RPC checks, contract deployment, channel opening,
   state publication, vault finalisation, and per-transaction cycle/size
@@ -44,7 +44,7 @@ Current implementation stage:
   live-matching CKB splice packages plus xUDT splice-in/out packages against an
   active StateCell/VaultCell pair. Factory splice fixture commands print and
   validate signed all-participant CKB/xUDT reserve-repartition packages and
-  export the fixed-width `FactorySpliceWitnessV1` bytes as
+  export `WitnessEnvelopeV2`-wrapped `FactorySpliceWitnessV1` body bytes as
   `contract_witness_hex`.
 - `contracts/morph-state-lock`: no-std CKB lock script that delegates StateCell
   spending to the expected state type script.
@@ -70,8 +70,8 @@ Current implementation stage:
 - `contracts/morph-devnet-xudt`: no-std devnet xUDT script used to test
   token-bearing vault settlement without depending on an external issuer.
 
-This is not mainnet software. The current baseline is a Devnet V1 release
-candidate with devnet production-scenario acceptance: known local P0/P1
+This is not mainnet software. The current baseline is the post-V1 V2-envelope
+devnet line with local production-scenario acceptance: known local P0/P1
 safety-boundary blockers are addressed and the generalized stateful audit gate
 passes locally. It is not mainnet-ready or production real-assets-ready; value
 limits still require external diff review, mainnet-like fee/reorg evidence,
@@ -89,12 +89,12 @@ publishes and finalises those child channels. The CKB+xUDT smoke paths mint a
 local test asset into the vault and settle exact token balances through the
 same StateCell and VaultCell authority model.
 The reduced-signature factory work is deliberately narrow at this stage:
-CKB-VM tests and devnet smoke cover a fixed-width proof for claim-reducing
-rights updates and fixed-width CKB/xUDT reserve-claim reduced exits. The xUDT
+CKB-VM tests and devnet smoke cover bounded body schemas for claim-reducing
+rights updates and CKB/xUDT reserve-claim reduced exits. The xUDT
 reduced-exit smoke covers typed child-vault and FactoryVault change binding,
 including partial, full, one-sided, and tampered child-token amount cases.
-Sparse Merkle update packages and a fixed-width no-std
-Merkle witness now cover the first general proof-bundle step for larger
+Sparse Merkle update packages and a bounded no-std Merkle witness body now cover
+the first general proof-bundle step for larger
 factories, including a devnet smoke path that updates one right through the
 256-sibling proof. Smoke summaries bind the current bounded reduced-rights,
 sparse Merkle, CKB reduced-exit, and xUDT reduced-exit proof shapes to their
@@ -168,7 +168,8 @@ cycle/byte budgets for completed smoke runs, including per-transaction and
 proof-profile budgets from
 [docs/devnet-smoke-budget.example.json](docs/devnet-smoke-budget.example.json).
 Factory splice apply transactions are included in those proof profiles, binding
-`FactorySpliceWitnessV1` length to the recorded cycle and byte metrics.
+`FactorySpliceWitnessV1` body length inside `WitnessEnvelopeV2` to the recorded
+cycle and byte metrics.
 For release closeout, `scripts/devnet-e2e.sh` starts a fresh real CKB devnet
 from the parent `../ckb` tree, runs only the on-chain smoke path with local
 `cargo test`/testtool checks skipped, and applies the smoke budget profile to
@@ -266,11 +267,11 @@ stop file appears. Watch cursors remember the last observed funding anchor, and
 the scanner only publishes packages whose funding anchor matches the confirmed
 StateCell, emitting splice-specific alerts when a saved package belongs to a
 different anchor.
-The sponsor lock's V1 script-enforced boundary is intentionally narrower than
-the watchtower operator policy. On chain it checks state type, channel/state
-number range, fee caps, clean sponsor change, and rejects finite script-level
-expiry values. Runtime fields such as expiry windows, sponsor source, cadence,
-and webhook policy are operator/watchtower policy until a future
+The sponsor lock's script-enforced boundary is intentionally narrower than the
+watchtower operator policy. On chain it checks state type, channel/state number
+range, fee caps, clean sponsor change, and rejects finite script-level expiry
+values. Runtime fields such as expiry windows, sponsor source, cadence, and
+webhook policy are operator/watchtower policy until a future
 script-verifiable design exists.
 
 For the factory research track, the CLI can also print and validate a
@@ -357,19 +358,20 @@ cargo run -p morph-cli -- validate-splice-package \
   target/xudt-splice-out.json --json
 ```
 
-The splice package validator derives the fixed-width
-`SpliceStateTransitionWitnessV1` bytes and reports them as
-`contract_witness_hex`, alongside fixed-width current/next StateHeader bytes,
-and the V1 withdrawal payout policy for transaction-builder integration.
-The factory splice package validator likewise derives fixed-width
-`FactorySpliceWitnessV1` bytes as `contract_witness_hex`, so transaction
-builders can pass the validated package evidence directly into the factory
-type/vault script parsers.
+The splice package validator derives the encoded
+`SpliceStateTransitionWitnessV1` body and reports it as `contract_witness_hex`,
+alongside fixed-layout current/next StateHeader bytes, and the conservative
+participant-signature withdrawal payout policy for transaction-builder
+integration.
+The factory splice package validator likewise derives `WitnessEnvelopeV2` bytes
+carrying a `FactorySpliceWitnessV1` body as `contract_witness_hex`, so
+transaction builders can pass the validated package evidence directly into the
+factory type/vault script parsers.
 The reduced factory splice validator emits the sparse-Merkle host proof shape
-and the fixed-width `FactoryReducedSpliceWitnessV1` as `contract_witness_hex`:
-one reserve claim, 256 proof siblings, unchanged access roots, the full
-participant key commitment, and one authorised participant signature over the
-factory splice header.
+and `WitnessEnvelopeV2` bytes carrying `FactoryReducedSpliceWitnessV1` as
+`contract_witness_hex`: one reserve claim, 256 proof siblings, unchanged access
+roots, the full participant key commitment, and one authorised participant
+signature over the factory splice header.
 Splice-out package summaries expose `withdrawal_payout_policy:
 participant_signature_pubkey`, and live apply reports include the exact
 participant pubkey and lock hash used for the withdrawal output. `devnet
