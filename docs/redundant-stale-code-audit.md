@@ -11,8 +11,8 @@ not a current stale-code assessment of the post-V1 implementation.
 
 The current V2 line, commit `a2059ba` on
 `arthur/v2-final-nonfixed-witness`, deliberately changes the factory
-authorisation boundary from raw fixed-width witness-length dispatch to the
-bounded `WitnessEnvelopeV2` kind/body/digest envelope. Consequently, the V1
+authorisation boundary from the old top-level fixed-length witness convention to
+the bounded `WitnessEnvelopeV2` kind/body/digest envelope. Consequently, the V1
 scope classifications below remain valid only for that older audit baseline.
 They should not be used to decide whether current V2 witness-envelope code,
 documentation, fixtures, or release evidence are stale.
