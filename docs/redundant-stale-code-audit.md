@@ -4,6 +4,19 @@ This audit records a conservative sweep for redundant or stale code paths on
 the V1 devnet release-candidate line. It intentionally avoids behavior changes,
 wire-format changes, dependency upgrades, and historical evidence edits.
 
+## Supersession Note
+
+This document is a historical audit of the V1 devnet release-candidate line,
+not a current stale-code assessment of the post-V1 implementation.
+
+The current V2 line, commit `a2059ba` on
+`arthur/v2-final-nonfixed-witness`, deliberately changes the factory
+authorisation boundary from raw fixed-width witness-length dispatch to the
+bounded `WitnessEnvelopeV2` kind/body/digest envelope. Consequently, the V1
+scope classifications below remain valid only for that older audit baseline.
+They should not be used to decide whether current V2 witness-envelope code,
+documentation, fixtures, or release evidence are stale.
+
 ## Baseline
 
 - Branch: `arthur/audit-stale-redundant-code`
@@ -107,5 +120,7 @@ This audit intentionally does not:
 - Change active CLI command behavior or devnet smoke flows.
 - Upgrade CKB dependencies or resolve upstream duplicate dependency versions.
 - Delete M5, M6, or V1 devnet release-candidate closeout evidence.
-- Reclassify mainnet readiness. The repository remains a Devnet V1 release
-  candidate until the separate mainnet-readiness gates pass.
+- Reclassify mainnet readiness. At the time of this audit, the repository
+  remained a Devnet V1 release candidate until the separate mainnet-readiness
+  gates passed. Current readiness classification must be taken from the active
+  V2 roadmap and readiness documents, not from this historical audit.
