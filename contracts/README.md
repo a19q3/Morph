@@ -3,7 +3,9 @@
 This directory contains the CKB script boundary for the devnet prototype.
 
 The repository implements host-side protocol semantics in `morph-core` and the
-fixed-width V1 validation subset in no-std CKB scripts:
+current no-std CKB script boundary: fixed-layout body parsers where schemas are
+intentionally fixed, plus `WitnessEnvelopeV2` authorisation dispatch by kind,
+body, and digest for factory flows:
 
 - `morph-state-type`: owns State Cell progression, state-number monotonicity,
   and bilateral participant signature verification.
@@ -15,9 +17,11 @@ fixed-width V1 validation subset in no-std CKB scripts:
   matching settling StateHeader output.
 - `morph-factory-type`: owns conservative FactoryStateCell creation,
   monotonic updates, full-participant signatures, bounded reduced-rights
-  updates, bounded reserve-claim reduced exits, and local-exit evidence checks.
+  updates, bounded reserve-claim reduced exits, local-exit evidence checks, and
+  `WitnessEnvelopeV2` factory authorisation dispatch.
 - `morph-factory-vault-lock`: owns factory reserve conservation while a
-  conservative or reduced exit materialises a child channel.
+  conservative or reduced exit materialises a child channel, including
+  envelope-carried factory splice and reduced-splice bodies.
 - `morph-devnet-xudt`: provides the devnet-only xUDT issuer and conservation
   script used by CKB+xUDT smoke paths.
 
