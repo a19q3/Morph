@@ -41,8 +41,9 @@ not add new cargo subcommand dependencies.
 
 ### Cleanups Performed
 
-- Clarified that the implementation document's current non-goals are
-  intentional V1 boundaries rather than stale implementation gaps.
+- Clarified that the implementation document's historical conservative
+  boundaries were intentional scope choices rather than stale implementation
+  gaps.
 - Added this audit report so deferred items, upstream dependency duplication,
   and large-module refactor candidates are tracked without changing protocol
   behavior.
@@ -64,14 +65,14 @@ historical closeout evidence, and safe under the required checks.
 
 ### Intentional Deferred Scope
 
-These references are retained because they describe real V1 limits or future
-protocol work:
+These references are retained because they describe real historical limits or
+future protocol work:
 
 - Multi-right and variable-depth reduced-signature proof bundles.
 - Generic descriptor runtime.
 - Concurrent unconfirmed splice/off-chain-update interleaving.
 - Arbitrary splice-out payout-lock allowlists.
-- Larger factory proof profiles beyond the fixed-width V1 smoke paths.
+- Larger factory proof profiles beyond the historical bounded smoke paths.
 
 Historical closeout files such as `docs/m5-closeout.md`,
 `docs/m6-closeout.md`, and `docs/v1-devnet-rc-closeout.md` are evidence
