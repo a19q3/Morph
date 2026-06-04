@@ -40,9 +40,10 @@ bounded `WitnessEnvelopeV2` carrying one checked, kind-specific body schema:
   it also requires a real settling Morph State Cell whose type hash, channel,
   and state number are admitted by the policy.
 
-The state type script verifies the bilateral V1 participant witness: two sorted
-compressed secp256k1 public keys, two ECDSA signatures over the canonical state
-header digest, and a participant commitment that must match the signed header.
+The state type script verifies the bilateral participant witness body: two
+sorted compressed secp256k1 public keys, two ECDSA signatures over the canonical
+state header digest, and a participant commitment that must match the signed
+header.
 The factory type script first parses `WitnessEnvelopeV2` and authenticates the
 body commitment, kind, flags, and bounded body length. It then verifies the
 kind-specific bounded body: full participant signatures, reduced rights, sparse
@@ -73,11 +74,11 @@ outputs match the delta descriptor, and the remaining post-splice vault still
 covers the latest settlement descriptor. `morph-cli` exposes this as
 `print-splice-fixture --kind splice-in|splice-out|xudt-splice-in|xudt-splice-out`
 and `validate-splice-package` for deterministic review. `morph-script-common` also
-has fixed-width parsers and digest helpers for `SpliceHeaderV1`,
+has fixed-layout parsers and digest helpers for `SpliceHeaderV1`,
 `SpliceSignatureWitnessV1`, `SpliceVaultDescriptorV2`, and
 `SpliceAssetDeltasV1`, matching the draft Molecule schema.
-`SpliceStateTransitionWitnessV1` packages those pieces into one fixed-width
-1017-byte witness blob, and `verify_splice_state_transition_bundle` checks the
+`SpliceStateTransitionWitnessV1` packages those pieces into one bounded
+1017-byte witness body, and `verify_splice_state_transition_bundle` checks the
 current active StateHeader, post-splice active StateHeader, splice header,
 signatures, old/new vault descriptors, and asset deltas together. The CLI
 validation path derives the same 1017-byte contract witness from the structured
@@ -105,7 +106,7 @@ packages and live xUDT splice-in/splice-out packages from an active
 StateCell/VaultCell pair. `devnet apply-splice --splice-package
 <path>` checks that package against the same live cells, recreates the new
 StateCell and VaultCell under the new funding anchor, preserves typed xUDT
-vault data when present, inserts the fixed-width splice witness, pays external
+vault data when present, inserts the encoded splice witness, pays external
 CKB/fees and typed withdrawal carrier capacity from an owner cell, and reports
 the post-splice out points. For splice-out, the package and apply reports expose
 `withdrawal_payout_policy: participant_signature_pubkey`, the selected
@@ -122,14 +123,14 @@ smokes publish a descriptor matching the post-splice vault and finalise the
 channel. `devnet splice-negative-smoke` now derives live signed splice packages
 and confirms rejection for stale funding epochs, wrong channel ids, wrong vault
 type applications, insufficient remaining value, tampered xUDT deltas, and
-signed-fee leakage before any malformed splice reaches acceptance. The V1 splice
-rule set is intentionally conservative: splice packages are based on a
-quiescent base state number, use fixed-width CKB/CKB+xUDT typed deltas, and
+signed-fee leakage before any malformed splice reaches acceptance. The
+conservative splice rule set is intentionally narrow: splice packages are based
+on a quiescent base state number, use bounded CKB/CKB+xUDT typed deltas, and
 send splice-out withdrawals to participant-derived secp256k1 locks rather than
 arbitrary operator payout locks. Funding epoch is treated as explicit state
 semantics; the active channel wire target is `StateHeaderV2` with
 `funding_epoch` and vault-set commitments. `morph-script-common` exposes the
-fixed-width `StateHeaderV2` parser and
+fixed-layout `StateHeaderV2` parser and
 `verify_splice_state_transition_bundle_v2`, which requires the current header's
 epoch/vault-set commitment to match the old splice side and the next header's
 epoch/vault-set commitment to match the new splice side. `morph-core` mirrors
@@ -174,7 +175,7 @@ byte-for-byte unchanged, and every touched participant must appear in the
 authorisation set.
 
 There is now a bounded on-chain reduced-rights proof for the narrow safe case:
-two factory participants, ten fixed-width rights, one touched participant, and
+two factory participants, ten fixed-layout rights, one touched participant, and
 one signature. The proof verifies the full participant commitment, old/new
 rights roots, old/new access-manifest roots, the non-interference digest, and
 the touched participant's signature. It only allows the touched participant's
@@ -241,7 +242,7 @@ cell.
 
 The conservative M6 factory-splice layer starts at the host/package boundary
 and now has an initial M6.1 contract witness bridge. `morph-core` models a
-signed factory splice header, factory vault descriptors, and fixed CKB/xUDT
+signed factory splice header, factory vault descriptors, and typed CKB/xUDT
 vault deltas. Validation requires exactly one participant reserve claim to move
 by the same amount as the FactoryVaultCell delta: splice-in adds external
 reserve and increases the claim, while splice-out decreases the claim and
@@ -253,7 +254,8 @@ validator derives the contract-facing `WitnessEnvelopeV2` containing a
 `FactorySpliceWitnessV1` body as `contract_witness_hex`. `devnet
 save-factory-splice-package` can capture a live
 conservative FactoryStateCell/FactoryVaultCell pair into the same signed
-package format when the live state root matches the V1 reserve-claim shape, and
+package format when the live state root matches the conservative reserve-claim
+shape, and
 `devnet apply-factory-splice` consumes that package with the envelope witness
 against the live factory state/vault pair. The CKB factory splice smoke
 wrappers now run live package capture, apply the splice, and then materialise a
@@ -265,7 +267,7 @@ The reduced CKB and xUDT factory splice smoke wrappers exercise the same live
 flows with `FactoryReducedSpliceWitnessV1`, one authorised participant
 signature, and the 256-sibling sparse-Merkle reserve-claim proof.
 `morph-script-common` parses the `WitnessEnvelopeV2` factory witness surface
-and the bounded fixed-width `FactorySpliceWitnessV1` body,
+and the bounded `FactorySpliceWitnessV1` body schema,
 `morph-factory-type` accepts signed all-participant factory splice updates, and
 `morph-factory-vault-lock` checks the touched FactoryVaultCell amount against
 the signed delta. Reduced sparse-Merkle factory-splice witnesses are covered by
@@ -299,7 +301,7 @@ confirmation depth, runtime window, polling interval, fee, explicit sponsor
 usage, auto-funded sponsor rotation, auto-sponsor capacity, and devnet mining
 requirements. This keeps deployment assumptions in an auditable file rather
 than relying only on command-line convention.
-This operator policy is distinct from the V1 sponsor lock's script-enforced
+This operator policy is distinct from the sponsor lock's script-enforced
 boundary. On chain, sponsor spending is bounded by expected state type,
 channel/state-number range, fee caps, clean sponsor change, and rejection of
 finite script-level expiry values. Runtime fields such as expiry windows,
@@ -326,7 +328,7 @@ process manager rather than becoming its own process manager.
 
 ## Current Non-Goals
 
-These are intentional conservative scope boundaries inherited from the V1
+These are intentional conservative scope boundaries inherited from the historical
 milestones, not stale implementation gaps. Changing them requires a separate
 protocol or proof-shape update.
 
@@ -337,10 +339,11 @@ protocol or proof-shape update.
   Merkle update, carried through `WitnessEnvelopeV2` when used as factory
   contract witnesses.
 - No generic descriptor runtime.
-- No concurrent unconfirmed splice updates. Splice V1 uses a quiescent base
-  state number; concurrent splice/off-chain-update interleaving is deferred.
-- No arbitrary splice-out payout locks. V1 withdrawals are participant-owned;
-  explicit payout-lock allowlists are deferred to V1.1 policy work.
+- No concurrent unconfirmed splice updates. Conservative splice uses a quiescent
+  base state number; concurrent splice/off-chain-update interleaving is deferred.
+- No arbitrary splice-out payout locks. Conservative withdrawals are
+  participant-owned; explicit payout-lock allowlists remain separate policy
+  work.
 - No base-layer CKB change.
 - Watchtower splice integration covers package funding-anchor selection, cursor
   resume metadata, and stale pre-splice package alerts.
