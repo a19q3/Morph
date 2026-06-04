@@ -1,5 +1,19 @@
 # Roadmap
 
+## Current Baseline Note
+
+This roadmap is now read against the post-V1 implementation line at commit
+`a2059ba` on `arthur/v2-final-nonfixed-witness`. Closed milestone text keeps
+its original V1 package, body, and fixture names where those names still identify
+historical evidence or active body schemas. Those names must not be interpreted
+as the current top-level factory witness dispatch contract.
+
+For current factory authorisation, `morph-factory-type` and
+`morph-factory-vault-lock` parse a bounded `WitnessEnvelopeV2` and dispatch on
+the envelope kind plus checked body digest. The remaining `*V1` names in factory
+sections identify bounded body schemas or JSON package schemas carried inside
+that V2 envelope, not raw witness-length dispatch.
+
 ## M0: Protocol Semantics
 
 Status: implemented.
@@ -177,13 +191,16 @@ finalisation path.
 
 ## M4: Reduced-Signature Factory Mode
 
-Status: implemented for the current fixed-width claim-reducing update,
-single-right sparse Merkle update, reserve-claim reduced-exit, and devnet
-smoke-budget scope.
+Status: implemented for the current V2-envelope factory witness boundary,
+covering bounded claim-reducing update bodies, single-right sparse Merkle update
+bodies, reserve-claim reduced-exit bodies, and devnet smoke-budget scope.
+The proof bodies remain fixed-layout conservative schemas, but the contract
+authorisation boundary no longer selects factory behaviour from raw witness
+length.
 
 Implemented:
 
-- fixed-width `FactoryReducedRightsWitnessV1`;
+- `WitnessEnvelopeV2`-wrapped `FactoryReducedRightsWitnessV1` body;
 - script-level verification of full participant membership commitment;
 - old/new rights-root and access-manifest-root checks;
 - non-interference digest binding;
@@ -194,7 +211,7 @@ Implemented:
   remains unchanged;
 - serialisable reduced factory-exit package fixture and CLI validation for the
   host-level reserve-claim consumption predicate;
-- fixed-width `FactoryReducedExitWitnessV1` schema entry;
+- `FactoryReducedExitWitnessV1` body schema entry for V2-envelope dispatch;
 - script-level reduced factory-exit verification in `morph-factory-type` and
   `morph-factory-vault-lock`, including local child-channel evidence and
   reserve-conservation checks;
@@ -210,8 +227,8 @@ Implemented:
   one-sided child settlement, and tampered child-token amount rejection;
 - host-level sparse Merkle update package for a single-right transition inside
   an arbitrary factory rights tree, including CLI fixture and validation;
-- script-level fixed-width sparse Merkle update witness for the same
-  single-right transition, including CKB-VM accept/reject coverage;
+- script-level sparse Merkle update body for the same single-right transition,
+  wrapped by the V2 witness envelope and covered by CKB-VM accept/reject tests;
 - devnet smoke coverage for the sparse Merkle factory update witness, including
   smoke-summary evidence and per-transaction budget profile entry;
 - smoke-summary proof profile binding for the bounded reduced-rights update,
@@ -228,10 +245,12 @@ Implemented:
 - rejection of touched-right inflation and unrelated participant mutation in
   CKB-VM tests.
 
-Deferred beyond the current roadmap:
+Deferred beyond the current V2-envelope roadmap:
 
 - empirical budget profiles for larger, multi-right, or variable-depth proof
-  shapes beyond the current fixed-width smoke witnesses.
+  shapes beyond the current bounded conservative body schemas. The old
+  fixed-width top-level factory dispatch is not a deferred item; it has been
+  replaced by `WitnessEnvelopeV2`.
 
 ## M4.5: Devnet Stateful Acceptance
 
