@@ -422,21 +422,21 @@ splice-in/splice-out packages via `--asset xudt --xudt-amount <amount>`. It
 records the live StateCell and VaultCell out points, signs the splice header
 with Alice/Bob, and writes the package under `target/morph-splice-packages` by
 default. `apply-splice` expects that package to match the live current
-StateHeader bytes and old VaultCell capacity. It inserts the fixed-width
-`SpliceStateTransitionWitnessV1`, pays CKB splice-in deltas, typed withdrawal
+StateHeader bytes and old VaultCell capacity. It inserts the encoded
+`SpliceStateTransitionWitnessV1` body, pays CKB splice-in deltas, typed withdrawal
 cell capacity, typed external-input carrier accounting, and transaction fees
 from an opener-controlled fee cell. CKB splice-out withdrawals go to a
 participant-derived secp256k1 lock, xUDT splice-out withdrawals go to a typed
 participant-owned output, and xUDT splice-in uses `--xudt-input-out-point` to
 consume an owner-controlled typed input.
 `validate-splice-package --json` reports the package payout rule as
-`withdrawal_payout_policy`; V1 splice-out packages use
+`withdrawal_payout_policy`; conservative splice-out packages use
 `participant_signature_pubkey`. Live `apply-splice --json` reports the exact
 `withdrawal_participant_pubkey_sec1` and `withdrawal_lock_hash` used for the
 on-chain withdrawal output, so a smoke artifact can be audited without
 reconstructing the transaction by hand. `make smoke-assert` requires this
 evidence for splice apply artifacts and rejects splice-out reports that do not
-use the V1 participant-signature payout rule.
+use the conservative participant-signature payout rule.
 
 For a one-command live path, use the splice smokes:
 
@@ -499,10 +499,10 @@ The sponsor script does not treat arbitrary output data as a publication. The
 policy binds the expected Morph StateType hash, and the sponsor lock rejects a
 fee spend unless the settling StateHeader appears in an output carrying that
 exact type.
-V1 does not have script-verifiable clock evidence for "not after" expiry
-windows, so the sponsor lock rejects finite `expiry` values and only accepts the
-unbounded sentinel `u64::MAX`. Operational expiry windows belong in the
-watchtower policy.
+The active sponsor script has no script-verifiable clock evidence for "not
+after" expiry windows, so the sponsor lock rejects finite `expiry` values and
+only accepts the unbounded sentinel `u64::MAX`. Operational expiry windows
+belong in the watchtower policy.
 
 For watchtower-style runs, use tighter policy bounds:
 
@@ -1200,14 +1200,14 @@ cargo run -q -p morph-cli -- devnet factory-xudt-splice-out-smoke --json
 ```
 
 The live builder is deliberately narrow: the current FactoryStateCell root must
-match the conservative V1 reserve-claim shape for Alice and Bob. The apply
-command consumes the FactoryStateCell, FactoryVaultCell, an owner fee cell, and
-an optional xUDT external input for xUDT splice-in. Splice-out withdrawal
-outputs are derived from the touched participant's signed secp256k1 key. The
-reduced save/apply commands use the same live transaction shape but feed
-`FactoryReducedSpliceWitnessV1` to both factory scripts, keeping the access
-manifest root unchanged and proving only the touched reserve claim through the
-sparse Merkle witness.
+match the conservative reserve-claim shape for Alice and Bob. The apply command
+consumes the FactoryStateCell, FactoryVaultCell, an owner fee cell, and an
+optional xUDT external input for xUDT splice-in. Splice-out withdrawal outputs
+are derived from the touched participant's signed secp256k1 key. The reduced
+save/apply commands use the same live transaction shape but feed a
+`WitnessEnvelopeV2` carrying `FactoryReducedSpliceWitnessV1` to both factory
+scripts, keeping the access manifest root unchanged and proving only the touched
+reserve claim through the sparse Merkle witness.
 
 The CKB and xUDT smoke wrappers open a factory, capture a live factory splice
 package, apply the splice, and then materialise a child channel from the
