@@ -1,13 +1,23 @@
 # M5 Closeout
 
-M5 closes the conservative bilateral splice scope. The accepted V1 design is:
+M5 closes the conservative bilateral splice scope.
+
+## Supersession Note
+
+This is a historical closeout for the conservative bilateral splice milestone.
+It remains useful as evidence for the splice policy and devnet coverage, but it
+is not the current factory witness-boundary document. Current factory
+authorisation uses `WitnessEnvelopeV2`; the M5 references below concern
+bilateral splice package/body scope and `StateHeaderV2` funding-epoch semantics.
+
+The accepted conservative design is:
 
 - quiescent splice packages with an explicit base state number;
 - explicit funding-epoch semantics, with `StateHeaderV2` as the active channel
   wire target;
-- fixed-width CKB and CKB+xUDT asset delta descriptors;
+- bounded CKB and CKB+xUDT asset delta descriptors;
 - participant-owned splice-out withdrawals, with arbitrary payout locks deferred
-  beyond V1.
+  beyond this conservative scope.
 
 ## Done
 
@@ -15,7 +25,7 @@ M5 closes the conservative bilateral splice scope. The accepted V1 design is:
   including base-state matching, epoch advancement, vault descriptor
   commitments, asset-delta conservation, withdrawal amounts, and remaining
   settlement coverage.
-- `morph-script-common` exposes fixed-width parsers for the splice header,
+- `morph-script-common` exposes bounded parsers for the splice header,
   splice witness, old/new vault descriptors, asset deltas, bundled splice
   witness, and `StateHeaderV2`.
 - `verify_splice_state_transition_bundle_v2` covers the explicit-epoch target by
@@ -32,9 +42,9 @@ M5 closes the conservative bilateral splice scope. The accepted V1 design is:
   signed-fee leakage.
 - Watchtower package selection is funding-anchor aware and emits splice-specific
   alerts for detected splices, stale packages, and splice-aware publication.
-- Package and apply JSON artifacts expose the V1 participant-owned withdrawal
-  rule through `withdrawal_payout_policy`, the participant pubkey, and the live
-  withdrawal lock hash.
+- Package and apply JSON artifacts expose the conservative participant-owned
+  withdrawal rule through `withdrawal_payout_policy`, the participant pubkey,
+  and the live withdrawal lock hash.
 - Default smoke assertion now requires splice apply artifacts for all four
   splice smokes and verifies splice-out payout evidence stays
   `participant_signature_pubkey` with a concrete participant pubkey, lock hash,
@@ -45,8 +55,8 @@ M5 closes the conservative bilateral splice scope. The accepted V1 design is:
 - Concurrent unconfirmed splice updates while ordinary off-chain updates keep
   advancing.
 - Generic descriptor runtimes and arbitrary payout graphs.
-- Pre-authorised third-party payout-lock allowlists, which are a V1.1 policy
-  candidate.
+- Pre-authorised third-party payout-lock allowlists, which remain separate
+  policy work.
 - Factory splice-in/out, which begins in M6.
 
 ## Closure Verification
