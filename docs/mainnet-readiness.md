@@ -7,9 +7,10 @@ have current evidence from mainnet or a mainnet-like environment.
 
 The historical Devnet V1 release-candidate evidence remains useful background,
 but it is no longer the active baseline for factory witness dispatch. Current
-factory authorisation uses `WitnessEnvelopeV2` with bounded body schemas; V1
-suffixes that remain in package and witness names identify body/schema history,
-not a raw fixed-width top-level dispatch contract.
+factory authorisation uses `WitnessEnvelopeV2` with bounded body schemas.
+Remaining `.v1` and `*V1` suffixes in package, proof-kind, and witness names
+identify schema/body history, not the active top-level factory dispatch
+contract.
 
 ## P0 Release Blockers
 
