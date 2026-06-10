@@ -12,7 +12,7 @@ use ckb_std::high_level::{
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
-use morph_script_common::{PHASE_SETTLING, Result, ScriptError, SponsorPolicyV1, StateHeaderV2};
+use morph_script_common::{PHASE_SETTLING, Result, ScriptError, SponsorPolicy, StateHeader};
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -34,7 +34,7 @@ fn main() {}
 fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
-    let policy = SponsorPolicyV1::parse(args.as_ref())?;
+    let policy = SponsorPolicy::parse(args.as_ref())?;
     validate_script_enforced_policy(&policy)?;
     validate_sponsored_state(&policy)?;
 
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_script_enforced_policy(policy: &SponsorPolicyV1) -> Result<()> {
+fn validate_script_enforced_policy(policy: &SponsorPolicy) -> Result<()> {
     if policy.expiry() != u64::MAX {
         return Err(ScriptError::SponsorPolicyUnsupported);
     }
@@ -67,13 +67,13 @@ fn validate_script_enforced_policy(policy: &SponsorPolicyV1) -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_sponsored_state(policy: &SponsorPolicyV1) -> Result<()> {
+fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
     let mut found = false;
     let mut index = 0;
     loop {
         match load_cell_data(index, Source::Output) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV2::parse(&data) {
+                if let Ok(header) = StateHeader::parse(&data) {
                     if header.channel_id() == policy.channel_id() {
                         if found {
                             return Err(ScriptError::StateCellAmbiguous);

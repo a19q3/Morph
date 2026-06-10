@@ -14,7 +14,7 @@ use crate::packages::{
 };
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
-const DEVNET_SMOKE_BUDGET_SCHEMA: &str = "morph.devnet_smoke_budget.v1";
+const DEVNET_SMOKE_BUDGET_SCHEMA: &str = "morph.devnet_smoke_budget";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetSmokeSummary {
@@ -869,105 +869,105 @@ fn assert_factory_proof_profile_coverage(summary: &DevnetSmokeSummary) -> Result
     assert_factory_proof_profile(
         summary,
         "factory-reduced-rights-smoke",
-        "factory_reduced_rights_bounded_claim_decrease_v1",
+        "factory_reduced_rights_bounded_claim_decrease",
         "$.update",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-merkle-update-smoke",
-        "factory_sparse_merkle_update_v1",
+        "factory_sparse_merkle_update",
         "$.update",
         Some(256),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-exit-smoke",
-        "factory_reduced_exit_ckb_reserve_claim_v1",
+        "factory_reduced_exit_ckb_reserve_claim",
         "$.exit",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-exit-asymmetric-smoke",
-        "factory_reduced_exit_ckb_reserve_claim_v1",
+        "factory_reduced_exit_ckb_reserve_claim",
         "$.exit",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-xudt-exit-smoke",
-        "factory_reduced_exit_xudt_change_reserve_claim_v1",
+        "factory_reduced_exit_xudt_change_reserve_claim",
         "$.exit",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-xudt-exit-full-smoke",
-        "factory_reduced_exit_xudt_reserve_claim_v1",
+        "factory_reduced_exit_xudt_reserve_claim",
         "$.exit",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-xudt-exit-one-sided-smoke",
-        "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+        "factory_reduced_exit_xudt_one_sided_reserve_claim",
         "$.exit",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-splice-in-smoke",
-        "factory_splice_all_participants_ckb_v1",
+        "factory_splice_all_participants_ckb",
         "$.apply",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-splice-out-smoke",
-        "factory_splice_all_participants_ckb_v1",
+        "factory_splice_all_participants_ckb",
         "$.apply",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-splice-in-smoke",
-        "factory_reduced_splice_ckb_sparse_merkle_v1",
+        "factory_reduced_splice_ckb_sparse_merkle",
         "$.apply",
-        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-splice-out-smoke",
-        "factory_reduced_splice_ckb_sparse_merkle_v1",
+        "factory_reduced_splice_ckb_sparse_merkle",
         "$.apply",
-        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-xudt-splice-in-smoke",
-        "factory_reduced_splice_xudt_sparse_merkle_v1",
+        "factory_reduced_splice_xudt_sparse_merkle",
         "$.apply",
-        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-reduced-xudt-splice-out-smoke",
-        "factory_reduced_splice_xudt_sparse_merkle_v1",
+        "factory_reduced_splice_xudt_sparse_merkle",
         "$.apply",
-        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1),
+        Some(morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-xudt-splice-in-smoke",
-        "factory_splice_all_participants_xudt_v1",
+        "factory_splice_all_participants_xudt",
         "$.apply",
         Some(0),
     )?;
     assert_factory_proof_profile(
         summary,
         "factory-xudt-splice-out-smoke",
-        "factory_splice_all_participants_xudt_v1",
+        "factory_splice_all_participants_xudt",
         "$.apply",
         Some(0),
     )?;
@@ -1139,7 +1139,7 @@ fn assert_watchtower_service_coverage(summary: &DevnetSmokeSummary) -> Result<()
     let service = summary
         .watchtower_services
         .iter()
-        .find(|record| record.schema == "morph.watchtower_config_service.v1")
+        .find(|record| record.schema == "morph.watchtower_config_service")
         .ok_or_else(|| anyhow!("missing watchtower service report"))?;
     if service.stopped_reason.as_deref() != Some("stop_file") {
         return Err(anyhow!(
@@ -1160,7 +1160,7 @@ fn assert_watchtower_service_coverage(summary: &DevnetSmokeSummary) -> Result<()
     let health = summary
         .watchtower_services
         .iter()
-        .find(|record| record.schema == "morph.watchtower_health.v1")
+        .find(|record| record.schema == "morph.watchtower_health")
         .ok_or_else(|| anyhow!("missing watchtower health report"))?;
     if health.status.as_deref() != Some("stopped")
         || health.stopped_reason.as_deref() != Some("stop_file")
@@ -1302,7 +1302,7 @@ fn assert_factory_splice_smoke(
     let reduced = check.contains("reduced");
     let expected_min_signatures = if reduced { 1 } else { 2 };
     let expected_proof_siblings = if reduced {
-        morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1
+        morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH
     } else {
         0
     };
@@ -2430,7 +2430,7 @@ fn collect_watchtower_alerts(
                 line_index + 1
             )
         })?;
-        if value.get("schema").and_then(Value::as_str) != Some("morph.watchtower_alert.v1") {
+        if value.get("schema").and_then(Value::as_str) != Some("morph.watchtower_alert") {
             continue;
         }
         let alert: WatchtowerAlert = serde_json::from_value(value).with_context(|| {
@@ -2531,7 +2531,7 @@ fn collect_from_value(
         }
     }
 
-    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_local_exit_package.v1") {
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_local_exit_package") {
         let package: StoredFactoryLocalExitPackage =
             serde_json::from_value(Value::Object(object.clone())).with_context(|| {
                 format!("failed to decode factory local-exit package at {path}")
@@ -2556,8 +2556,7 @@ fn collect_from_value(
             });
     }
 
-    if object.get("schema").and_then(Value::as_str)
-        == Some("morph.factory_reduced_rights_package.v1")
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_reduced_rights_package")
     {
         let package: StoredFactoryReducedRightsPackage =
             serde_json::from_value(Value::Object(object.clone())).with_context(|| {
@@ -2585,7 +2584,7 @@ fn collect_from_value(
     }
 
     if object.get("schema").and_then(Value::as_str)
-        == Some("morph.factory_merkle_update_state_package.v1")
+        == Some("morph.factory_merkle_update_state_package")
     {
         let package: StoredFactoryMerkleUpdateStatePackage =
             serde_json::from_value(Value::Object(object.clone())).with_context(|| {
@@ -2616,7 +2615,7 @@ fn collect_from_value(
             });
     }
 
-    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_splice_package.v1") {
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_splice_package") {
         let package: StoredFactorySplicePackage =
             serde_json::from_value(Value::Object(object.clone()))
                 .with_context(|| format!("failed to decode factory splice package at {path}"))?;
@@ -2648,8 +2647,7 @@ fn collect_from_value(
             });
     }
 
-    if object.get("schema").and_then(Value::as_str)
-        == Some("morph.factory_reduced_splice_package.v1")
+    if object.get("schema").and_then(Value::as_str) == Some("morph.factory_reduced_splice_package")
     {
         let package: StoredFactoryReducedSplicePackage =
             serde_json::from_value(Value::Object(object.clone())).with_context(|| {
@@ -2728,7 +2726,7 @@ fn watchtower_service_from_object(
     object: &serde_json::Map<String, Value>,
 ) -> Option<WatchtowerServiceSummary> {
     let schema = string_field(object, "schema")?;
-    if schema != "morph.watchtower_config_service.v1" && schema != "morph.watchtower_health.v1" {
+    if schema != "morph.watchtower_config_service" && schema != "morph.watchtower_health" {
         return None;
     }
     Some(WatchtowerServiceSummary {
@@ -2853,7 +2851,7 @@ fn factory_proof_profiles(
                     check: update.check.clone(),
                     transaction_path: tx.path.clone(),
                     evidence_path: update.path.clone(),
-                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease".to_string(),
                     proof_siblings: 0,
                     witness_len: update.witness_len,
                     estimated_cycles: tx.estimated_cycles,
@@ -2870,7 +2868,7 @@ fn factory_proof_profiles(
                 check: update.check.clone(),
                 transaction_path: tx.path.clone(),
                 evidence_path: update.path.clone(),
-                proof_kind: "factory_sparse_merkle_update_v1".to_string(),
+                proof_kind: "factory_sparse_merkle_update".to_string(),
                 proof_siblings: update.proof_siblings,
                 witness_len: update.witness_len,
                 estimated_cycles: tx.estimated_cycles,
@@ -2889,18 +2887,18 @@ fn factory_proof_profiles(
                 proof_kind: if exit.xudt_type_hash.is_some()
                     && exit.factory_vault_change_xudt_amount.unwrap_or_default() > 0
                 {
-                    "factory_reduced_exit_xudt_change_reserve_claim_v1"
+                    "factory_reduced_exit_xudt_change_reserve_claim"
                 } else if exit.xudt_type_hash.is_some()
                     && matches!(
                         (exit.alice_xudt_amount, exit.bob_xudt_amount),
                         (Some(0), Some(amount)) | (Some(amount), Some(0)) if amount > 0
                     )
                 {
-                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
+                    "factory_reduced_exit_xudt_one_sided_reserve_claim"
                 } else if exit.xudt_type_hash.is_some() {
-                    "factory_reduced_exit_xudt_reserve_claim_v1"
+                    "factory_reduced_exit_xudt_reserve_claim"
                 } else {
-                    "factory_reduced_exit_ckb_reserve_claim_v1"
+                    "factory_reduced_exit_ckb_reserve_claim"
                 }
                 .to_string(),
                 proof_siblings: 0,
@@ -2920,14 +2918,14 @@ fn factory_proof_profiles(
                 evidence_path: splice.path.clone(),
                 proof_kind: if splice.reserve_claim_asset.starts_with("xudt:") {
                     if splice.proof_siblings > 0 {
-                        "factory_reduced_splice_xudt_sparse_merkle_v1"
+                        "factory_reduced_splice_xudt_sparse_merkle"
                     } else {
-                        "factory_splice_all_participants_xudt_v1"
+                        "factory_splice_all_participants_xudt"
                     }
                 } else if splice.proof_siblings > 0 {
-                    "factory_reduced_splice_ckb_sparse_merkle_v1"
+                    "factory_reduced_splice_ckb_sparse_merkle"
                 } else {
-                    "factory_splice_all_participants_ckb_v1"
+                    "factory_splice_all_participants_ckb"
                 }
                 .to_string(),
                 proof_siblings: splice.proof_siblings,
@@ -3157,15 +3155,15 @@ mod tests {
         fs::write(
             dir.join("watch-alerts.jsonl"),
             concat!(
-                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":1,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"older_state_detected","message":"old state","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":null,"scanned_to_block":10,"next_from_block":11}"#,
+                r#"{"schema":"morph.watchtower_alert","created_unix_ms":1,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"older_state_detected","message":"old state","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":null,"scanned_to_block":10,"next_from_block":11}"#,
                 "\n",
-                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":2,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"publication_submitted","message":"published","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":"0xdef","scanned_to_block":10,"next_from_block":11}"#,
+                r#"{"schema":"morph.watchtower_alert","created_unix_ms":2,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"publication_submitted","message":"published","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":"0xdef","scanned_to_block":10,"next_from_block":11}"#,
                 "\n",
-                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":3,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_detected","message":"splice","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
+                r#"{"schema":"morph.watchtower_alert","created_unix_ms":3,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_detected","message":"splice","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
                 "\n",
-                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":4,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_package_stale","message":"stale","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
+                r#"{"schema":"morph.watchtower_alert","created_unix_ms":4,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_package_stale","message":"stale","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
                 "\n",
-                r#"{"schema":"morph.watchtower_alert.v1","created_unix_ms":5,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"info","event":"scan_idle","message":"idle","selected_state_number":1,"observed_state_number":null,"observed_out_point":null,"publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
+                r#"{"schema":"morph.watchtower_alert","created_unix_ms":5,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"info","event":"scan_idle","message":"idle","selected_state_number":1,"observed_state_number":null,"observed_out_point":null,"publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
                 "\n",
             ),
         )
@@ -3173,7 +3171,7 @@ mod tests {
         fs::write(
             dir.join("service.json"),
             r#"{
-              "schema": "morph.watchtower_config_service.v1",
+              "schema": "morph.watchtower_config_service",
               "config_path": "watch-config.json",
               "completed_passes": 0,
               "published_count": 0,
@@ -3190,7 +3188,7 @@ mod tests {
         fs::write(
             dir.join("service-health.json"),
             r#"{
-              "schema": "morph.watchtower_health.v1",
+              "schema": "morph.watchtower_health",
               "config_path": "watch-config.json",
               "updated_unix_ms": 1,
               "completed_passes": 0,
@@ -3239,7 +3237,7 @@ mod tests {
                 .factory_proof_profiles
                 .iter()
                 .any(|profile| profile.proof_kind
-                    == "factory_reduced_exit_xudt_change_reserve_claim_v1"
+                    == "factory_reduced_exit_xudt_change_reserve_claim"
                     && profile.estimated_cycles == 77)
         );
         assert_eq!(summary.factory_reduced_exits.len(), 1);
@@ -3261,13 +3259,13 @@ mod tests {
             summary
                 .watchtower_services
                 .iter()
-                .any(|service| service.schema == "morph.watchtower_config_service.v1")
+                .any(|service| service.schema == "morph.watchtower_config_service")
         );
         assert!(
             summary
                 .watchtower_services
                 .iter()
-                .any(|service| service.schema == "morph.watchtower_health.v1")
+                .any(|service| service.schema == "morph.watchtower_health")
         );
         assert_eq!(summary.factory_splices.len(), 1);
         assert_eq!(summary.factory_splices[0].kind, "splice_in");
@@ -3440,7 +3438,7 @@ mod tests {
                 proof_profiles: vec![DevnetSmokeProofProfileBudgetLimit {
                     check: "factory-reduced-rights-smoke".to_string(),
                     transaction_path: "$.update".to_string(),
-                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease".to_string(),
                     proof_siblings: Some(0),
                     max_witness_len: Some(2_580),
                     max_cycles: Some(1),
@@ -3501,7 +3499,7 @@ mod tests {
                 proof_profiles: vec![DevnetSmokeProofProfileBudgetLimit {
                     check: "factory-reduced-rights-smoke".to_string(),
                     transaction_path: "$.update".to_string(),
-                    proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+                    proof_kind: "factory_reduced_rights_bounded_claim_decrease".to_string(),
                     proof_siblings: Some(0),
                     max_witness_len: Some(1),
                     max_cycles: None,
@@ -3522,7 +3520,7 @@ mod tests {
         fs::write(
             &path,
             r#"{
-              "schema": "morph.devnet_smoke_budget.v1",
+              "schema": "morph.devnet_smoke_budget",
               "max_total_cycles": 100,
               "max_tx_cycles": 80,
               "max_total_bytes": 200,
@@ -3536,7 +3534,7 @@ mod tests {
               "proof_profiles": [{
                 "check": "factory-reduced-rights-smoke",
                 "transaction_path": "$.update",
-                "proof_kind": "factory_reduced_rights_bounded_claim_decrease_v1",
+                "proof_kind": "factory_reduced_rights_bounded_claim_decrease",
                 "proof_siblings": 0,
                 "max_witness_len": 2580,
                 "max_cycles": 1,
@@ -3587,21 +3585,21 @@ mod tests {
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-reduced-exit-smoke"
-                && limit.proof_kind == "factory_reduced_exit_ckb_reserve_claim_v1"
+                && limit.proof_kind == "factory_reduced_exit_ckb_reserve_claim"
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-reduced-xudt-exit-smoke"
-                && limit.proof_kind == "factory_reduced_exit_xudt_change_reserve_claim_v1"
+                && limit.proof_kind == "factory_reduced_exit_xudt_change_reserve_claim"
                 && limit.proof_siblings == Some(0)
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-reduced-xudt-exit-one-sided-smoke"
-                && limit.proof_kind == "factory_reduced_exit_xudt_one_sided_reserve_claim_v1"
+                && limit.proof_kind == "factory_reduced_exit_xudt_one_sided_reserve_claim"
                 && limit.proof_siblings == Some(0)
         }));
         assert!(profile.proof_profiles.iter().any(|limit| {
             limit.check == "factory-xudt-splice-out-smoke"
-                && limit.proof_kind == "factory_splice_all_participants_xudt_v1"
+                && limit.proof_kind == "factory_splice_all_participants_xudt"
                 && limit.proof_siblings == Some(0)
         }));
     }
@@ -3971,62 +3969,62 @@ mod tests {
                 factory_proof_profile(),
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-exit-smoke",
-                    "factory_reduced_exit_ckb_reserve_claim_v1",
+                    "factory_reduced_exit_ckb_reserve_claim",
                 ),
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-exit-asymmetric-smoke",
-                    "factory_reduced_exit_ckb_reserve_claim_v1",
+                    "factory_reduced_exit_ckb_reserve_claim",
                 ),
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-xudt-exit-smoke",
-                    "factory_reduced_exit_xudt_change_reserve_claim_v1",
+                    "factory_reduced_exit_xudt_change_reserve_claim",
                 ),
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-xudt-exit-full-smoke",
-                    "factory_reduced_exit_xudt_reserve_claim_v1",
+                    "factory_reduced_exit_xudt_reserve_claim",
                 ),
                 factory_reduced_exit_proof_profile(
                     "factory-reduced-xudt-exit-one-sided-smoke",
-                    "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+                    "factory_reduced_exit_xudt_one_sided_reserve_claim",
                 ),
                 factory_splice_proof_profile(
                     "factory-splice-in-smoke",
-                    "factory_splice_all_participants_ckb_v1",
+                    "factory_splice_all_participants_ckb",
                     0,
                 ),
                 factory_splice_proof_profile(
                     "factory-splice-out-smoke",
-                    "factory_splice_all_participants_ckb_v1",
+                    "factory_splice_all_participants_ckb",
                     0,
                 ),
                 factory_splice_proof_profile(
                     "factory-reduced-splice-in-smoke",
-                    "factory_reduced_splice_ckb_sparse_merkle_v1",
-                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                    "factory_reduced_splice_ckb_sparse_merkle",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH,
                 ),
                 factory_splice_proof_profile(
                     "factory-reduced-splice-out-smoke",
-                    "factory_reduced_splice_ckb_sparse_merkle_v1",
-                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                    "factory_reduced_splice_ckb_sparse_merkle",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH,
                 ),
                 factory_splice_proof_profile(
                     "factory-reduced-xudt-splice-in-smoke",
-                    "factory_reduced_splice_xudt_sparse_merkle_v1",
-                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                    "factory_reduced_splice_xudt_sparse_merkle",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH,
                 ),
                 factory_splice_proof_profile(
                     "factory-reduced-xudt-splice-out-smoke",
-                    "factory_reduced_splice_xudt_sparse_merkle_v1",
-                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1,
+                    "factory_reduced_splice_xudt_sparse_merkle",
+                    morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH,
                 ),
                 factory_splice_proof_profile(
                     "factory-xudt-splice-in-smoke",
-                    "factory_splice_all_participants_xudt_v1",
+                    "factory_splice_all_participants_xudt",
                     0,
                 ),
                 factory_splice_proof_profile(
                     "factory-xudt-splice-out-smoke",
-                    "factory_splice_all_participants_xudt_v1",
+                    "factory_splice_all_participants_xudt",
                     0,
                 ),
             ],
@@ -4210,7 +4208,7 @@ mod tests {
             check: "factory-merkle-update-smoke".to_string(),
             transaction_path: "$.update".to_string(),
             evidence_path: "$.package.package".to_string(),
-            proof_kind: "factory_sparse_merkle_update_v1".to_string(),
+            proof_kind: "factory_sparse_merkle_update".to_string(),
             proof_siblings: 256,
             witness_len: 8720,
             estimated_cycles: 1,
@@ -4223,7 +4221,7 @@ mod tests {
             check: "factory-reduced-rights-smoke".to_string(),
             transaction_path: "$.update".to_string(),
             evidence_path: "$.package.package".to_string(),
-            proof_kind: "factory_reduced_rights_bounded_claim_decrease_v1".to_string(),
+            proof_kind: "factory_reduced_rights_bounded_claim_decrease".to_string(),
             proof_siblings: 0,
             witness_len: 2580,
             estimated_cycles: 1,
@@ -4369,9 +4367,9 @@ mod tests {
     ) -> FactorySpliceEvidenceSummary {
         let mut summary =
             factory_splice(check, kind, reserve_claim_asset, external_input, withdrawal);
-        summary.proof_siblings = morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH_V1;
+        summary.proof_siblings = morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH;
         summary.signatures = 1;
-        summary.witness_len = morph_script_common::FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN;
+        summary.witness_len = morph_script_common::FACTORY_REDUCED_SPLICE_WITNESS_LEN;
         summary
     }
 
@@ -4467,7 +4465,7 @@ mod tests {
             WatchtowerServiceSummary {
                 check: "watch-auto-sponsor/service".to_string(),
                 path: "$".to_string(),
-                schema: "morph.watchtower_config_service.v1".to_string(),
+                schema: "morph.watchtower_config_service".to_string(),
                 status: None,
                 stopped_reason: Some("stop_file".to_string()),
                 completed_passes: 0,
@@ -4482,7 +4480,7 @@ mod tests {
             WatchtowerServiceSummary {
                 check: "watch-auto-sponsor/service-health".to_string(),
                 path: "$".to_string(),
-                schema: "morph.watchtower_health.v1".to_string(),
+                schema: "morph.watchtower_health".to_string(),
                 status: Some("stopped".to_string()),
                 stopped_reason: Some("stop_file".to_string()),
                 completed_passes: 0,

@@ -39,7 +39,7 @@ write_scenario() {
   local failures_json="$6"
   local coverage_json="$7"
   jq -n \
-    --arg schema "morph.devnet_stateful_scenario.v1" \
+    --arg schema "morph.devnet_stateful_scenario" \
     --arg scenario_id "$scenario_id" \
     --arg category "$category" \
     --arg description "$description" \
@@ -62,7 +62,7 @@ write_scenario() {
 }
 
 cat >"$OUT_DIR/manifest.txt" <<EOF
-schema=morph.devnet_stateful_scenarios.v1
+schema=morph.devnet_stateful_scenarios
 rpc_url=$RPC_URL
 started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 mine_blocks=$MINE_BLOCKS

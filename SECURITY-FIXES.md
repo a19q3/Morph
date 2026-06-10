@@ -5,12 +5,12 @@ superseded for current devnet release-candidate status by the stateful closeout
 at `3814453` in
 [`docs/devnet-stateful-acceptance-closeout.md`](docs/devnet-stateful-acceptance-closeout.md).
 
-This note records the local P0/P1 safety-boundary fixes for the V1 safety
+This note records the local P0/P1 safety-boundary fixes for the current safety
 kernel candidate. It is intended as reviewer context for the security-fix
 baseline commit.
 
 Status at this closeout: the known local P0/P1 safety-kernel blockers were
-addressed in the implementation baseline, making this a V1 safety-kernel audit
+addressed in the implementation baseline, making this a current safety-kernel audit
 candidate. This was not a mainnet-ready or production-ready claim; value limits
 still required external diff review, mainnet-like evidence, supply-chain
 revalidation, operational readiness sign-off, and value-limit policy.
@@ -30,7 +30,7 @@ Implementation safety-boundary baseline: `8944bf7`.
 - Negative tests: `vault_lock_rejects_fake_state_header_without_state_type`,
   `sponsor_lock_rejects_fake_state_header_without_state_type`,
   `watchtower_state_detection_requires_authentic_state_scripts`.
-- Remaining limitation: this closes the V1 authenticity boundary for the
+- Remaining limitation: this closes the current authenticity boundary for the
   implemented fixed-width state scripts; future descriptor runtimes or new
   state script versions must add equivalent authenticity tests before use.
 
@@ -43,7 +43,7 @@ Implementation safety-boundary baseline: `8944bf7`.
   relative block counts and are encoded before transaction construction.
 - Negative tests: `vault_lock_rejects_raw_absolute_since`,
   `finalise-since-negative-smoke`.
-- Remaining limitation: V1 intentionally supports only relative block-number
+- Remaining limitation: current intentionally supports only relative block-number
   maturity. Epoch or timestamp maturity remains future work.
 
 ## State retirement cannot orphan value
@@ -57,7 +57,7 @@ Implementation safety-boundary baseline: `8944bf7`.
 - Negative tests:
   `state_type_rejects_standalone_settling_close_without_matching_vault`,
   `state_type_rejects_standalone_active_splice_retire_without_matching_vault`.
-- Remaining limitation: this uses the current V1 vault commitment shape; any
+- Remaining limitation: this uses the current current vault commitment shape; any
   future multi-vault set must update the commitment and tests together.
 
 ## Merkle locality is not mint authority
@@ -81,7 +81,7 @@ Implementation safety-boundary baseline: `8944bf7`.
   release.
 - Attack model: a reduced exit decreases the claim by a smaller amount than the
   child vault receives.
-- Fix: reduced-exit V1 now checks the ReserveClaim asset domain. CKB releases
+- Fix: reduced-exit current now checks the ReserveClaim asset domain. CKB releases
   require an untyped claim and bind `release_quantity` to child vault capacity.
   xUDT releases require a typed claim whose asset type matches the descriptor
   and bind `release_quantity` to the child vault token amount.
@@ -98,7 +98,7 @@ Implementation safety-boundary baseline: `8944bf7`.
 ## xUDT reduced-exit typed binding
 
 - Current status: contract, CKB-VM, and devnet smoke coverage are active for
-  xUDT reduced-exit V1. The witness reuses the fixed-width xUDT descriptor
+  xUDT reduced-exit current. The witness reuses the fixed-width xUDT descriptor
   variant; no new schema is introduced.
 - Fix: the factory type checks child-vault type hash, token amount, capacity,
   descriptor version, and descriptor commitment. The factory vault lock checks
@@ -120,7 +120,7 @@ Implementation safety-boundary baseline: `8944bf7`.
   evidence for enforcing them on chain.
 - Attack model: documentation overstates script-enforced sponsor safety and a
   reviewer assumes operator-only policy fields are consensus checks.
-- Fix: V1 documents the script-enforced sponsor boundary as state type,
+- Fix: current documents the script-enforced sponsor boundary as state type,
   channel/state-number range, fee caps, and clean change. The sponsor lock now
   rejects finite script-level `expiry` values instead of silently accepting an
   unenforceable deadline. Expiry windows, sponsor source, cadence, webhook
@@ -131,7 +131,7 @@ Implementation safety-boundary baseline: `8944bf7`.
   `sponsor_lock_rejects_finite_expiry_policy`,
   `rejects_fee_above_operator_limit`,
   `rejects_explicit_sponsor_when_policy_forbids_it`.
-- Remaining limitation: finite expiry windows and sponsor source are not V1
+- Remaining limitation: finite expiry windows and sponsor source are not current
   script-enforced fields; finite script-level expiry is rejected.
 
 ## Evidence run

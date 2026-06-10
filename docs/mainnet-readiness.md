@@ -53,7 +53,7 @@ Local evidence covers:
 - splice funding-anchor and vault-set transitions;
 - factory full-participant signatures;
 - bounded reduced-rights, sparse-Merkle, reduced-exit, factory-splice, and
-  reduced-splice proof bodies carried by `WitnessEnvelopeV2`;
+  reduced-splice proof bodies carried by `WitnessEnvelope`;
 - expected failure paths for malformed or attack-shaped transactions.
 
 ## What Local Evidence Does Not Prove

@@ -10,7 +10,9 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         chain_id: bytes32(1),
         signature_scheme_id: 1,
         channel_id: bytes32(2),
+        funding_epoch: 0,
         funding_anchor: bytes32(3),
+        vault_set_commitment: bytes32(33),
         state_number: n,
         mode: Mode::BilateralPlain,
         phase,
@@ -24,8 +26,8 @@ fn header(n: u64, phase: Phase) -> StateHeader {
     }
 }
 
-fn header_v2(n: u64, phase: Phase, funding_epoch: u64) -> StateHeaderV2 {
-    StateHeaderV2 {
+fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
+    StateHeader {
         protocol_version: 1,
         chain_id: bytes32(1),
         signature_scheme_id: 1,
@@ -212,11 +214,7 @@ fn good_partition() -> PartitionedTransaction {
     }
 }
 
-fn vault_descriptor(
-    funding_anchor: Bytes32,
-    ckb: Amount,
-    xudt: Option<Amount>,
-) -> VaultDescriptorV2 {
+fn vault_descriptor(funding_anchor: Bytes32, ckb: Amount, xudt: Option<Amount>) -> VaultDescriptor {
     let mut assets = vec![VaultAssetAmount {
         asset: VaultAsset::Ckb,
         amount: ckb,
@@ -227,7 +225,7 @@ fn vault_descriptor(
             amount,
         });
     }
-    VaultDescriptorV2 {
+    VaultDescriptor {
         funding_anchor,
         assets,
     }
@@ -298,6 +296,7 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
             )
         }
     };
+    current_state.header.vault_set_commitment = vault_descriptor_commitment(&old_vault);
     let mut header = SpliceHeader {
         protocol_version: 1,
         chain_id: current_state.header.chain_id,
@@ -310,9 +309,9 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         base_state_number: current_state.header.state_number,
         splice_number: 1,
         kind,
-        old_vault_commitment: vault_descriptor_commitment_v2(&old_vault),
-        new_vault_commitment: vault_descriptor_commitment_v2(&new_vault),
-        asset_delta_commitment: splice_asset_delta_commitment_v1(&deltas),
+        old_vault_commitment: vault_descriptor_commitment(&old_vault),
+        new_vault_commitment: vault_descriptor_commitment(&new_vault),
+        asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment: current_state.header.participants_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
@@ -357,9 +356,11 @@ fn xudt_splice_out_transition() -> SpliceTransition {
             amount: 70,
         },
     ];
-    splice.header.old_vault_commitment = vault_descriptor_commitment_v2(&splice.old_vault);
-    splice.header.new_vault_commitment = vault_descriptor_commitment_v2(&splice.new_vault);
-    splice.header.asset_delta_commitment = splice_asset_delta_commitment_v1(&splice.deltas);
+    splice.current_state.header.vault_set_commitment =
+        vault_descriptor_commitment(&splice.old_vault);
+    splice.header.old_vault_commitment = vault_descriptor_commitment(&splice.old_vault);
+    splice.header.new_vault_commitment = vault_descriptor_commitment(&splice.new_vault);
+    splice.header.asset_delta_commitment = splice_asset_delta_commitment(&splice.deltas);
     splice.witness = splice_witness_for(&mut splice.header);
     splice
 }
@@ -450,14 +451,14 @@ fn factory_splice_transition(
         touched_participants: BTreeSet::from([participant]),
         authorised_participants: BTreeSet::from([participant]),
     };
-    let old_vault = FactoryVaultDescriptorV1 {
+    let old_vault = FactoryVaultDescriptor {
         factory_id: bytes32(90),
         assets: vec![VaultAssetAmount {
             asset: asset.clone(),
             amount: old_amount,
         }],
     };
-    let new_vault = FactoryVaultDescriptorV1 {
+    let new_vault = FactoryVaultDescriptor {
         factory_id: bytes32(90),
         assets: vec![VaultAssetAmount {
             asset: asset.clone(),
@@ -481,7 +482,7 @@ fn factory_splice_transition(
         old_access_manifest_root: bytes32(91),
         new_access_manifest_root: bytes32(92),
         kind,
-        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: blake2b256(b"factory splice fixture"),
         participants_commitment: bytes32(0),
     };
@@ -582,8 +583,8 @@ fn signing_digest_is_domain_separated_and_state_sensitive() {
 }
 
 #[test]
-fn state_header_v2_digest_binds_epoch_and_vault_set() {
-    let h1 = header_v2(1, Phase::Settling, 3);
+fn state_header_digest_binds_epoch_and_vault_set() {
+    let h1 = header_with_epoch(1, Phase::Settling, 3);
     let mut h2 = h1.clone();
     h2.funding_epoch = 4;
 
@@ -599,9 +600,9 @@ fn state_header_v2_digest_binds_epoch_and_vault_set() {
 }
 
 #[test]
-fn state_header_v2_context_rejects_epoch_and_vault_set_changes() {
-    let old = header_v2(1, Phase::Active, 3);
-    let mut new = header_v2(9, Phase::Settling, 3);
+fn state_header_context_rejects_epoch_and_vault_set_changes() {
+    let old = header_with_epoch(1, Phase::Active, 3);
+    let mut new = header_with_epoch(9, Phase::Settling, 3);
     new.payload_commitment = bytes32(9);
     new.settlement_descriptor_commitment = bytes32(10);
 
@@ -610,7 +611,7 @@ fn state_header_v2_context_rejects_epoch_and_vault_set_changes() {
     new.funding_epoch = 4;
     assert!(!old.same_context_except_progress(&new));
 
-    let mut changed_vault_set = header_v2(9, Phase::Settling, 3);
+    let mut changed_vault_set = header_with_epoch(9, Phase::Settling, 3);
     changed_vault_set.vault_set_commitment = bytes32(34);
     assert!(!old.same_context_except_progress(&changed_vault_set));
 }
@@ -684,7 +685,7 @@ fn splice_rejects_tampered_asset_delta_commitment() {
 fn splice_rejects_same_supply_wrong_xudt_recipient_amount() {
     let mut splice = splice_transition(SpliceKind::In);
     splice.deltas[1].new_amount = 59;
-    splice.header.asset_delta_commitment = splice_asset_delta_commitment_v1(&splice.deltas);
+    splice.header.asset_delta_commitment = splice_asset_delta_commitment(&splice.deltas);
     let witness = splice_witness_for(&mut splice.header);
     splice.witness = witness;
 
@@ -747,7 +748,7 @@ fn factory_splice_rejects_reserve_claim_without_vault_input() {
     let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
     splice.deltas[0].external_input = 19;
     splice.deltas[0].new_amount = 69;
-    splice.header.vault_delta_commitment = factory_vault_delta_commitment_v1(&splice.deltas);
+    splice.header.vault_delta_commitment = factory_vault_delta_commitment(&splice.deltas);
     splice.witness = factory_splice_witness_for(&mut splice.header);
 
     let err = validate_factory_splice_transition(&splice).unwrap_err();
@@ -768,7 +769,7 @@ fn factory_splice_rejects_xudt_type_mismatch() {
     let mut splice =
         factory_splice_transition(FactorySpliceKind::In, VaultAsset::Xudt(bytes32(42)));
     splice.deltas[0].asset = VaultAsset::Xudt(bytes32(43));
-    splice.header.vault_delta_commitment = factory_vault_delta_commitment_v1(&splice.deltas);
+    splice.header.vault_delta_commitment = factory_vault_delta_commitment(&splice.deltas);
     splice.witness = factory_splice_witness_for(&mut splice.header);
 
     let err = validate_factory_splice_transition(&splice).unwrap_err();
@@ -1220,16 +1221,15 @@ fn sponsor_policy_accepts_bounded_publication_fee() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 100,
-        expiry: 1_000,
-        allowed_sponsor_source: bytes32(10),
+        expiry: u64::MAX,
+        publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };
     let spend = SponsorSpend {
         channel_id: bytes32(2),
         state_number: 2,
         fee: 150,
-        now: 900,
-        sponsor_source: bytes32(10),
+        publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
         operation: ChannelOperation::Publish,
     };
@@ -1246,22 +1246,73 @@ fn sponsor_policy_rejects_drain_attempt() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 950,
-        expiry: 1_000,
-        allowed_sponsor_source: bytes32(10),
+        expiry: u64::MAX,
+        publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };
     let spend = SponsorSpend {
         channel_id: bytes32(2),
         state_number: 2,
         fee: 100,
-        now: 900,
-        sponsor_source: bytes32(10),
+        publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
         operation: ChannelOperation::Publish,
     };
 
     let err = validate_sponsor_policy(&policy, &spend).unwrap_err();
     assert_eq!(err, MorphError::SponsorBudgetExceeded);
+}
+
+#[test]
+fn sponsor_policy_rejects_script_unsupported_expiry() {
+    let policy = SponsorPolicy {
+        channel_id: bytes32(2),
+        min_state_number: 1,
+        max_state_number: 10,
+        max_fee_per_tx: 200,
+        max_total_fee: 1_000,
+        already_spent: 100,
+        expiry: 1_000,
+        publication_state_type_hash: bytes32(10),
+        change_lock: bytes32(11),
+    };
+    let spend = SponsorSpend {
+        channel_id: bytes32(2),
+        state_number: 2,
+        fee: 100,
+        publication_state_type_hash: bytes32(10),
+        change_lock: bytes32(11),
+        operation: ChannelOperation::Publish,
+    };
+
+    let err = validate_sponsor_policy(&policy, &spend).unwrap_err();
+    assert_eq!(err, MorphError::SponsorPolicyUnsupported);
+}
+
+#[test]
+fn sponsor_policy_rejects_wrong_publication_state_type() {
+    let policy = SponsorPolicy {
+        channel_id: bytes32(2),
+        min_state_number: 1,
+        max_state_number: 10,
+        max_fee_per_tx: 200,
+        max_total_fee: 1_000,
+        already_spent: 100,
+        expiry: u64::MAX,
+        publication_state_type_hash: bytes32(10),
+        change_lock: bytes32(11),
+    };
+    let spend = SponsorSpend {
+        channel_id: bytes32(2),
+        state_number: 2,
+        fee: 100,
+        publication_state_type_hash: bytes32(99),
+        change_lock: bytes32(11),
+        operation: ChannelOperation::Publish,
+    };
+
+    let err = validate_sponsor_policy(&policy, &spend).unwrap_err();
+    assert_eq!(err, MorphError::SponsorStateTypeMismatch);
 }
 
 #[test]

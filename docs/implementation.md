@@ -32,7 +32,7 @@ Morph Channel splits authority into three boundaries:
 
 ```mermaid
 flowchart TB
-    A["Participants sign StateHeaderV2"] --> B["State Cell"]
+    A["Participants sign StateHeader"] --> B["State Cell"]
     B --> C["Vault lock checks current settling state"]
     D["Sponsor Cell"] --> E["Sponsor lock pays bounded fee"]
     E --> B
@@ -46,16 +46,16 @@ state, but they cannot rewrite vault settlement or drain participant assets.
 
 | Object | Where it lives | Role |
 | --- | --- | --- |
-| `StateHeaderV2` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set commitment, state number, phase, and settlement descriptor commitment. |
-| `BilateralSignatureWitnessV1` | script-common | Two sorted participant public keys and signatures over the state digest. |
-| `SpliceStateTransitionWitnessV1` | script-common, CLI | Bounded body proving an old funding anchor can move to a new funding anchor. |
-| `FactoryStateHeaderV1` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, and reserve context. |
-| `FactoryRightV1` | script-common, core, CLI | Fixed-layout representation of a participant right such as balance or reserve claim. |
-| `WitnessEnvelopeV2` | script-common, CLI, factory scripts | Factory authorisation envelope: kind, flags, body length, and body digest. |
-| `SponsorPolicyV1` | script-common, CLI | Script-level sponsor fee policy. |
+| `StateHeader` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set commitment, state number, phase, and settlement descriptor commitment. |
+| `BilateralSignatureWitness` | script-common | Two sorted participant public keys and signatures over the state digest. |
+| `SpliceStateTransitionWitness` | script-common, CLI | Bounded body proving an old funding anchor can move to a new funding anchor. |
+| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, and reserve context. |
+| `FactoryRight` | script-common, core, CLI | Fixed-layout representation of a participant right such as balance or reserve claim. |
+| `WitnessEnvelope` | script-common, CLI, factory scripts | Factory authorisation envelope: kind, flags, body length, and body digest. |
+| `SponsorPolicy` | script-common, CLI | Script-level sponsor fee policy. |
 
-Names ending in `V1` usually identify a fixed-layout body schema. They are not
-a claim that the current factory witness boundary is the old V1 boundary.
+Names ending in `current` usually identify a fixed-layout body schema. They are not
+a claim that the current factory witness boundary is the old current boundary.
 
 ## Script Boundary
 
@@ -106,7 +106,7 @@ evidence permits.
 
 ## Factory Witness Envelope
 
-Factory authorisation uses `WitnessEnvelopeV2`.
+Factory authorisation uses `WitnessEnvelope`.
 
 ```mermaid
 flowchart LR
@@ -122,7 +122,7 @@ The scripts verify the envelope first, then dispatch by `kind`.
 
 ```mermaid
 flowchart TB
-    E["WitnessEnvelopeV2"] --> H["Check version, flags, length, digest"]
+    E["WitnessEnvelope"] --> H["Check version, flags, length, digest"]
     H --> K{"kind"}
     K --> A["all-participant signature body"]
     K --> B["reduced-rights body"]
@@ -169,7 +169,7 @@ attack-shaped variants.
 | Splice value loss | splice invariant tests, script bridge tests, devnet splice negative smokes. |
 | Factory right interference | reduced-rights and sparse-Merkle update tests. |
 | Reserve release mismatch | reduced-exit host, script, and devnet smoke coverage. |
-| Witness envelope tamper | `WitnessEnvelopeV2` parser and factory script negative tests. |
+| Witness envelope tamper | `WitnessEnvelope` parser and factory script negative tests. |
 
 The executable audit matrix is in [audit-matrix.md](audit-matrix.md). Devnet
 assertion gates are described in [devnet.md](devnet.md).
@@ -194,7 +194,7 @@ crates/morph-cli/src/*packages.rs       reusable package encoders/validators
 The implementation is deliberately conservative:
 
 - fixed-layout bodies are used where CKB scripts need simple bounded parsing;
-- `WitnessEnvelopeV2` provides the current factory authorisation boundary;
+- `WitnessEnvelope` provides the current factory authorisation boundary;
 - reduced factory paths prove one narrow local change, not arbitrary global
   mutation;
 - devnet evidence is local and executable, but not a mainnet readiness claim.

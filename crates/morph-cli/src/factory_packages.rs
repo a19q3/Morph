@@ -12,46 +12,45 @@ use morph_core::{
     FactoryReducedSpliceWitness, FactoryRight, FactoryRightId, FactoryRightKind,
     FactoryRightMerkleProof, FactorySingleRightMerkleUpdate, FactorySpliceHeader,
     FactorySpliceKind, FactorySpliceTransition, FactoryUpdate, FactoryVaultDelta,
-    FactoryVaultDescriptorV1, ParticipantSignature, SpliceWitness, VaultAsset, VaultAssetAmount,
+    FactoryVaultDescriptor, ParticipantSignature, SpliceWitness, VaultAsset, VaultAssetAmount,
     blake2b256, bytes32, factory_right_sparse_proof, factory_right_sparse_root,
-    factory_vault_delta_commitment_v1, participants_commitment, validate_factory_non_interference,
+    factory_vault_delta_commitment, participants_commitment, validate_factory_non_interference,
     validate_factory_reduced_splice_transition, validate_factory_single_right_merkle_localization,
     validate_factory_single_right_merkle_update, validate_factory_splice_transition,
     validate_reduced_factory_exit,
 };
 use morph_script_common::{
-    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
-    FACTORY_MERKLE_UPDATE_DOMAIN_V1, FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1,
-    FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1,
-    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
-    FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1, FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1,
-    FACTORY_SIGNATURE_THRESHOLD_V1, FACTORY_SIGNATURE_WITNESS_V1_LEN,
-    FACTORY_SIGNATURE_WITNESS_VERSION_V1, FACTORY_SPARSE_MERKLE_DEPTH_V1,
-    FACTORY_SPLICE_HEADER_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN, FACTORY_SPLICE_WITNESS_VERSION_V1,
-    FACTORY_VAULT_ASSET_AMOUNT_V1_LEN, FACTORY_VAULT_DELTA_V1_LEN, FACTORY_VAULT_DELTAS_V1_LEN,
-    FACTORY_VAULT_DESCRIPTOR_V1_LEN, FactoryReducedSpliceWitnessV1, FactorySpliceWitnessV1,
-    VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2,
-    WITNESS_ENVELOPE_V2_LEN, WITNESS_ENVELOPE_V2_MAGIC, WITNESS_ENVELOPE_VERSION_V2,
-    WitnessEnvelopeV2, witness_envelope_body_commitment_v2,
+    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_MERKLE_UPDATE_DOMAIN,
+    FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
+    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD, FACTORY_REDUCED_SPLICE_WITNESS_LEN,
+    FACTORY_REDUCED_SPLICE_WITNESS_VERSION, FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT,
+    FACTORY_SIGNATURE_THRESHOLD, FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION,
+    FACTORY_SPARSE_MERKLE_DEPTH, FACTORY_SPLICE_HEADER_LEN, FACTORY_SPLICE_WITNESS_LEN,
+    FACTORY_SPLICE_WITNESS_VERSION, FACTORY_VAULT_ASSET_AMOUNT_LEN, FACTORY_VAULT_DELTA_LEN,
+    FACTORY_VAULT_DELTAS_LEN, FACTORY_VAULT_DESCRIPTOR_LEN,
+    FactoryReducedSpliceWitness as WireFactoryReducedSpliceWitness,
+    FactorySpliceWitness as WireFactorySpliceWitness, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
+    WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, witness_envelope_body_commitment,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::packages::canonical_hex32;
 
-const FACTORY_PACKAGE_SCHEMA: &str = "morph.factory_update_package.v1";
-const FACTORY_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE_V1";
-const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package.v1";
-const FACTORY_STATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE_V1";
-const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package.v1";
-const FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_merkle_update_package.v1";
-const FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN_V1: &str = "CKB_MORPH_FACTORY_MERKLE_UPDATE_PACKAGE_V1";
-const FACTORY_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_splice_package.v1";
-const FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_reduced_splice_package.v1";
-const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1: &str = "all_participants_v1";
-const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1: &str = "authorised_participants_v1";
+const FACTORY_PACKAGE_SCHEMA: &str = "morph.factory_update_package";
+const FACTORY_DIGEST_DOMAIN: &str = "CKB_MORPH_FACTORY_UPDATE_PACKAGE";
+const FACTORY_STATE_PACKAGE_SCHEMA: &str = "morph.factory_state_package";
+const FACTORY_STATE_DIGEST_DOMAIN: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE";
+const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package";
+const FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_merkle_update_package";
+const FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN: &str = "CKB_MORPH_FACTORY_MERKLE_UPDATE_PACKAGE";
+const FACTORY_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_splice_package";
+const FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_reduced_splice_package";
+const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS: &str = "all_participants";
+const FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS: &str = "authorised_participants";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixtureFactorySpliceKind {
@@ -496,7 +495,7 @@ impl StoredFactoryUpdatePackage {
 
     fn compute_digest(&self) -> Result<String> {
         let payload = DigestPayload {
-            domain: FACTORY_DIGEST_DOMAIN_V1,
+            domain: FACTORY_DIGEST_DOMAIN,
             schema: FACTORY_PACKAGE_SCHEMA,
             factory_id: canonical_hex32(&self.factory_id)?,
             update_number: self.update_number,
@@ -520,7 +519,7 @@ impl StoredFactoryStatePackage {
         Self::from_update_package_with_mode(
             update_package,
             signing_keys,
-            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1,
+            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS,
         )
     }
 
@@ -531,7 +530,7 @@ impl StoredFactoryStatePackage {
         Self::from_update_package_with_mode(
             update_package,
             signing_keys,
-            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1,
+            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS,
         )
     }
 
@@ -605,8 +604,8 @@ impl StoredFactoryStatePackage {
             self.schema
         );
         ensure!(
-            self.signature_mode == FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1
-                || self.signature_mode == FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1,
+            self.signature_mode == FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS
+                || self.signature_mode == FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS,
             "unsupported factory signature mode {}",
             self.signature_mode
         );
@@ -643,10 +642,8 @@ impl StoredFactoryStatePackage {
             "factory state package requires at least one participant"
         );
         let expected_participants = match self.signature_mode.as_str() {
-            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS_V1 => {
-                update_participants(&self.update_package)?
-            }
-            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS_V1 => self
+            FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS => update_participants(&self.update_package)?,
+            FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS => self
                 .update_package
                 .authorised_participants
                 .iter()
@@ -718,7 +715,7 @@ impl StoredFactoryStatePackage {
 
     fn compute_digest(&self) -> Result<String> {
         let payload = FactoryStateDigestPayload {
-            domain: FACTORY_STATE_DIGEST_DOMAIN_V1,
+            domain: FACTORY_STATE_DIGEST_DOMAIN,
             schema: FACTORY_STATE_PACKAGE_SCHEMA,
             signature_mode: self.signature_mode.clone(),
             factory_id: canonical_hex32(&self.factory_id)?,
@@ -1079,7 +1076,7 @@ impl StoredFactoryMerkleUpdatePackage {
 
     fn compute_digest(&self) -> Result<String> {
         let payload = FactoryMerkleDigestPayload {
-            domain: FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN_V1,
+            domain: FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN,
             schema: FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA,
             factory_id: canonical_hex32(&self.factory_id)?,
             update_number: self.update_number,
@@ -1154,7 +1151,7 @@ impl StoredFactorySplicePackage {
             new_state_root: hex_prefixed(&transition.header.new_state_root),
             old_access_manifest_root: hex_prefixed(&transition.header.old_access_manifest_root),
             new_access_manifest_root: hex_prefixed(&transition.header.new_access_manifest_root),
-            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment_v1(
+            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment(
                 &transition.deltas,
             )),
             non_interference_digest: update_package.non_interference_digest.clone(),
@@ -1322,7 +1319,7 @@ impl StoredFactorySplicePackage {
                     .collect::<Result<Vec<_>>>()?,
             },
             update,
-            old_vault: FactoryVaultDescriptorV1 {
+            old_vault: FactoryVaultDescriptor {
                 factory_id: hex32_bytes(&self.factory_id)?,
                 assets: self
                     .old_vault
@@ -1330,7 +1327,7 @@ impl StoredFactorySplicePackage {
                     .map(StoredFactoryVaultAssetAmount::to_amount)
                     .collect::<Result<Vec<_>>>()?,
             },
-            new_vault: FactoryVaultDescriptorV1 {
+            new_vault: FactoryVaultDescriptor {
                 factory_id: hex32_bytes(&self.factory_id)?,
                 assets: self
                     .new_vault
@@ -1504,7 +1501,7 @@ impl StoredFactoryReducedSplicePackage {
             new_state_root: hex_prefixed(&transition.header.new_state_root),
             old_access_manifest_root: hex_prefixed(&transition.header.old_access_manifest_root),
             new_access_manifest_root: hex_prefixed(&transition.header.new_access_manifest_root),
-            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment_v1(
+            vault_delta_commitment: hex_prefixed(&factory_vault_delta_commitment(
                 &transition.deltas,
             )),
             non_interference_digest: hex_prefixed(&contract_non_interference_digest),
@@ -1712,7 +1709,7 @@ impl StoredFactoryReducedSplicePackage {
                     .collect::<Result<Vec<_>>>()?,
             },
             update,
-            old_vault: FactoryVaultDescriptorV1 {
+            old_vault: FactoryVaultDescriptor {
                 factory_id: hex32_bytes(&self.factory_id)?,
                 assets: self
                     .old_vault
@@ -1720,7 +1717,7 @@ impl StoredFactoryReducedSplicePackage {
                     .map(StoredFactoryVaultAssetAmount::to_amount)
                     .collect::<Result<Vec<_>>>()?,
             },
-            new_vault: FactoryVaultDescriptorV1 {
+            new_vault: FactoryVaultDescriptor {
                 factory_id: hex32_bytes(&self.factory_id)?,
                 assets: self
                     .new_vault
@@ -2208,7 +2205,7 @@ pub fn fixture_factory_splice_package_with_kind(
         old_access_manifest_root: bytes32(91),
         new_access_manifest_root: bytes32(92),
         kind: splice_kind,
-        vault_delta_commitment: factory_vault_delta_commitment_v1(&deltas),
+        vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: bytes32(0),
         participants_commitment: bytes32(0),
     };
@@ -2229,14 +2226,14 @@ pub fn fixture_factory_splice_package_with_kind(
             signatures: Vec::new(),
         },
         update,
-        old_vault: FactoryVaultDescriptorV1 {
+        old_vault: FactoryVaultDescriptor {
             factory_id: bytes32(90),
             assets: vec![VaultAssetAmount {
                 asset: asset.clone(),
                 amount: old_amount,
             }],
         },
-        new_vault: FactoryVaultDescriptorV1 {
+        new_vault: FactoryVaultDescriptor {
             factory_id: bytes32(90),
             assets: vec![VaultAssetAmount {
                 asset,
@@ -2818,20 +2815,20 @@ fn contract_witness_bytes_from_transition(transition: &FactorySpliceTransition) 
         factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
     let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
 
-    let mut raw = vec![0u8; FACTORY_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_SPLICE_WITNESS_VERSION_V1);
+    let mut raw = vec![0u8; FACTORY_SPLICE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    raw[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    raw[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
-    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    raw[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    raw[offset..offset + FACTORY_SIGNATURE_WITNESS_LEN].copy_from_slice(&signatures);
+    offset += FACTORY_SIGNATURE_WITNESS_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
-    let parsed = FactorySpliceWitnessV1::parse(&raw)
+    let parsed = WireFactorySpliceWitness::parse(&raw)
         .map_err(|err| anyhow::anyhow!("encoded factory splice witness is invalid: {err:?}"))?;
     parsed
         .header()
@@ -2848,7 +2845,7 @@ fn contract_witness_bytes_from_transition(transition: &FactorySpliceTransition) 
     parsed
         .deltas()
         .map_err(|err| anyhow::anyhow!("encoded factory splice deltas are invalid: {err:?}"))?;
-    witness_envelope_v2(WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, &raw)
+    witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, &raw)
 }
 
 fn contract_reduced_splice_witness_bytes_from_transition(
@@ -2863,20 +2860,20 @@ fn contract_reduced_splice_witness_bytes_from_transition(
         factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
     let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
 
-    let mut raw = vec![0u8; FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1);
+    let mut raw = vec![0u8; FACTORY_REDUCED_SPLICE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    raw[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    raw[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN].copy_from_slice(&merkle_update);
-    offset += FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    raw[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    raw[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_LEN].copy_from_slice(&merkle_update);
+    offset += FACTORY_MERKLE_UPDATE_WITNESS_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
-    let parsed = FactoryReducedSpliceWitnessV1::parse(&raw).map_err(|err| {
+    let parsed = WireFactoryReducedSpliceWitness::parse(&raw).map_err(|err| {
         anyhow::anyhow!("encoded reduced factory splice witness is invalid: {err:?}")
     })?;
     parsed.header().map_err(|err| {
@@ -2894,23 +2891,23 @@ fn contract_reduced_splice_witness_bytes_from_transition(
     parsed.deltas().map_err(|err| {
         anyhow::anyhow!("encoded reduced factory splice deltas are invalid: {err:?}")
     })?;
-    witness_envelope_v2(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, &raw)
+    witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, &raw)
 }
 
-fn witness_envelope_v2(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
+fn witness_envelope(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
     let body_len: u32 = body
         .len()
         .try_into()
         .context("factory witness body length does not fit in u32")?;
-    let mut raw = vec![0u8; WITNESS_ENVELOPE_V2_LEN + body.len()];
-    raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
-    put_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+    let mut raw = vec![0u8; WITNESS_ENVELOPE_LEN + body.len()];
+    raw[0..WITNESS_ENVELOPE_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_MAGIC);
+    put_u16(&mut raw, 8, WITNESS_ENVELOPE_FORMAT);
     put_u16(&mut raw, 10, kind);
     put_u16(&mut raw, 12, 0);
     put_u32(&mut raw, 14, body_len);
-    raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(kind, body));
-    raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
-    WitnessEnvelopeV2::parse(&raw)
+    raw[18..50].copy_from_slice(&witness_envelope_body_commitment(kind, body));
+    raw[WITNESS_ENVELOPE_LEN..].copy_from_slice(body);
+    WitnessEnvelope::parse(&raw)
         .map_err(|err| anyhow::anyhow!("encoded factory witness envelope is invalid: {err:?}"))?;
     Ok(raw)
 }
@@ -2929,7 +2926,7 @@ fn factory_reduced_splice_contract_non_interference_digest(
     let after = factory_right_wire_bytes(&update.after.right);
 
     let mut payload = Vec::new();
-    payload.extend_from_slice(FACTORY_MERKLE_UPDATE_DOMAIN_V1);
+    payload.extend_from_slice(FACTORY_MERKLE_UPDATE_DOMAIN);
     payload.extend_from_slice(&header.factory_id);
     payload.extend_from_slice(&old_update_number);
     payload.extend_from_slice(&new_update_number);
@@ -2945,8 +2942,8 @@ fn factory_reduced_splice_contract_non_interference_digest(
 
 fn factory_splice_header_wire_bytes(
     header: &FactorySpliceHeader,
-) -> [u8; FACTORY_SPLICE_HEADER_V1_LEN] {
-    let mut raw = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+) -> [u8; FACTORY_SPLICE_HEADER_LEN] {
+    let mut raw = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
     raw[2..34].copy_from_slice(&header.factory_id);
     put_u64(&mut raw, 34, header.old_update_number);
@@ -2965,22 +2962,22 @@ fn factory_splice_header_wire_bytes(
 fn factory_signature_witness_wire_bytes(
     witness: &SpliceWitness,
     update: &FactoryUpdate,
-) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_V1_LEN]> {
+) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_LEN]> {
     ensure!(
-        witness.threshold == FACTORY_SIGNATURE_THRESHOLD_V1
-            && witness.signatures.len() == FACTORY_SIGNATURE_COUNT_V1 as usize,
+        witness.threshold == FACTORY_SIGNATURE_THRESHOLD
+            && witness.signatures.len() == FACTORY_SIGNATURE_COUNT as usize,
         "contract factory splice witness requires exactly two participant signatures"
     );
     let participants = factory_participants_from_update(update)?;
     ensure!(
-        participants.len() == FACTORY_SIGNATURE_COUNT_V1 as usize,
+        participants.len() == FACTORY_SIGNATURE_COUNT as usize,
         "contract factory splice witness requires exactly two participant ids"
     );
 
-    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
-    raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
+    raw[2] = FACTORY_SIGNATURE_THRESHOLD;
+    raw[3] = FACTORY_SIGNATURE_COUNT;
     for (index, (participant, signature)) in participants
         .iter()
         .zip(witness.signatures.iter())
@@ -3009,17 +3006,16 @@ fn factory_signature_witness_wire_bytes(
 fn factory_merkle_update_witness_wire_bytes(
     update: &FactorySingleRightMerkleUpdate,
     witness: &FactoryReducedSpliceWitness,
-) -> Result<[u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN]> {
+) -> Result<[u8; FACTORY_MERKLE_UPDATE_WITNESS_LEN]> {
     ensure!(
-        witness.participant_threshold == FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1
-            && witness.participant_keys.len()
-                == FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
-            && witness.signatures.len() == FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1 as usize,
+        witness.participant_threshold == FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD
+            && witness.participant_keys.len() == FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+            && witness.signatures.len() == FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT as usize,
         "contract reduced factory splice witness requires two participant keys and one authorised signature"
     );
     ensure!(
         update.before.siblings == update.after.siblings
-            && update.before.siblings.len() == FACTORY_SPARSE_MERKLE_DEPTH_V1,
+            && update.before.siblings.len() == FACTORY_SPARSE_MERKLE_DEPTH,
         "contract reduced factory splice witness requires one unchanged sparse Merkle frontier"
     );
     ensure!(
@@ -3027,19 +3023,19 @@ fn factory_merkle_update_witness_wire_bytes(
         "contract reduced factory splice witness requires one changed right"
     );
 
-    let mut raw = [0u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
-    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
-    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1;
+    let mut raw = [0u8; FACTORY_MERKLE_UPDATE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT;
 
     for (index, key) in witness.participant_keys.iter().enumerate() {
         ensure!(
             key.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
             "contract reduced factory splice participant pubkey must be compressed secp256k1"
         );
-        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN;
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
         raw[offset..offset + BYTE32_LEN].copy_from_slice(&key.participant);
         raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
             .copy_from_slice(&key.pubkey_sec1);
@@ -3060,17 +3056,17 @@ fn factory_merkle_update_witness_wire_bytes(
         }
     }
 
-    let touched_offset = 8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN;
+    let touched_offset = 8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
     raw[touched_offset..touched_offset + BYTE32_LEN]
         .copy_from_slice(&update.before.right.id.participant);
     let before_offset = touched_offset + BYTE32_LEN;
-    raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN]
+    raw[before_offset..before_offset + FACTORY_RIGHT_LEN]
         .copy_from_slice(&factory_right_wire_bytes(&update.before.right));
-    let after_offset = before_offset + FACTORY_RIGHT_V1_LEN;
-    raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN]
+    let after_offset = before_offset + FACTORY_RIGHT_LEN;
+    raw[after_offset..after_offset + FACTORY_RIGHT_LEN]
         .copy_from_slice(&factory_right_wire_bytes(&update.after.right));
-    let siblings_offset = after_offset + FACTORY_RIGHT_V1_LEN;
+    let siblings_offset = after_offset + FACTORY_RIGHT_LEN;
     for (depth, sibling) in update.before.siblings.iter().enumerate() {
         let offset = siblings_offset + depth * BYTE32_LEN;
         raw[offset..offset + BYTE32_LEN].copy_from_slice(&sibling.hash);
@@ -3091,8 +3087,8 @@ fn factory_participants_from_update(update: &FactoryUpdate) -> Result<Vec<Bytes3
     Ok(participants.into_iter().collect())
 }
 
-fn factory_right_wire_bytes(right: &FactoryRight) -> [u8; FACTORY_RIGHT_V1_LEN] {
-    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+fn factory_right_wire_bytes(right: &FactoryRight) -> [u8; FACTORY_RIGHT_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_LEN];
     raw[0..32].copy_from_slice(&right.id.participant);
     raw[32..64].copy_from_slice(&right.id.subchannel);
     raw[64] = factory_right_kind_wire_byte(right.id.kind);
@@ -3116,8 +3112,8 @@ fn factory_right_kind_wire_byte(kind: FactoryRightKind) -> u8 {
 
 fn factory_vault_descriptor_wire_bytes(
     expected_factory_id: &Bytes32,
-    descriptor: &FactoryVaultDescriptorV1,
-) -> Result<[u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN]> {
+    descriptor: &FactoryVaultDescriptor,
+) -> Result<[u8; FACTORY_VAULT_DESCRIPTOR_LEN]> {
     ensure!(
         &descriptor.factory_id == expected_factory_id,
         "factory vault descriptor factory_id mismatch"
@@ -3126,12 +3122,12 @@ fn factory_vault_descriptor_wire_bytes(
         !descriptor.assets.is_empty() && descriptor.assets.len() <= 2,
         "contract factory vault descriptor supports one or two assets"
     );
-    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN];
+    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_LEN];
     raw[0..32].copy_from_slice(&descriptor.factory_id);
     put_u16(&mut raw, 32, descriptor.assets.len() as u16);
     for (index, asset) in descriptor.assets.iter().enumerate() {
-        let offset = 34 + index * FACTORY_VAULT_ASSET_AMOUNT_V1_LEN;
-        raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN]
+        let offset = 34 + index * FACTORY_VAULT_ASSET_AMOUNT_LEN;
+        raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_LEN]
             .copy_from_slice(&factory_vault_asset_wire_bytes(asset));
     }
     Ok(raw)
@@ -3139,8 +3135,8 @@ fn factory_vault_descriptor_wire_bytes(
 
 fn factory_vault_asset_wire_bytes(
     amount: &VaultAssetAmount,
-) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN];
+) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_LEN];
     let (kind, type_hash) = vault_asset_wire_key(&amount.asset);
     raw[0] = kind;
     raw[1..33].copy_from_slice(&type_hash);
@@ -3150,23 +3146,23 @@ fn factory_vault_asset_wire_bytes(
 
 fn factory_vault_deltas_wire_bytes(
     deltas: &[FactoryVaultDelta],
-) -> Result<[u8; FACTORY_VAULT_DELTAS_V1_LEN]> {
+) -> Result<[u8; FACTORY_VAULT_DELTAS_LEN]> {
     ensure!(
         !deltas.is_empty() && deltas.len() <= 2,
         "contract factory vault deltas support one or two assets"
     );
-    let mut raw = [0u8; FACTORY_VAULT_DELTAS_V1_LEN];
+    let mut raw = [0u8; FACTORY_VAULT_DELTAS_LEN];
     put_u16(&mut raw, 0, deltas.len() as u16);
     for (index, delta) in deltas.iter().enumerate() {
-        let offset = 2 + index * FACTORY_VAULT_DELTA_V1_LEN;
-        raw[offset..offset + FACTORY_VAULT_DELTA_V1_LEN]
+        let offset = 2 + index * FACTORY_VAULT_DELTA_LEN;
+        raw[offset..offset + FACTORY_VAULT_DELTA_LEN]
             .copy_from_slice(&factory_vault_delta_wire_bytes(delta));
     }
     Ok(raw)
 }
 
-fn factory_vault_delta_wire_bytes(delta: &FactoryVaultDelta) -> [u8; FACTORY_VAULT_DELTA_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_DELTA_V1_LEN];
+fn factory_vault_delta_wire_bytes(delta: &FactoryVaultDelta) -> [u8; FACTORY_VAULT_DELTA_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTA_LEN];
     let (kind, type_hash) = vault_asset_wire_key(&delta.asset);
     raw[0] = kind;
     raw[1..33].copy_from_slice(&type_hash);
@@ -3186,8 +3182,8 @@ fn factory_splice_kind_wire_byte(kind: FactorySpliceKind) -> u8 {
 
 fn vault_asset_wire_key(asset: &VaultAsset) -> (u8, Bytes32) {
     match asset {
-        VaultAsset::Ckb => (VAULT_ASSET_KIND_CKB_V1, [0u8; 32]),
-        VaultAsset::Xudt(type_hash) => (VAULT_ASSET_KIND_XUDT_V1, *type_hash),
+        VaultAsset::Ckb => (VAULT_ASSET_KIND_CKB, [0u8; 32]),
+        VaultAsset::Xudt(type_hash) => (VAULT_ASSET_KIND_XUDT, *type_hash),
     }
 }
 
@@ -3308,7 +3304,7 @@ mod tests {
         let package = fixture_state_package().unwrap();
         let summary = package.summary().unwrap();
 
-        assert_eq!(summary.signature_mode, "all_participants_v1");
+        assert_eq!(summary.signature_mode, "all_participants");
         assert_eq!(summary.signature_threshold, 2);
         assert_eq!(summary.participants, 2);
         assert_eq!(summary.signatures, 2);
@@ -3319,7 +3315,7 @@ mod tests {
         let package = fixture_reduced_state_package().unwrap();
         let summary = package.summary().unwrap();
 
-        assert_eq!(summary.signature_mode, "authorised_participants_v1");
+        assert_eq!(summary.signature_mode, "authorised_participants");
         assert_eq!(summary.signature_threshold, 1);
         assert_eq!(summary.participants, 1);
         assert_eq!(summary.signatures, 1);
@@ -3401,7 +3397,7 @@ mod tests {
         assert_eq!(loaded.signing_digest, package.signing_digest);
         assert_eq!(
             loaded.summary().unwrap().contract_witness_len,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3465,7 +3461,7 @@ mod tests {
         assert_eq!(loaded_summary.proof_siblings, 256);
         assert_eq!(
             loaded_summary.contract_witness_len,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3507,11 +3503,11 @@ mod tests {
     ) {
         assert_eq!(
             summary.contract_witness_len,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN
         );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_SPLICE_WITNESS_V1_LEN,
+            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN,
             "contract_witness_hex",
         )
         .unwrap();
@@ -3521,9 +3517,9 @@ mod tests {
             contract_witness_bytes_from_transition(&transition).unwrap()
         );
 
-        let envelope = WitnessEnvelopeV2::parse(&summary_bytes).unwrap();
-        assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2);
-        let parsed = FactorySpliceWitnessV1::parse(envelope.body()).unwrap();
+        let envelope = WitnessEnvelope::parse(&summary_bytes).unwrap();
+        assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SPLICE);
+        let parsed = WireFactorySpliceWitness::parse(envelope.body()).unwrap();
         let header = parsed.header().unwrap();
         let signature = parsed.factory_signature().unwrap();
         let old_vault = parsed.old_vault().unwrap();
@@ -3558,11 +3554,11 @@ mod tests {
     ) {
         assert_eq!(
             summary.contract_witness_len,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN
+            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN
         );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            WITNESS_ENVELOPE_V2_LEN + FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
+            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN,
             "contract_witness_hex",
         )
         .unwrap();
@@ -3572,12 +3568,12 @@ mod tests {
             contract_reduced_splice_witness_bytes_from_transition(&transition).unwrap()
         );
 
-        let envelope = WitnessEnvelopeV2::parse(&summary_bytes).unwrap();
+        let envelope = WitnessEnvelope::parse(&summary_bytes).unwrap();
         assert_eq!(
             envelope.kind(),
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
         );
-        let parsed = FactoryReducedSpliceWitnessV1::parse(envelope.body()).unwrap();
+        let parsed = WireFactoryReducedSpliceWitness::parse(envelope.body()).unwrap();
         let header = parsed.header().unwrap();
         let merkle_update = parsed.merkle_update().unwrap();
         let old_vault = parsed.old_vault().unwrap();
@@ -3616,8 +3612,8 @@ mod tests {
             &hex32_bytes(&summary.new_access_manifest_root).unwrap(),
             &hex32_bytes(&summary.non_interference_digest).unwrap(),
         );
-        let old_header = morph_script_common::FactoryStateHeaderV1::parse(&old_header_raw).unwrap();
-        let new_header = morph_script_common::FactoryStateHeaderV1::parse(&new_header_raw).unwrap();
+        let old_header = morph_script_common::FactoryStateHeader::parse(&old_header_raw).unwrap();
+        let new_header = morph_script_common::FactoryStateHeader::parse(&new_header_raw).unwrap();
         morph_script_common::verify_factory_reduced_splice_update(
             &old_header,
             &new_header,
@@ -3636,7 +3632,7 @@ mod tests {
             decode_hex_exact(&package.participant_keys[0].pubkey_sec1, 33, "pubkey_sec1").unwrap();
         let pubkey_1 =
             decode_hex_exact(&package.participant_keys[1].pubkey_sec1, 33, "pubkey_sec1").unwrap();
-        morph_script_common::factory_participants_commitment_v1(
+        morph_script_common::factory_participants_commitment(
             package.signature_threshold,
             &[
                 (participant_0.as_slice(), pubkey_0.as_slice()),
@@ -3652,14 +3648,14 @@ mod tests {
         participants_commitment: &Bytes32,
         access_manifest_root: &Bytes32,
         non_interference_digest: &Bytes32,
-    ) -> [u8; morph_script_common::FACTORY_STATE_HEADER_V1_LEN] {
-        let mut raw = [0u8; morph_script_common::FACTORY_STATE_HEADER_V1_LEN];
+    ) -> [u8; morph_script_common::FACTORY_STATE_HEADER_LEN] {
+        let mut raw = [0u8; morph_script_common::FACTORY_STATE_HEADER_LEN];
         put_u16(&mut raw, 0, 1);
         raw[2..34].fill(2);
         put_u16(
             &mut raw,
             34,
-            morph_script_common::SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+            morph_script_common::SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
         );
         raw[36..68].copy_from_slice(factory_id);
         put_u64(&mut raw, 68, update_number);
@@ -3678,7 +3674,7 @@ mod tests {
             fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
                 .unwrap();
         package.vault_deltas[0].new_amount -= 1;
-        package.vault_delta_commitment = hex_prefixed(&factory_vault_delta_commitment_v1(
+        package.vault_delta_commitment = hex_prefixed(&factory_vault_delta_commitment(
             &package
                 .vault_deltas
                 .iter()

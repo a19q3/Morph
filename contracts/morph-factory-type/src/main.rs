@@ -17,21 +17,20 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
-    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1, BYTE32_LEN,
-    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FactoryLocalExitWitnessV1, FactoryMerkleUpdateWitnessV1, FactoryReducedExitWitnessV1,
-    FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1, FactorySignatureWitnessV1,
-    FactorySpliceWitnessV1, FactoryStateHeaderV1, PHASE_ACTIVE, Result,
-    SETTLEMENT_DESCRIPTOR_DOMAIN_V1, ScriptError, StateHeaderV2,
-    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, WitnessEnvelopeV2, blake2b256, read_u128,
-    validate_factory_merkle_update_local_predicate, verify_factory_merkle_update,
-    verify_factory_reduced_splice_update, verify_factory_splice_update,
-    verify_factory_state_signatures, verify_reduced_factory_exit_update,
-    verify_reduced_factory_rights_update,
+    BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION, BYTE32_LEN,
+    BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
+    FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
+    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySignatureWitness,
+    FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN,
+    ScriptError, StateHeader, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope,
+    blake2b256, read_u128, validate_factory_merkle_update_local_predicate,
+    verify_factory_merkle_update, verify_factory_reduced_splice_update,
+    verify_factory_splice_update, verify_factory_state_signatures,
+    verify_reduced_factory_exit_update, verify_reduced_factory_rights_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -65,7 +64,7 @@ fn main() -> Result<()> {
     ) {
         (None, Some(new_data)) => validate_create(&new_data, expected_factory_id)?,
         (Some(old_data), Some(new_data)) => {
-            let old_header = FactoryStateHeaderV1::parse(&old_data)?;
+            let old_header = FactoryStateHeader::parse(&old_data)?;
             if old_header.factory_id() != expected_factory_id {
                 return Err(ScriptError::FactoryIdMismatch);
             }
@@ -79,7 +78,7 @@ fn main() -> Result<()> {
 
 #[cfg(target_arch = "riscv64")]
 fn validate_create(new_data: &[u8], expected_factory_id: &[u8]) -> Result<()> {
-    let new_header = FactoryStateHeaderV1::parse(new_data)?;
+    let new_header = FactoryStateHeader::parse(new_data)?;
     if new_header.factory_id() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
@@ -93,11 +92,11 @@ fn validate_create(new_data: &[u8], expected_factory_id: &[u8]) -> Result<()> {
 
 #[cfg(target_arch = "riscv64")]
 fn validate_update(
-    old_header: &FactoryStateHeaderV1,
+    old_header: &FactoryStateHeader,
     new_data: &[u8],
     expected_factory_id: &[u8],
 ) -> Result<()> {
-    let new_header = FactoryStateHeaderV1::parse(new_data)?;
+    let new_header = FactoryStateHeader::parse(new_data)?;
     if new_header.factory_id() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
@@ -114,8 +113,8 @@ fn validate_update(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_participant_authorisation(
-    old_header: &FactoryStateHeaderV1,
-    header: &FactoryStateHeaderV1,
+    old_header: &FactoryStateHeader,
+    header: &FactoryStateHeader,
 ) -> Result<()> {
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::ParticipantWitnessMissing)?;
@@ -124,37 +123,37 @@ fn validate_participant_authorisation(
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
     let input_type_data = input_type.raw_data();
-    let envelope = WitnessEnvelopeV2::parse(input_type_data.as_ref())?;
+    let envelope = WitnessEnvelope::parse(input_type_data.as_ref())?;
     let raw = envelope.body();
     match envelope.kind() {
-        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2 => {
-            let witness = FactorySignatureWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE => {
+            let witness = FactorySignatureWitness::parse(raw)?;
             verify_factory_state_signatures(header, &witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2 => {
-            let witness = FactoryReducedRightsWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS => {
+            let witness = FactoryReducedRightsWitness::parse(raw)?;
             verify_reduced_factory_rights_update(old_header, header, &witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2 => {
-            let witness = FactoryMerkleUpdateWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
+            let witness = FactoryMerkleUpdateWitness::parse(raw)?;
             verify_factory_merkle_update(old_header, header, &witness)?;
             validate_factory_merkle_update_local_predicate(&witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2 => {
-            let witness = FactoryReducedExitWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
+            let witness = FactoryReducedExitWitness::parse(raw)?;
             verify_reduced_factory_exit_update(old_header, header, &witness)?;
             validate_reduced_exit(header, &witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2 => {
-            let witness = FactoryReducedSpliceWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE => {
+            let witness = FactoryReducedSpliceWitness::parse(raw)?;
             verify_factory_reduced_splice_update(old_header, header, &witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2 => {
-            let witness = FactorySpliceWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
+            let witness = FactorySpliceWitness::parse(raw)?;
             verify_factory_splice_update(old_header, header, &witness)
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2 => {
-            let witness = FactoryLocalExitWitnessV1::parse(raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
+            let witness = FactoryLocalExitWitness::parse(raw)?;
             let signatures = witness.factory_signature()?;
             verify_factory_state_signatures(header, &signatures)?;
             validate_local_exit(header, &witness)
@@ -165,8 +164,8 @@ fn validate_participant_authorisation(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_local_exit(
-    header: &FactoryStateHeaderV1,
-    witness: &FactoryLocalExitWitnessV1,
+    header: &FactoryStateHeader,
+    witness: &FactoryLocalExitWitness,
 ) -> Result<()> {
     if header.non_interference_digest() != witness.exit_digest().as_slice() {
         return Err(ScriptError::FactoryLocalExitMismatch);
@@ -185,8 +184,8 @@ fn validate_local_exit(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_reduced_exit(
-    _header: &FactoryStateHeaderV1,
-    witness: &FactoryReducedExitWitnessV1,
+    _header: &FactoryStateHeader,
+    witness: &FactoryReducedExitWitness,
 ) -> Result<()> {
     validate_exit_materialisation(
         witness.state_output_index(),
@@ -232,12 +231,12 @@ fn validate_exit_materialisation(
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
 
-    let exit_header = StateHeaderV2::parse(exit_state_header)?;
+    let exit_header = StateHeader::parse(exit_state_header)?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
     if exit_header.settlement_descriptor_commitment()
-        != blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN_V1, descriptor_raw]).as_slice()
+        != blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN, descriptor_raw]).as_slice()
     {
         return Err(ScriptError::SettlementDescriptorMismatch);
     }
@@ -261,16 +260,16 @@ fn validate_exit_materialisation(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_child_vault_shape(
-    exit_header: StateHeaderV2,
+    exit_header: StateHeader,
     descriptor_raw: &[u8],
     vault_index: usize,
 ) -> Result<()> {
     match descriptor_raw.len() {
-        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
-            if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION_V1 {
+        BILATERAL_CKB_DESCRIPTOR_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_DESCRIPTOR_VERSION {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
-            let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw)?;
+            let descriptor = BilateralCkbSettlementDescriptor::parse(descriptor_raw)?;
             let vault_data =
                 load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
             if !vault_data.is_empty() {
@@ -287,11 +286,11 @@ fn validate_child_vault_shape(
                 return Err(ScriptError::SettlementOutputMismatch);
             }
         }
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
-            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1 {
+        BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => {
+            if exit_header.descriptor_version() != BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
-            let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(descriptor_raw)?;
+            let descriptor = BilateralCkbXudtSettlementDescriptor::parse(descriptor_raw)?;
             let vault_type = load_cell_type_hash(vault_index, Source::Output)
                 .map_err(|_| ScriptError::Encoding)?
                 .ok_or(ScriptError::XudtTypeMismatch)?;

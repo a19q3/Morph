@@ -1,7 +1,7 @@
-# Devnet V1 RC Closeout
+# Devnet current RC Closeout
 
-Status: historical Devnet V1 release-candidate evidence; superseded for current
-readiness tracking by the V2 non-fixed factory witness work.
+Status: historical Devnet current release-candidate evidence; superseded for current
+readiness tracking by the current non-fixed factory witness work.
 
 This is not a mainnet-ready or production real-assets-ready claim. Mainnet-like
 challenge-window evidence, fee stress, supply-chain revalidation in release CI,
@@ -10,25 +10,25 @@ and value-limit policy remain release gates before raising asset limits.
 
 ## Supersession Note
 
-The evidence below remains useful as a frozen V1 devnet release-candidate record
+The evidence below remains useful as a frozen current devnet release-candidate record
 for commit `4ca867c`. It must not be read as the current implementation design
 or as current release evidence.
 
-The current post-V1 line is commit `a2059ba` on
+The current post-current line is commit `a2059ba` on
 `arthur/v2-final-nonfixed-witness`. That line removes the factory contracts'
 old top-level fixed-length witness convention as the public authorisation
-boundary and replaces it with a bounded `WitnessEnvelopeV2` header:
+boundary and replaces it with a bounded `WitnessEnvelope` header:
 
 - witness kind selects the factory authorisation path;
 - body length is bounded per kind instead of inferred from one global raw
   witness size;
 - the body digest commits the envelope to the decoded authorisation payload;
-- V1-style body names, such as reduced exit and splice, remain as historical
+- current-style body names, such as reduced exit and splice, remain as historical
   body schemas rather than as the top-level dispatch contract.
 
-Therefore the V1 limitations and script hashes below are deliberately retained
+Therefore the current limitations and script hashes below are deliberately retained
 as historical evidence, but design decisions for the next mature version should
-be taken from the V2 implementation and current roadmap documents.
+be taken from the current implementation and current roadmap documents.
 
 ## Source Baseline
 
@@ -94,9 +94,9 @@ From `target/devnet-e2e/20260520T100401Z/smoke/deploy-contracts.json`:
 - Negative test: `factory-reduced-xudt-negative-exit-smoke` expects
   `SettlementOutputMismatch`.
 - Remaining limitation: no generic descriptor runtime, no multi-right reduced
-  proof, and no variable-depth proof in V1. The later V2 witness envelope
+  proof, and no variable-depth proof in current. The later current witness envelope
   addresses the old top-level fixed-length factory dispatch convention rather
-  than these historical V1 proof-model limitations by itself.
+  than these historical current proof-model limitations by itself.
 
 ### Relative Since Devnet Maturity
 

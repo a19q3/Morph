@@ -14,15 +14,14 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
-    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1,
-    FactoryLocalExitWitnessV1, FactoryReducedExitWitnessV1, FactoryReducedSpliceWitnessV1,
-    FactorySpliceWitnessV1, FactoryStateHeaderV1, FactoryVaultDeltaV1, FactoryVaultDeltasV1,
-    FactoryVaultDescriptorV1, Result, ScriptError, VAULT_ASSET_KIND_CKB_V1,
-    VAULT_ASSET_KIND_XUDT_V1, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, WitnessEnvelopeV2, read_u128,
-    verify_factory_reduced_splice_update, verify_factory_splice_update,
+    BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BYTE32_LEN,
+    BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
+    FactoryLocalExitWitness, FactoryReducedExitWitness, FactoryReducedSpliceWitness,
+    FactorySpliceWitness, FactoryStateHeader, FactoryVaultDelta, FactoryVaultDeltas,
+    FactoryVaultDescriptor, Result, ScriptError, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+    WitnessEnvelope, read_u128, verify_factory_reduced_splice_update, verify_factory_splice_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -58,7 +57,7 @@ fn main() -> Result<()> {
         .to_opt()
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
     let input_type_data = input_type.raw_data();
-    let envelope = WitnessEnvelopeV2::parse(input_type_data.as_ref())?;
+    let envelope = WitnessEnvelope::parse(input_type_data.as_ref())?;
     let input_type_raw = envelope.body();
 
     let old_header = find_unique_factory_state(Source::Input, factory_id, factory_type_hash)?;
@@ -67,8 +66,8 @@ fn main() -> Result<()> {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
     match envelope.kind() {
-        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2 => {
-            let witness = FactoryLocalExitWitnessV1::parse(input_type_raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
+            let witness = FactoryLocalExitWitness::parse(input_type_raw)?;
             if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
                 return Err(ScriptError::FactoryLocalExitMismatch);
             }
@@ -79,8 +78,8 @@ fn main() -> Result<()> {
             )?;
             validate_factory_reduced_exit_reserve_conservation(&child_release)?;
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2 => {
-            let witness = FactoryReducedExitWitnessV1::parse(input_type_raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
+            let witness = FactoryReducedExitWitness::parse(input_type_raw)?;
             let digest = witness.non_interference_digest(&old_header, &new_header)?;
             if new_header.non_interference_digest() != digest.as_slice() {
                 return Err(ScriptError::FactoryReducedProofMismatch);
@@ -104,16 +103,16 @@ fn main() -> Result<()> {
             }
             validate_factory_reduced_exit_reserve_conservation(&child_release)?;
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2 => {
-            let witness = FactorySpliceWitnessV1::parse(input_type_raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
+            let witness = FactorySpliceWitness::parse(input_type_raw)?;
             verify_factory_splice_update(&old_header, &new_header, &witness)?;
             let old_vault = witness.old_vault()?;
             let new_vault = witness.new_vault()?;
             let deltas = witness.deltas()?;
             validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2 => {
-            let witness = FactoryReducedSpliceWitnessV1::parse(input_type_raw)?;
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE => {
+            let witness = FactoryReducedSpliceWitness::parse(input_type_raw)?;
             verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
             let old_vault = witness.old_vault()?;
             let new_vault = witness.new_vault()?;
@@ -138,7 +137,7 @@ fn find_unique_factory_state(
     source: Source,
     expected_factory_id: &[u8],
     expected_type_hash: &[u8],
-) -> Result<FactoryStateHeaderV1<'static>> {
+) -> Result<FactoryStateHeader<'static>> {
     let mut found: Option<alloc::vec::Vec<u8>> = None;
     let mut index = 0;
     loop {
@@ -146,7 +145,7 @@ fn find_unique_factory_state(
             Ok(Some(type_hash)) => {
                 if type_hash.as_slice() == expected_type_hash {
                     let data = load_cell_data(index, source).map_err(|_| ScriptError::Encoding)?;
-                    let header = FactoryStateHeaderV1::parse(&data)?;
+                    let header = FactoryStateHeader::parse(&data)?;
                     if header.factory_id() != expected_factory_id {
                         return Err(ScriptError::FactoryIdMismatch);
                     }
@@ -165,7 +164,7 @@ fn find_unique_factory_state(
 
     let data = found.ok_or(ScriptError::StateCellMissing)?;
     let leaked: &'static [u8] = alloc::boxed::Box::leak(data.into_boxed_slice());
-    FactoryStateHeaderV1::parse(leaked)
+    FactoryStateHeader::parse(leaked)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -181,10 +180,10 @@ fn validate_child_vault(
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
     match settlement_descriptor.len() {
-        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
+        BILATERAL_CKB_DESCRIPTOR_LEN => {
             validate_ckb_child_vault(settlement_descriptor, vault_index)
         }
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
+        BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => {
             validate_xudt_child_vault(settlement_descriptor, vault_index)
         }
         _ => Err(ScriptError::SettlementDescriptorEncoding),
@@ -196,7 +195,7 @@ fn validate_ckb_child_vault(
     settlement_descriptor: &[u8],
     vault_index: usize,
 ) -> Result<ChildVaultRelease> {
-    let descriptor = BilateralCkbSettlementDescriptorV1::parse(settlement_descriptor)?;
+    let descriptor = BilateralCkbSettlementDescriptor::parse(settlement_descriptor)?;
     let expected_capacity = descriptor.checked_total_capacity()?;
     let vault_data =
         load_cell_data(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
@@ -225,7 +224,7 @@ fn validate_xudt_child_vault(
     settlement_descriptor: &[u8],
     vault_index: usize,
 ) -> Result<ChildVaultRelease> {
-    let descriptor = BilateralCkbXudtSettlementDescriptorV1::parse(settlement_descriptor)?;
+    let descriptor = BilateralCkbXudtSettlementDescriptor::parse(settlement_descriptor)?;
     let vault_type =
         load_cell_type_hash(vault_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
     let vault_type = vault_type.ok_or(ScriptError::XudtTypeMismatch)?;
@@ -265,9 +264,9 @@ struct FactoryVaultMaterialisedAssets {
 
 #[cfg(target_arch = "riscv64")]
 fn validate_factory_splice_vault_deltas(
-    old_vault: &FactoryVaultDescriptorV1,
-    new_vault: &FactoryVaultDescriptorV1,
-    deltas: &FactoryVaultDeltasV1,
+    old_vault: &FactoryVaultDescriptor,
+    new_vault: &FactoryVaultDescriptor,
+    deltas: &FactoryVaultDeltas,
 ) -> Result<()> {
     let input_capacity = single_group_capacity(Source::GroupInput)?;
     let input_type =
@@ -313,7 +312,7 @@ fn validate_factory_splice_vault_deltas(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_factory_vault_descriptor_materialisation(
-    descriptor: &FactoryVaultDescriptorV1,
+    descriptor: &FactoryVaultDescriptor,
     capacity: u64,
     type_hash: Option<&[u8]>,
     data: &[u8],
@@ -350,7 +349,7 @@ fn validate_factory_vault_descriptor_materialisation(
 
 #[cfg(target_arch = "riscv64")]
 fn factory_vault_descriptor_assets(
-    descriptor: &FactoryVaultDescriptorV1,
+    descriptor: &FactoryVaultDescriptor,
 ) -> Result<FactoryVaultMaterialisedAssets> {
     let mut ckb_amount = None;
     let mut xudt = None;
@@ -358,13 +357,13 @@ fn factory_vault_descriptor_assets(
     for index in 0..descriptor.asset_count() as usize {
         let asset = descriptor.asset(index)?;
         match asset.asset_kind() {
-            VAULT_ASSET_KIND_CKB_V1 => {
+            VAULT_ASSET_KIND_CKB => {
                 if ckb_amount.is_some() {
                     return Err(ScriptError::FactorySpliceProofMismatch);
                 }
                 ckb_amount = Some(asset.amount());
             }
-            VAULT_ASSET_KIND_XUDT_V1 => {
+            VAULT_ASSET_KIND_XUDT => {
                 if xudt.is_some() {
                     return Err(ScriptError::FactorySpliceProofMismatch);
                 }
@@ -385,7 +384,7 @@ fn factory_vault_descriptor_assets(
 #[cfg(target_arch = "riscv64")]
 #[allow(clippy::too_many_arguments)]
 fn validate_factory_splice_cell_delta(
-    delta: &FactoryVaultDeltaV1,
+    delta: &FactoryVaultDelta,
     input_capacity: u64,
     input_type: Option<&[u8]>,
     input_data: &[u8],
@@ -394,7 +393,7 @@ fn validate_factory_splice_cell_delta(
     output_data: &[u8],
 ) -> Result<()> {
     match delta.asset_kind() {
-        VAULT_ASSET_KIND_CKB_V1 => {
+        VAULT_ASSET_KIND_CKB => {
             if input_type.is_some()
                 || output_type.is_some()
                 || !input_data.is_empty()
@@ -405,7 +404,7 @@ fn validate_factory_splice_cell_delta(
                 return Err(ScriptError::FactorySpliceProofMismatch);
             }
         }
-        VAULT_ASSET_KIND_XUDT_V1 => {
+        VAULT_ASSET_KIND_XUDT => {
             if input_type != Some(delta.asset_type()) || output_type != Some(delta.asset_type()) {
                 return Err(ScriptError::XudtTypeMismatch);
             }

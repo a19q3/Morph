@@ -1,20 +1,19 @@
 use blake2b_rs::Blake2bBuilder;
 
 use crate::types::{
-    Bytes32, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptorV1,
-    Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, StateHeaderV2,
-    VaultAsset, VaultDescriptorV2,
+    Bytes32, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptor,
+    Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, VaultAsset,
+    VaultDescriptor,
 };
 
-pub const STATE_DOMAIN_V1: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V1";
-pub const STATE_DOMAIN_V2: &[u8] = b"CKB_MORPH_CHANNEL_STATE_V2";
-pub const PARTICIPANTS_DOMAIN_V1: &[u8] = b"CKB_MORPH_PARTICIPANTS_V1";
-pub const SPLICE_HEADER_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_HEADER_V1";
-pub const SPLICE_DELTA_DOMAIN_V1: &[u8] = b"CKB_MORPH_SPLICE_DELTA_V1";
-pub const VAULT_DESCRIPTOR_DOMAIN_V2: &[u8] = b"CKB_MORPH_VAULT_DESCRIPTOR_V2";
-pub const FACTORY_SPLICE_HEADER_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_SPLICE_HEADER_V1";
-pub const FACTORY_VAULT_DESCRIPTOR_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DESCRIPTOR_V1";
-pub const FACTORY_VAULT_DELTA_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DELTA_V1";
+pub const STATE_DOMAIN: &[u8] = b"CKB_MORPH_CHANNEL_STATE";
+pub const PARTICIPANTS_DOMAIN: &[u8] = b"CKB_MORPH_PARTICIPANTS";
+pub const SPLICE_HEADER_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_HEADER";
+pub const SPLICE_DELTA_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_DELTA";
+pub const VAULT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_VAULT_DESCRIPTOR";
+pub const FACTORY_SPLICE_HEADER_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_SPLICE_HEADER";
+pub const FACTORY_VAULT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DESCRIPTOR";
+pub const FACTORY_VAULT_DELTA_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DELTA";
 
 pub trait SigningBytes {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>);
@@ -35,7 +34,7 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
     let mut hasher = Blake2bBuilder::new(32)
         .personal(b"ckb-default-hash")
         .build();
-    hasher.update(PARTICIPANTS_DOMAIN_V1);
+    hasher.update(PARTICIPANTS_DOMAIN);
     hasher.update(&[threshold]);
     hasher.update(&[pubkeys.len() as u8]);
     for pubkey in pubkeys {
@@ -47,36 +46,7 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
 
 impl SigningBytes for StateHeader {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(STATE_DOMAIN_V1);
-        out.extend_from_slice(&self.protocol_version.to_le_bytes());
-        out.extend_from_slice(&self.chain_id);
-        out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
-        out.extend_from_slice(&self.channel_id);
-        out.extend_from_slice(&self.funding_anchor);
-        out.extend_from_slice(&self.state_number.to_le_bytes());
-        out.push(self.mode.as_u8());
-        out.push(self.phase.as_u8());
-        out.extend_from_slice(&self.participants_commitment);
-        out.extend_from_slice(&self.asset_registry_commitment);
-        out.extend_from_slice(&self.settlement_descriptor_commitment);
-        out.extend_from_slice(&self.descriptor_version.to_le_bytes());
-        out.extend_from_slice(&self.payload_commitment);
-        out.extend_from_slice(&self.challenge_policy_commitment);
-        out.extend_from_slice(&self.state_layout_version.to_le_bytes());
-    }
-}
-
-impl StateHeader {
-    pub fn signing_digest(&self) -> [u8; 32] {
-        let mut bytes = Vec::with_capacity(256);
-        self.encode_signing_bytes(&mut bytes);
-        blake2b256(&bytes)
-    }
-}
-
-impl SigningBytes for StateHeaderV2 {
-    fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(STATE_DOMAIN_V2);
+        out.extend_from_slice(STATE_DOMAIN);
         out.extend_from_slice(&self.protocol_version.to_le_bytes());
         out.extend_from_slice(&self.chain_id);
         out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
@@ -97,7 +67,7 @@ impl SigningBytes for StateHeaderV2 {
     }
 }
 
-impl StateHeaderV2 {
+impl StateHeader {
     pub fn signing_digest(&self) -> [u8; 32] {
         let mut bytes = Vec::with_capacity(384);
         self.encode_signing_bytes(&mut bytes);
@@ -107,7 +77,7 @@ impl StateHeaderV2 {
 
 impl SigningBytes for SpliceHeader {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(SPLICE_HEADER_DOMAIN_V1);
+        out.extend_from_slice(SPLICE_HEADER_DOMAIN);
         out.extend_from_slice(&self.protocol_version.to_le_bytes());
         out.extend_from_slice(&self.chain_id);
         out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
@@ -137,7 +107,7 @@ impl SpliceHeader {
 
 impl SigningBytes for FactorySpliceHeader {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(FACTORY_SPLICE_HEADER_DOMAIN_V1);
+        out.extend_from_slice(FACTORY_SPLICE_HEADER_DOMAIN);
         out.extend_from_slice(&self.protocol_version.to_le_bytes());
         out.extend_from_slice(&self.factory_id);
         out.extend_from_slice(&self.old_update_number.to_le_bytes());
@@ -161,9 +131,9 @@ impl FactorySpliceHeader {
     }
 }
 
-pub fn vault_descriptor_commitment_v2(descriptor: &VaultDescriptorV2) -> Bytes32 {
+pub fn vault_descriptor_commitment(descriptor: &VaultDescriptor) -> Bytes32 {
     let mut bytes = Vec::with_capacity(64 + descriptor.assets.len() * 49);
-    bytes.extend_from_slice(VAULT_DESCRIPTOR_DOMAIN_V2);
+    bytes.extend_from_slice(VAULT_DESCRIPTOR_DOMAIN);
     bytes.extend_from_slice(&descriptor.funding_anchor);
     bytes.extend_from_slice(&(descriptor.assets.len() as u16).to_le_bytes());
     for amount in &descriptor.assets {
@@ -173,9 +143,9 @@ pub fn vault_descriptor_commitment_v2(descriptor: &VaultDescriptorV2) -> Bytes32
     blake2b256(&bytes)
 }
 
-pub fn factory_vault_descriptor_commitment_v1(descriptor: &FactoryVaultDescriptorV1) -> Bytes32 {
+pub fn factory_vault_descriptor_commitment(descriptor: &FactoryVaultDescriptor) -> Bytes32 {
     let mut bytes = Vec::with_capacity(64 + descriptor.assets.len() * 49);
-    bytes.extend_from_slice(FACTORY_VAULT_DESCRIPTOR_DOMAIN_V1);
+    bytes.extend_from_slice(FACTORY_VAULT_DESCRIPTOR_DOMAIN);
     bytes.extend_from_slice(&descriptor.factory_id);
     bytes.extend_from_slice(&(descriptor.assets.len() as u16).to_le_bytes());
     for amount in &descriptor.assets {
@@ -185,9 +155,9 @@ pub fn factory_vault_descriptor_commitment_v1(descriptor: &FactoryVaultDescripto
     blake2b256(&bytes)
 }
 
-pub fn splice_asset_delta_commitment_v1(deltas: &[SpliceAssetDelta]) -> Bytes32 {
+pub fn splice_asset_delta_commitment(deltas: &[SpliceAssetDelta]) -> Bytes32 {
     let mut bytes = Vec::with_capacity(64 + deltas.len() * 113);
-    bytes.extend_from_slice(SPLICE_DELTA_DOMAIN_V1);
+    bytes.extend_from_slice(SPLICE_DELTA_DOMAIN);
     bytes.extend_from_slice(&(deltas.len() as u16).to_le_bytes());
     for delta in deltas {
         encode_vault_asset(&delta.asset, &mut bytes);
@@ -200,9 +170,9 @@ pub fn splice_asset_delta_commitment_v1(deltas: &[SpliceAssetDelta]) -> Bytes32 
     blake2b256(&bytes)
 }
 
-pub fn factory_vault_delta_commitment_v1(deltas: &[FactoryVaultDelta]) -> Bytes32 {
+pub fn factory_vault_delta_commitment(deltas: &[FactoryVaultDelta]) -> Bytes32 {
     let mut bytes = Vec::with_capacity(64 + deltas.len() * 97);
-    bytes.extend_from_slice(FACTORY_VAULT_DELTA_DOMAIN_V1);
+    bytes.extend_from_slice(FACTORY_VAULT_DELTA_DOMAIN);
     bytes.extend_from_slice(&(deltas.len() as u16).to_le_bytes());
     for delta in deltas {
         encode_vault_asset(&delta.asset, &mut bytes);

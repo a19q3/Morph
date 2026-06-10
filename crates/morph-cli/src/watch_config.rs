@@ -12,11 +12,11 @@ use crate::devnet::{
 use crate::packages::canonical_hex32;
 use crate::rpc::CkbRpcClient;
 
-const WATCH_CONFIG_SCHEMA: &str = "morph.watchtower_config.v1";
-const WATCH_CONFIG_RUN_SCHEMA: &str = "morph.watchtower_config_run.v1";
-const WATCH_CONFIG_LOOP_SCHEMA: &str = "morph.watchtower_config_loop.v1";
-const WATCH_CONFIG_SERVICE_SCHEMA: &str = "morph.watchtower_config_service.v1";
-const WATCH_CONFIG_HEALTH_SCHEMA: &str = "morph.watchtower_health.v1";
+const WATCH_CONFIG_SCHEMA: &str = "morph.watchtower_config";
+const WATCH_CONFIG_RUN_SCHEMA: &str = "morph.watchtower_config_run";
+const WATCH_CONFIG_LOOP_SCHEMA: &str = "morph.watchtower_config_loop";
+const WATCH_CONFIG_SERVICE_SCHEMA: &str = "morph.watchtower_config_service";
+const WATCH_CONFIG_HEALTH_SCHEMA: &str = "morph.watchtower_health";
 const DEFAULT_STORE_DIR: &str = "target/morph-state-packages";
 const DEFAULT_DETECTION_DEPTH: u64 = 1;
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
@@ -28,7 +28,7 @@ const MAX_LOOP_PASSES: u64 = 10_000;
 const MAX_SERVICE_PASSES: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WatchtowerConfigV1 {
+pub struct WatchtowerConfig {
     pub schema: String,
     #[serde(default)]
     pub defaults: WatchtowerConfigDefaults,
@@ -158,7 +158,7 @@ pub struct WatchtowerConfigServiceHealth {
     pub last_error: Option<String>,
 }
 
-impl WatchtowerConfigV1 {
+impl WatchtowerConfig {
     pub fn fixture() -> Self {
         Self {
             schema: WATCH_CONFIG_SCHEMA.to_string(),
@@ -265,14 +265,14 @@ impl WatchtowerConfigV1 {
     }
 }
 
-pub fn fixture_config() -> WatchtowerConfigV1 {
-    WatchtowerConfigV1::fixture()
+pub fn fixture_config() -> WatchtowerConfig {
+    WatchtowerConfig::fixture()
 }
 
-pub fn read_watchtower_config(path: &Path) -> Result<WatchtowerConfigV1> {
+pub fn read_watchtower_config(path: &Path) -> Result<WatchtowerConfig> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read watchtower config {}", path.display()))?;
-    let config: WatchtowerConfigV1 = serde_json::from_slice(&bytes)
+    let config: WatchtowerConfig = serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse watchtower config {}", path.display()))?;
     config
         .validate()
@@ -283,7 +283,7 @@ pub fn read_watchtower_config(path: &Path) -> Result<WatchtowerConfigV1> {
 pub fn run_watchtower_config_once(
     rpc: &CkbRpcClient,
     config_path: &Path,
-    config: &WatchtowerConfigV1,
+    config: &WatchtowerConfig,
     runtime: WatchtowerRuntimeOptions,
 ) -> Result<WatchtowerConfigRunReport> {
     config.validate()?;
@@ -315,7 +315,7 @@ pub fn run_watchtower_config_once(
 pub fn run_watchtower_config_loop(
     rpc: &CkbRpcClient,
     config_path: &Path,
-    config: &WatchtowerConfigV1,
+    config: &WatchtowerConfig,
     runtime: WatchtowerRuntimeOptions,
     options: WatchtowerConfigLoopOptions,
 ) -> Result<WatchtowerConfigLoopReport> {
@@ -376,7 +376,7 @@ pub fn run_watchtower_config_loop(
 pub fn run_watchtower_config_service(
     rpc: &CkbRpcClient,
     config_path: &Path,
-    config: &WatchtowerConfigV1,
+    config: &WatchtowerConfig,
     runtime: WatchtowerRuntimeOptions,
     options: WatchtowerConfigServiceOptions,
 ) -> Result<WatchtowerConfigServiceReport> {
@@ -698,14 +698,14 @@ mod tests {
 
     #[test]
     fn validates_fixture_config() {
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         config.validate().unwrap();
         assert_eq!(config.channels.len(), 1);
     }
 
     #[test]
     fn rejects_duplicate_channels() {
-        let mut config = WatchtowerConfigV1::fixture();
+        let mut config = WatchtowerConfig::fixture();
         config.channels.push(config.channels[0].clone());
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("duplicate channel"));
@@ -713,7 +713,7 @@ mod tests {
 
     #[test]
     fn rejects_channel_without_sponsor_path() {
-        let mut config = WatchtowerConfigV1::fixture();
+        let mut config = WatchtowerConfig::fixture();
         config.defaults.auto_fund_sponsor = Some(false);
         config.channels[0].sponsor_out_point = None;
         let err = config.validate().unwrap_err();
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn resolves_channel_options_relative_to_config_file() {
-        let mut config = WatchtowerConfigV1::fixture();
+        let mut config = WatchtowerConfig::fixture();
         config.defaults.store_dir = Some(PathBuf::from("packages"));
         config.defaults.watch_policy = Some(PathBuf::from("policy.json"));
         config.defaults.alert_file = Some(PathBuf::from("alerts.jsonl"));
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn rejects_zero_loop_options() {
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         let runtime = WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: "key".to_string(),
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn rejects_unbounded_loop_report_size() {
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         let runtime = WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: "key".to_string(),
@@ -823,7 +823,7 @@ mod tests {
         let stop_file = dir.join("stop");
         let health_file = dir.join("health.json");
         fs::write(&stop_file, b"stop").unwrap();
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         let runtime = WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: "key".to_string(),
@@ -863,7 +863,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let health_file = dir.join("health.json");
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         let runtime = WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: "key".to_string(),
@@ -909,7 +909,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_service_options() {
-        let config = WatchtowerConfigV1::fixture();
+        let config = WatchtowerConfig::fixture();
         let runtime = WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: "key".to_string(),

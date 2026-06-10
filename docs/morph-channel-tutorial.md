@@ -120,16 +120,16 @@ flowchart TB
 
 The conservative path requires all factory participants to sign. Reduced paths
 prove a narrow local change, such as one participant reducing their own reserve
-claim. Factory scripts receive those proofs through `WitnessEnvelopeV2`.
+claim. Factory scripts receive those proofs through `WitnessEnvelope`.
 
-## Why `WitnessEnvelopeV2` Matters
+## Why `WitnessEnvelope` Matters
 
-Earlier factory work used body names that still end in `V1`. In the current
+Earlier factory work used body names that still end in `current`. In the current
 design, the public contract-facing factory witness is an envelope:
 
 ```mermaid
 flowchart LR
-    E["WitnessEnvelopeV2"] --> K["kind"]
+    E["WitnessEnvelope"] --> K["kind"]
     E --> L["body length"]
     E --> D["body digest"]
     K --> B["specific fixed-layout body"]

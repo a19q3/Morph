@@ -135,7 +135,7 @@ The important smoke families are:
 flowchart TB
     FS["FactoryStateCell"] --> FU["Factory update"]
     FV["FactoryVaultCell"] --> FE["Factory exit / splice"]
-    FU --> E["WitnessEnvelopeV2"]
+    FU --> E["WitnessEnvelope"]
     FE --> E
     E --> K{"kind"}
     K --> R1["reduced-rights body"]

@@ -122,14 +122,14 @@ From `target/devnet-stateful-e2e/20260520T135931Z/scenarios/smoke/deploy-contrac
 `target/devnet-stateful-e2e/<run>/scenarios/` contains:
 
 - `manifest.txt` with git, RPC, CKB, script, timing, and status metadata;
-- one `morph.devnet_stateful_scenario.v1` JSON file per required scenario;
+- one `morph.devnet_stateful_scenario` JSON file per required scenario;
 - `smoke/`, the underlying real devnet smoke artifact tree;
 - `summary.md`, `summary.json`, `summary-check.json`, and
   `summary-budget-check.json`.
 
-The `.v1` suffix on `morph.devnet_stateful_scenario.v1` is only the scenario
+The `` suffix on `morph.devnet_stateful_scenario` is only the scenario
 artifact schema version. It is not a protocol or witness-version label. Current
-factory authorisation is read through the bounded `WitnessEnvelopeV2`
+factory authorisation is read through the bounded `WitnessEnvelope`
 kind/body/digest envelope, and this historical closeout needs fresh rerun
 evidence before it can serve as current release evidence again.
 

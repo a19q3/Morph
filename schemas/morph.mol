@@ -5,40 +5,40 @@
 // on-chain wire boundary and should be generated once moleculec is available
 // in the devnet build environment.
 //
-// The active devnet V2 channel headers and V1 witness bodies intentionally use
+// The active devnet current channel headers and current witness bodies intentionally use
 // fixed-width encodings. Factory authorisation witnesses are no longer
 // dispatched by raw body length: every factory contract witness is carried in a
-// WitnessEnvelopeV2 header followed by one bounded V1 body. These lengths are
+// WitnessEnvelope header followed by one bounded current body. These lengths are
 // part of the audited transaction shape:
 //
-// - StateHeaderV2: 314 bytes
-// - SpliceHeaderV1: 325 bytes
-// - SpliceSignatureWitnessV1: 198 bytes
-// - SpliceVaultAssetAmountV2: 49 bytes
-// - SpliceVaultDescriptorV2: 132 bytes
-// - SpliceAssetDeltaV1: 113 bytes
-// - SpliceAssetDeltasV1: 228 bytes
-// - SpliceStateTransitionWitnessV1: 1017 bytes
-// - FactoryStateHeaderV1: 238 bytes
-// - BilateralSignatureWitnessV1: 198 bytes
-// - FactorySignatureWitnessV1: 262 bytes
-// - FactoryRightV1: 114 bytes
-// - FactoryReducedRightsWitnessV1: 2580 bytes
-// - FactoryMerkleUpdateWitnessV1: 8720 bytes
-// - FactoryReducedExitWitnessV1: 3058 bytes
+// - StateHeader: 314 bytes
+// - SpliceHeader: 325 bytes
+// - SpliceSignatureWitness: 198 bytes
+// - SpliceVaultAssetAmount: 49 bytes
+// - SpliceVaultDescriptor: 132 bytes
+// - SpliceAssetDelta: 113 bytes
+// - SpliceAssetDeltas: 228 bytes
+// - SpliceStateTransitionWitness: 1017 bytes
+// - FactoryStateHeader: 238 bytes
+// - BilateralSignatureWitness: 198 bytes
+// - FactorySignatureWitness: 262 bytes
+// - FactoryRight: 114 bytes
+// - FactoryReducedRightsWitness: 2580 bytes
+// - FactoryMerkleUpdateWitness: 8720 bytes
+// - FactoryReducedExitWitness: 3058 bytes
 // - FactoryReducedExitXudtWitnessV1: 3122 bytes
-// - FactoryLocalExitWitnessV1: 726 bytes
+// - FactoryLocalExitWitness: 726 bytes
 // - FactoryLocalExitXudtWitnessV1: 790 bytes
-// - FactorySpliceHeaderV1: 275 bytes
-// - FactoryVaultDescriptorV1: 132 bytes
-// - FactoryVaultDeltaV1: 97 bytes
-// - FactoryVaultDeltasV1: 196 bytes
-// - FactorySpliceWitnessV1: 999 bytes
-// - FactoryReducedSpliceWitnessV1: 9457 bytes
-// - WitnessEnvelopeV2 header: 50 bytes
-// - BilateralCkbSettlementDescriptorV1: 84 bytes
-// - BilateralCkbXudtSettlementDescriptorV1: 148 bytes
-// - SponsorPolicyV1: 144 bytes
+// - FactorySpliceHeader: 275 bytes
+// - FactoryVaultDescriptor: 132 bytes
+// - FactoryVaultDelta: 97 bytes
+// - FactoryVaultDeltas: 196 bytes
+// - FactorySpliceWitness: 999 bytes
+// - FactoryReducedSpliceWitness: 9457 bytes
+// - WitnessEnvelope header: 50 bytes
+// - BilateralCkbSettlementDescriptor: 84 bytes
+// - BilateralCkbXudtSettlementDescriptor: 148 bytes
+// - SponsorPolicy: 144 bytes
 
 array Byte32 [byte; 32];
 array WitnessEnvelopeMagicV2 [byte; 8];
@@ -46,17 +46,17 @@ array FactoryMerkleProofSiblingsV1 [Byte32; 256];
 array Secp256k1CompressedPubkey [byte; 33];
 array EcdsaSignature [byte; 64];
 
-// WitnessEnvelopeV2 is a fixed 50-byte prefix followed by a bounded variable
+// WitnessEnvelope is a fixed 50-byte prefix followed by a bounded variable
 // body. body_commitment is blake2b256(domain, kind_le, body). The current
 // factory kind map is:
-// 1 FactorySignatureWitnessV1
-// 2 FactoryReducedRightsWitnessV1
-// 3 FactoryMerkleUpdateWitnessV1
-// 4 FactoryReducedExitWitnessV1 or FactoryReducedExitXudtWitnessV1
-// 5 FactoryLocalExitWitnessV1 or FactoryLocalExitXudtWitnessV1
-// 6 FactorySpliceWitnessV1
-// 7 FactoryReducedSpliceWitnessV1
-struct WitnessEnvelopeV2 {
+// 1 FactorySignatureWitness
+// 2 FactoryReducedRightsWitness
+// 3 FactoryMerkleUpdateWitness
+// 4 FactoryReducedExitWitness or FactoryReducedExitXudtWitnessV1
+// 5 FactoryLocalExitWitness or FactoryLocalExitXudtWitnessV1
+// 6 FactorySpliceWitness
+// 7 FactoryReducedSpliceWitness
+struct WitnessEnvelope {
     magic: WitnessEnvelopeMagicV2,
     version: uint16,
     kind: uint16,
@@ -76,7 +76,7 @@ struct ChallengePolicyV1 {
     min_emergency_rebuilds: uint32,
 }
 
-struct StateHeaderV2 {
+struct StateHeader {
     protocol_version: uint16,
     chain_id: Byte32,
     signature_scheme_id: uint16,
@@ -96,7 +96,7 @@ struct StateHeaderV2 {
     state_layout_version: uint16,
 }
 
-struct SpliceHeaderV1 {
+struct SpliceHeader {
     protocol_version: uint16,
     chain_id: Byte32,
     signature_scheme_id: uint16,
@@ -115,7 +115,7 @@ struct SpliceHeaderV1 {
     challenge_policy_commitment: Byte32,
 }
 
-struct SpliceSignatureWitnessV1 {
+struct SpliceSignatureWitness {
     version: uint16,
     threshold: byte,
     count: byte,
@@ -125,20 +125,20 @@ struct SpliceSignatureWitnessV1 {
     participant_1_signature: EcdsaSignature,
 }
 
-struct SpliceVaultAssetAmountV2 {
+struct SpliceVaultAssetAmount {
     asset_kind: byte,
     asset_type: Byte32,
     amount: uint128,
 }
 
-struct SpliceVaultDescriptorV2 {
+struct SpliceVaultDescriptor {
     funding_anchor: Byte32,
     asset_count: uint16,
-    asset_0: SpliceVaultAssetAmountV2,
-    asset_1: SpliceVaultAssetAmountV2,
+    asset_0: SpliceVaultAssetAmount,
+    asset_1: SpliceVaultAssetAmount,
 }
 
-struct SpliceAssetDeltaV1 {
+struct SpliceAssetDelta {
     asset_kind: byte,
     asset_type: Byte32,
     old_amount: uint128,
@@ -148,22 +148,22 @@ struct SpliceAssetDeltaV1 {
     signed_fee: uint128,
 }
 
-struct SpliceAssetDeltasV1 {
+struct SpliceAssetDeltas {
     delta_count: uint16,
-    delta_0: SpliceAssetDeltaV1,
-    delta_1: SpliceAssetDeltaV1,
+    delta_0: SpliceAssetDelta,
+    delta_1: SpliceAssetDelta,
 }
 
-struct SpliceStateTransitionWitnessV1 {
+struct SpliceStateTransitionWitness {
     version: uint16,
-    splice_header: SpliceHeaderV1,
-    splice_signature: SpliceSignatureWitnessV1,
-    old_vault_descriptor: SpliceVaultDescriptorV2,
-    new_vault_descriptor: SpliceVaultDescriptorV2,
-    asset_deltas: SpliceAssetDeltasV1,
+    splice_header: SpliceHeader,
+    splice_signature: SpliceSignatureWitness,
+    old_vault_descriptor: SpliceVaultDescriptor,
+    new_vault_descriptor: SpliceVaultDescriptor,
+    asset_deltas: SpliceAssetDeltas,
 }
 
-struct FactoryStateHeaderV1 {
+struct FactoryStateHeader {
     protocol_version: uint16,
     chain_id: Byte32,
     signature_scheme_id: uint16,
@@ -177,7 +177,7 @@ struct FactoryStateHeaderV1 {
     state_layout_version: uint16,
 }
 
-struct BilateralSignatureWitnessV1 {
+struct BilateralSignatureWitness {
     version: uint16,
     threshold: byte,
     count: byte,
@@ -187,7 +187,7 @@ struct BilateralSignatureWitnessV1 {
     participant_1_signature: EcdsaSignature,
 }
 
-struct FactorySignatureWitnessV1 {
+struct FactorySignatureWitness {
     version: uint16,
     threshold: byte,
     count: byte,
@@ -199,7 +199,7 @@ struct FactorySignatureWitnessV1 {
     participant_1_signature: EcdsaSignature,
 }
 
-struct FactoryRightV1 {
+struct FactoryRight {
     participant: Byte32,
     subchannel: Byte32,
     kind: byte,
@@ -215,7 +215,7 @@ struct FactoryReducedRightsParticipantV1 {
     signature: EcdsaSignature,
 }
 
-struct FactoryReducedRightsWitnessV1 {
+struct FactoryReducedRightsWitness {
     version: uint16,
     participant_threshold: byte,
     participant_count: byte,
@@ -225,29 +225,29 @@ struct FactoryReducedRightsWitnessV1 {
     participant_0: FactoryReducedRightsParticipantV1,
     participant_1: FactoryReducedRightsParticipantV1,
     touched_participant: Byte32,
-    before_0: FactoryRightV1,
-    before_1: FactoryRightV1,
-    before_2: FactoryRightV1,
-    before_3: FactoryRightV1,
-    before_4: FactoryRightV1,
-    before_5: FactoryRightV1,
-    before_6: FactoryRightV1,
-    before_7: FactoryRightV1,
-    before_8: FactoryRightV1,
-    before_9: FactoryRightV1,
-    after_0: FactoryRightV1,
-    after_1: FactoryRightV1,
-    after_2: FactoryRightV1,
-    after_3: FactoryRightV1,
-    after_4: FactoryRightV1,
-    after_5: FactoryRightV1,
-    after_6: FactoryRightV1,
-    after_7: FactoryRightV1,
-    after_8: FactoryRightV1,
-    after_9: FactoryRightV1,
+    before_0: FactoryRight,
+    before_1: FactoryRight,
+    before_2: FactoryRight,
+    before_3: FactoryRight,
+    before_4: FactoryRight,
+    before_5: FactoryRight,
+    before_6: FactoryRight,
+    before_7: FactoryRight,
+    before_8: FactoryRight,
+    before_9: FactoryRight,
+    after_0: FactoryRight,
+    after_1: FactoryRight,
+    after_2: FactoryRight,
+    after_3: FactoryRight,
+    after_4: FactoryRight,
+    after_5: FactoryRight,
+    after_6: FactoryRight,
+    after_7: FactoryRight,
+    after_8: FactoryRight,
+    after_9: FactoryRight,
 }
 
-struct FactoryMerkleUpdateWitnessV1 {
+struct FactoryMerkleUpdateWitness {
     version: uint16,
     participant_threshold: byte,
     participant_count: byte,
@@ -257,12 +257,12 @@ struct FactoryMerkleUpdateWitnessV1 {
     participant_0: FactoryReducedRightsParticipantV1,
     participant_1: FactoryReducedRightsParticipantV1,
     touched_participant: Byte32,
-    right_before: FactoryRightV1,
-    right_after: FactoryRightV1,
+    right_before: FactoryRight,
+    right_after: FactoryRight,
     proof_siblings: FactoryMerkleProofSiblingsV1,
 }
 
-struct FactoryReducedExitWitnessV1 {
+struct FactoryReducedExitWitness {
     version: uint16,
     participant_threshold: byte,
     participant_count: byte,
@@ -278,28 +278,28 @@ struct FactoryReducedExitWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV2,
-    settlement_descriptor: BilateralCkbSettlementDescriptorV1,
-    before_0: FactoryRightV1,
-    before_1: FactoryRightV1,
-    before_2: FactoryRightV1,
-    before_3: FactoryRightV1,
-    before_4: FactoryRightV1,
-    before_5: FactoryRightV1,
-    before_6: FactoryRightV1,
-    before_7: FactoryRightV1,
-    before_8: FactoryRightV1,
-    before_9: FactoryRightV1,
-    after_0: FactoryRightV1,
-    after_1: FactoryRightV1,
-    after_2: FactoryRightV1,
-    after_3: FactoryRightV1,
-    after_4: FactoryRightV1,
-    after_5: FactoryRightV1,
-    after_6: FactoryRightV1,
-    after_7: FactoryRightV1,
-    after_8: FactoryRightV1,
-    after_9: FactoryRightV1,
+    exit_state_header: StateHeader,
+    settlement_descriptor: BilateralCkbSettlementDescriptor,
+    before_0: FactoryRight,
+    before_1: FactoryRight,
+    before_2: FactoryRight,
+    before_3: FactoryRight,
+    before_4: FactoryRight,
+    before_5: FactoryRight,
+    before_6: FactoryRight,
+    before_7: FactoryRight,
+    before_8: FactoryRight,
+    before_9: FactoryRight,
+    after_0: FactoryRight,
+    after_1: FactoryRight,
+    after_2: FactoryRight,
+    after_3: FactoryRight,
+    after_4: FactoryRight,
+    after_5: FactoryRight,
+    after_6: FactoryRight,
+    after_7: FactoryRight,
+    after_8: FactoryRight,
+    after_9: FactoryRight,
 }
 
 struct FactoryReducedExitXudtWitnessV1 {
@@ -318,55 +318,55 @@ struct FactoryReducedExitXudtWitnessV1 {
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV2,
-    settlement_descriptor: BilateralCkbXudtSettlementDescriptorV1,
-    before_0: FactoryRightV1,
-    before_1: FactoryRightV1,
-    before_2: FactoryRightV1,
-    before_3: FactoryRightV1,
-    before_4: FactoryRightV1,
-    before_5: FactoryRightV1,
-    before_6: FactoryRightV1,
-    before_7: FactoryRightV1,
-    before_8: FactoryRightV1,
-    before_9: FactoryRightV1,
-    after_0: FactoryRightV1,
-    after_1: FactoryRightV1,
-    after_2: FactoryRightV1,
-    after_3: FactoryRightV1,
-    after_4: FactoryRightV1,
-    after_5: FactoryRightV1,
-    after_6: FactoryRightV1,
-    after_7: FactoryRightV1,
-    after_8: FactoryRightV1,
-    after_9: FactoryRightV1,
+    exit_state_header: StateHeader,
+    settlement_descriptor: BilateralCkbXudtSettlementDescriptor,
+    before_0: FactoryRight,
+    before_1: FactoryRight,
+    before_2: FactoryRight,
+    before_3: FactoryRight,
+    before_4: FactoryRight,
+    before_5: FactoryRight,
+    before_6: FactoryRight,
+    before_7: FactoryRight,
+    before_8: FactoryRight,
+    before_9: FactoryRight,
+    after_0: FactoryRight,
+    after_1: FactoryRight,
+    after_2: FactoryRight,
+    after_3: FactoryRight,
+    after_4: FactoryRight,
+    after_5: FactoryRight,
+    after_6: FactoryRight,
+    after_7: FactoryRight,
+    after_8: FactoryRight,
+    after_9: FactoryRight,
 }
 
-struct FactoryLocalExitWitnessV1 {
+struct FactoryLocalExitWitness {
     version: uint16,
-    factory_signature: FactorySignatureWitnessV1,
+    factory_signature: FactorySignatureWitness,
     state_output_index: uint32,
     vault_output_index: uint32,
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV2,
-    settlement_descriptor: BilateralCkbSettlementDescriptorV1,
+    exit_state_header: StateHeader,
+    settlement_descriptor: BilateralCkbSettlementDescriptor,
 }
 
 struct FactoryLocalExitXudtWitnessV1 {
     version: uint16,
-    factory_signature: FactorySignatureWitnessV1,
+    factory_signature: FactorySignatureWitness,
     state_output_index: uint32,
     vault_output_index: uint32,
     state_type_hash: Byte32,
     vault_lock_hash: Byte32,
     state_lock_hash: Byte32,
-    exit_state_header: StateHeaderV2,
-    settlement_descriptor: BilateralCkbXudtSettlementDescriptorV1,
+    exit_state_header: StateHeader,
+    settlement_descriptor: BilateralCkbXudtSettlementDescriptor,
 }
 
-struct FactorySpliceHeaderV1 {
+struct FactorySpliceHeader {
     protocol_version: uint16,
     factory_id: Byte32,
     old_update_number: uint64,
@@ -381,20 +381,20 @@ struct FactorySpliceHeaderV1 {
     participants_commitment: Byte32,
 }
 
-struct FactoryVaultAssetAmountV1 {
+struct FactoryVaultAssetAmount {
     asset_kind: byte,
     asset_type: Byte32,
     amount: uint128,
 }
 
-struct FactoryVaultDescriptorV1 {
+struct FactoryVaultDescriptor {
     factory_id: Byte32,
     asset_count: uint16,
-    asset_0: FactoryVaultAssetAmountV1,
-    asset_1: FactoryVaultAssetAmountV1,
+    asset_0: FactoryVaultAssetAmount,
+    asset_1: FactoryVaultAssetAmount,
 }
 
-struct FactoryVaultDeltaV1 {
+struct FactoryVaultDelta {
     asset_kind: byte,
     asset_type: Byte32,
     old_amount: uint128,
@@ -403,28 +403,28 @@ struct FactoryVaultDeltaV1 {
     withdrawal: uint128,
 }
 
-struct FactoryVaultDeltasV1 {
+struct FactoryVaultDeltas {
     delta_count: uint16,
-    delta_0: FactoryVaultDeltaV1,
-    delta_1: FactoryVaultDeltaV1,
+    delta_0: FactoryVaultDelta,
+    delta_1: FactoryVaultDelta,
 }
 
-struct FactorySpliceWitnessV1 {
+struct FactorySpliceWitness {
     version: uint16,
-    splice_header: FactorySpliceHeaderV1,
-    factory_signature: FactorySignatureWitnessV1,
-    old_vault_descriptor: FactoryVaultDescriptorV1,
-    new_vault_descriptor: FactoryVaultDescriptorV1,
-    vault_deltas: FactoryVaultDeltasV1,
+    splice_header: FactorySpliceHeader,
+    factory_signature: FactorySignatureWitness,
+    old_vault_descriptor: FactoryVaultDescriptor,
+    new_vault_descriptor: FactoryVaultDescriptor,
+    vault_deltas: FactoryVaultDeltas,
 }
 
-struct FactoryReducedSpliceWitnessV1 {
+struct FactoryReducedSpliceWitness {
     version: uint16,
-    splice_header: FactorySpliceHeaderV1,
-    merkle_update: FactoryMerkleUpdateWitnessV1,
-    old_vault_descriptor: FactoryVaultDescriptorV1,
-    new_vault_descriptor: FactoryVaultDescriptorV1,
-    vault_deltas: FactoryVaultDeltasV1,
+    splice_header: FactorySpliceHeader,
+    merkle_update: FactoryMerkleUpdateWitness,
+    old_vault_descriptor: FactoryVaultDescriptor,
+    new_vault_descriptor: FactoryVaultDescriptor,
+    vault_deltas: FactoryVaultDeltas,
 }
 
 struct BilateralCkbSettlementOutputV1 {
@@ -432,7 +432,7 @@ struct BilateralCkbSettlementOutputV1 {
     capacity: uint64,
 }
 
-struct BilateralCkbSettlementDescriptorV1 {
+struct BilateralCkbSettlementDescriptor {
     version: uint16,
     output_count: byte,
     reserved: byte,
@@ -446,7 +446,7 @@ struct BilateralCkbXudtSettlementOutputV1 {
     xudt_amount: uint128,
 }
 
-struct BilateralCkbXudtSettlementDescriptorV1 {
+struct BilateralCkbXudtSettlementDescriptor {
     version: uint16,
     output_count: byte,
     asset_count: byte,
@@ -455,7 +455,7 @@ struct BilateralCkbXudtSettlementDescriptorV1 {
     output_1: BilateralCkbXudtSettlementOutputV1,
 }
 
-struct SponsorPolicyV1 {
+struct SponsorPolicy {
     channel_id: Byte32,
     min_state_number: uint64,
     max_state_number: uint64,

@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::packages::canonical_hex32;
 
-const WATCH_POLICY_SCHEMA: &str = "morph.watchtower_policy.v1";
+const WATCH_POLICY_SCHEMA: &str = "morph.watchtower_policy";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WatchtowerPolicyV1 {
+pub struct WatchtowerPolicy {
     pub schema: String,
     pub channel_id: Option<String>,
     pub min_detection_depth: u64,
@@ -38,7 +38,7 @@ pub struct WatchPolicyRun<'a> {
     pub alert_webhook_present: bool,
 }
 
-impl WatchtowerPolicyV1 {
+impl WatchtowerPolicy {
     pub fn fixture() -> Self {
         Self {
             schema: WATCH_POLICY_SCHEMA.to_string(),
@@ -162,14 +162,14 @@ impl WatchtowerPolicyV1 {
     }
 }
 
-pub fn fixture_policy() -> WatchtowerPolicyV1 {
-    WatchtowerPolicyV1::fixture()
+pub fn fixture_policy() -> WatchtowerPolicy {
+    WatchtowerPolicy::fixture()
 }
 
-pub fn read_watchtower_policy(path: &Path) -> Result<WatchtowerPolicyV1> {
+pub fn read_watchtower_policy(path: &Path) -> Result<WatchtowerPolicy> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read watchtower policy {}", path.display()))?;
-    let policy: WatchtowerPolicyV1 = serde_json::from_slice(&bytes)
+    let policy: WatchtowerPolicy = serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse watchtower policy {}", path.display()))?;
     policy
         .validate()
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn accepts_fixture_policy_run() {
-        WatchtowerPolicyV1::fixture()
+        WatchtowerPolicy::fixture()
             .validate_run(&valid_run())
             .unwrap();
     }
@@ -209,9 +209,7 @@ mod tests {
     fn rejects_shallow_detection_depth() {
         let mut run = valid_run();
         run.detection_depth = 1;
-        let err = WatchtowerPolicyV1::fixture()
-            .validate_run(&run)
-            .unwrap_err();
+        let err = WatchtowerPolicy::fixture().validate_run(&run).unwrap_err();
         assert!(err.to_string().contains("below policy minimum"));
     }
 
@@ -219,15 +217,13 @@ mod tests {
     fn rejects_fee_above_operator_limit() {
         let mut run = valid_run();
         run.fee = 300_000_000;
-        let err = WatchtowerPolicyV1::fixture()
-            .validate_run(&run)
-            .unwrap_err();
+        let err = WatchtowerPolicy::fixture().validate_run(&run).unwrap_err();
         assert!(err.to_string().contains("exceeds policy maximum"));
     }
 
     #[test]
     fn rejects_explicit_sponsor_when_policy_forbids_it() {
-        let mut policy = WatchtowerPolicyV1::fixture();
+        let mut policy = WatchtowerPolicy::fixture();
         policy.allow_explicit_sponsor = false;
         policy.require_auto_fund_sponsor = true;
 
@@ -240,7 +236,7 @@ mod tests {
 
     #[test]
     fn rejects_wrong_channel_policy() {
-        let mut policy = WatchtowerPolicyV1::fixture();
+        let mut policy = WatchtowerPolicy::fixture();
         policy.channel_id =
             Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string());
 
@@ -250,7 +246,7 @@ mod tests {
 
     #[test]
     fn rejects_webhook_when_policy_forbids_it() {
-        let mut policy = WatchtowerPolicyV1::fixture();
+        let mut policy = WatchtowerPolicy::fixture();
         policy.allow_webhook_alerts = false;
 
         let mut run = valid_run();

@@ -1,6 +1,6 @@
 {
-  "schema": "morph.devnet_smoke_budget.v1",
-  "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. The v1 suffixes do not denote the active protocol baseline; factory witnesses are interpreted through bounded WitnessEnvelopeV2 kind/body/digest envelopes on the current V2-envelope implementation line.",
+  "schema": "morph.devnet_smoke_budget",
+  "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. The current suffixes do not denote the active protocol baseline; factory witnesses are interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current current-envelope implementation line.",
   "max_total_cycles": 1200000000,
   "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
@@ -119,7 +119,7 @@
     {
       "check": "factory-reduced-rights-smoke",
       "transaction_path": "$.update",
-      "proof_kind": "factory_reduced_rights_bounded_claim_decrease_v1",
+      "proof_kind": "factory_reduced_rights_bounded_claim_decrease",
       "proof_siblings": 0,
       "max_witness_len": 3000,
       "max_cycles": 6000000,
@@ -128,7 +128,7 @@
     {
       "check": "factory-merkle-update-smoke",
       "transaction_path": "$.update",
-      "proof_kind": "factory_sparse_merkle_update_v1",
+      "proof_kind": "factory_sparse_merkle_update",
       "proof_siblings": 256,
       "max_witness_len": 9000,
       "max_cycles": 30000000,
@@ -137,7 +137,7 @@
     {
       "check": "factory-reduced-exit-smoke",
       "transaction_path": "$.exit",
-      "proof_kind": "factory_reduced_exit_ckb_reserve_claim_v1",
+      "proof_kind": "factory_reduced_exit_ckb_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 3100,
       "max_cycles": 10000000,
@@ -146,7 +146,7 @@
     {
       "check": "factory-reduced-xudt-exit-smoke",
       "transaction_path": "$.exit",
-      "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim_v1",
+      "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
       "max_cycles": 7500000,
@@ -155,7 +155,7 @@
     {
       "check": "factory-reduced-xudt-exit-full-smoke",
       "transaction_path": "$.exit",
-      "proof_kind": "factory_reduced_exit_xudt_reserve_claim_v1",
+      "proof_kind": "factory_reduced_exit_xudt_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
       "max_cycles": 7500000,
@@ -164,7 +164,7 @@
     {
       "check": "factory-reduced-xudt-exit-one-sided-smoke",
       "transaction_path": "$.exit",
-      "proof_kind": "factory_reduced_exit_xudt_one_sided_reserve_claim_v1",
+      "proof_kind": "factory_reduced_exit_xudt_one_sided_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
       "max_cycles": 7500000,
@@ -173,7 +173,7 @@
     {
       "check": "factory-splice-in-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_splice_all_participants_ckb_v1",
+      "proof_kind": "factory_splice_all_participants_ckb",
       "proof_siblings": 0,
       "max_witness_len": 1200,
       "max_cycles": 16000000,
@@ -182,7 +182,7 @@
     {
       "check": "factory-splice-out-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_splice_all_participants_ckb_v1",
+      "proof_kind": "factory_splice_all_participants_ckb",
       "proof_siblings": 0,
       "max_witness_len": 1200,
       "max_cycles": 16000000,
@@ -191,7 +191,7 @@
     {
       "check": "factory-reduced-splice-in-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle_v1",
+      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle",
       "proof_siblings": 256,
       "max_witness_len": 10000,
       "max_cycles": 18000000,
@@ -200,7 +200,7 @@
     {
       "check": "factory-reduced-splice-out-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle_v1",
+      "proof_kind": "factory_reduced_splice_ckb_sparse_merkle",
       "proof_siblings": 256,
       "max_witness_len": 10000,
       "max_cycles": 18000000,
@@ -209,7 +209,7 @@
     {
       "check": "factory-reduced-xudt-splice-in-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle_v1",
+      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle",
       "proof_siblings": 256,
       "max_witness_len": 10000,
       "max_cycles": 20000000,
@@ -218,7 +218,7 @@
     {
       "check": "factory-reduced-xudt-splice-out-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle_v1",
+      "proof_kind": "factory_reduced_splice_xudt_sparse_merkle",
       "proof_siblings": 256,
       "max_witness_len": 10000,
       "max_cycles": 20000000,
@@ -227,7 +227,7 @@
     {
       "check": "factory-xudt-splice-in-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_splice_all_participants_xudt_v1",
+      "proof_kind": "factory_splice_all_participants_xudt",
       "proof_siblings": 0,
       "max_witness_len": 1200,
       "max_cycles": 16000000,
@@ -236,7 +236,7 @@
     {
       "check": "factory-xudt-splice-out-smoke",
       "transaction_path": "$.apply",
-      "proof_kind": "factory_splice_all_participants_xudt_v1",
+      "proof_kind": "factory_splice_all_participants_xudt",
       "proof_siblings": 0,
       "max_witness_len": 1200,
       "max_cycles": 16000000,

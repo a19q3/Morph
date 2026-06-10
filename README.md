@@ -45,9 +45,9 @@ invalid transition.
 
 ## What Is Implemented
 
-The current factory witness design uses `WitnessEnvelopeV2`. Factory scripts
+The current factory witness design uses `WitnessEnvelope`. Factory scripts
 dispatch by envelope kind, bounded body length, and checked body digest. Some
-body and JSON schema names still end in `V1`; those names identify fixed-layout
+body and JSON schema names still end in `current`; those names identify fixed-layout
 body schemas, not the current authorisation boundary.
 
 Implemented locally:
@@ -63,7 +63,7 @@ Implemented locally:
 - conservative factory state updates signed by all factory participants;
 - factory local exits that materialise child bilateral channels;
 - bounded reduced-rights, reduced-exit, sparse-Merkle update, and reduced-splice
-  factory proof bodies carried by `WitnessEnvelopeV2`;
+  factory proof bodies carried by `WitnessEnvelope`;
 - local devnet smoke reports and stateful acceptance reports that bind protocol
   scenarios to transaction evidence, cycle budgets, and expected negative-path
   failures.
@@ -144,7 +144,7 @@ remained committed.
 
 Factory exits can materialise child bilateral channels. Factory splice paths
 can repartition CKB or xUDT reserve. The current contract-facing witness surface
-uses `WitnessEnvelopeV2`, so the scripts first authenticate the envelope and
+uses `WitnessEnvelope`, so the scripts first authenticate the envelope and
 then parse the specific fixed-layout body.
 
 ## Repository Layout

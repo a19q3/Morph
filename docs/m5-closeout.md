@@ -7,13 +7,13 @@ M5 closes the conservative bilateral splice scope.
 This is a historical closeout for the conservative bilateral splice milestone.
 It remains useful as evidence for the splice policy and devnet coverage, but it
 is not the current factory witness-boundary document. Current factory
-authorisation uses `WitnessEnvelopeV2`; the M5 references below concern
-bilateral splice package/body scope and `StateHeaderV2` funding-epoch semantics.
+authorisation uses `WitnessEnvelope`; the M5 references below concern
+bilateral splice package/body scope and `StateHeader` funding-epoch semantics.
 
 The accepted conservative design is:
 
 - quiescent splice packages with an explicit base state number;
-- explicit funding-epoch semantics, with `StateHeaderV2` as the active channel
+- explicit funding-epoch semantics, with `StateHeader` as the active channel
   wire target;
 - bounded CKB and CKB+xUDT asset delta descriptors;
 - participant-owned splice-out withdrawals, with arbitrary payout locks deferred
@@ -27,8 +27,8 @@ The accepted conservative design is:
   settlement coverage.
 - `morph-script-common` exposes bounded parsers for the splice header,
   splice witness, old/new vault descriptors, asset deltas, bundled splice
-  witness, and `StateHeaderV2`.
-- `verify_splice_state_transition_bundle_v2` covers the explicit-epoch target by
+  witness, and `StateHeader`.
+- `verify_splice_state_transition_bundle` covers the explicit-epoch target by
   binding old/new funding epochs to old/new vault-set commitments.
 - `morph-state-type` and `morph-vault-lock` accept the conservative
   old/new-anchor splice bridge and reject wrong-channel or malformed vault

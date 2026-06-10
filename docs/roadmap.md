@@ -27,13 +27,13 @@ acceptance gates exist locally. Production work remains open.
 | M1: Bilateral channel | Implemented | State Cell progression, Vault Cell settlement, sponsor fee boundary, and participant signatures. |
 | M2: Devnet vertical slice | Implemented | Local CKB node flow, script deployment, channel open, state publication, vault finalisation, negative smokes, and reports. |
 | M3: Assets and splice | Implemented locally | CKB+xUDT settlement, splice-in/out, funding epoch, vault-set commitment, package validation, and devnet smokes. |
-| M4: Factory mode | Implemented narrowly | Conservative factory updates, local exits, reduced-rights proof, sparse-Merkle update, reduced exit, factory splice, and reduced splice through `WitnessEnvelopeV2`. |
+| M4: Factory mode | Implemented narrowly | Conservative factory updates, local exits, reduced-rights proof, sparse-Merkle update, reduced exit, factory splice, and reduced splice through `WitnessEnvelope`. |
 | M5: Watchtower and audit gates | Implemented locally | Watch config, policy checks, JSONL/webhook alerts, stale-package guard, smoke assertions, stateful assertions, and budget profiles. |
 | M6: Production readiness | Open | External review, mainnet-like fee/reorg evidence, CI release revalidation, runbooks, multi-operator evidence, and value limits. |
 
 ## Current Factory Witness Baseline
 
-Factory authorisation uses `WitnessEnvelopeV2`.
+Factory authorisation uses `WitnessEnvelope`.
 
 ```mermaid
 flowchart TB
@@ -42,7 +42,7 @@ flowchart TB
     S --> R["state/root/vault checks"]
 ```
 
-The remaining `*V1` names in package or body schemas identify fixed-layout
+The remaining `*current` names in package or body schemas identify fixed-layout
 schemas and historical evidence labels. They are not the current public factory
 authorisation boundary.
 

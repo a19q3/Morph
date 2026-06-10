@@ -427,7 +427,7 @@ jq -n \
   --arg watch_policy "$WATCH_DIR_ABS/watch-policy.json" \
   --arg alert_file "$WATCH_DIR_ABS/watch-alerts.jsonl" \
   '{
-    schema: "morph.watchtower_config.v1",
+    schema: "morph.watchtower_config",
     defaults: {
       store_dir: $store_dir,
       watch_policy: $watch_policy,
@@ -540,7 +540,7 @@ jq -n \
   --arg store_dir "$WATCH_LOOP_DIR_ABS/packages" \
   --arg alert_file "$WATCH_LOOP_DIR_ABS/watch-alerts.jsonl" \
   '{
-    schema: "morph.watchtower_config.v1",
+    schema: "morph.watchtower_config",
     defaults: {
       store_dir: $store_dir,
       alert_file: $alert_file,
@@ -616,7 +616,7 @@ jq -n \
   --argjson scanned_to_block "$WATCH_SPLICE_SCANNED_TO_BLOCK" \
   --argjson updated_unix_ms "$WATCH_SPLICE_UPDATED_MS" \
   '{
-    schema: "morph.watch_cursor.v1",
+    schema: "morph.watch_cursor",
     channel_id: $channel_id,
     next_block: $next_block,
     scanned_to_block: $scanned_to_block,

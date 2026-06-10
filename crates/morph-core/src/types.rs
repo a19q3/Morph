@@ -42,25 +42,6 @@ pub struct StateHeader {
     pub chain_id: Bytes32,
     pub signature_scheme_id: u16,
     pub channel_id: Bytes32,
-    pub funding_anchor: Bytes32,
-    pub state_number: u64,
-    pub mode: Mode,
-    pub phase: Phase,
-    pub participants_commitment: Bytes32,
-    pub asset_registry_commitment: Bytes32,
-    pub settlement_descriptor_commitment: Bytes32,
-    pub descriptor_version: u16,
-    pub payload_commitment: Bytes32,
-    pub challenge_policy_commitment: Bytes32,
-    pub state_layout_version: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateHeaderV2 {
-    pub protocol_version: u16,
-    pub chain_id: Bytes32,
-    pub signature_scheme_id: u16,
-    pub channel_id: Bytes32,
     pub funding_epoch: u64,
     pub funding_anchor: Bytes32,
     pub vault_set_commitment: Bytes32,
@@ -76,7 +57,7 @@ pub struct StateHeaderV2 {
     pub state_layout_version: u16,
 }
 
-impl StateHeaderV2 {
+impl StateHeader {
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
         self.protocol_version == next.protocol_version
             && self.chain_id == next.chain_id
@@ -145,7 +126,7 @@ pub struct SponsorPolicy {
     pub max_total_fee: Capacity,
     pub already_spent: Capacity,
     pub expiry: u64,
-    pub allowed_sponsor_source: Bytes32,
+    pub publication_state_type_hash: Bytes32,
     pub change_lock: Bytes32,
 }
 
@@ -154,8 +135,7 @@ pub struct SponsorSpend {
     pub channel_id: Bytes32,
     pub state_number: u64,
     pub fee: Capacity,
-    pub now: u64,
-    pub sponsor_source: Bytes32,
+    pub publication_state_type_hash: Bytes32,
     pub change_lock: Bytes32,
     pub operation: ChannelOperation,
 }
@@ -233,7 +213,7 @@ pub enum FactorySpliceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FactoryVaultDescriptorV1 {
+pub struct FactoryVaultDescriptor {
     pub factory_id: Bytes32,
     pub assets: Vec<VaultAssetAmount>,
 }
@@ -268,8 +248,8 @@ pub struct FactorySpliceTransition {
     pub header: FactorySpliceHeader,
     pub witness: SpliceWitness,
     pub update: FactoryUpdate,
-    pub old_vault: FactoryVaultDescriptorV1,
-    pub new_vault: FactoryVaultDescriptorV1,
+    pub old_vault: FactoryVaultDescriptor,
+    pub new_vault: FactoryVaultDescriptor,
     pub deltas: Vec<FactoryVaultDelta>,
     pub asset_registry: AssetRegistry,
 }
@@ -299,8 +279,8 @@ pub struct FactoryReducedSpliceTransition {
     pub header: FactorySpliceHeader,
     pub witness: FactoryReducedSpliceWitness,
     pub update: FactorySingleRightMerkleUpdate,
-    pub old_vault: FactoryVaultDescriptorV1,
-    pub new_vault: FactoryVaultDescriptorV1,
+    pub old_vault: FactoryVaultDescriptor,
+    pub new_vault: FactoryVaultDescriptor,
     pub deltas: Vec<FactoryVaultDelta>,
     pub asset_registry: AssetRegistry,
 }
@@ -482,7 +462,7 @@ pub struct VaultAssetAmount {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VaultDescriptorV2 {
+pub struct VaultDescriptor {
     pub funding_anchor: Bytes32,
     pub assets: Vec<VaultAssetAmount>,
 }
@@ -528,8 +508,8 @@ pub struct SpliceTransition {
     pub current_state: StateCell,
     pub header: SpliceHeader,
     pub witness: SpliceWitness,
-    pub old_vault: VaultDescriptorV2,
-    pub new_vault: VaultDescriptorV2,
+    pub old_vault: VaultDescriptor,
+    pub new_vault: VaultDescriptor,
     pub deltas: Vec<SpliceAssetDelta>,
     pub withdrawals: Vec<VaultAssetAmount>,
     pub remaining_settlement: Vec<VaultAssetAmount>,

@@ -5,15 +5,15 @@ use k256::ecdsa::{Signature, VerifyingKey};
 use thiserror::Error;
 
 use crate::hash::{
-    blake2b256, factory_vault_delta_commitment_v1, participants_commitment,
-    splice_asset_delta_commitment_v1, vault_descriptor_commitment_v2,
+    blake2b256, factory_vault_delta_commitment, participants_commitment,
+    splice_asset_delta_commitment, vault_descriptor_commitment,
 };
 use crate::types::*;
 
-const FACTORY_RIGHT_KEY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY_V1";
-const FACTORY_RIGHT_LEAF_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF_V1";
-const FACTORY_RIGHT_NODE_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE_V1";
-const FACTORY_RIGHT_EMPTY_DOMAIN_V1: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY_V1";
+const FACTORY_RIGHT_KEY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_KEY";
+const FACTORY_RIGHT_LEAF_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF";
+const FACTORY_RIGHT_NODE_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE";
+const FACTORY_RIGHT_EMPTY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY";
 const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -54,10 +54,10 @@ pub enum MorphError {
     SponsorChannelMismatch,
     #[error("sponsor policy state number outside authorised range")]
     SponsorStateOutOfRange,
-    #[error("sponsor policy expired")]
-    SponsorPolicyExpired,
-    #[error("sponsor source is not authorised")]
-    SponsorSourceMismatch,
+    #[error("sponsor policy contains a script-unsupported field value")]
+    SponsorPolicyUnsupported,
+    #[error("sponsor publication state type hash mismatch")]
+    SponsorStateTypeMismatch,
     #[error("sponsor change lock mismatch")]
     SponsorChangeLockMismatch,
     #[error("sponsor fee exceeds per-transaction limit")]
@@ -211,7 +211,9 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     if splice.header.chain_id != current.chain_id
         || splice.header.signature_scheme_id != current.signature_scheme_id
         || splice.header.channel_id != current.channel_id
+        || splice.header.old_funding_epoch != current.funding_epoch
         || splice.header.old_funding_anchor != current.funding_anchor
+        || splice.header.old_vault_commitment != current.vault_set_commitment
         || splice.header.participants_commitment != current.participants_commitment
         || splice.header.challenge_policy_commitment != current.challenge_policy_commitment
     {
@@ -227,12 +229,12 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     }
     if splice.old_vault.funding_anchor != splice.header.old_funding_anchor
         || splice.new_vault.funding_anchor != splice.header.new_funding_anchor
-        || vault_descriptor_commitment_v2(&splice.old_vault) != splice.header.old_vault_commitment
-        || vault_descriptor_commitment_v2(&splice.new_vault) != splice.header.new_vault_commitment
+        || vault_descriptor_commitment(&splice.old_vault) != splice.header.old_vault_commitment
+        || vault_descriptor_commitment(&splice.new_vault) != splice.header.new_vault_commitment
     {
         return Err(MorphError::SpliceVaultCommitmentMismatch);
     }
-    if splice_asset_delta_commitment_v1(&splice.deltas) != splice.header.asset_delta_commitment {
+    if splice_asset_delta_commitment(&splice.deltas) != splice.header.asset_delta_commitment {
         return Err(MorphError::SpliceDeltaCommitmentMismatch);
     }
 
@@ -328,11 +330,11 @@ pub fn validate_sponsor_policy(policy: &SponsorPolicy, spend: &SponsorSpend) -> 
     {
         return Err(MorphError::SponsorStateOutOfRange);
     }
-    if spend.now > policy.expiry {
-        return Err(MorphError::SponsorPolicyExpired);
+    if policy.expiry != u64::MAX {
+        return Err(MorphError::SponsorPolicyUnsupported);
     }
-    if spend.sponsor_source != policy.allowed_sponsor_source {
-        return Err(MorphError::SponsorSourceMismatch);
+    if spend.publication_state_type_hash != policy.publication_state_type_hash {
+        return Err(MorphError::SponsorStateTypeMismatch);
     }
     if spend.change_lock != policy.change_lock {
         return Err(MorphError::SponsorChangeLockMismatch);
@@ -488,7 +490,7 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
     {
         return Err(MorphError::FactorySpliceHeaderMismatch);
     }
-    if factory_vault_delta_commitment_v1(&splice.deltas) != splice.header.vault_delta_commitment {
+    if factory_vault_delta_commitment(&splice.deltas) != splice.header.vault_delta_commitment {
         return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
     }
     if splice.update.touched_participants.len() != 1
@@ -586,7 +588,7 @@ pub fn validate_factory_reduced_splice_transition(
     {
         return Err(MorphError::FactorySpliceHeaderMismatch);
     }
-    if factory_vault_delta_commitment_v1(&splice.deltas) != splice.header.vault_delta_commitment {
+    if factory_vault_delta_commitment(&splice.deltas) != splice.header.vault_delta_commitment {
         return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
     }
 
@@ -788,7 +790,7 @@ pub fn factory_right_sparse_proof(
 
 pub fn factory_right_key(id: &FactoryRightId) -> Bytes32 {
     let mut bytes = Vec::with_capacity(128);
-    bytes.extend_from_slice(FACTORY_RIGHT_KEY_DOMAIN_V1);
+    bytes.extend_from_slice(FACTORY_RIGHT_KEY_DOMAIN);
     bytes.extend_from_slice(&id.participant);
     bytes.extend_from_slice(&id.subchannel);
     bytes.push(factory_right_kind_byte(id.kind));
@@ -807,7 +809,7 @@ pub fn factory_right_key(id: &FactoryRightId) -> Bytes32 {
 
 pub fn factory_right_leaf_hash(right: &FactoryRight) -> Bytes32 {
     let mut bytes = Vec::with_capacity(160);
-    bytes.extend_from_slice(FACTORY_RIGHT_LEAF_DOMAIN_V1);
+    bytes.extend_from_slice(FACTORY_RIGHT_LEAF_DOMAIN);
     bytes.extend_from_slice(&factory_right_key(&right.id));
     bytes.extend_from_slice(&right.id.participant);
     bytes.extend_from_slice(&right.id.subchannel);
@@ -1012,7 +1014,7 @@ fn factory_sparse_subtree_root(
 
 fn factory_empty_hashes() -> [Bytes32; FACTORY_SPARSE_MERKLE_DEPTH + 1] {
     let mut out = [[0u8; 32]; FACTORY_SPARSE_MERKLE_DEPTH + 1];
-    out[0] = blake2b256(FACTORY_RIGHT_EMPTY_DOMAIN_V1);
+    out[0] = blake2b256(FACTORY_RIGHT_EMPTY_DOMAIN);
     for height in 1..=FACTORY_SPARSE_MERKLE_DEPTH {
         out[height] = factory_right_node_hash(
             FACTORY_SPARSE_MERKLE_DEPTH - height,
@@ -1025,7 +1027,7 @@ fn factory_empty_hashes() -> [Bytes32; FACTORY_SPARSE_MERKLE_DEPTH + 1] {
 
 fn factory_right_node_hash(depth: usize, left: Bytes32, right: Bytes32) -> Bytes32 {
     let mut bytes = Vec::with_capacity(72);
-    bytes.extend_from_slice(FACTORY_RIGHT_NODE_DOMAIN_V1);
+    bytes.extend_from_slice(FACTORY_RIGHT_NODE_DOMAIN);
     bytes.extend_from_slice(&(depth as u16).to_le_bytes());
     bytes.extend_from_slice(&left);
     bytes.extend_from_slice(&right);
@@ -1353,17 +1355,7 @@ fn reserve_claim_asset(asset_type: &Option<Bytes32>) -> VaultAsset {
 }
 
 fn require_same_header_context(old: &StateHeader, new: &StateHeader) -> Result<()> {
-    let same = old.protocol_version == new.protocol_version
-        && old.chain_id == new.chain_id
-        && old.signature_scheme_id == new.signature_scheme_id
-        && old.channel_id == new.channel_id
-        && old.funding_anchor == new.funding_anchor
-        && old.mode == new.mode
-        && old.participants_commitment == new.participants_commitment
-        && old.asset_registry_commitment == new.asset_registry_commitment
-        && old.challenge_policy_commitment == new.challenge_policy_commitment
-        && old.state_layout_version == new.state_layout_version;
-    if same {
+    if old.same_context_except_progress(new) {
         Ok(())
     } else {
         Err(MorphError::HeaderContextChanged)

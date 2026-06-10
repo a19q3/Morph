@@ -11,45 +11,41 @@ use k256::ecdsa::{Signature, SigningKey};
 use morph_core::types::{FactoryMerkleSibling, FactoryRight, FactoryRightId, FactoryRightKind};
 use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1, BILATERAL_CKB_DESCRIPTOR_V1_LEN,
-    BILATERAL_CKB_DESCRIPTOR_VERSION_V1, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1,
-    BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    BILATERAL_SIGNATURE_COUNT_V1, BILATERAL_SIGNATURE_THRESHOLD_V1,
-    BILATERAL_SIGNATURE_WITNESS_V1_LEN, BILATERAL_SIGNATURE_WITNESS_VERSION_V1, BYTE32_LEN,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_V1_LEN,
-    FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1, FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1,
-    FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1,
-    FACTORY_REDUCED_EXIT_WITNESS_V1_LEN, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1,
-    FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_COUNT_V1, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1, FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN,
-    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1, FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN,
-    FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
-    FACTORY_RIGHT_V1_LEN, FACTORY_SIGNATURE_COUNT_V1, FACTORY_SIGNATURE_THRESHOLD_V1,
-    FACTORY_SIGNATURE_WITNESS_V1_LEN, FACTORY_SIGNATURE_WITNESS_VERSION_V1,
-    FACTORY_SPARSE_MERKLE_DEPTH_V1, FACTORY_SPLICE_HEADER_V1_LEN, FACTORY_SPLICE_WITNESS_V1_LEN,
-    FACTORY_SPLICE_WITNESS_VERSION_V1, FACTORY_STATE_HEADER_V1_LEN,
-    FACTORY_VAULT_ASSET_AMOUNT_V1_LEN, FACTORY_VAULT_DELTA_V1_LEN, FACTORY_VAULT_DELTAS_V1_LEN,
-    FACTORY_VAULT_DESCRIPTOR_V1_LEN, FactoryMerkleUpdateWitnessV1, FactoryReducedExitWitnessV1,
-    FactoryReducedRightsWitnessV1, FactoryReducedSpliceWitnessV1, FactorySpliceHeaderV1,
-    FactoryStateHeaderV1, FactoryVaultDeltasV1, PHASE_ACTIVE, PHASE_SETTLING,
-    SPLICE_ASSET_DELTA_V1_LEN, SPLICE_ASSET_DELTAS_V1_LEN, SPLICE_HEADER_V1_LEN, SPLICE_KIND_IN_V1,
-    SPLICE_KIND_OUT_V1, SPLICE_SIGNATURE_COUNT_V1, SPLICE_SIGNATURE_THRESHOLD_V1,
-    SPLICE_SIGNATURE_WITNESS_V1_LEN, SPLICE_SIGNATURE_WITNESS_VERSION_V1,
-    SPLICE_STATE_TRANSITION_WITNESS_V1_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1,
-    SPLICE_VAULT_ASSET_AMOUNT_V2_LEN, SPLICE_VAULT_DESCRIPTOR_V2_LEN, SPONSOR_POLICY_V1_LEN,
-    STATE_HEADER_V2_LEN, SpliceAssetDeltasV1, SpliceHeaderV1, SpliceStateTransitionWitnessV1,
-    SpliceVaultDescriptorV2, StateHeaderV2, StateHeaderV2Input, VAULT_ASSET_KIND_CKB_V1,
-    VAULT_ASSET_KIND_XUDT_V1, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2, WITNESS_ENVELOPE_V2_LEN, WITNESS_ENVELOPE_V2_MAGIC,
-    WITNESS_ENVELOPE_VERSION_V2, WitnessEnvelopeV2, blake2b256, encode_state_header_v2,
-    factory_local_exit_digest_v1, factory_participants_commitment_v1, participants_commitment_v1,
-    relative_block_since, settlement_descriptor_commitment_v1, vault_cell_commitment_v1,
-    witness_envelope_body_commitment_v2,
+    BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
+    BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
+    BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
+    BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
+    ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
+    FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
+    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_EXIT_WITNESS_LEN,
+    FACTORY_REDUCED_EXIT_WITNESS_VERSION, FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN,
+    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT, FACTORY_REDUCED_RIGHTS_COUNT,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD, FACTORY_REDUCED_RIGHTS_WITNESS_LEN,
+    FACTORY_REDUCED_RIGHTS_WITNESS_VERSION, FACTORY_REDUCED_SPLICE_WITNESS_LEN,
+    FACTORY_REDUCED_SPLICE_WITNESS_VERSION, FACTORY_RIGHT_KIND_RESERVE_CLAIM, FACTORY_RIGHT_LEN,
+    FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD, FACTORY_SIGNATURE_WITNESS_LEN,
+    FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH, FACTORY_SPLICE_HEADER_LEN,
+    FACTORY_SPLICE_WITNESS_LEN, FACTORY_SPLICE_WITNESS_VERSION, FACTORY_STATE_HEADER_LEN,
+    FACTORY_VAULT_ASSET_AMOUNT_LEN, FACTORY_VAULT_DELTA_LEN, FACTORY_VAULT_DELTAS_LEN,
+    FACTORY_VAULT_DESCRIPTOR_LEN, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
+    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySpliceHeader,
+    FactoryStateHeader, FactoryVaultDeltas, PHASE_ACTIVE, PHASE_SETTLING, SPLICE_ASSET_DELTA_LEN,
+    SPLICE_ASSET_DELTAS_LEN, SPLICE_HEADER_LEN, SPLICE_KIND_IN, SPLICE_KIND_OUT,
+    SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN,
+    SPLICE_SIGNATURE_WITNESS_VERSION, SPLICE_STATE_TRANSITION_WITNESS_LEN,
+    SPLICE_STATE_TRANSITION_WITNESS_VERSION, SPLICE_VAULT_ASSET_AMOUNT_LEN,
+    SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN, STATE_HEADER_LEN, SpliceAssetDeltas,
+    SpliceHeader, SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
+    StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, blake2b256, encode_state_header, factory_local_exit_digest,
+    factory_participants_commitment, participants_commitment, relative_block_since,
+    settlement_descriptor_commitment, vault_cell_commitment, witness_envelope_body_commitment,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -168,7 +164,7 @@ fn vault_commitment(
     type_hash: Option<[u8; 32]>,
     data: &[u8],
 ) -> [u8; 32] {
-    vault_cell_commitment_v1(
+    vault_cell_commitment(
         lock.calc_script_hash().as_slice(),
         capacity,
         type_hash.as_ref().map(|hash| hash.as_slice()),
@@ -254,7 +250,7 @@ fn signature(key: &SigningKey, digest: &[u8; 32]) -> [u8; ECDSA_SIGNATURE_LEN] {
     out
 }
 
-fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_V2_LEN] {
+fn header_raw(state_number: u64, phase: u8) -> [u8; STATE_HEADER_LEN] {
     header_raw_with_anchor(state_number, phase, FUNDING_ANCHOR)
 }
 
@@ -262,8 +258,8 @@ fn header_raw_with_anchor(
     state_number: u64,
     phase: u8,
     funding_anchor: [u8; 32],
-) -> [u8; STATE_HEADER_V2_LEN] {
-    encode_state_header_v2(&StateHeaderV2Input {
+) -> [u8; STATE_HEADER_LEN] {
+    encode_state_header(&StateHeaderInput {
         protocol_version: 1,
         chain_id: [2; BYTE32_LEN],
         signature_scheme_id: 1,
@@ -284,15 +280,15 @@ fn header_raw_with_anchor(
     })
 }
 
-fn factory_header_raw(update_number: u64) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
+fn factory_header_raw(update_number: u64) -> [u8; FACTORY_STATE_HEADER_LEN] {
     factory_header_raw_with_id(update_number, FACTORY_ID)
 }
 
 fn factory_header_raw_with_id(
     update_number: u64,
     factory_id: [u8; 32],
-) -> [u8; FACTORY_STATE_HEADER_V1_LEN] {
-    let mut raw = [0u8; FACTORY_STATE_HEADER_V1_LEN];
+) -> [u8; FACTORY_STATE_HEADER_LEN] {
+    let mut raw = [0u8; FACTORY_STATE_HEADER_LEN];
     put_u16(&mut raw, 0, 1);
     raw[2..34].fill(2);
     put_u16(&mut raw, 34, 1);
@@ -326,18 +322,18 @@ fn signed_state_pair(
     let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let commitment = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+    let commitment = participants_commitment(2, &[&entries[0].0, &entries[1].0]);
     let mut old = header_raw(old_number, old_phase);
     old[150..182].copy_from_slice(&commitment);
     let mut new = header_raw(new_number, new_phase);
     new[150..182].copy_from_slice(&commitment);
 
-    let header = StateHeaderV2::parse(&new).unwrap();
+    let header = StateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
-    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);
-    witness[2] = BILATERAL_SIGNATURE_THRESHOLD_V1;
-    witness[3] = BILATERAL_SIGNATURE_COUNT_V1;
+    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION);
+    witness[2] = BILATERAL_SIGNATURE_THRESHOLD;
+    witness[3] = BILATERAL_SIGNATURE_COUNT;
     for (index, (pubkey, key)) in entries.iter().enumerate() {
         let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
         witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
@@ -366,7 +362,7 @@ fn signed_state_pair_with_new_descriptor(
     let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let commitment = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+    let commitment = participants_commitment(2, &[&entries[0].0, &entries[1].0]);
     let mut old = header_raw(old_number, old_phase);
     old[150..182].copy_from_slice(&commitment);
     let mut new = header_raw(new_number, new_phase);
@@ -374,12 +370,12 @@ fn signed_state_pair_with_new_descriptor(
     new[214..246].copy_from_slice(&descriptor_commitment);
     put_u16(&mut new, 246, descriptor_version);
 
-    let header = StateHeaderV2::parse(&new).unwrap();
+    let header = StateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
-    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION_V1);
-    witness[2] = BILATERAL_SIGNATURE_THRESHOLD_V1;
-    witness[3] = BILATERAL_SIGNATURE_COUNT_V1;
+    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION);
+    witness[2] = BILATERAL_SIGNATURE_THRESHOLD;
+    witness[3] = BILATERAL_SIGNATURE_COUNT;
     for (index, (pubkey, key)) in entries.iter().enumerate() {
         let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
         witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
@@ -403,7 +399,7 @@ fn signed_splice_out_bundle(
     new_capacity: u64,
 ) -> (Bytes, Bytes, Bytes) {
     signed_splice_ckb_bundle(
-        SPLICE_KIND_OUT_V1,
+        SPLICE_KIND_OUT,
         old_anchor,
         new_anchor,
         state_number,
@@ -421,7 +417,7 @@ fn signed_splice_in_bundle(
     new_capacity: u64,
 ) -> (Bytes, Bytes, Bytes) {
     signed_splice_ckb_bundle(
-        SPLICE_KIND_IN_V1,
+        SPLICE_KIND_IN,
         old_anchor,
         new_anchor,
         state_number,
@@ -440,7 +436,7 @@ fn signed_splice_out_bundle_with_channel(
     header_channel_id: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     signed_splice_ckb_bundle(
-        SPLICE_KIND_OUT_V1,
+        SPLICE_KIND_OUT,
         old_anchor,
         new_anchor,
         state_number,
@@ -463,31 +459,31 @@ fn signed_splice_ckb_bundle(
     let key1 = signing_key(2);
     let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let participants = participants_commitment_v1(2, &[&entries[0].0, &entries[1].0]);
+    let participants = participants_commitment(2, &[&entries[0].0, &entries[1].0]);
 
     let old_asset = splice_vault_asset_bytes(
-        VAULT_ASSET_KIND_CKB_V1,
+        VAULT_ASSET_KIND_CKB,
         &[0u8; BYTE32_LEN],
         old_capacity as u128,
     );
     let old_vault_raw = splice_vault_descriptor_bytes(old_anchor, 1, &old_asset, None);
-    let old_vault = SpliceVaultDescriptorV2::parse(&old_vault_raw).unwrap();
+    let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
 
     let new_asset = splice_vault_asset_bytes(
-        VAULT_ASSET_KIND_CKB_V1,
+        VAULT_ASSET_KIND_CKB,
         &[0u8; BYTE32_LEN],
         new_capacity as u128,
     );
     let new_vault_raw = splice_vault_descriptor_bytes(new_anchor, 1, &new_asset, None);
-    let new_vault = SpliceVaultDescriptorV2::parse(&new_vault_raw).unwrap();
+    let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
 
     let (external_input, withdrawal) = match kind {
-        SPLICE_KIND_IN_V1 => (new_capacity - old_capacity, 0),
-        SPLICE_KIND_OUT_V1 => (0, old_capacity - new_capacity),
+        SPLICE_KIND_IN => (new_capacity - old_capacity, 0),
+        SPLICE_KIND_OUT => (0, old_capacity - new_capacity),
         _ => unreachable!("test fixture only builds known splice kinds"),
     };
     let delta = splice_asset_delta_bytes(
-        VAULT_ASSET_KIND_CKB_V1,
+        VAULT_ASSET_KIND_CKB,
         &[0u8; BYTE32_LEN],
         old_capacity as u128,
         new_capacity as u128,
@@ -496,7 +492,7 @@ fn signed_splice_ckb_bundle(
         0,
     );
     let deltas_raw = splice_asset_deltas_bytes(1, &delta, None);
-    let deltas = SpliceAssetDeltasV1::parse(&deltas_raw).unwrap();
+    let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
 
     let mut splice_header_raw = splice_header_bytes(
         kind,
@@ -513,7 +509,7 @@ fn signed_splice_ckb_bundle(
     if let Some(channel_id) = header_channel_id {
         splice_header_raw[36..68].copy_from_slice(&channel_id);
     }
-    let splice_header = SpliceHeaderV1::parse(&splice_header_raw).unwrap();
+    let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
     let signature_witness =
         signed_splice_signature_witness(&entries, &splice_header.signing_digest());
     let bundle_raw = splice_state_transition_witness_bytes(
@@ -523,7 +519,7 @@ fn signed_splice_ckb_bundle(
         &new_vault_raw,
         &deltas_raw,
     );
-    SpliceStateTransitionWitnessV1::parse(&bundle_raw).unwrap();
+    SpliceStateTransitionWitness::parse(&bundle_raw).unwrap();
 
     let mut old_state = header_raw_with_anchor(state_number, PHASE_ACTIVE, old_anchor);
     old_state[108..140].copy_from_slice(&old_vault.commitment().unwrap());
@@ -543,11 +539,11 @@ fn signed_splice_ckb_bundle(
 fn signed_splice_signature_witness(
     entries: &[([u8; COMPRESSED_SECP256K1_PUBKEY_LEN], SigningKey); 2],
     digest: &[u8; BYTE32_LEN],
-) -> [u8; SPLICE_SIGNATURE_WITNESS_V1_LEN] {
-    let mut witness = [0u8; SPLICE_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, SPLICE_SIGNATURE_WITNESS_VERSION_V1);
-    witness[2] = SPLICE_SIGNATURE_THRESHOLD_V1;
-    witness[3] = SPLICE_SIGNATURE_COUNT_V1;
+) -> [u8; SPLICE_SIGNATURE_WITNESS_LEN] {
+    let mut witness = [0u8; SPLICE_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, SPLICE_SIGNATURE_WITNESS_VERSION);
+    witness[2] = SPLICE_SIGNATURE_THRESHOLD;
+    witness[3] = SPLICE_SIGNATURE_COUNT;
     for (index, (pubkey, key)) in entries.iter().enumerate() {
         let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
         witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
@@ -565,8 +561,8 @@ fn splice_header_bytes(
     base_state_number: u64,
     participants: &[u8; BYTE32_LEN],
     commitments: (&[u8; BYTE32_LEN], &[u8; BYTE32_LEN], &[u8; BYTE32_LEN]),
-) -> [u8; SPLICE_HEADER_V1_LEN] {
-    let mut raw = [0u8; SPLICE_HEADER_V1_LEN];
+) -> [u8; SPLICE_HEADER_LEN] {
+    let mut raw = [0u8; SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, 1);
     raw[2..34].fill(2);
     put_u16(&mut raw, 34, 1);
@@ -590,8 +586,8 @@ fn splice_vault_asset_bytes(
     kind: u8,
     type_hash: &[u8; BYTE32_LEN],
     amount: u128,
-) -> [u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN] {
-    let mut raw = [0u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN];
+) -> [u8; SPLICE_VAULT_ASSET_AMOUNT_LEN] {
+    let mut raw = [0u8; SPLICE_VAULT_ASSET_AMOUNT_LEN];
     raw[0] = kind;
     raw[1..33].copy_from_slice(type_hash);
     put_u128(&mut raw, 33, amount);
@@ -601,16 +597,16 @@ fn splice_vault_asset_bytes(
 fn splice_vault_descriptor_bytes(
     funding_anchor: [u8; BYTE32_LEN],
     count: u16,
-    asset_0: &[u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN],
-    asset_1: Option<&[u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN]>,
-) -> [u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN] {
-    let mut raw = [0u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN];
+    asset_0: &[u8; SPLICE_VAULT_ASSET_AMOUNT_LEN],
+    asset_1: Option<&[u8; SPLICE_VAULT_ASSET_AMOUNT_LEN]>,
+) -> [u8; SPLICE_VAULT_DESCRIPTOR_LEN] {
+    let mut raw = [0u8; SPLICE_VAULT_DESCRIPTOR_LEN];
     raw[0..32].copy_from_slice(&funding_anchor);
     put_u16(&mut raw, 32, count);
-    raw[34..34 + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN].copy_from_slice(asset_0);
+    raw[34..34 + SPLICE_VAULT_ASSET_AMOUNT_LEN].copy_from_slice(asset_0);
     if let Some(asset) = asset_1 {
-        let offset = 34 + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN;
-        raw[offset..offset + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN].copy_from_slice(asset);
+        let offset = 34 + SPLICE_VAULT_ASSET_AMOUNT_LEN;
+        raw[offset..offset + SPLICE_VAULT_ASSET_AMOUNT_LEN].copy_from_slice(asset);
     }
     raw
 }
@@ -623,8 +619,8 @@ fn splice_asset_delta_bytes(
     external_input: u128,
     withdrawal: u128,
     signed_fee: u128,
-) -> [u8; SPLICE_ASSET_DELTA_V1_LEN] {
-    let mut raw = [0u8; SPLICE_ASSET_DELTA_V1_LEN];
+) -> [u8; SPLICE_ASSET_DELTA_LEN] {
+    let mut raw = [0u8; SPLICE_ASSET_DELTA_LEN];
     raw[0] = kind;
     raw[1..33].copy_from_slice(type_hash);
     put_u128(&mut raw, 33, old_amount);
@@ -637,38 +633,38 @@ fn splice_asset_delta_bytes(
 
 fn splice_asset_deltas_bytes(
     count: u16,
-    delta_0: &[u8; SPLICE_ASSET_DELTA_V1_LEN],
-    delta_1: Option<&[u8; SPLICE_ASSET_DELTA_V1_LEN]>,
-) -> [u8; SPLICE_ASSET_DELTAS_V1_LEN] {
-    let mut raw = [0u8; SPLICE_ASSET_DELTAS_V1_LEN];
+    delta_0: &[u8; SPLICE_ASSET_DELTA_LEN],
+    delta_1: Option<&[u8; SPLICE_ASSET_DELTA_LEN]>,
+) -> [u8; SPLICE_ASSET_DELTAS_LEN] {
+    let mut raw = [0u8; SPLICE_ASSET_DELTAS_LEN];
     put_u16(&mut raw, 0, count);
-    raw[2..2 + SPLICE_ASSET_DELTA_V1_LEN].copy_from_slice(delta_0);
+    raw[2..2 + SPLICE_ASSET_DELTA_LEN].copy_from_slice(delta_0);
     if let Some(delta) = delta_1 {
-        let offset = 2 + SPLICE_ASSET_DELTA_V1_LEN;
-        raw[offset..offset + SPLICE_ASSET_DELTA_V1_LEN].copy_from_slice(delta);
+        let offset = 2 + SPLICE_ASSET_DELTA_LEN;
+        raw[offset..offset + SPLICE_ASSET_DELTA_LEN].copy_from_slice(delta);
     }
     raw
 }
 
 fn splice_state_transition_witness_bytes(
-    header: &[u8; SPLICE_HEADER_V1_LEN],
-    signatures: &[u8; SPLICE_SIGNATURE_WITNESS_V1_LEN],
-    old_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN],
-    new_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN],
-    deltas: &[u8; SPLICE_ASSET_DELTAS_V1_LEN],
-) -> [u8; SPLICE_STATE_TRANSITION_WITNESS_V1_LEN] {
-    let mut raw = [0u8; SPLICE_STATE_TRANSITION_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1);
+    header: &[u8; SPLICE_HEADER_LEN],
+    signatures: &[u8; SPLICE_SIGNATURE_WITNESS_LEN],
+    old_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_LEN],
+    new_vault: &[u8; SPLICE_VAULT_DESCRIPTOR_LEN],
+    deltas: &[u8; SPLICE_ASSET_DELTAS_LEN],
+) -> [u8; SPLICE_STATE_TRANSITION_WITNESS_LEN] {
+    let mut raw = [0u8; SPLICE_STATE_TRANSITION_WITNESS_LEN];
+    put_u16(&mut raw, 0, SPLICE_STATE_TRANSITION_WITNESS_VERSION);
     let mut offset = 2;
-    raw[offset..offset + SPLICE_HEADER_V1_LEN].copy_from_slice(header);
-    offset += SPLICE_HEADER_V1_LEN;
-    raw[offset..offset + SPLICE_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(signatures);
-    offset += SPLICE_SIGNATURE_WITNESS_V1_LEN;
-    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(old_vault);
-    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
-    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(new_vault);
-    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
-    raw[offset..offset + SPLICE_ASSET_DELTAS_V1_LEN].copy_from_slice(deltas);
+    raw[offset..offset + SPLICE_HEADER_LEN].copy_from_slice(header);
+    offset += SPLICE_HEADER_LEN;
+    raw[offset..offset + SPLICE_SIGNATURE_WITNESS_LEN].copy_from_slice(signatures);
+    offset += SPLICE_SIGNATURE_WITNESS_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_LEN].copy_from_slice(old_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_LEN].copy_from_slice(new_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + SPLICE_ASSET_DELTAS_LEN].copy_from_slice(deltas);
     raw
 }
 
@@ -681,7 +677,7 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let commitment = factory_participants_commitment_v1(
+    let commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -696,12 +692,12 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
     new[140..172].fill(10);
     new[172..204].fill(11);
 
-    let header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let header = FactoryStateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
-    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
-    witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
-    witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD;
+    witness[3] = FACTORY_SIGNATURE_COUNT;
     for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
         let offset =
             4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
@@ -724,17 +720,17 @@ fn factory_splice_signature_witness(
     key0: &SigningKey,
     key1: &SigningKey,
     digest: &[u8; 32],
-) -> [u8; FACTORY_SIGNATURE_WITNESS_V1_LEN] {
+) -> [u8; FACTORY_SIGNATURE_WITNESS_LEN] {
     let mut entries = [
         ([1u8; BYTE32_LEN], pubkey(key0), signature(key0, digest)),
         ([2u8; BYTE32_LEN], pubkey(key1), signature(key1, digest)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
-    raw[3] = FACTORY_SIGNATURE_COUNT_V1;
+    let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
+    raw[2] = FACTORY_SIGNATURE_THRESHOLD;
+    raw[3] = FACTORY_SIGNATURE_COUNT;
     for (index, (participant, pubkey, sig)) in entries.iter().enumerate() {
         let offset =
             4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
@@ -748,8 +744,8 @@ fn factory_splice_signature_witness(
     raw
 }
 
-fn factory_vault_asset_bytes(kind: u8, amount: u128) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN];
+fn factory_vault_asset_bytes(kind: u8, amount: u128) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_ASSET_AMOUNT_LEN];
     raw[0] = kind;
     put_u128(&mut raw, 1 + BYTE32_LEN, amount);
     raw
@@ -759,7 +755,7 @@ fn factory_vault_asset_bytes_with_type(
     kind: u8,
     asset_type: [u8; BYTE32_LEN],
     amount: u128,
-) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN] {
+) -> [u8; FACTORY_VAULT_ASSET_AMOUNT_LEN] {
     let mut raw = factory_vault_asset_bytes(kind, amount);
     raw[1..1 + BYTE32_LEN].copy_from_slice(&asset_type);
     raw
@@ -767,27 +763,27 @@ fn factory_vault_asset_bytes_with_type(
 
 fn factory_vault_descriptor_bytes(
     factory_id: [u8; BYTE32_LEN],
-    asset: &[u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN],
-) -> [u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN];
+    asset: &[u8; FACTORY_VAULT_ASSET_AMOUNT_LEN],
+) -> [u8; FACTORY_VAULT_DESCRIPTOR_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_LEN];
     raw[0..BYTE32_LEN].copy_from_slice(&factory_id);
     put_u16(&mut raw, BYTE32_LEN, 1);
-    raw[BYTE32_LEN + 2..BYTE32_LEN + 2 + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN].copy_from_slice(asset);
+    raw[BYTE32_LEN + 2..BYTE32_LEN + 2 + FACTORY_VAULT_ASSET_AMOUNT_LEN].copy_from_slice(asset);
     raw
 }
 
 fn factory_vault_descriptor_two_assets_bytes(
     factory_id: [u8; BYTE32_LEN],
-    first: &[u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN],
-    second: &[u8; FACTORY_VAULT_ASSET_AMOUNT_V1_LEN],
-) -> [u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_V1_LEN];
+    first: &[u8; FACTORY_VAULT_ASSET_AMOUNT_LEN],
+    second: &[u8; FACTORY_VAULT_ASSET_AMOUNT_LEN],
+) -> [u8; FACTORY_VAULT_DESCRIPTOR_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DESCRIPTOR_LEN];
     raw[0..BYTE32_LEN].copy_from_slice(&factory_id);
     put_u16(&mut raw, BYTE32_LEN, 2);
     let mut offset = BYTE32_LEN + 2;
-    raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN].copy_from_slice(first);
-    offset += FACTORY_VAULT_ASSET_AMOUNT_V1_LEN;
-    raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_V1_LEN].copy_from_slice(second);
+    raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_LEN].copy_from_slice(first);
+    offset += FACTORY_VAULT_ASSET_AMOUNT_LEN;
+    raw[offset..offset + FACTORY_VAULT_ASSET_AMOUNT_LEN].copy_from_slice(second);
     raw
 }
 
@@ -797,8 +793,8 @@ fn factory_vault_delta_bytes(
     new_amount: u128,
     external_input: u128,
     withdrawal: u128,
-) -> [u8; FACTORY_VAULT_DELTA_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_DELTA_V1_LEN];
+) -> [u8; FACTORY_VAULT_DELTA_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTA_LEN];
     raw[0] = kind;
     put_u128(&mut raw, 1 + BYTE32_LEN, old_amount);
     put_u128(&mut raw, 1 + BYTE32_LEN + 16, new_amount);
@@ -814,7 +810,7 @@ fn factory_vault_delta_bytes_with_type(
     new_amount: u128,
     external_input: u128,
     withdrawal: u128,
-) -> [u8; FACTORY_VAULT_DELTA_V1_LEN] {
+) -> [u8; FACTORY_VAULT_DELTA_LEN] {
     let mut raw =
         factory_vault_delta_bytes(kind, old_amount, new_amount, external_input, withdrawal);
     raw[1..1 + BYTE32_LEN].copy_from_slice(&asset_type);
@@ -822,11 +818,11 @@ fn factory_vault_delta_bytes_with_type(
 }
 
 fn factory_vault_deltas_bytes(
-    delta: &[u8; FACTORY_VAULT_DELTA_V1_LEN],
-) -> [u8; FACTORY_VAULT_DELTAS_V1_LEN] {
-    let mut raw = [0u8; FACTORY_VAULT_DELTAS_V1_LEN];
+    delta: &[u8; FACTORY_VAULT_DELTA_LEN],
+) -> [u8; FACTORY_VAULT_DELTAS_LEN] {
+    let mut raw = [0u8; FACTORY_VAULT_DELTAS_LEN];
     put_u16(&mut raw, 0, 1);
-    raw[2..2 + FACTORY_VAULT_DELTA_V1_LEN].copy_from_slice(delta);
+    raw[2..2 + FACTORY_VAULT_DELTA_LEN].copy_from_slice(delta);
     raw
 }
 
@@ -843,7 +839,7 @@ fn signed_factory_splice_pair(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let factory_participants = factory_participants_commitment_v1(
+    let factory_participants = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -851,41 +847,41 @@ fn signed_factory_splice_pair(
         ],
     );
     let splice_participants =
-        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+        participants_commitment(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
 
     let mut old = factory_header_raw(1);
     old[108..140].copy_from_slice(&factory_participants);
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
     let mut new = factory_header_raw(2);
     new[76..108].fill(9);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].fill(10);
     new[172..204].fill(11);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
 
-    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, old_amount);
-    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, new_amount);
+    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, old_amount);
+    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, new_amount);
     let old_vault = factory_vault_descriptor_bytes(FACTORY_ID, &old_asset);
     let new_vault = factory_vault_descriptor_bytes(FACTORY_ID, &new_asset);
     let delta = factory_vault_delta_bytes(
-        VAULT_ASSET_KIND_CKB_V1,
+        VAULT_ASSET_KIND_CKB,
         old_amount,
         new_amount,
         external_input,
         withdrawal,
     );
     let deltas = factory_vault_deltas_bytes(&delta);
-    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+    let vault_delta_commitment = FactoryVaultDeltas::parse(&deltas)
         .unwrap()
         .commitment()
         .unwrap();
 
     let kind = if external_input > 0 {
-        SPLICE_KIND_IN_V1
+        SPLICE_KIND_IN
     } else {
-        SPLICE_KIND_OUT_V1
+        SPLICE_KIND_OUT
     };
-    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut header, 0, 1);
     header[2..34].copy_from_slice(old_header.factory_id());
     put_u64(&mut header, 34, old_header.update_number());
@@ -898,22 +894,22 @@ fn signed_factory_splice_pair(
     header[179..211].copy_from_slice(&vault_delta_commitment);
     header[211..243].copy_from_slice(new_header.non_interference_digest());
     header[243..275].copy_from_slice(&splice_participants);
-    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     let signatures =
         factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
 
-    let mut witness = [0u8; FACTORY_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_SPLICE_WITNESS_VERSION_V1);
+    let mut witness = [0u8; FACTORY_SPLICE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
-    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    witness[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_LEN].copy_from_slice(&signatures);
+    offset += FACTORY_SIGNATURE_WITNESS_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
     (
         old.to_vec().into(),
@@ -937,7 +933,7 @@ fn signed_factory_xudt_splice_pair(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let factory_participants = factory_participants_commitment_v1(
+    let factory_participants = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -945,35 +941,29 @@ fn signed_factory_xudt_splice_pair(
         ],
     );
     let splice_participants =
-        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+        participants_commitment(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
 
     let mut old = factory_header_raw(1);
     old[108..140].copy_from_slice(&factory_participants);
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
     let mut new = factory_header_raw(2);
     new[76..108].fill(9);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].fill(10);
     new[172..204].fill(11);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
 
-    let ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, ckb_amount);
-    let old_xudt_asset = factory_vault_asset_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
-        xudt_type_hash,
-        old_xudt_amount,
-    );
-    let new_xudt_asset = factory_vault_asset_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
-        xudt_type_hash,
-        new_xudt_amount,
-    );
+    let ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, ckb_amount);
+    let old_xudt_asset =
+        factory_vault_asset_bytes_with_type(VAULT_ASSET_KIND_XUDT, xudt_type_hash, old_xudt_amount);
+    let new_xudt_asset =
+        factory_vault_asset_bytes_with_type(VAULT_ASSET_KIND_XUDT, xudt_type_hash, new_xudt_amount);
     let old_vault =
         factory_vault_descriptor_two_assets_bytes(FACTORY_ID, &ckb_asset, &old_xudt_asset);
     let new_vault =
         factory_vault_descriptor_two_assets_bytes(FACTORY_ID, &ckb_asset, &new_xudt_asset);
     let delta = factory_vault_delta_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
+        VAULT_ASSET_KIND_XUDT,
         xudt_type_hash,
         old_xudt_amount,
         new_xudt_amount,
@@ -981,17 +971,17 @@ fn signed_factory_xudt_splice_pair(
         withdrawal,
     );
     let deltas = factory_vault_deltas_bytes(&delta);
-    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+    let vault_delta_commitment = FactoryVaultDeltas::parse(&deltas)
         .unwrap()
         .commitment()
         .unwrap();
 
     let kind = if external_input > 0 {
-        SPLICE_KIND_IN_V1
+        SPLICE_KIND_IN
     } else {
-        SPLICE_KIND_OUT_V1
+        SPLICE_KIND_OUT
     };
-    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut header, 0, 1);
     header[2..34].copy_from_slice(old_header.factory_id());
     put_u64(&mut header, 34, old_header.update_number());
@@ -1004,22 +994,22 @@ fn signed_factory_xudt_splice_pair(
     header[179..211].copy_from_slice(&vault_delta_commitment);
     header[211..243].copy_from_slice(new_header.non_interference_digest());
     header[243..275].copy_from_slice(&splice_participants);
-    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     let signatures =
         factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
 
-    let mut witness = [0u8; FACTORY_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_SPLICE_WITNESS_VERSION_V1);
+    let mut witness = [0u8; FACTORY_SPLICE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
-    offset += FACTORY_SIGNATURE_WITNESS_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    witness[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_LEN].copy_from_slice(&signatures);
+    offset += FACTORY_SIGNATURE_WITNESS_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
     (
         old.to_vec().into(),
@@ -1041,7 +1031,7 @@ fn signed_factory_reduced_splice_pair(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let factory_participants = factory_participants_commitment_v1(
+    let factory_participants = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -1049,7 +1039,7 @@ fn signed_factory_reduced_splice_pair(
         ],
     );
     let splice_participants =
-        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+        participants_commitment(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
 
     let mut before = large_factory_rights();
     let mut after = before.clone();
@@ -1076,49 +1066,49 @@ fn signed_factory_reduced_splice_pair(
         &after_proof.right,
         &before_proof.siblings,
     );
-    let merkle = FactoryMerkleUpdateWitnessV1::parse(&merkle_witness).unwrap();
+    let merkle = FactoryMerkleUpdateWitness::parse(&merkle_witness).unwrap();
     assert_eq!(merkle.rights_root(false).unwrap(), before_root);
     assert_eq!(merkle.rights_root(true).unwrap(), after_root);
 
     let mut old = factory_header_raw(1);
     old[76..108].copy_from_slice(&before_root);
     old[108..140].copy_from_slice(&factory_participants);
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(2);
     new[76..108].copy_from_slice(&after_root);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].copy_from_slice(old_header.access_manifest_root());
-    let preliminary_new = FactoryStateHeaderV1::parse(&new).unwrap();
+    let preliminary_new = FactoryStateHeader::parse(&new).unwrap();
     let digest = merkle
         .non_interference_digest(&old_header, &preliminary_new)
         .unwrap();
     new[172..204].copy_from_slice(&digest);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
 
-    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, old_amount);
-    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, new_amount);
+    let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, old_amount);
+    let new_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, new_amount);
     let old_vault = factory_vault_descriptor_bytes(FACTORY_ID, &old_asset);
     let new_vault = factory_vault_descriptor_bytes(FACTORY_ID, &new_asset);
     let delta = factory_vault_delta_bytes(
-        VAULT_ASSET_KIND_CKB_V1,
+        VAULT_ASSET_KIND_CKB,
         old_amount,
         new_amount,
         external_input,
         withdrawal,
     );
     let deltas = factory_vault_deltas_bytes(&delta);
-    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+    let vault_delta_commitment = FactoryVaultDeltas::parse(&deltas)
         .unwrap()
         .commitment()
         .unwrap();
 
     let kind = if external_input > 0 {
-        SPLICE_KIND_IN_V1
+        SPLICE_KIND_IN
     } else {
-        SPLICE_KIND_OUT_V1
+        SPLICE_KIND_OUT
     };
-    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut header, 0, 1);
     header[2..34].copy_from_slice(old_header.factory_id());
     put_u64(&mut header, 34, old_header.update_number());
@@ -1131,7 +1121,7 @@ fn signed_factory_reduced_splice_pair(
     header[179..211].copy_from_slice(&vault_delta_commitment);
     header[211..243].copy_from_slice(new_header.non_interference_digest());
     header[243..275].copy_from_slice(&splice_participants);
-    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     sign_merkle_update_witness(
         &mut merkle_witness,
         [1u8; BYTE32_LEN],
@@ -1139,19 +1129,19 @@ fn signed_factory_reduced_splice_pair(
         &splice_header.signing_digest(),
     );
 
-    let mut witness = [0u8; FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1);
+    let mut witness = [0u8; FACTORY_REDUCED_SPLICE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    witness[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN].copy_from_slice(&merkle_witness);
-    offset += FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
-    FactoryReducedSpliceWitnessV1::parse(&witness).unwrap();
+    witness[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    witness[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_LEN].copy_from_slice(&merkle_witness);
+    offset += FACTORY_MERKLE_UPDATE_WITNESS_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
+    FactoryReducedSpliceWitness::parse(&witness).unwrap();
 
     (
         old.to_vec().into(),
@@ -1175,7 +1165,7 @@ fn signed_factory_reduced_xudt_splice_pair(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let factory_participants = factory_participants_commitment_v1(
+    let factory_participants = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -1183,7 +1173,7 @@ fn signed_factory_reduced_xudt_splice_pair(
         ],
     );
     let splice_participants =
-        participants_commitment_v1(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
+        participants_commitment(2, &[entries[0].1.as_slice(), entries[1].1.as_slice()]);
 
     let mut before = large_factory_rights();
     let mut after = before.clone();
@@ -1212,43 +1202,37 @@ fn signed_factory_reduced_xudt_splice_pair(
         &after_proof.right,
         &before_proof.siblings,
     );
-    let merkle = FactoryMerkleUpdateWitnessV1::parse(&merkle_witness).unwrap();
+    let merkle = FactoryMerkleUpdateWitness::parse(&merkle_witness).unwrap();
     assert_eq!(merkle.rights_root(false).unwrap(), before_root);
     assert_eq!(merkle.rights_root(true).unwrap(), after_root);
 
     let mut old = factory_header_raw(1);
     old[76..108].copy_from_slice(&before_root);
     old[108..140].copy_from_slice(&factory_participants);
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(2);
     new[76..108].copy_from_slice(&after_root);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].copy_from_slice(old_header.access_manifest_root());
-    let preliminary_new = FactoryStateHeaderV1::parse(&new).unwrap();
+    let preliminary_new = FactoryStateHeader::parse(&new).unwrap();
     let digest = merkle
         .non_interference_digest(&old_header, &preliminary_new)
         .unwrap();
     new[172..204].copy_from_slice(&digest);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
 
-    let ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB_V1, ckb_amount);
-    let old_xudt_asset = factory_vault_asset_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
-        xudt_type_hash,
-        old_xudt_amount,
-    );
-    let new_xudt_asset = factory_vault_asset_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
-        xudt_type_hash,
-        new_xudt_amount,
-    );
+    let ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, ckb_amount);
+    let old_xudt_asset =
+        factory_vault_asset_bytes_with_type(VAULT_ASSET_KIND_XUDT, xudt_type_hash, old_xudt_amount);
+    let new_xudt_asset =
+        factory_vault_asset_bytes_with_type(VAULT_ASSET_KIND_XUDT, xudt_type_hash, new_xudt_amount);
     let old_vault =
         factory_vault_descriptor_two_assets_bytes(FACTORY_ID, &ckb_asset, &old_xudt_asset);
     let new_vault =
         factory_vault_descriptor_two_assets_bytes(FACTORY_ID, &ckb_asset, &new_xudt_asset);
     let delta = factory_vault_delta_bytes_with_type(
-        VAULT_ASSET_KIND_XUDT_V1,
+        VAULT_ASSET_KIND_XUDT,
         xudt_type_hash,
         old_xudt_amount,
         new_xudt_amount,
@@ -1256,17 +1240,17 @@ fn signed_factory_reduced_xudt_splice_pair(
         withdrawal,
     );
     let deltas = factory_vault_deltas_bytes(&delta);
-    let vault_delta_commitment = FactoryVaultDeltasV1::parse(&deltas)
+    let vault_delta_commitment = FactoryVaultDeltas::parse(&deltas)
         .unwrap()
         .commitment()
         .unwrap();
 
     let kind = if external_input > 0 {
-        SPLICE_KIND_IN_V1
+        SPLICE_KIND_IN
     } else {
-        SPLICE_KIND_OUT_V1
+        SPLICE_KIND_OUT
     };
-    let mut header = [0u8; FACTORY_SPLICE_HEADER_V1_LEN];
+    let mut header = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut header, 0, 1);
     header[2..34].copy_from_slice(old_header.factory_id());
     put_u64(&mut header, 34, old_header.update_number());
@@ -1279,7 +1263,7 @@ fn signed_factory_reduced_xudt_splice_pair(
     header[179..211].copy_from_slice(&vault_delta_commitment);
     header[211..243].copy_from_slice(new_header.non_interference_digest());
     header[243..275].copy_from_slice(&splice_participants);
-    let splice_header = FactorySpliceHeaderV1::parse(&header).unwrap();
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     sign_merkle_update_witness(
         &mut merkle_witness,
         [1u8; BYTE32_LEN],
@@ -1287,19 +1271,19 @@ fn signed_factory_reduced_xudt_splice_pair(
         &splice_header.signing_digest(),
     );
 
-    let mut witness = [0u8; FACTORY_REDUCED_SPLICE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION_V1);
+    let mut witness = [0u8; FACTORY_REDUCED_SPLICE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
-    witness[offset..offset + FACTORY_SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += FACTORY_SPLICE_HEADER_V1_LEN;
-    witness[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN].copy_from_slice(&merkle_witness);
-    offset += FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&old_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_V1_LEN].copy_from_slice(&new_vault);
-    offset += FACTORY_VAULT_DESCRIPTOR_V1_LEN;
-    witness[offset..offset + FACTORY_VAULT_DELTAS_V1_LEN].copy_from_slice(&deltas);
-    FactoryReducedSpliceWitnessV1::parse(&witness).unwrap();
+    witness[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += FACTORY_SPLICE_HEADER_LEN;
+    witness[offset..offset + FACTORY_MERKLE_UPDATE_WITNESS_LEN].copy_from_slice(&merkle_witness);
+    offset += FACTORY_MERKLE_UPDATE_WITNESS_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += FACTORY_VAULT_DESCRIPTOR_LEN;
+    witness[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
+    FactoryReducedSpliceWitness::parse(&witness).unwrap();
 
     (
         old.to_vec().into(),
@@ -1309,49 +1293,49 @@ fn signed_factory_reduced_xudt_splice_pair(
 }
 
 fn reduced_splice_merkle_offset() -> usize {
-    2 + FACTORY_SPLICE_HEADER_V1_LEN
+    2 + FACTORY_SPLICE_HEADER_LEN
 }
 
 fn reduced_participant_offset(index: usize) -> usize {
-    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn reduced_touched_offset() -> usize {
-    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn reduced_right_offset(after: bool, index: usize) -> usize {
     let before_offset = reduced_touched_offset() + BYTE32_LEN;
     if after {
         before_offset
-            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
-            + index * FACTORY_RIGHT_V1_LEN
+            + FACTORY_REDUCED_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN
+            + index * FACTORY_RIGHT_LEN
     } else {
-        before_offset + index * FACTORY_RIGHT_V1_LEN
+        before_offset + index * FACTORY_RIGHT_LEN
     }
 }
 
 fn merkle_participant_offset(index: usize) -> usize {
-    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn merkle_touched_offset() -> usize {
-    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn merkle_right_offset(after: bool) -> usize {
     let before_offset = merkle_touched_offset() + BYTE32_LEN;
     if after {
-        before_offset + FACTORY_RIGHT_V1_LEN
+        before_offset + FACTORY_RIGHT_LEN
     } else {
         before_offset
     }
 }
 
 fn merkle_sibling_offset(depth: usize) -> usize {
-    merkle_right_offset(true) + FACTORY_RIGHT_V1_LEN + depth * BYTE32_LEN
+    merkle_right_offset(true) + FACTORY_RIGHT_LEN + depth * BYTE32_LEN
 }
 
 fn factory_right_bytes(
@@ -1359,7 +1343,7 @@ fn factory_right_bytes(
     subchannel: u8,
     kind: u8,
     quantity: u128,
-) -> [u8; FACTORY_RIGHT_V1_LEN] {
+) -> [u8; FACTORY_RIGHT_LEN] {
     factory_right_bytes_with_asset(participant, subchannel, kind, quantity, None)
 }
 
@@ -1369,8 +1353,8 @@ fn factory_right_bytes_with_asset(
     kind: u8,
     quantity: u128,
     asset_type: Option<[u8; BYTE32_LEN]>,
-) -> [u8; FACTORY_RIGHT_V1_LEN] {
-    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+) -> [u8; FACTORY_RIGHT_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_LEN];
     raw[0..BYTE32_LEN].fill(participant);
     raw[BYTE32_LEN..2 * BYTE32_LEN].fill(subchannel);
     raw[2 * BYTE32_LEN] = kind;
@@ -1392,8 +1376,8 @@ fn factory_right_kind_byte(kind: FactoryRightKind) -> u8 {
     }
 }
 
-fn core_factory_right_bytes(right: &FactoryRight) -> [u8; FACTORY_RIGHT_V1_LEN] {
-    let mut raw = [0u8; FACTORY_RIGHT_V1_LEN];
+fn core_factory_right_bytes(right: &FactoryRight) -> [u8; FACTORY_RIGHT_LEN] {
+    let mut raw = [0u8; FACTORY_RIGHT_LEN];
     raw[0..BYTE32_LEN].copy_from_slice(&right.id.participant);
     raw[BYTE32_LEN..2 * BYTE32_LEN].copy_from_slice(&right.id.subchannel);
     raw[2 * BYTE32_LEN] = factory_right_kind_byte(right.id.kind);
@@ -1437,8 +1421,8 @@ fn large_factory_rights() -> Vec<FactoryRight> {
 fn reduced_rights_pair(
     touched_after_balance: u128,
 ) -> (
-    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
-    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
 ) {
     let before = [
         factory_right_bytes(1, 10, 0, 100),
@@ -1460,7 +1444,7 @@ fn reduced_rights_pair(
 fn reduced_rights_witness_raw(
     touched_after_balance: u128,
 ) -> (
-    [u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN],
+    [u8; FACTORY_REDUCED_RIGHTS_WITNESS_LEN],
     SigningKey,
     SigningKey,
 ) {
@@ -1473,12 +1457,12 @@ fn reduced_rights_witness_raw(
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     let (before, after) = reduced_rights_pair(touched_after_balance);
 
-    let mut raw = [0u8; FACTORY_REDUCED_RIGHTS_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
-    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
-    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+    let mut raw = [0u8; FACTORY_REDUCED_RIGHTS_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT;
     for (index, (participant, pubkey)) in entries.iter().enumerate() {
         let offset = reduced_participant_offset(index);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
@@ -1489,11 +1473,11 @@ fn reduced_rights_witness_raw(
     }
     raw[reduced_touched_offset()..reduced_touched_offset() + BYTE32_LEN]
         .copy_from_slice(&[1u8; BYTE32_LEN]);
-    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT as usize {
         let before_offset = reduced_right_offset(false, index);
-        raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&before[index]);
+        raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&before[index]);
         let after_offset = reduced_right_offset(true, index);
-        raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+        raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&after[index]);
     }
 
     (raw, key0, key1)
@@ -1510,31 +1494,31 @@ fn signed_reduced_factory_rights_pair(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let participants_commitment = factory_participants_commitment_v1(
+    let participants_commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
             (entries[1].0.as_slice(), entries[1].1.as_slice()),
         ],
     );
-    let witness = FactoryReducedRightsWitnessV1::parse(&witness_raw).unwrap();
+    let witness = FactoryReducedRightsWitness::parse(&witness_raw).unwrap();
 
     let mut old = factory_header_raw(old_number);
     old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
     old[108..140].copy_from_slice(&participants_commitment);
     old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(new_number);
     new[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
     new[108..140].copy_from_slice(&participants_commitment);
     new[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
-    let preliminary_new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let preliminary_new_header = FactoryStateHeader::parse(&new).unwrap();
     let digest = witness
         .non_interference_digest(&old_header, &preliminary_new_header)
         .unwrap();
     new[172..204].copy_from_slice(&digest);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
     let sig = signature(&key0, &new_header.signing_digest());
     let signature_offset =
         reduced_participant_offset(0) + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
@@ -1561,12 +1545,12 @@ fn merkle_update_witness_raw(
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut raw = vec![0u8; FACTORY_MERKLE_UPDATE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
-    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
-    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT_V1;
+    let mut raw = vec![0u8; FACTORY_MERKLE_UPDATE_WITNESS_LEN];
+    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT;
     for (index, (participant, pubkey)) in entries.iter().enumerate() {
         let offset = merkle_participant_offset(index);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
@@ -1576,11 +1560,11 @@ fn merkle_update_witness_raw(
             u8::from(participant.as_slice() == touched.as_slice());
     }
     raw[merkle_touched_offset()..merkle_touched_offset() + BYTE32_LEN].copy_from_slice(&touched);
-    raw[merkle_right_offset(false)..merkle_right_offset(false) + FACTORY_RIGHT_V1_LEN]
+    raw[merkle_right_offset(false)..merkle_right_offset(false) + FACTORY_RIGHT_LEN]
         .copy_from_slice(&core_factory_right_bytes(before_right));
-    raw[merkle_right_offset(true)..merkle_right_offset(true) + FACTORY_RIGHT_V1_LEN]
+    raw[merkle_right_offset(true)..merkle_right_offset(true) + FACTORY_RIGHT_LEN]
         .copy_from_slice(&core_factory_right_bytes(after_right));
-    assert_eq!(siblings.len(), FACTORY_SPARSE_MERKLE_DEPTH_V1);
+    assert_eq!(siblings.len(), FACTORY_SPARSE_MERKLE_DEPTH);
     for (depth, sibling) in siblings.iter().enumerate() {
         let offset = merkle_sibling_offset(depth);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(&sibling.hash);
@@ -1596,7 +1580,7 @@ fn sign_merkle_update_witness(
     digest: &[u8; 32],
 ) {
     let sig = signature(key, digest);
-    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize {
         if &raw[merkle_participant_offset(index)..merkle_participant_offset(index) + BYTE32_LEN]
             == participant.as_slice()
         {
@@ -1636,32 +1620,32 @@ fn signed_factory_merkle_update_pair_with_quantity(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let participants_commitment = factory_participants_commitment_v1(
+    let participants_commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
             (entries[1].0.as_slice(), entries[1].1.as_slice()),
         ],
     );
-    let witness = FactoryMerkleUpdateWitnessV1::parse(&witness_raw).unwrap();
+    let witness = FactoryMerkleUpdateWitness::parse(&witness_raw).unwrap();
     assert_eq!(witness.rights_root(false).unwrap(), before_root);
     assert_eq!(witness.rights_root(true).unwrap(), after_root);
 
     let mut old = factory_header_raw(old_number);
     old[76..108].copy_from_slice(&before_root);
     old[108..140].copy_from_slice(&participants_commitment);
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(new_number);
     new[76..108].copy_from_slice(&after_root);
     new[108..140].copy_from_slice(&participants_commitment);
     new[140..172].copy_from_slice(old_header.access_manifest_root());
-    let preliminary_new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let preliminary_new_header = FactoryStateHeader::parse(&new).unwrap();
     let digest = witness
         .non_interference_digest(&old_header, &preliminary_new_header)
         .unwrap();
     new[172..204].copy_from_slice(&digest);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
     sign_merkle_update_witness(
         &mut witness_raw,
         [1u8; BYTE32_LEN],
@@ -1673,12 +1657,12 @@ fn signed_factory_merkle_update_pair_with_quantity(
 }
 
 fn reduced_exit_participant_offset(index: usize) -> usize {
-    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn reduced_exit_touched_offset() -> usize {
-    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_V1_LEN
+    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
 fn reduced_exit_release_quantity_offset() -> usize {
@@ -1710,17 +1694,17 @@ fn reduced_exit_state_header_offset() -> usize {
 }
 
 fn reduced_exit_descriptor_offset() -> usize {
-    reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN
+    reduced_exit_state_header_offset() + STATE_HEADER_LEN
 }
 
 fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
     let before_offset = reduced_exit_descriptor_offset() + descriptor_len;
     if after {
         before_offset
-            + FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize * FACTORY_RIGHT_V1_LEN
-            + index * FACTORY_RIGHT_V1_LEN
+            + FACTORY_REDUCED_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN
+            + index * FACTORY_RIGHT_LEN
     } else {
-        before_offset + index * FACTORY_RIGHT_V1_LEN
+        before_offset + index * FACTORY_RIGHT_LEN
     }
 }
 
@@ -1729,8 +1713,8 @@ fn reduced_exit_rights_pair(
     reserve_claim_after_quantity: u128,
     reserve_asset_type: Option<[u8; BYTE32_LEN]>,
 ) -> (
-    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
-    [[u8; FACTORY_RIGHT_V1_LEN]; FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
 ) {
     let before = [
         factory_right_bytes(1, 10, 0, 100),
@@ -1791,14 +1775,14 @@ fn reduced_exit_witness_raw_with_reserve_asset(
 
     let mut raw = vec![
         0u8;
-        FACTORY_REDUCED_EXIT_WITNESS_V1_LEN - BILATERAL_CKB_DESCRIPTOR_V1_LEN
+        FACTORY_REDUCED_EXIT_WITNESS_LEN - BILATERAL_CKB_DESCRIPTOR_LEN
             + descriptor.len()
     ];
-    put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION_V1);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD_V1;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1;
-    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT_V1;
-    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT_V1;
+    put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION);
+    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
+    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT;
     for (index, (participant, pubkey)) in entries.iter().enumerate() {
         let offset = reduced_exit_participant_offset(index);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
@@ -1830,16 +1814,15 @@ fn reduced_exit_witness_raw_with_reserve_asset(
         .copy_from_slice(&vault_lock_hash);
     raw[reduced_exit_state_lock_hash_offset()..reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
         .copy_from_slice(&state_lock_hash);
-    raw[reduced_exit_state_header_offset()
-        ..reduced_exit_state_header_offset() + STATE_HEADER_V2_LEN]
+    raw[reduced_exit_state_header_offset()..reduced_exit_state_header_offset() + STATE_HEADER_LEN]
         .copy_from_slice(state_header);
     raw[reduced_exit_descriptor_offset()..reduced_exit_descriptor_offset() + descriptor.len()]
         .copy_from_slice(descriptor);
-    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT_V1 as usize {
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT as usize {
         let before_offset = reduced_exit_right_offset(false, descriptor.len(), index);
-        raw[before_offset..before_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&before[index]);
+        raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&before[index]);
         let after_offset = reduced_exit_right_offset(true, descriptor.len(), index);
-        raw[after_offset..after_offset + FACTORY_RIGHT_V1_LEN].copy_from_slice(&after[index]);
+        raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&after[index]);
     }
 
     (raw, key0, key1)
@@ -1852,7 +1835,7 @@ fn sign_reduced_exit_witness(
     digest: &[u8; 32],
 ) {
     let sig = signature(key, digest);
-    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT_V1 as usize {
+    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize {
         if &raw[reduced_exit_participant_offset(index)
             ..reduced_exit_participant_offset(index) + BYTE32_LEN]
             == participant.as_slice()
@@ -1899,14 +1882,14 @@ fn reduced_exit_old_factory_data_with_reserve_asset(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let participants_commitment = factory_participants_commitment_v1(
+    let participants_commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
             (entries[1].0.as_slice(), entries[1].1.as_slice()),
         ],
     );
-    let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+    let witness = FactoryReducedExitWitness::parse(&witness_raw).unwrap();
 
     let mut old = factory_header_raw(old_number);
     old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
@@ -1981,31 +1964,31 @@ fn signed_reduced_factory_exit_pair_with_reserve_asset(
         ([2u8; BYTE32_LEN], pubkey(&key1)),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let participants_commitment = factory_participants_commitment_v1(
+    let participants_commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
             (entries[1].0.as_slice(), entries[1].1.as_slice()),
         ],
     );
-    let witness = FactoryReducedExitWitnessV1::parse(&witness_raw).unwrap();
+    let witness = FactoryReducedExitWitness::parse(&witness_raw).unwrap();
 
     let mut old = factory_header_raw(old_number);
     old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
     old[108..140].copy_from_slice(&participants_commitment);
     old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
-    let old_header = FactoryStateHeaderV1::parse(&old).unwrap();
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(new_number);
     new[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
     new[108..140].copy_from_slice(&participants_commitment);
     new[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
-    let preliminary_new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let preliminary_new_header = FactoryStateHeader::parse(&new).unwrap();
     let digest = witness
         .non_interference_digest(&old_header, &preliminary_new_header)
         .unwrap();
     new[172..204].copy_from_slice(&digest);
-    let new_header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
     sign_reduced_exit_witness(
         &mut witness_raw,
         [1u8; BYTE32_LEN],
@@ -2029,7 +2012,7 @@ fn signed_factory_pair_with_exit_digest(
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let commitment = factory_participants_commitment_v1(
+    let commitment = factory_participants_commitment(
         2,
         &[
             (entries[0].0.as_slice(), entries[0].1.as_slice()),
@@ -2044,12 +2027,12 @@ fn signed_factory_pair_with_exit_digest(
     new[140..172].fill(10);
     new[172..204].copy_from_slice(&exit_digest);
 
-    let header = FactoryStateHeaderV1::parse(&new).unwrap();
+    let header = FactoryStateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
-    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION_V1);
-    witness[2] = FACTORY_SIGNATURE_THRESHOLD_V1;
-    witness[3] = FACTORY_SIGNATURE_COUNT_V1;
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD;
+    witness[3] = FACTORY_SIGNATURE_COUNT;
     for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
         let offset =
             4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
@@ -2079,23 +2062,20 @@ fn factory_local_exit_witness(
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Bytes {
-    let mut witness = vec![
-        0u8;
-        FACTORY_LOCAL_EXIT_WITNESS_V1_LEN - BILATERAL_CKB_DESCRIPTOR_V1_LEN
-            + descriptor.len()
-    ];
-    put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION_V1);
-    witness[2..2 + FACTORY_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(factory_signature);
-    let offset = 2 + FACTORY_SIGNATURE_WITNESS_V1_LEN;
+    let mut witness =
+        vec![0u8; FACTORY_LOCAL_EXIT_WITNESS_LEN - BILATERAL_CKB_DESCRIPTOR_LEN + descriptor.len()];
+    put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION);
+    witness[2..2 + FACTORY_SIGNATURE_WITNESS_LEN].copy_from_slice(factory_signature);
+    let offset = 2 + FACTORY_SIGNATURE_WITNESS_LEN;
     witness[offset..offset + 4].copy_from_slice(&state_output_index.to_le_bytes());
     witness[offset + 4..offset + 8].copy_from_slice(&vault_output_index.to_le_bytes());
     witness[offset + 8..offset + 8 + BYTE32_LEN].copy_from_slice(&state_type_hash);
     witness[offset + 8 + BYTE32_LEN..offset + 8 + 2 * BYTE32_LEN].copy_from_slice(&vault_lock_hash);
     witness[offset + 8 + 2 * BYTE32_LEN..offset + 8 + 3 * BYTE32_LEN]
         .copy_from_slice(&state_lock_hash);
-    witness[offset + 8 + 3 * BYTE32_LEN..offset + 8 + 3 * BYTE32_LEN + STATE_HEADER_V2_LEN]
+    witness[offset + 8 + 3 * BYTE32_LEN..offset + 8 + 3 * BYTE32_LEN + STATE_HEADER_LEN]
         .copy_from_slice(state_header);
-    witness[offset + 8 + 3 * BYTE32_LEN + STATE_HEADER_V2_LEN..].copy_from_slice(descriptor);
+    witness[offset + 8 + 3 * BYTE32_LEN + STATE_HEADER_LEN..].copy_from_slice(descriptor);
     witness.into()
 }
 
@@ -2111,23 +2091,23 @@ fn factory_witness_with_input_type(
     kind: u16,
     body: impl AsRef<[u8]>,
 ) -> ckb_testtool::ckb_types::packed::Bytes {
-    witness_with_input_type(factory_witness_envelope_v2(kind, body.as_ref()).into())
+    witness_with_input_type(factory_witness_envelope(kind, body.as_ref()).into())
 }
 
-fn factory_witness_envelope_v2(kind: u16, body: &[u8]) -> Vec<u8> {
+fn factory_witness_envelope(kind: u16, body: &[u8]) -> Vec<u8> {
     let body_len: u32 = body
         .len()
         .try_into()
         .expect("factory witness body length fits in u32");
-    let mut raw = vec![0u8; WITNESS_ENVELOPE_V2_LEN + body.len()];
-    raw[0..WITNESS_ENVELOPE_V2_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_V2_MAGIC);
-    put_u16(&mut raw, 8, WITNESS_ENVELOPE_VERSION_V2);
+    let mut raw = vec![0u8; WITNESS_ENVELOPE_LEN + body.len()];
+    raw[0..WITNESS_ENVELOPE_MAGIC.len()].copy_from_slice(WITNESS_ENVELOPE_MAGIC);
+    put_u16(&mut raw, 8, WITNESS_ENVELOPE_FORMAT);
     put_u16(&mut raw, 10, kind);
     put_u16(&mut raw, 12, 0);
     put_u32(&mut raw, 14, body_len);
-    raw[18..50].copy_from_slice(&witness_envelope_body_commitment_v2(kind, body));
-    raw[WITNESS_ENVELOPE_V2_LEN..].copy_from_slice(body);
-    WitnessEnvelopeV2::parse(&raw).expect("factory witness envelope should parse");
+    raw[18..50].copy_from_slice(&witness_envelope_body_commitment(kind, body));
+    raw[WITNESS_ENVELOPE_LEN..].copy_from_slice(body);
+    WitnessEnvelope::parse(&raw).expect("factory witness envelope should parse");
     raw
 }
 
@@ -2147,9 +2127,9 @@ fn descriptor_bytes(
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut raw = [0u8; BILATERAL_CKB_DESCRIPTOR_V1_LEN];
-    put_u16(&mut raw, 0, BILATERAL_CKB_DESCRIPTOR_VERSION_V1);
-    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
+    let mut raw = [0u8; BILATERAL_CKB_DESCRIPTOR_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_DESCRIPTOR_VERSION);
+    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT;
     raw[3] = 0;
     for (index, (lock_hash, capacity)) in entries.iter().enumerate() {
         let offset = 4 + index * (BYTE32_LEN + 8);
@@ -2174,10 +2154,10 @@ fn ckb_xudt_descriptor_bytes(
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let mut raw = [0u8; BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN];
-    put_u16(&mut raw, 0, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1);
-    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT_V1;
-    raw[3] = BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT_V1;
+    let mut raw = [0u8; BILATERAL_CKB_XUDT_DESCRIPTOR_LEN];
+    put_u16(&mut raw, 0, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
+    raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT;
+    raw[3] = BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT;
     raw[4..36].copy_from_slice(&xudt_type_hash);
     for (index, (lock_hash, capacity, amount)) in entries.iter().enumerate() {
         let offset = 36 + index * (BYTE32_LEN + 8 + 16);
@@ -2284,7 +2264,7 @@ fn sponsor_policy_with_bounds_and_expiry(
     max_total_fee: u64,
     expiry: u64,
 ) -> Vec<u8> {
-    let mut raw = [0u8; SPONSOR_POLICY_V1_LEN];
+    let mut raw = [0u8; SPONSOR_POLICY_LEN];
     raw[0..32].fill(3);
     put_u64(&mut raw, 32, min_state_number);
     put_u64(&mut raw, 40, max_state_number);
@@ -2552,7 +2532,7 @@ fn factory_type_accepts_signed_factory_update() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
             sig_witness,
         ))
         .build();
@@ -2694,7 +2674,7 @@ fn factory_type_accepts_reduced_rights_update() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
             reduced_witness,
         ))
         .build();
@@ -2735,7 +2715,7 @@ fn factory_type_accepts_sparse_merkle_right_update() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
             merkle_witness,
         ))
         .build();
@@ -2777,7 +2757,7 @@ fn factory_type_rejects_sparse_merkle_right_increase() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
             merkle_witness,
         ))
         .build();
@@ -2818,7 +2798,7 @@ fn factory_type_rejects_sparse_merkle_sibling_tamper() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
             merkle_witness,
         ))
         .build();
@@ -2857,7 +2837,7 @@ fn factory_type_rejects_reduced_rights_increase() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
             reduced_witness,
         ))
         .build();
@@ -2896,7 +2876,7 @@ fn factory_type_rejects_equal_update_number() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
             sig_witness,
         ))
         .build();
@@ -2938,7 +2918,7 @@ fn factory_type_rejects_invalid_participant_signature() {
         .output(output)
         .output_data(new_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
             sig_witness,
         ))
         .build();
@@ -3035,11 +3015,11 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
             &splice_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
             splice_witness,
         ))
         .witness(empty_witness())
@@ -3141,11 +3121,11 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
             &splice_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
             splice_witness,
         ))
         .witness(empty_witness())
@@ -3242,9 +3222,9 @@ fn factory_xudt_splice_tx(
     };
     let change_capacity = input_capacity + external_input_capacity - output_capacity;
     let witness_kind = if reduced {
-        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE_V2
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
     } else {
-        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE_V2
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE
     };
     let tx = TransactionBuilder::default()
         .input(factory_input)
@@ -3365,7 +3345,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         BOB_CAPACITY,
     );
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_payload_commitment(
         &mut child_state,
         vault_commitment(&vault_lock, released_capacity, None, &[]),
@@ -3374,7 +3354,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
@@ -3434,11 +3414,11 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             &reduced_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             reduced_witness,
         ))
         .witness(empty_witness())
@@ -3529,7 +3509,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
         BOB_CAPACITY,
     );
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_payload_commitment(
         &mut child_state,
         vault_commitment(&vault_lock, released_capacity, None, &[]),
@@ -3538,7 +3518,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
@@ -3600,11 +3580,11 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             &reduced_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             reduced_witness,
         ))
         .witness(empty_witness())
@@ -3628,12 +3608,8 @@ fn reduced_exit_xudt_witness_parses_with_typed_claim() {
     );
     let release_quantity = ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT;
     let mut child_state = header_raw(0, PHASE_ACTIVE);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
-    put_u16(
-        &mut child_state,
-        246,
-        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    );
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
+    put_u16(&mut child_state, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     let (witness, _, _) = reduced_exit_witness_raw_with_reserve_asset(
         release_quantity,
         release_quantity + 1,
@@ -3647,11 +3623,11 @@ fn reduced_exit_xudt_witness_parses_with_typed_claim() {
         &descriptor,
         Some(xudt_type_hash),
     );
-    assert_eq!(witness.len(), FACTORY_REDUCED_EXIT_XUDT_WITNESS_V1_LEN);
-    let witness = FactoryReducedExitWitnessV1::parse(&witness).unwrap();
+    assert_eq!(witness.len(), FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN);
+    let witness = FactoryReducedExitWitness::parse(&witness).unwrap();
     assert_eq!(
         witness.settlement_descriptor().len(),
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN
+        BILATERAL_CKB_XUDT_DESCRIPTOR_LEN
     );
     assert_eq!(witness.release_quantity(), release_quantity);
 }
@@ -3832,12 +3808,8 @@ fn factory_reduced_xudt_exit_tx(
     let child_vault_capacity = ALICE_CAPACITY + BOB_CAPACITY;
     let child_vault_data = xudt_amount_data(released_xudt_amount);
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
-    put_u16(
-        &mut child_state,
-        246,
-        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    );
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
+    put_u16(&mut child_state, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     set_state_payload_commitment(
         &mut child_state,
         vault_commitment(
@@ -3851,7 +3823,7 @@ fn factory_reduced_xudt_exit_tx(
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
@@ -3954,11 +3926,11 @@ fn factory_reduced_xudt_exit_tx(
         .output_data(xudt_amount_data(child_vault_amount).pack())
         .output_data(factory_vault_change_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             &reduced_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
             reduced_witness,
         ))
         .witness(empty_witness())
@@ -4039,7 +4011,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_payload_commitment(
         &mut child_state,
         vault_commitment(&vault_lock, ALICE_CAPACITY + BOB_CAPACITY, None, &[]),
@@ -4048,12 +4020,12 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
 
-    let exit_digest = factory_local_exit_digest_v1(
+    let exit_digest = factory_local_exit_digest(
         state_output_index,
         vault_output_index,
         &state_type_hash,
@@ -4113,11 +4085,11 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             &exit_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             &exit_witness,
         ))
         .witness(empty_witness())
@@ -4182,11 +4154,11 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             &exit_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             exit_witness,
         ))
         .witness(empty_witness())
@@ -4269,7 +4241,7 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_payload_commitment(
         &mut child_state,
         vault_commitment(&vault_lock, ALICE_CAPACITY + BOB_CAPACITY, None, &[]),
@@ -4278,12 +4250,12 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
 
-    let exit_digest = factory_local_exit_digest_v1(
+    let exit_digest = factory_local_exit_digest(
         state_output_index,
         vault_output_index,
         &state_type_hash,
@@ -4343,11 +4315,11 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             &exit_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             exit_witness,
         ))
         .witness(empty_witness())
@@ -4504,12 +4476,8 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
-    put_u16(
-        &mut child_state,
-        246,
-        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    );
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
+    put_u16(&mut child_state, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     let child_vault_data = xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT);
     set_state_payload_commitment(
         &mut child_state,
@@ -4524,12 +4492,12 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     let key1 = signing_key(2);
     let mut child_pubkeys = [pubkey(&key0), pubkey(&key1)];
     child_pubkeys.sort();
-    child_state[150..182].copy_from_slice(&participants_commitment_v1(
+    child_state[150..182].copy_from_slice(&participants_commitment(
         2,
         &[&child_pubkeys[0], &child_pubkeys[1]],
     ));
 
-    let exit_digest = factory_local_exit_digest_v1(
+    let exit_digest = factory_local_exit_digest(
         state_output_index,
         vault_output_index,
         &state_type_hash,
@@ -4620,11 +4588,11 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         .output_data(xudt_amount_data(child_vault_amount).pack())
         .output_data(factory_vault_change_data.pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             &exit_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             exit_witness,
         ))
         .witness(empty_witness())
@@ -4666,9 +4634,9 @@ fn factory_type_rejects_local_exit_digest_mismatch() {
     let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
 
-    let correct_digest = factory_local_exit_digest_v1(
+    let correct_digest = factory_local_exit_digest(
         state_output_index,
         vault_output_index,
         &state_type_hash,
@@ -4717,7 +4685,7 @@ fn factory_type_rejects_local_exit_digest_mismatch() {
         .output_data(Bytes::from(child_state.to_vec()).pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             exit_witness,
         ))
         .build();
@@ -4760,9 +4728,9 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
     let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
     let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
-    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment_v1(&descriptor));
+    child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
 
-    let exit_digest = factory_local_exit_digest_v1(
+    let exit_digest = factory_local_exit_digest(
         state_output_index,
         vault_output_index,
         &state_type_hash,
@@ -4809,7 +4777,7 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
         .output_data(Bytes::from(child_state.to_vec()).pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT_V2,
+            WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
             exit_witness,
         ))
         .build();
@@ -4900,14 +4868,14 @@ fn state_type_accepts_signed_descriptor_update() {
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
     let descriptor = descriptor_bytes([1u8; 32], ALICE_CAPACITY, [2u8; 32], BOB_CAPACITY);
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let (old_data, new_data, sig_witness) = signed_state_pair_with_new_descriptor(
         1,
         PHASE_ACTIVE,
         2,
         PHASE_SETTLING,
         descriptor_commitment,
-        BILATERAL_CKB_DESCRIPTOR_VERSION_V1,
+        BILATERAL_CKB_DESCRIPTOR_VERSION,
     );
 
     let input_out_point = context.create_cell(
@@ -5025,7 +4993,7 @@ fn vault_lock_accepts_finalise_with_current_state() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -5106,7 +5074,7 @@ fn vault_lock_rejects_descriptor_output_mismatch() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -5186,7 +5154,7 @@ fn ckb_vault_finalise_tx_with_tamper(
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -5337,7 +5305,7 @@ fn vault_lock_rejects_fake_state_header_without_state_type() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -5415,7 +5383,7 @@ fn vault_lock_rejects_state_type_since_args_mismatch() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let mismatched_since = relative_since(1);
     let state_code = context.deploy_cell(contract_bin("morph-state-type"));
@@ -5507,7 +5475,7 @@ fn vault_lock_rejects_raw_absolute_since() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -6634,7 +6602,7 @@ fn vault_lock_accepts_xudt_finalise_with_descriptor_amounts() {
         BOB_CAPACITY,
         BOB_XUDT_AMOUNT,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -6653,11 +6621,7 @@ fn vault_lock_accepts_xudt_finalise_with_descriptor_amounts() {
     );
     let mut state_data = header_raw(3, PHASE_SETTLING);
     state_data[214..246].copy_from_slice(&descriptor_commitment);
-    put_u16(
-        &mut state_data,
-        246,
-        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    );
+    put_u16(&mut state_data, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     set_state_payload_commitment(&mut state_data, vault_commitment);
 
     let state_out_point = context.create_cell(
@@ -6743,7 +6707,7 @@ fn xudt_vault_finalise_tx_with_tamper(
         BOB_CAPACITY,
         bob_descriptor_amount,
     );
-    let descriptor_commitment = settlement_descriptor_commitment_v1(&descriptor);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let finalise_since = relative_since(0);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
@@ -6763,11 +6727,7 @@ fn xudt_vault_finalise_tx_with_tamper(
     );
     let mut state_data = header_raw(3, PHASE_SETTLING);
     state_data[214..246].copy_from_slice(&descriptor_commitment);
-    put_u16(
-        &mut state_data,
-        246,
-        BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION_V1,
-    );
+    put_u16(&mut state_data, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     set_state_payload_commitment(&mut state_data, vault_commitment);
 
     let state_out_point = context.create_cell(

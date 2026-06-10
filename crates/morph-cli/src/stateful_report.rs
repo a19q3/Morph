@@ -11,9 +11,9 @@ use crate::smoke_report::{
     DevnetSmokeSummary, DevnetSmokeTransactionBudgetLimit,
 };
 
-const DEVNET_STATEFUL_BUDGET_SCHEMA: &str = "morph.devnet_stateful_budget.v1";
-const DEVNET_STATEFUL_SCENARIO_SCHEMA: &str = "morph.devnet_stateful_scenario.v1";
-const DEVNET_AUDIT_PROFILE_SCHEMA: &str = "morph.devnet_audit_profile.v1";
+const DEVNET_STATEFUL_BUDGET_SCHEMA: &str = "morph.devnet_stateful_budget";
+const DEVNET_STATEFUL_SCENARIO_SCHEMA: &str = "morph.devnet_stateful_scenario";
+const DEVNET_AUDIT_PROFILE_SCHEMA: &str = "morph.devnet_audit_profile";
 
 const REQUIRED_SCENARIOS: &[&str] = &[
     "bilateral_supersede_watchtower_finalise",

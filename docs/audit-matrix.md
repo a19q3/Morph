@@ -2,17 +2,17 @@
 
 The paper's audit matrix is represented in `crates/morph-core/tests/invariants.rs`.
 
-This matrix is read against the current post-V1 V2-envelope implementation
-line. Remaining `*V1` fixture and witness names identify bounded body/package
+This matrix is read against the current post-current current-envelope implementation
+line. Remaining `*current` fixture and witness names identify bounded body/package
 schemas or historical policy labels; factory script authorisation is dispatched
-through `WitnessEnvelopeV2`, not through the old top-level fixed-length witness
+through `WitnessEnvelope`, not through the old top-level fixed-length witness
 convention.
 
 | Invariant | Current executable check |
 | --- | --- |
 | One live State Cell controls the channel pointer | `accepts_valid_state_supersession`, `rejects_stale_or_equal_state_number` |
 | Funding anchor identity is canonical | `rejects_wrong_funding_anchor_reference`, `rejects_changed_header_context` |
-| StateHeaderV2 funding epoch and vault-set commitments are signed state semantics | `state_header_v2_digest_binds_epoch_and_vault_set`, `state_header_v2_context_rejects_epoch_and_vault_set_changes`, `state_header_v2_fields_are_fixed_width`, `verifies_splice_state_transition_v2_epoch_bridge` |
+| StateHeader funding epoch and vault-set commitments are signed state semantics | `state_header_digest_binds_epoch_and_vault_set`, `state_header_context_rejects_epoch_and_vault_set_changes`, `state_header_fields_are_fixed_width`, `verifies_splice_state_transition_epoch_bridge` |
 | State numbers are strictly monotonic | `rejects_stale_or_equal_state_number` |
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |
 | Factory state evidence is signed by all factory participants | `factory_type_accepts_signed_factory_update`, `factory_type_rejects_invalid_participant_signature` |

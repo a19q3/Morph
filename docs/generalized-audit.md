@@ -10,11 +10,11 @@ budget evidence. `devnet-stateful-report` summarises the family status, and
 
 The default profile is
 [`docs/devnet-audit-profile.example.json`](devnet-audit-profile.example.json)
-with schema `morph.devnet_audit_profile.v1`.
+with schema `morph.devnet_audit_profile`.
 
-The `.v1` suffix here is only the audit-profile schema version. It is not a
-protocol or witness-version label. On the current post-V1 implementation line,
-factory authorisation is read through the bounded `WitnessEnvelopeV2`
+The `` suffix here is only the audit-profile schema version. It is not a
+protocol or witness-version label. On the current post-current implementation line,
+factory authorisation is read through the bounded `WitnessEnvelope`
 kind/body/digest envelope.
 
 ## Found Issue To Executable Family

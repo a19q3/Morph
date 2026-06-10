@@ -13,24 +13,24 @@ use k256::ecdsa::{Signature, SigningKey};
 use morph_core::{
     Amount, Bytes32, Mode, ParticipantSignature, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind,
     SpliceTransition, SpliceWitness, StateCell, StateHeader, VaultAsset, VaultAssetAmount,
-    VaultDescriptorV2, bytes32, participants_commitment, splice_asset_delta_commitment_v1,
-    validate_splice_transition, vault_descriptor_commitment_v2,
+    VaultDescriptor, bytes32, participants_commitment, splice_asset_delta_commitment,
+    validate_splice_transition, vault_descriptor_commitment,
 };
 use morph_script_common::{
-    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_V1_LEN,
-    SPLICE_ASSET_DELTAS_V1_LEN, SPLICE_HEADER_V1_LEN, SPLICE_SIGNATURE_COUNT_V1,
-    SPLICE_SIGNATURE_THRESHOLD_V1, SPLICE_SIGNATURE_WITNESS_V1_LEN,
-    SPLICE_SIGNATURE_WITNESS_VERSION_V1, SPLICE_STATE_TRANSITION_WITNESS_V1_LEN,
-    SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1, SPLICE_VAULT_ASSET_AMOUNT_V2_LEN,
-    SPLICE_VAULT_DESCRIPTOR_V2_LEN, STATE_HEADER_V2_LEN, SpliceStateTransitionWitnessV1,
-    StateHeaderV2Input, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, encode_state_header_v2,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_LEN,
+    SPLICE_ASSET_DELTAS_LEN, SPLICE_HEADER_LEN, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
+    SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
+    SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
+    SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, STATE_HEADER_LEN,
+    SpliceStateTransitionWitness, StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
+    encode_state_header,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::packages::{PackageOutPoint, canonical_hex32};
 
-const SPLICE_PACKAGE_SCHEMA: &str = "morph.splice_package.v1";
-const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1: u16 = 1;
+const SPLICE_PACKAGE_SCHEMA: &str = "morph.splice_package";
+const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixtureSpliceKind {
@@ -46,7 +46,9 @@ pub struct StoredSpliceStateRef {
     pub chain_id: String,
     pub signature_scheme_id: u16,
     pub channel_id: String,
+    pub funding_epoch: u64,
     pub funding_anchor: String,
+    pub vault_set_commitment: String,
     pub state_number: u64,
     pub mode: String,
     pub phase: String,
@@ -69,7 +71,7 @@ pub struct StoredVaultAssetAmount {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StoredVaultDescriptorV2 {
+pub struct StoredVaultDescriptor {
     pub funding_anchor: String,
     pub assets: Vec<StoredVaultAssetAmount>,
 }
@@ -117,8 +119,8 @@ pub struct StoredSplicePackage {
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
-    pub old_vault_descriptor: StoredVaultDescriptorV2,
-    pub expected_new_vault_descriptor: StoredVaultDescriptorV2,
+    pub old_vault_descriptor: StoredVaultDescriptor,
+    pub expected_new_vault_descriptor: StoredVaultDescriptor,
     pub asset_deltas: Vec<StoredSpliceAssetDelta>,
     pub withdrawals: Vec<StoredVaultAssetAmount>,
     pub remaining_settlement: Vec<StoredVaultAssetAmount>,
@@ -198,8 +200,8 @@ impl StoredSplicePackage {
             ),
             signing_digest: hex_prefixed(&digest),
             current_state: StoredSpliceStateRef::from_state_cell(&transition.current_state),
-            old_vault_descriptor: StoredVaultDescriptorV2::from_descriptor(&transition.old_vault),
-            expected_new_vault_descriptor: StoredVaultDescriptorV2::from_descriptor(
+            old_vault_descriptor: StoredVaultDescriptor::from_descriptor(&transition.old_vault),
+            expected_new_vault_descriptor: StoredVaultDescriptor::from_descriptor(
                 &transition.new_vault,
             ),
             asset_deltas: transition
@@ -305,9 +307,9 @@ impl StoredSplicePackage {
         );
 
         let transition = self.to_transition()?;
-        let old_commitment = hex_prefixed(&vault_descriptor_commitment_v2(&transition.old_vault));
-        let new_commitment = hex_prefixed(&vault_descriptor_commitment_v2(&transition.new_vault));
-        let delta_commitment = hex_prefixed(&splice_asset_delta_commitment_v1(&transition.deltas));
+        let old_commitment = hex_prefixed(&vault_descriptor_commitment(&transition.old_vault));
+        let new_commitment = hex_prefixed(&vault_descriptor_commitment(&transition.new_vault));
+        let delta_commitment = hex_prefixed(&splice_asset_delta_commitment(&transition.deltas));
         ensure!(
             self.old_vault_commitment == old_commitment,
             "old_vault_commitment does not match old_vault_descriptor"
@@ -363,12 +365,12 @@ impl StoredSplicePackage {
         contract_witness_bytes_from_transition(&transition)
     }
 
-    pub fn current_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V2_LEN]> {
+    pub fn current_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_LEN]> {
         let transition = self.validate()?;
         current_state_header_wire_bytes(&transition)
     }
 
-    pub fn next_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_V2_LEN]> {
+    pub fn next_state_header_bytes(&self) -> Result<[u8; STATE_HEADER_LEN]> {
         let transition = self.validate()?;
         next_state_header_wire_bytes(&transition)
     }
@@ -448,7 +450,9 @@ impl StoredSpliceStateRef {
             chain_id: hex_prefixed(&state.header.chain_id),
             signature_scheme_id: state.header.signature_scheme_id,
             channel_id: hex_prefixed(&state.header.channel_id),
+            funding_epoch: state.header.funding_epoch,
             funding_anchor: hex_prefixed(&state.header.funding_anchor),
+            vault_set_commitment: hex_prefixed(&state.header.vault_set_commitment),
             state_number: state.header.state_number,
             mode: mode_label(state.header.mode).to_string(),
             phase: phase_label(state.header.phase).to_string(),
@@ -490,6 +494,10 @@ impl StoredSpliceStateRef {
             "current_state.funding_anchor must be canonical"
         );
         ensure!(
+            self.vault_set_commitment == canonical_hex32(&self.vault_set_commitment)?,
+            "current_state.vault_set_commitment must be canonical"
+        );
+        ensure!(
             self.participants_commitment == canonical_hex32(&self.participants_commitment)?,
             "current_state.participants_commitment must be canonical"
         );
@@ -516,7 +524,9 @@ impl StoredSpliceStateRef {
                 chain_id: hex32_bytes(&self.chain_id)?,
                 signature_scheme_id: self.signature_scheme_id,
                 channel_id: hex32_bytes(&self.channel_id)?,
+                funding_epoch: self.funding_epoch,
                 funding_anchor: hex32_bytes(&self.funding_anchor)?,
+                vault_set_commitment: hex32_bytes(&self.vault_set_commitment)?,
                 state_number: self.state_number,
                 mode,
                 phase,
@@ -536,8 +546,8 @@ impl StoredSpliceStateRef {
     }
 }
 
-impl StoredVaultDescriptorV2 {
-    fn from_descriptor(descriptor: &VaultDescriptorV2) -> Self {
+impl StoredVaultDescriptor {
+    fn from_descriptor(descriptor: &VaultDescriptor) -> Self {
         Self {
             funding_anchor: hex_prefixed(&descriptor.funding_anchor),
             assets: descriptor
@@ -548,7 +558,7 @@ impl StoredVaultDescriptorV2 {
         }
     }
 
-    fn to_descriptor(&self) -> Result<VaultDescriptorV2> {
+    fn to_descriptor(&self) -> Result<VaultDescriptor> {
         ensure!(
             self.funding_anchor == canonical_hex32(&self.funding_anchor)?,
             "vault descriptor funding_anchor must be canonical"
@@ -557,7 +567,7 @@ impl StoredVaultDescriptorV2 {
             self.assets == canonical_amounts(&self.assets)?,
             "vault descriptor assets must be sorted unique canonical assets"
         );
-        Ok(VaultDescriptorV2 {
+        Ok(VaultDescriptor {
             funding_anchor: hex32_bytes(&self.funding_anchor)?,
             assets: self
                 .assets
@@ -695,13 +705,15 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
     let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
     let participants_commitment = participants_commitment(2, &pubkeys);
 
-    let current_state = StateCell {
+    let mut current_state = StateCell {
         header: StateHeader {
             protocol_version: 1,
             chain_id: bytes32(1),
-            signature_scheme_id: SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B_V1,
+            signature_scheme_id: SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
             channel_id: bytes32(2),
+            funding_epoch: 0,
             funding_anchor: bytes32(3),
+            vault_set_commitment: bytes32(0),
             state_number: 7,
             mode: Mode::BilateralPlain,
             phase: Phase::Active,
@@ -718,6 +730,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
     };
     let (kind_label, header_kind, old_vault, new_vault, deltas, withdrawals, remaining_settlement) =
         fixture_splice_parts(kind);
+    current_state.header.vault_set_commitment = vault_descriptor_commitment(&old_vault);
     let header = SpliceHeader {
         protocol_version: 1,
         chain_id: current_state.header.chain_id,
@@ -730,9 +743,9 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         base_state_number: current_state.header.state_number,
         splice_number: 1,
         kind: header_kind,
-        old_vault_commitment: vault_descriptor_commitment_v2(&old_vault),
-        new_vault_commitment: vault_descriptor_commitment_v2(&new_vault),
-        asset_delta_commitment: splice_asset_delta_commitment_v1(&deltas),
+        old_vault_commitment: vault_descriptor_commitment(&old_vault),
+        new_vault_commitment: vault_descriptor_commitment(&new_vault),
+        asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
@@ -760,8 +773,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
-        old_vault_descriptor: StoredVaultDescriptorV2::from_descriptor(&old_vault),
-        expected_new_vault_descriptor: StoredVaultDescriptorV2::from_descriptor(&new_vault),
+        old_vault_descriptor: StoredVaultDescriptor::from_descriptor(&old_vault),
+        expected_new_vault_descriptor: StoredVaultDescriptor::from_descriptor(&new_vault),
         asset_deltas: deltas
             .iter()
             .map(StoredSpliceAssetDelta::from_delta)
@@ -797,8 +810,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
 type FixtureSpliceParts = (
     &'static str,
     SpliceKind,
-    VaultDescriptorV2,
-    VaultDescriptorV2,
+    VaultDescriptor,
+    VaultDescriptor,
     Vec<SpliceAssetDelta>,
     Vec<VaultAssetAmount>,
     Vec<VaultAssetAmount>,
@@ -807,7 +820,7 @@ type FixtureSpliceParts = (
 fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
     match kind {
         FixtureSpliceKind::SpliceIn => {
-            let old_vault = VaultDescriptorV2 {
+            let old_vault = VaultDescriptor {
                 funding_anchor: bytes32(3),
                 assets: vec![
                     VaultAssetAmount {
@@ -820,7 +833,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
                     },
                 ],
             };
-            let new_vault = VaultDescriptorV2 {
+            let new_vault = VaultDescriptor {
                 funding_anchor: bytes32(33),
                 assets: vec![
                     VaultAssetAmount {
@@ -870,7 +883,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
             )
         }
         FixtureSpliceKind::SpliceOut => {
-            let old_vault = VaultDescriptorV2 {
+            let old_vault = VaultDescriptor {
                 funding_anchor: bytes32(3),
                 assets: vec![
                     VaultAssetAmount {
@@ -883,7 +896,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
                     },
                 ],
             };
-            let new_vault = VaultDescriptorV2 {
+            let new_vault = VaultDescriptor {
                 funding_anchor: bytes32(33),
                 assets: vec![
                     VaultAssetAmount {
@@ -926,7 +939,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
             )
         }
         FixtureSpliceKind::XudtSpliceIn => {
-            let old_vault = VaultDescriptorV2 {
+            let old_vault = VaultDescriptor {
                 funding_anchor: bytes32(3),
                 assets: vec![
                     VaultAssetAmount {
@@ -939,7 +952,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
                     },
                 ],
             };
-            let new_vault = VaultDescriptorV2 {
+            let new_vault = VaultDescriptor {
                 funding_anchor: bytes32(33),
                 assets: vec![
                     VaultAssetAmount {
@@ -979,7 +992,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
             )
         }
         FixtureSpliceKind::XudtSpliceOut => {
-            let old_vault = VaultDescriptorV2 {
+            let old_vault = VaultDescriptor {
                 funding_anchor: bytes32(3),
                 assets: vec![
                     VaultAssetAmount {
@@ -992,7 +1005,7 @@ fn fixture_splice_parts(kind: FixtureSpliceKind) -> FixtureSpliceParts {
                     },
                 ],
             };
-            let new_vault = VaultDescriptorV2 {
+            let new_vault = VaultDescriptor {
                 funding_anchor: bytes32(33),
                 assets: vec![
                     VaultAssetAmount {
@@ -1090,44 +1103,32 @@ fn stored_asset(asset: &VaultAsset) -> (String, Option<String>) {
 
 fn next_state_header_for_splice(transition: &SpliceTransition) -> StateHeader {
     let mut header = transition.current_state.header.clone();
+    header.funding_epoch = transition.header.new_funding_epoch;
     header.funding_anchor = transition.header.new_funding_anchor;
+    header.vault_set_commitment = transition.header.new_vault_commitment;
     header.phase = Phase::Active;
     header
 }
 
 fn current_state_header_wire_bytes(
     transition: &SpliceTransition,
-) -> Result<[u8; STATE_HEADER_V2_LEN]> {
-    state_header_wire_bytes_v2(
-        &transition.current_state.header,
-        transition.header.old_funding_epoch,
-        &vault_descriptor_commitment_v2(&transition.old_vault),
-    )
+) -> Result<[u8; STATE_HEADER_LEN]> {
+    state_header_wire_bytes(&transition.current_state.header)
 }
 
-fn next_state_header_wire_bytes(
-    transition: &SpliceTransition,
-) -> Result<[u8; STATE_HEADER_V2_LEN]> {
-    state_header_wire_bytes_v2(
-        &next_state_header_for_splice(transition),
-        transition.header.new_funding_epoch,
-        &vault_descriptor_commitment_v2(&transition.new_vault),
-    )
+fn next_state_header_wire_bytes(transition: &SpliceTransition) -> Result<[u8; STATE_HEADER_LEN]> {
+    state_header_wire_bytes(&next_state_header_for_splice(transition))
 }
 
-fn state_header_wire_bytes_v2(
-    header: &StateHeader,
-    funding_epoch: u64,
-    vault_set_commitment: &[u8; BYTE32_LEN],
-) -> Result<[u8; STATE_HEADER_V2_LEN]> {
-    Ok(encode_state_header_v2(&StateHeaderV2Input {
+fn state_header_wire_bytes(header: &StateHeader) -> Result<[u8; STATE_HEADER_LEN]> {
+    Ok(encode_state_header(&StateHeaderInput {
         protocol_version: header.protocol_version,
         chain_id: header.chain_id,
         signature_scheme_id: header.signature_scheme_id,
         channel_id: header.channel_id,
-        funding_epoch,
+        funding_epoch: header.funding_epoch,
         funding_anchor: header.funding_anchor,
-        vault_set_commitment: *vault_set_commitment,
+        vault_set_commitment: header.vault_set_commitment,
         state_number: header.state_number,
         mode: mode_wire_byte(header.mode),
         phase: phase_wire_byte(header.phase),
@@ -1148,20 +1149,20 @@ fn contract_witness_bytes_from_transition(transition: &SpliceTransition) -> Resu
     let new_vault = splice_vault_descriptor_wire_bytes(&transition.new_vault)?;
     let deltas = splice_asset_deltas_wire_bytes(&transition.deltas)?;
 
-    let mut raw = vec![0u8; SPLICE_STATE_TRANSITION_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, SPLICE_STATE_TRANSITION_WITNESS_VERSION_V1);
+    let mut raw = vec![0u8; SPLICE_STATE_TRANSITION_WITNESS_LEN];
+    put_u16(&mut raw, 0, SPLICE_STATE_TRANSITION_WITNESS_VERSION);
     let mut offset = 2;
-    raw[offset..offset + SPLICE_HEADER_V1_LEN].copy_from_slice(&header);
-    offset += SPLICE_HEADER_V1_LEN;
-    raw[offset..offset + SPLICE_SIGNATURE_WITNESS_V1_LEN].copy_from_slice(&signatures);
-    offset += SPLICE_SIGNATURE_WITNESS_V1_LEN;
-    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(&old_vault);
-    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
-    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_V2_LEN].copy_from_slice(&new_vault);
-    offset += SPLICE_VAULT_DESCRIPTOR_V2_LEN;
-    raw[offset..offset + SPLICE_ASSET_DELTAS_V1_LEN].copy_from_slice(&deltas);
+    raw[offset..offset + SPLICE_HEADER_LEN].copy_from_slice(&header);
+    offset += SPLICE_HEADER_LEN;
+    raw[offset..offset + SPLICE_SIGNATURE_WITNESS_LEN].copy_from_slice(&signatures);
+    offset += SPLICE_SIGNATURE_WITNESS_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_LEN].copy_from_slice(&old_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + SPLICE_VAULT_DESCRIPTOR_LEN].copy_from_slice(&new_vault);
+    offset += SPLICE_VAULT_DESCRIPTOR_LEN;
+    raw[offset..offset + SPLICE_ASSET_DELTAS_LEN].copy_from_slice(&deltas);
 
-    let parsed = SpliceStateTransitionWitnessV1::parse(&raw)
+    let parsed = SpliceStateTransitionWitness::parse(&raw)
         .map_err(|err| anyhow!("encoded splice transition witness is invalid: {err:?}"))?;
     parsed
         .header()
@@ -1181,8 +1182,8 @@ fn contract_witness_bytes_from_transition(transition: &SpliceTransition) -> Resu
     Ok(raw)
 }
 
-fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_V1_LEN] {
-    let mut raw = [0u8; SPLICE_HEADER_V1_LEN];
+fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
+    let mut raw = [0u8; SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
     raw[2..34].copy_from_slice(&header.chain_id);
     put_u16(&mut raw, 34, header.signature_scheme_id);
@@ -1204,17 +1205,17 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_V1_LEN]
 
 fn splice_signature_witness_wire_bytes(
     witness: &SpliceWitness,
-) -> Result<[u8; SPLICE_SIGNATURE_WITNESS_V1_LEN]> {
+) -> Result<[u8; SPLICE_SIGNATURE_WITNESS_LEN]> {
     ensure!(
-        witness.threshold == SPLICE_SIGNATURE_THRESHOLD_V1
-            && witness.signatures.len() == SPLICE_SIGNATURE_COUNT_V1 as usize,
+        witness.threshold == SPLICE_SIGNATURE_THRESHOLD
+            && witness.signatures.len() == SPLICE_SIGNATURE_COUNT as usize,
         "contract splice witness requires exactly two participant signatures"
     );
 
-    let mut raw = [0u8; SPLICE_SIGNATURE_WITNESS_V1_LEN];
-    put_u16(&mut raw, 0, SPLICE_SIGNATURE_WITNESS_VERSION_V1);
-    raw[2] = SPLICE_SIGNATURE_THRESHOLD_V1;
-    raw[3] = SPLICE_SIGNATURE_COUNT_V1;
+    let mut raw = [0u8; SPLICE_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut raw, 0, SPLICE_SIGNATURE_WITNESS_VERSION);
+    raw[2] = SPLICE_SIGNATURE_THRESHOLD;
+    raw[3] = SPLICE_SIGNATURE_COUNT;
     for (index, signature) in witness.signatures.iter().enumerate() {
         ensure!(
             signature.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
@@ -1235,27 +1236,25 @@ fn splice_signature_witness_wire_bytes(
 }
 
 fn splice_vault_descriptor_wire_bytes(
-    descriptor: &VaultDescriptorV2,
-) -> Result<[u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN]> {
+    descriptor: &VaultDescriptor,
+) -> Result<[u8; SPLICE_VAULT_DESCRIPTOR_LEN]> {
     ensure!(
         !descriptor.assets.is_empty() && descriptor.assets.len() <= 2,
         "contract splice vault descriptor supports one or two assets"
     );
-    let mut raw = [0u8; SPLICE_VAULT_DESCRIPTOR_V2_LEN];
+    let mut raw = [0u8; SPLICE_VAULT_DESCRIPTOR_LEN];
     raw[0..32].copy_from_slice(&descriptor.funding_anchor);
     put_u16(&mut raw, 32, descriptor.assets.len() as u16);
     for (index, asset) in descriptor.assets.iter().enumerate() {
-        let offset = 34 + index * SPLICE_VAULT_ASSET_AMOUNT_V2_LEN;
-        raw[offset..offset + SPLICE_VAULT_ASSET_AMOUNT_V2_LEN]
+        let offset = 34 + index * SPLICE_VAULT_ASSET_AMOUNT_LEN;
+        raw[offset..offset + SPLICE_VAULT_ASSET_AMOUNT_LEN]
             .copy_from_slice(&splice_vault_asset_wire_bytes(asset));
     }
     Ok(raw)
 }
 
-fn splice_vault_asset_wire_bytes(
-    amount: &VaultAssetAmount,
-) -> [u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN] {
-    let mut raw = [0u8; SPLICE_VAULT_ASSET_AMOUNT_V2_LEN];
+fn splice_vault_asset_wire_bytes(amount: &VaultAssetAmount) -> [u8; SPLICE_VAULT_ASSET_AMOUNT_LEN] {
+    let mut raw = [0u8; SPLICE_VAULT_ASSET_AMOUNT_LEN];
     let (kind, type_hash) = vault_asset_wire_key(&amount.asset);
     raw[0] = kind;
     raw[1..33].copy_from_slice(&type_hash);
@@ -1265,23 +1264,23 @@ fn splice_vault_asset_wire_bytes(
 
 fn splice_asset_deltas_wire_bytes(
     deltas: &[SpliceAssetDelta],
-) -> Result<[u8; SPLICE_ASSET_DELTAS_V1_LEN]> {
+) -> Result<[u8; SPLICE_ASSET_DELTAS_LEN]> {
     ensure!(
         !deltas.is_empty() && deltas.len() <= 2,
         "contract splice asset deltas support one or two assets"
     );
-    let mut raw = [0u8; SPLICE_ASSET_DELTAS_V1_LEN];
+    let mut raw = [0u8; SPLICE_ASSET_DELTAS_LEN];
     put_u16(&mut raw, 0, deltas.len() as u16);
     for (index, delta) in deltas.iter().enumerate() {
-        let offset = 2 + index * SPLICE_ASSET_DELTA_V1_LEN;
-        raw[offset..offset + SPLICE_ASSET_DELTA_V1_LEN]
+        let offset = 2 + index * SPLICE_ASSET_DELTA_LEN;
+        raw[offset..offset + SPLICE_ASSET_DELTA_LEN]
             .copy_from_slice(&splice_asset_delta_wire_bytes(delta));
     }
     Ok(raw)
 }
 
-fn splice_asset_delta_wire_bytes(delta: &SpliceAssetDelta) -> [u8; SPLICE_ASSET_DELTA_V1_LEN] {
-    let mut raw = [0u8; SPLICE_ASSET_DELTA_V1_LEN];
+fn splice_asset_delta_wire_bytes(delta: &SpliceAssetDelta) -> [u8; SPLICE_ASSET_DELTA_LEN] {
+    let mut raw = [0u8; SPLICE_ASSET_DELTA_LEN];
     let (kind, type_hash) = vault_asset_wire_key(&delta.asset);
     raw[0] = kind;
     raw[1..33].copy_from_slice(&type_hash);
@@ -1302,8 +1301,8 @@ fn splice_kind_wire_byte(kind: SpliceKind) -> u8 {
 
 fn vault_asset_wire_key(asset: &VaultAsset) -> (u8, Bytes32) {
     match asset {
-        VaultAsset::Ckb => (VAULT_ASSET_KIND_CKB_V1, [0u8; 32]),
-        VaultAsset::Xudt(type_hash) => (VAULT_ASSET_KIND_XUDT_V1, *type_hash),
+        VaultAsset::Ckb => (VAULT_ASSET_KIND_CKB, [0u8; 32]),
+        VaultAsset::Xudt(type_hash) => (VAULT_ASSET_KIND_XUDT, *type_hash),
     }
 }
 
@@ -1538,15 +1537,15 @@ mod tests {
 
     fn assert_contract_witness_verifies(package: &StoredSplicePackage) {
         let witness_bytes = package.contract_witness_bytes().unwrap();
-        assert_eq!(witness_bytes.len(), SPLICE_STATE_TRANSITION_WITNESS_V1_LEN);
+        assert_eq!(witness_bytes.len(), SPLICE_STATE_TRANSITION_WITNESS_LEN);
 
-        let parsed = SpliceStateTransitionWitnessV1::parse(&witness_bytes).unwrap();
+        let parsed = SpliceStateTransitionWitness::parse(&witness_bytes).unwrap();
         let transition = package.validate().unwrap();
         let current_raw = current_state_header_wire_bytes(&transition).unwrap();
         let next_raw = next_state_header_wire_bytes(&transition).unwrap();
-        let current = morph_script_common::StateHeaderV2::parse(&current_raw).unwrap();
-        let next = morph_script_common::StateHeaderV2::parse(&next_raw).unwrap();
-        morph_script_common::verify_splice_state_transition_bundle_v2(&current, &next, &parsed)
+        let current = morph_script_common::StateHeader::parse(&current_raw).unwrap();
+        let next = morph_script_common::StateHeader::parse(&next_raw).unwrap();
+        morph_script_common::verify_splice_state_transition_bundle(&current, &next, &parsed)
             .unwrap();
     }
 
@@ -1563,27 +1562,27 @@ mod tests {
         assert_eq!(summary.remaining_settlement_assets, 2);
         assert_eq!(
             summary.contract_witness_len,
-            SPLICE_STATE_TRANSITION_WITNESS_V1_LEN
+            SPLICE_STATE_TRANSITION_WITNESS_LEN
         );
         assert_eq!(
             decode_hex_exact(
                 &summary.current_state_header_hex,
-                STATE_HEADER_V2_LEN,
+                STATE_HEADER_LEN,
                 "current_state_header_hex"
             )
             .unwrap()
             .len(),
-            STATE_HEADER_V2_LEN
+            STATE_HEADER_LEN
         );
         assert_eq!(
             decode_hex_exact(
                 &summary.next_state_header_hex,
-                STATE_HEADER_V2_LEN,
+                STATE_HEADER_LEN,
                 "next_state_header_hex"
             )
             .unwrap()
             .len(),
-            STATE_HEADER_V2_LEN
+            STATE_HEADER_LEN
         );
         let digest = hex32_bytes(&summary.signing_digest).unwrap();
         for signature in &package.signatures {
@@ -1623,9 +1622,9 @@ mod tests {
     fn encodes_contract_splice_transition_witness() {
         let package = fixture_package_with_kind(FixtureSpliceKind::SpliceIn).unwrap();
         let witness_bytes = package.contract_witness_bytes().unwrap();
-        assert_eq!(witness_bytes.len(), SPLICE_STATE_TRANSITION_WITNESS_V1_LEN);
+        assert_eq!(witness_bytes.len(), SPLICE_STATE_TRANSITION_WITNESS_LEN);
 
-        let parsed = SpliceStateTransitionWitnessV1::parse(&witness_bytes).unwrap();
+        let parsed = SpliceStateTransitionWitness::parse(&witness_bytes).unwrap();
         assert_eq!(parsed.header().unwrap().base_state_number(), 7);
         assert_eq!(parsed.old_vault().unwrap().asset_count(), 2);
         assert_eq!(parsed.new_vault().unwrap().asset_count(), 2);
@@ -1711,7 +1710,7 @@ mod tests {
     fn rejects_splice_delta_mismatch() {
         let mut package = fixture_package_with_kind(FixtureSpliceKind::SpliceIn).unwrap();
         package.asset_deltas[0].new_amount -= 1;
-        package.asset_delta_commitment = hex_prefixed(&splice_asset_delta_commitment_v1(
+        package.asset_delta_commitment = hex_prefixed(&splice_asset_delta_commitment(
             &package
                 .asset_deltas
                 .iter()

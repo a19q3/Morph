@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-const WATCH_ALERT_SCHEMA: &str = "morph.watchtower_alert.v1";
+const WATCH_ALERT_SCHEMA: &str = "morph.watchtower_alert";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -245,6 +245,6 @@ mod tests {
         let request = handle.join().unwrap();
         assert!(request.starts_with("POST / HTTP/1.1"));
         assert!(request.contains("older_state_detected"));
-        assert!(request.contains("morph.watchtower_alert.v1"));
+        assert!(request.contains("morph.watchtower_alert"));
     }
 }

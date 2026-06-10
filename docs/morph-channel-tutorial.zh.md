@@ -115,16 +115,16 @@ flowchart TB
 
 保守路径要求所有 factory 参与者签名。Reduced 路径只证明一个很窄的局部变化，
 例如一个参与者减少自己的 reserve claim。Factory 脚本通过
-`WitnessEnvelopeV2` 接收这些证明。
+`WitnessEnvelope` 接收这些证明。
 
-## 为什么 `WitnessEnvelopeV2` 重要
+## 为什么 `WitnessEnvelope` 重要
 
-有些 body/schema 名字仍然带 `V1` 后缀。当前设计里，factory 合约面对的公开
-witness 是 `WitnessEnvelopeV2`：
+有些 body/schema 名字仍然带 `current` 后缀。当前设计里，factory 合约面对的公开
+witness 是 `WitnessEnvelope`：
 
 ```mermaid
 flowchart LR
-    E["WitnessEnvelopeV2"] --> K["kind"]
+    E["WitnessEnvelope"] --> K["kind"]
     E --> L["body length"]
     E --> D["body digest"]
     K --> B["具体的固定布局 body"]

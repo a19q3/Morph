@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CKB_SOURCE_DIR="${CKB_SOURCE_DIR:-$ROOT_DIR/../ckb}"
+CKB_BIN="${CKB_BIN:-}"
 missing=0
 
 check() {
@@ -26,11 +29,33 @@ check_bin() {
   fi
 }
 
+resolve_ckb_bin() {
+  if [ -n "$CKB_BIN" ]; then
+    printf "%s" "$CKB_BIN"
+    return
+  fi
+
+  if command -v ckb >/dev/null 2>&1; then
+    command -v ckb
+    return
+  fi
+
+  for candidate in \
+    "$CKB_SOURCE_DIR/target/release/ckb" \
+    "$CKB_SOURCE_DIR/target/debug/ckb"
+  do
+    if [ -x "$candidate" ]; then
+      printf "%s" "$candidate"
+      return
+    fi
+  done
+}
+
 check cargo
 check rustup
 check jq
 
-CKB_BIN="${CKB_BIN:-}"
+CKB_BIN="$(resolve_ckb_bin)"
 check_bin ckb "$CKB_BIN"
 
 if command -v ckb-cli >/dev/null 2>&1; then

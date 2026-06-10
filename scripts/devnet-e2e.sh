@@ -129,7 +129,7 @@ fi
 mkdir -p "$LOG_DIR" "$OUT_DIR"
 
 cat >"$E2E_DIR/manifest.txt" <<EOF
-schema=morph.real_devnet_e2e.v1
+schema=morph.real_devnet_e2e
 started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 run_id=$RUN_ID
 root_dir=$ROOT_DIR

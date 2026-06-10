@@ -16,16 +16,15 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_V1_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN, BYTE32_LEN,
-    BilateralCkbSettlementDescriptorV1, BilateralCkbXudtSettlementDescriptorV1, PHASE_ACTIVE,
-    PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitnessV1, SpliceVaultDescriptorV2,
-    StateHeaderV2, VAULT_ASSET_KIND_CKB_V1, VAULT_ASSET_KIND_XUDT_V1, read_u64, read_u128,
-    validate_relative_block_since, vault_cell_commitment_v1,
-    verify_splice_state_transition_bundle_v2,
+    BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BYTE32_LEN,
+    BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor, PHASE_ACTIVE,
+    PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitness, SpliceVaultDescriptor,
+    StateHeader, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, read_u64, read_u128,
+    validate_relative_block_since, vault_cell_commitment, verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
-const VAULT_ARGS_V2_LEN: usize = BYTE32_LEN + 8 + BYTE32_LEN + 1 + BYTE32_LEN + 1;
+const VAULT_ARGS_LEN: usize = BYTE32_LEN + 8 + BYTE32_LEN + 1 + BYTE32_LEN + 1;
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -47,7 +46,7 @@ fn main() {}
 fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
-    if args.len() != VAULT_ARGS_V2_LEN {
+    if args.len() != VAULT_ARGS_LEN {
         return Err(ScriptError::WrongArgsLength);
     }
     let expected_funding_anchor = &args.as_ref()[..BYTE32_LEN];
@@ -66,7 +65,7 @@ fn main() -> Result<()> {
         state_lock_code_hash,
         state_lock_hash_type,
     )?;
-    let header = StateHeaderV2::parse(&state_data)?;
+    let header = StateHeader::parse(&state_data)?;
     if header.phase() == PHASE_ACTIVE {
         validate_splice_vault_spend(
             &script,
@@ -95,8 +94,8 @@ fn main() -> Result<()> {
         .ok_or(ScriptError::SettlementWitnessMissing)?;
     let descriptor_raw = input_type.raw_data();
     match descriptor_raw.len() {
-        BILATERAL_CKB_DESCRIPTOR_V1_LEN => {
-            let descriptor = BilateralCkbSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
+        BILATERAL_CKB_DESCRIPTOR_LEN => {
+            let descriptor = BilateralCkbSettlementDescriptor::parse(descriptor_raw.as_ref())?;
             if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
@@ -106,9 +105,8 @@ fn main() -> Result<()> {
             }
             verify_ckb_descriptor_outputs(&descriptor)?;
         }
-        BILATERAL_CKB_XUDT_DESCRIPTOR_V1_LEN => {
-            let descriptor =
-                BilateralCkbXudtSettlementDescriptorV1::parse(descriptor_raw.as_ref())?;
+        BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => {
+            let descriptor = BilateralCkbXudtSettlementDescriptor::parse(descriptor_raw.as_ref())?;
             if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
@@ -144,7 +142,7 @@ fn sum_group_capacity(source: Source) -> Result<u64> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn verify_ckb_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptorV1) -> Result<()> {
+fn verify_ckb_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptor) -> Result<()> {
     for entry in 0..2 {
         verify_exact_plain_output(descriptor.lock_hash(entry), descriptor.capacity(entry))?;
     }
@@ -153,7 +151,7 @@ fn verify_ckb_descriptor_outputs(descriptor: &BilateralCkbSettlementDescriptorV1
 
 #[cfg(target_arch = "riscv64")]
 fn verify_ckb_xudt_descriptor_outputs(
-    descriptor: &BilateralCkbXudtSettlementDescriptorV1,
+    descriptor: &BilateralCkbXudtSettlementDescriptor,
 ) -> Result<()> {
     let input_amount = sum_group_xudt_amount(Source::GroupInput, descriptor.xudt_type_hash())?;
     if input_amount != descriptor.checked_total_xudt_amount()? {
@@ -297,7 +295,7 @@ fn validate_current_vault_commitment(expected: &[u8]) -> Result<()> {
     let type_hash =
         load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
-    let commitment = vault_cell_commitment_v1(
+    let commitment = vault_cell_commitment(
         lock_hash.as_slice(),
         capacity,
         type_hash.as_ref().map(|hash| hash.as_slice()),
@@ -323,7 +321,7 @@ fn find_unique_state_input(
     loop {
         match load_cell_data(index, Source::Input) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV2::parse(&data)
+                if let Ok(header) = StateHeader::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
                     && state_cell_scripts_match(
                         index,
@@ -354,13 +352,13 @@ fn find_unique_state_input(
 fn validate_splice_vault_spend(
     current_script: &ckb_std::ckb_types::packed::Script,
     state_index: usize,
-    old_header: &StateHeaderV2,
+    old_header: &StateHeader,
     expected_funding_anchor: &[u8],
     expected_lock_code_hash: &[u8],
     expected_lock_hash_type: u8,
 ) -> Result<()> {
     let witness_raw = find_splice_witness_raw(expected_funding_anchor)?;
-    let witness = SpliceStateTransitionWitnessV1::parse(&witness_raw)
+    let witness = SpliceStateTransitionWitness::parse(&witness_raw)
         .map_err(|_| ScriptError::SpliceProofEncoding)?;
     let splice_header = witness.header()?;
     let new_data = find_unique_state_output_for_splice(
@@ -369,8 +367,8 @@ fn validate_splice_vault_spend(
         expected_lock_code_hash,
         expected_lock_hash_type,
     )?;
-    let new_header = StateHeaderV2::parse(&new_data)?;
-    verify_splice_state_transition_bundle_v2(old_header, &new_header, &witness)?;
+    let new_header = StateHeader::parse(&new_data)?;
+    verify_splice_state_transition_bundle(old_header, &new_header, &witness)?;
 
     let old_vault = witness.old_vault()?;
     let new_vault = witness.new_vault()?;
@@ -391,7 +389,7 @@ fn find_splice_witness_raw(expected_old_funding_anchor: &[u8]) -> Result<alloc::
             Ok(witness_args) => {
                 if let Some(input_type) = witness_args.input_type().to_opt() {
                     let raw = input_type.raw_data();
-                    if let Ok(witness) = SpliceStateTransitionWitnessV1::parse(raw.as_ref()) {
+                    if let Ok(witness) = SpliceStateTransitionWitness::parse(raw.as_ref()) {
                         let header = witness.header()?;
                         if header.old_funding_anchor() == expected_old_funding_anchor {
                             if found.is_some() {
@@ -428,7 +426,7 @@ fn find_unique_state_output_for_splice(
     loop {
         match load_cell_data(index, Source::Output) {
             Ok(data) => {
-                if let Ok(header) = StateHeaderV2::parse(&data)
+                if let Ok(header) = StateHeader::parse(&data)
                     && header.funding_anchor() == expected_funding_anchor
                     && state_type_script_matches_anchor(
                         &base_type,
@@ -562,7 +560,7 @@ fn script_matches_anchor(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_old_vault_inputs(descriptor: &SpliceVaultDescriptorV2) -> Result<()> {
+fn validate_old_vault_inputs(descriptor: &SpliceVaultDescriptor) -> Result<()> {
     let assets = descriptor_assets(descriptor)?;
     let capacity = sum_group_capacity(Source::GroupInput)? as u128;
     if capacity != assets.ckb_amount {
@@ -584,7 +582,7 @@ fn validate_old_vault_inputs(descriptor: &SpliceVaultDescriptorV2) -> Result<()>
 #[cfg(target_arch = "riscv64")]
 fn validate_new_vault_output(
     current_script: &ckb_std::ckb_types::packed::Script,
-    descriptor: &SpliceVaultDescriptorV2,
+    descriptor: &SpliceVaultDescriptor,
 ) -> Result<[u8; 32]> {
     let assets = descriptor_assets(descriptor)?;
     let output_index = single_vault_output_index(current_script, descriptor.funding_anchor())?;
@@ -609,7 +607,7 @@ fn validate_new_vault_output(
             }
             let lock_hash = load_cell_lock_hash(output_index, Source::Output)
                 .map_err(|_| ScriptError::Encoding)?;
-            Ok(vault_cell_commitment_v1(
+            Ok(vault_cell_commitment(
                 lock_hash.as_slice(),
                 capacity,
                 Some(actual_type_hash.as_slice()),
@@ -625,7 +623,7 @@ fn validate_new_vault_output(
             }
             let lock_hash = load_cell_lock_hash(output_index, Source::Output)
                 .map_err(|_| ScriptError::Encoding)?;
-            Ok(vault_cell_commitment_v1(
+            Ok(vault_cell_commitment(
                 lock_hash.as_slice(),
                 capacity,
                 None,
@@ -651,20 +649,20 @@ struct DescriptorAssets<'a> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn descriptor_assets<'a>(descriptor: &SpliceVaultDescriptorV2<'a>) -> Result<DescriptorAssets<'a>> {
+fn descriptor_assets<'a>(descriptor: &SpliceVaultDescriptor<'a>) -> Result<DescriptorAssets<'a>> {
     let mut ckb_amount: Option<u128> = None;
     let mut xudt: Option<(&'a [u8], u128)> = None;
 
     for index in 0..descriptor.asset_count() as usize {
         let asset = descriptor.asset(index)?;
         match asset.asset_kind() {
-            VAULT_ASSET_KIND_CKB_V1 => {
+            VAULT_ASSET_KIND_CKB => {
                 if ckb_amount.is_some() {
                     return Err(ScriptError::SpliceProofMismatch);
                 }
                 ckb_amount = Some(asset.amount());
             }
-            VAULT_ASSET_KIND_XUDT_V1 => {
+            VAULT_ASSET_KIND_XUDT => {
                 if xudt.is_some() {
                     return Err(ScriptError::SpliceProofMismatch);
                 }
