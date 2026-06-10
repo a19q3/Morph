@@ -1,7 +1,7 @@
 # Devnet current RC Closeout
 
-Status: historical Devnet current release-candidate evidence; superseded for current
-readiness tracking by the current non-fixed factory witness work.
+Status: historical Devnet release-candidate evidence; superseded for current
+readiness tracking by the witness-envelope factory witness work.
 
 This is not a mainnet-ready or production real-assets-ready claim. Mainnet-like
 challenge-window evidence, fee stress, supply-chain revalidation in release CI,
@@ -10,11 +10,11 @@ and value-limit policy remain release gates before raising asset limits.
 
 ## Supersession Note
 
-The evidence below remains useful as a frozen current devnet release-candidate record
+The evidence below remains useful as a frozen devnet release-candidate record
 for commit `4ca867c`. It must not be read as the current implementation design
 or as current release evidence.
 
-The current post-current line is commit `a2059ba` on
+The current witness-envelope line is commit `a2059ba` on
 `arthur/v2-final-nonfixed-witness`. That line removes the factory contracts'
 old top-level fixed-length witness convention as the public authorisation
 boundary and replaces it with a bounded `WitnessEnvelope` header:
@@ -23,7 +23,7 @@ boundary and replaces it with a bounded `WitnessEnvelope` header:
 - body length is bounded per kind instead of inferred from one global raw
   witness size;
 - the body digest commits the envelope to the decoded authorisation payload;
-- current-style body names, such as reduced exit and splice, remain as historical
+- fixed-layout body names, such as reduced exit and splice, remain as historical
   body schemas rather than as the top-level dispatch contract.
 
 Therefore the current limitations and script hashes below are deliberately retained

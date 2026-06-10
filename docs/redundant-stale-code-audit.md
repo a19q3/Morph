@@ -6,15 +6,15 @@ wire-format changes, dependency upgrades, and historical evidence edits.
 
 ## Supersession Note
 
-This document is a historical audit of the current devnet release-candidate line,
-not a current stale-code assessment of the post-current implementation.
+This document is a historical audit of the devnet release-candidate line,
+not a current stale-code assessment of the witness-envelope implementation.
 
-The current current line, commit `a2059ba` on
+The current line, commit `a2059ba` on
 `arthur/v2-final-nonfixed-witness`, deliberately changes the factory
 authorisation boundary from the old top-level fixed-length witness convention to
 the bounded `WitnessEnvelope` kind/body/digest envelope. Consequently, the current
 scope classifications below remain valid only for that older audit baseline.
-They should not be used to decide whether current current witness-envelope code,
+They should not be used to decide whether current witness-envelope code,
 documentation, fixtures, or release evidence are stale.
 
 ## Baseline

@@ -1,9 +1,8 @@
 # Devnet Stateful Production Scenario Acceptance
 
-Status: historical devnet stateful acceptance evidence passed locally, including
-the generalized audit profile and supply-chain gate. Contract boundary fixes
-after this recorded run require a fresh clean `make devnet-stateful-e2e` artifact
-before this closeout can be used as current release evidence again.
+Status: devnet stateful acceptance is the required current release-evidence
+gate. A closeout is current only when its artifact manifest records the current
+clean `HEAD`, `git_dirty=false`, and `status=passed`.
 
 This is not a mainnet-ready or production real-assets-ready claim. The suite is
 the devnet acceptance layer for production-shaped stateful lifecycles and

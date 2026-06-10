@@ -9,7 +9,7 @@ This is a historical M6 closeout document. It records the conservative
 factory-splice milestone and should not be read as the current factory witness
 dispatch design.
 
-The current post-current implementation line at commit `a2059ba` wraps factory
+The current witness-envelope implementation line at commit `a2059ba` wraps factory
 authorisation bodies in `WitnessEnvelope`. The `*current` names below remain useful
 as package/body schema names and evidence labels, but factory contracts now
 dispatch by envelope kind and checked body digest rather than by the old

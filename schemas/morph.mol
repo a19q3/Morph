@@ -5,10 +5,10 @@
 // on-chain wire boundary and should be generated once moleculec is available
 // in the devnet build environment.
 //
-// The active devnet current channel headers and current witness bodies intentionally use
+// The active devnet channel headers and witness bodies intentionally use
 // fixed-width encodings. Factory authorisation witnesses are no longer
 // dispatched by raw body length: every factory contract witness is carried in a
-// WitnessEnvelope header followed by one bounded current body. These lengths are
+// WitnessEnvelope header followed by one bounded body. These lengths are
 // part of the audited transaction shape:
 //
 // - StateHeader: 314 bytes
@@ -26,9 +26,9 @@
 // - FactoryReducedRightsWitness: 2580 bytes
 // - FactoryMerkleUpdateWitness: 8720 bytes
 // - FactoryReducedExitWitness: 3058 bytes
-// - FactoryReducedExitXudtWitnessV1: 3122 bytes
+// - FactoryReducedExitXudtWitness: 3122 bytes
 // - FactoryLocalExitWitness: 726 bytes
-// - FactoryLocalExitXudtWitnessV1: 790 bytes
+// - FactoryLocalExitXudtWitness: 790 bytes
 // - FactorySpliceHeader: 275 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
@@ -41,8 +41,8 @@
 // - SponsorPolicy: 144 bytes
 
 array Byte32 [byte; 32];
-array WitnessEnvelopeMagicV2 [byte; 8];
-array FactoryMerkleProofSiblingsV1 [Byte32; 256];
+array WitnessEnvelopeMagic [byte; 8];
+array FactoryMerkleProofSiblings [Byte32; 256];
 array Secp256k1CompressedPubkey [byte; 33];
 array EcdsaSignature [byte; 64];
 
@@ -52,12 +52,12 @@ array EcdsaSignature [byte; 64];
 // 1 FactorySignatureWitness
 // 2 FactoryReducedRightsWitness
 // 3 FactoryMerkleUpdateWitness
-// 4 FactoryReducedExitWitness or FactoryReducedExitXudtWitnessV1
-// 5 FactoryLocalExitWitness or FactoryLocalExitXudtWitnessV1
+// 4 FactoryReducedExitWitness or FactoryReducedExitXudtWitness
+// 5 FactoryLocalExitWitness or FactoryLocalExitXudtWitness
 // 6 FactorySpliceWitness
 // 7 FactoryReducedSpliceWitness
 struct WitnessEnvelope {
-    magic: WitnessEnvelopeMagicV2,
+    magic: WitnessEnvelopeMagic,
     version: uint16,
     kind: uint16,
     flags: uint16,
@@ -70,7 +70,7 @@ struct OutPointRef {
     index: uint32,
 }
 
-struct ChallengePolicyV1 {
+struct ChallengePolicy {
     since_value: uint64,
     detection_depth: uint32,
     min_emergency_rebuilds: uint32,
@@ -208,7 +208,7 @@ struct FactoryRight {
     quantity: uint128,
 }
 
-struct FactoryReducedRightsParticipantV1 {
+struct FactoryReducedRightsParticipant {
     participant: Byte32,
     pubkey: Secp256k1CompressedPubkey,
     signed: byte,
@@ -222,8 +222,8 @@ struct FactoryReducedRightsWitness {
     authorised_count: byte,
     right_count: byte,
     reserved: uint16,
-    participant_0: FactoryReducedRightsParticipantV1,
-    participant_1: FactoryReducedRightsParticipantV1,
+    participant_0: FactoryReducedRightsParticipant,
+    participant_1: FactoryReducedRightsParticipant,
     touched_participant: Byte32,
     before_0: FactoryRight,
     before_1: FactoryRight,
@@ -254,12 +254,12 @@ struct FactoryMerkleUpdateWitness {
     authorised_count: byte,
     right_count: byte,
     reserved: uint16,
-    participant_0: FactoryReducedRightsParticipantV1,
-    participant_1: FactoryReducedRightsParticipantV1,
+    participant_0: FactoryReducedRightsParticipant,
+    participant_1: FactoryReducedRightsParticipant,
     touched_participant: Byte32,
     right_before: FactoryRight,
     right_after: FactoryRight,
-    proof_siblings: FactoryMerkleProofSiblingsV1,
+    proof_siblings: FactoryMerkleProofSiblings,
 }
 
 struct FactoryReducedExitWitness {
@@ -269,8 +269,8 @@ struct FactoryReducedExitWitness {
     authorised_count: byte,
     right_count: byte,
     reserved: uint16,
-    participant_0: FactoryReducedRightsParticipantV1,
-    participant_1: FactoryReducedRightsParticipantV1,
+    participant_0: FactoryReducedRightsParticipant,
+    participant_1: FactoryReducedRightsParticipant,
     touched_participant: Byte32,
     release_quantity: uint128,
     state_output_index: uint32,
@@ -302,15 +302,15 @@ struct FactoryReducedExitWitness {
     after_9: FactoryRight,
 }
 
-struct FactoryReducedExitXudtWitnessV1 {
+struct FactoryReducedExitXudtWitness {
     version: uint16,
     participant_threshold: byte,
     participant_count: byte,
     authorised_count: byte,
     right_count: byte,
     reserved: uint16,
-    participant_0: FactoryReducedRightsParticipantV1,
-    participant_1: FactoryReducedRightsParticipantV1,
+    participant_0: FactoryReducedRightsParticipant,
+    participant_1: FactoryReducedRightsParticipant,
     touched_participant: Byte32,
     release_quantity: uint128,
     state_output_index: uint32,
@@ -354,7 +354,7 @@ struct FactoryLocalExitWitness {
     settlement_descriptor: BilateralCkbSettlementDescriptor,
 }
 
-struct FactoryLocalExitXudtWitnessV1 {
+struct FactoryLocalExitXudtWitness {
     version: uint16,
     factory_signature: FactorySignatureWitness,
     state_output_index: uint32,
@@ -427,7 +427,7 @@ struct FactoryReducedSpliceWitness {
     vault_deltas: FactoryVaultDeltas,
 }
 
-struct BilateralCkbSettlementOutputV1 {
+struct BilateralCkbSettlementOutput {
     lock_hash: Byte32,
     capacity: uint64,
 }
@@ -436,11 +436,11 @@ struct BilateralCkbSettlementDescriptor {
     version: uint16,
     output_count: byte,
     reserved: byte,
-    output_0: BilateralCkbSettlementOutputV1,
-    output_1: BilateralCkbSettlementOutputV1,
+    output_0: BilateralCkbSettlementOutput,
+    output_1: BilateralCkbSettlementOutput,
 }
 
-struct BilateralCkbXudtSettlementOutputV1 {
+struct BilateralCkbXudtSettlementOutput {
     lock_hash: Byte32,
     capacity: uint64,
     xudt_amount: uint128,
@@ -451,8 +451,8 @@ struct BilateralCkbXudtSettlementDescriptor {
     output_count: byte,
     asset_count: byte,
     xudt_type_hash: Byte32,
-    output_0: BilateralCkbXudtSettlementOutputV1,
-    output_1: BilateralCkbXudtSettlementOutputV1,
+    output_0: BilateralCkbXudtSettlementOutput,
+    output_1: BilateralCkbXudtSettlementOutput,
 }
 
 struct SponsorPolicy {

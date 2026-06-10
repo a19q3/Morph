@@ -1298,6 +1298,19 @@ impl StoredFactorySplicePackage {
             signature_keys == self.participant_keys,
             "factory splice signatures do not match participant key set"
         );
+        let update_participant_ids = factory_participants_from_update(&update)?
+            .iter()
+            .map(|participant| hex_prefixed(participant))
+            .collect::<Vec<_>>();
+        let package_participant_ids = self
+            .participant_keys
+            .iter()
+            .map(|key| key.participant.clone())
+            .collect::<Vec<_>>();
+        ensure!(
+            package_participant_ids == update_participant_ids,
+            "factory splice participant_keys do not match update participants"
+        );
 
         let transition = FactorySpliceTransition {
             header: self.header()?,
@@ -3363,6 +3376,22 @@ mod tests {
         assert_eq!(summary.signature_threshold, 2);
         assert_eq!(summary.signatures, 2);
         assert_factory_splice_contract_witness(&package, &summary);
+    }
+
+    #[test]
+    fn rejects_factory_splice_participant_key_set_mismatch() {
+        let mut package =
+            fixture_factory_splice_package_with_kind(FixtureFactorySpliceKind::CkbSpliceIn)
+                .unwrap();
+        let wrong_participant = hex_prefixed(&bytes32(0));
+        package.participant_keys[0].participant = wrong_participant.clone();
+        package.signatures[0].participant = wrong_participant;
+
+        let err = package.validate().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("participant_keys do not match update participants")
+        );
     }
 
     #[test]

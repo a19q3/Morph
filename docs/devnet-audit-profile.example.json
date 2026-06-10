@@ -1,6 +1,6 @@
 {
   "schema": "morph.devnet_audit_profile",
-  "description": "Audit profile schema is a devnet evidence taxonomy label. The current suffix does not denote the active protocol baseline; factory authorisation is interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current current-envelope implementation line.",
+  "description": "Audit profile schema is a devnet evidence taxonomy label. The schema suffix does not denote the active protocol baseline; factory authorisation is interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current witness-envelope implementation line.",
   "families": [
     {
       "id": "state_authority_authenticity",

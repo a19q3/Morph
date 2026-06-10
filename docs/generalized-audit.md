@@ -12,8 +12,8 @@ The default profile is
 [`docs/devnet-audit-profile.example.json`](devnet-audit-profile.example.json)
 with schema `morph.devnet_audit_profile`.
 
-The `` suffix here is only the audit-profile schema version. It is not a
-protocol or witness-version label. On the current post-current implementation line,
+The schema suffix here is only the audit-profile evidence label. It is not a
+protocol or witness-version label. On the current witness-envelope implementation line,
 factory authorisation is read through the bounded `WitnessEnvelope`
 kind/body/digest envelope.
 
