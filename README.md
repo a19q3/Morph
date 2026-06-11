@@ -204,11 +204,18 @@ cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
 make devnet-smoke
 make devnet-e2e
 make devnet-stateful-e2e
+make fiber-morph-devnet-preflight
+make fiber-morph-devnet-acceptance
 ```
 
 The generated reports live under `target/devnet-smoke/` and
 `target/devnet-stateful-e2e/`. The `latest` symlink points to the most recent
 successful run when it is safe to refresh.
+
+The Fiber/Morph gate starts Fiber's local devnet stack, runs Morph's strict
+stateful channel/factory matrix on Fiber's CKB RPC, and then runs Fiber channel
+acceptance on the same devnet. See
+[fiber-morph-devnet-acceptance.md](docs/fiber-morph-devnet-acceptance.md).
 
 ## Common CLI Workflows
 

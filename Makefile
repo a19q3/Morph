@@ -8,7 +8,7 @@ DENY ?= cargo deny
 # RUSTSEC-2026-0097 is the current rand advisory; RUSTSEC-2020-0097 is for xcb.
 AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097
 
-.PHONY: ci test lint fmt fmt-check audit deny supply-chain smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
+.PHONY: ci test lint fmt fmt-check audit deny supply-chain smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 
 ci: fmt-check lint supply-chain test fixture-checks contract-tests
 
@@ -80,6 +80,15 @@ devnet-e2e:
 
 devnet-stateful-e2e:
 	scripts/devnet-stateful-e2e.sh
+
+fiber-morph-devnet-preflight:
+	FIBER_MORPH_ACCEPTANCE_MODE=preflight scripts/fiber-morph-devnet-acceptance.sh
+
+fiber-morph-devnet-acceptance:
+	FIBER_MORPH_ACCEPTANCE_MODE=coexistence scripts/fiber-morph-devnet-acceptance.sh
+
+fiber-morph-devnet-acceptance-full:
+	FIBER_MORPH_ACCEPTANCE_MODE=full scripts/fiber-morph-devnet-acceptance.sh
 
 smoke-report:
 	$(CARGO) run -p morph-cli -- devnet-smoke-report

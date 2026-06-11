@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PARENT_DIR="$(cd "$ROOT_DIR/.." && pwd)"
+
+FIBER_DIR="${FIBER_DIR:-$PARENT_DIR/fiber}"
+CKB_SOURCE_DIR="${CKB_SOURCE_DIR:-$PARENT_DIR/ckb}"
+CKB_CLI_SOURCE_DIR="${CKB_CLI_SOURCE_DIR:-$PARENT_DIR/ckb-cli}"
+
+RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+OUT_DIR="${OUT_DIR:-$ROOT_DIR/target/fiber-morph-devnet-acceptance/$RUN_ID}"
+LOG_DIR="$OUT_DIR/logs"
+TOOL_BIN_DIR="$OUT_DIR/tool-bin"
+MODE="${FIBER_MORPH_ACCEPTANCE_MODE:-coexistence}"
+FIBER_TEST_ENV="${FIBER_TEST_ENV:-debug}"
+FIBER_CKB_RPC_URL="${FIBER_CKB_RPC_URL:-http://127.0.0.1:8114}"
+FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
+FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
+FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
+FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
+FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/udt e2e/udt-router-pay}"
+BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
+BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
+RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
+
+CKB_BIN="${CKB_BIN:-}"
+CKB_CLI_BIN="${CKB_CLI_BIN:-}"
+FIBER_STACK_PID=""
+
+if [ "${1:-}" = "--preflight" ]; then
+  MODE="preflight"
+elif [ -n "${1:-}" ]; then
+  MODE="$1"
+fi
+
+mkdir -p "$LOG_DIR" "$TOOL_BIN_DIR"
+
+log() {
+  printf '[fiber-morph-acceptance] %s\n' "$*"
+}
+
+fail() {
+  printf '[fiber-morph-acceptance] error: %s\n' "$*" >&2
+  exit 1
+}
+
+require_tool() {
+  local name="$1"
+  command -v "$name" >/dev/null 2>&1 || fail "missing required tool: $name"
+}
+
+clone_repo_if_missing() {
+  local dir="$1"
+  local url="$2"
+  if [ -d "$dir/.git" ]; then
+    return
+  fi
+  if [ -e "$dir" ]; then
+    fail "$dir exists but is not a git checkout"
+  fi
+  log "cloning missing dependency: $url -> $dir"
+  git clone "$url" "$dir"
+}
+
+git_value() {
+  local dir="$1"
+  shift
+  git -C "$dir" "$@" 2>/dev/null || printf 'unknown'
+}
+
+write_repo_state() {
+  local path="$OUT_DIR/repo-state.json"
+  jq -n \
+    --arg morph_dir "$ROOT_DIR" \
+    --arg morph_branch "$(git_value "$ROOT_DIR" branch --show-current)" \
+    --arg morph_head "$(git_value "$ROOT_DIR" rev-parse --short HEAD)" \
+    --arg morph_status "$(git_value "$ROOT_DIR" status --porcelain)" \
+    --arg fiber_dir "$FIBER_DIR" \
+    --arg fiber_branch "$(git_value "$FIBER_DIR" branch --show-current)" \
+    --arg fiber_head "$(git_value "$FIBER_DIR" rev-parse --short HEAD)" \
+    --arg fiber_status "$(git_value "$FIBER_DIR" status --porcelain)" \
+    --arg ckb_dir "$CKB_SOURCE_DIR" \
+    --arg ckb_branch "$(git_value "$CKB_SOURCE_DIR" branch --show-current)" \
+    --arg ckb_head "$(git_value "$CKB_SOURCE_DIR" rev-parse --short HEAD)" \
+    --arg ckb_status "$(git_value "$CKB_SOURCE_DIR" status --porcelain)" \
+    --arg ckb_cli_dir "$CKB_CLI_SOURCE_DIR" \
+    --arg ckb_cli_branch "$(git_value "$CKB_CLI_SOURCE_DIR" branch --show-current)" \
+    --arg ckb_cli_head "$(git_value "$CKB_CLI_SOURCE_DIR" rev-parse --short HEAD)" \
+    --arg ckb_cli_status "$(git_value "$CKB_CLI_SOURCE_DIR" status --porcelain)" \
+    '{
+      schema: "morph.fiber_morph_repo_state",
+      morph: { dir: $morph_dir, branch: $morph_branch, head: $morph_head, status: $morph_status },
+      fiber: { dir: $fiber_dir, branch: $fiber_branch, head: $fiber_head, status: $fiber_status },
+      ckb: { dir: $ckb_dir, branch: $ckb_branch, head: $ckb_head, status: $ckb_status },
+      ckb_cli: { dir: $ckb_cli_dir, branch: $ckb_cli_branch, head: $ckb_cli_head, status: $ckb_cli_status }
+    }' >"$path"
+  log "repo state -> $path"
+}
+
+assert_clean_for_production() {
+  local morph_status
+  morph_status="$(git -C "$ROOT_DIR" status --porcelain)"
+  if [ -n "$morph_status" ]; then
+    fail "Morph worktree is dirty; production acceptance requires a clean tree because devnet-stateful-assert enforces freshness"
+  fi
+  local fiber_status
+  fiber_status="$(git -C "$FIBER_DIR" status --porcelain --untracked-files=no)"
+  if [ -n "$fiber_status" ]; then
+    fail "Fiber tracked worktree is dirty; commit or stash tracked changes before production acceptance"
+  fi
+}
+
+resolve_ckb_bin() {
+  if [ -n "$CKB_BIN" ]; then
+    [ -x "$CKB_BIN" ] || fail "CKB_BIN is not executable: $CKB_BIN"
+    return
+  fi
+  if command -v ckb >/dev/null 2>&1; then
+    CKB_BIN="$(command -v ckb)"
+    return
+  fi
+  for candidate in \
+    "$CKB_SOURCE_DIR/target/release/ckb" \
+    "$CKB_SOURCE_DIR/target/debug/ckb"
+  do
+    if [ -x "$candidate" ]; then
+      CKB_BIN="$candidate"
+      return
+    fi
+  done
+  [ -f "$CKB_SOURCE_DIR/Cargo.toml" ] || fail "cannot find CKB source at $CKB_SOURCE_DIR"
+  log "building ckb from $CKB_SOURCE_DIR"
+  cargo build --manifest-path "$CKB_SOURCE_DIR/Cargo.toml" -p ckb
+  CKB_BIN="$CKB_SOURCE_DIR/target/debug/ckb"
+  [ -x "$CKB_BIN" ] || fail "CKB build did not produce $CKB_BIN"
+}
+
+resolve_ckb_cli_bin() {
+  if [ -n "$CKB_CLI_BIN" ]; then
+    [ -x "$CKB_CLI_BIN" ] || fail "CKB_CLI_BIN is not executable: $CKB_CLI_BIN"
+    return
+  fi
+  if command -v ckb-cli >/dev/null 2>&1; then
+    CKB_CLI_BIN="$(command -v ckb-cli)"
+    return
+  fi
+  for candidate in \
+    "$CKB_CLI_SOURCE_DIR/target/release/ckb-cli" \
+    "$CKB_CLI_SOURCE_DIR/target/debug/ckb-cli"
+  do
+    if [ -x "$candidate" ]; then
+      CKB_CLI_BIN="$candidate"
+      return
+    fi
+  done
+  [ -f "$CKB_CLI_SOURCE_DIR/Cargo.toml" ] || fail "cannot find ckb-cli source at $CKB_CLI_SOURCE_DIR"
+  log "building ckb-cli from $CKB_CLI_SOURCE_DIR"
+  cargo build --manifest-path "$CKB_CLI_SOURCE_DIR/Cargo.toml"
+  CKB_CLI_BIN="$CKB_CLI_SOURCE_DIR/target/debug/ckb-cli"
+  [ -x "$CKB_CLI_BIN" ] || fail "ckb-cli build did not produce $CKB_CLI_BIN"
+}
+
+prepare_tool_path() {
+  resolve_ckb_bin
+  resolve_ckb_cli_bin
+  ln -sf "$CKB_BIN" "$TOOL_BIN_DIR/ckb"
+  ln -sf "$CKB_CLI_BIN" "$TOOL_BIN_DIR/ckb-cli"
+  export PATH="$TOOL_BIN_DIR:$PATH"
+  log "ckb -> $CKB_BIN"
+  log "ckb-cli -> $CKB_CLI_BIN"
+}
+
+write_manifest() {
+  cat >"$OUT_DIR/manifest.txt" <<EOF
+schema=morph.fiber_morph_devnet_acceptance
+started_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+run_id=$RUN_ID
+mode=$MODE
+root_dir=$ROOT_DIR
+fiber_dir=$FIBER_DIR
+ckb_source_dir=$CKB_SOURCE_DIR
+ckb_cli_source_dir=$CKB_CLI_SOURCE_DIR
+ckb_bin=$CKB_BIN
+ckb_cli_bin=$CKB_CLI_BIN
+fiber_ckb_rpc_url=$FIBER_CKB_RPC_URL
+fiber_node1_rpc_url=$FIBER_NODE1_RPC_URL
+fiber_node2_rpc_url=$FIBER_NODE2_RPC_URL
+fiber_node3_rpc_url=$FIBER_NODE3_RPC_URL
+fiber_test_env=$FIBER_TEST_ENV
+fiber_coexistence_suite=$FIBER_COEXISTENCE_SUITE
+fiber_bruno_suites=$FIBER_BRUNO_SUITES
+build_morph_contracts=$BUILD_MORPH_CONTRACTS
+run_fiber_restart_regression=$RUN_FIBER_RESTART_REGRESSION
+EOF
+}
+
+rpc_ready() {
+  local url="$1"
+  local method="$2"
+  local params="${3:-[]}"
+  local payload
+  payload="$(jq -cn --arg method "$method" --argjson params "$params" \
+    '{id:1,jsonrpc:"2.0",method:$method,params:$params}')"
+  curl -fsS -H 'content-type: application/json' -d "$payload" "$url" |
+    jq -e '.result != null' >/dev/null
+}
+
+wait_for_rpc() {
+  local url="$1"
+  local method="$2"
+  local label="$3"
+  local deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if rpc_ready "$url" "$method" "[]"; then
+      return
+    fi
+    if [ -n "$FIBER_STACK_PID" ] && ! kill -0 "$FIBER_STACK_PID" >/dev/null 2>&1; then
+      fail "Fiber stack exited while waiting for $label; see $LOG_DIR/fiber-stack.log"
+    fi
+    sleep 2
+  done
+  fail "timed out waiting for $label at $url"
+}
+
+kill_tree() {
+  local pid="$1"
+  local child
+  if command -v pgrep >/dev/null 2>&1; then
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+      kill_tree "$child"
+    done
+  fi
+  kill "$pid" >/dev/null 2>&1 || true
+}
+
+stop_fiber_stack() {
+  if [ -n "$FIBER_STACK_PID" ] && kill -0 "$FIBER_STACK_PID" >/dev/null 2>&1; then
+    log "stopping Fiber stack pid=$FIBER_STACK_PID"
+    kill_tree "$FIBER_STACK_PID"
+    wait "$FIBER_STACK_PID" >/dev/null 2>&1 || true
+  fi
+  FIBER_STACK_PID=""
+}
+
+trap stop_fiber_stack EXIT
+
+start_fiber_stack() {
+  local testcase="$1"
+  local log_file="$2"
+  stop_fiber_stack
+  log "starting Fiber stack for $testcase"
+  (
+    cd "$FIBER_DIR"
+    REMOVE_OLD_STATE=y \
+    TEST_ENV="$FIBER_TEST_ENV" \
+    PATH="$TOOL_BIN_DIR:$PATH" \
+      ./tests/nodes/start.sh "$testcase"
+  ) >"$log_file" 2>&1 &
+  FIBER_STACK_PID="$!"
+  wait_for_rpc "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB"
+  wait_for_rpc "$FIBER_NODE1_RPC_URL" "node_info" "Fiber node1"
+  wait_for_rpc "$FIBER_NODE2_RPC_URL" "node_info" "Fiber node2"
+  wait_for_rpc "$FIBER_NODE3_RPC_URL" "node_info" "Fiber node3"
+  log "Fiber stack ready for $testcase"
+}
+
+run_bruno_suite() {
+  local suite="$1"
+  local label="${suite//\//_}"
+  local log_file="$LOG_DIR/fiber-bruno-$label.log"
+  log "running Fiber Bruno suite $suite"
+  (
+    cd "$FIBER_DIR/tests/bruno"
+    npm exec --yes -- "$BRUNO_CLI_SPEC" run "$suite" -r --env test
+  ) >"$log_file" 2>&1
+  jq -n \
+    --arg suite "$suite" \
+    --arg status "passed" \
+    --arg log "$log_file" \
+    '{suite:$suite,status:$status,log:$log}' >"$OUT_DIR/fiber-bruno-$label.json"
+}
+
+build_morph_contracts() {
+  if [ "$BUILD_MORPH_CONTRACTS" != "1" ]; then
+    log "Morph contract build skipped by BUILD_MORPH_CONTRACTS=$BUILD_MORPH_CONTRACTS"
+    return
+  fi
+  log "building Morph RISC-V contracts"
+  (cd "$ROOT_DIR" && make build-contracts) >"$LOG_DIR/morph-build-contracts.log" 2>&1
+}
+
+run_morph_stateful_on_fiber_ckb() {
+  local scenario_dir="$OUT_DIR/morph-stateful/scenarios"
+  mkdir -p "$scenario_dir"
+  build_morph_contracts
+  log "running Morph strict stateful channel/factory matrix on Fiber CKB devnet"
+  (
+    cd "$ROOT_DIR"
+    MORPH_CKB_RPC="$FIBER_CKB_RPC_URL" \
+    CKB_BIN="$CKB_BIN" \
+    CKB_SOURCE_DIR="$CKB_SOURCE_DIR" \
+    OUT_DIR="$scenario_dir" \
+    LATEST_LINK="$OUT_DIR/morph-stateful/latest" \
+    MORPH_DEVNET_SMOKE_SKIP_LOCAL_CHECKS=1 \
+      scripts/devnet-stateful-scenarios.sh
+  ) >"$LOG_DIR/morph-stateful-on-fiber-ckb.log" 2>&1
+  log "Morph stateful artifacts -> $scenario_dir"
+}
+
+run_fiber_restart_regression() {
+  if [ "$RUN_FIBER_RESTART_REGRESSION" != "1" ]; then
+    log "Fiber external-funding restart regression skipped"
+    return
+  fi
+  local log_file="$LOG_DIR/fiber-external-funding-restart.log"
+  log "running Fiber external-funding restart regression"
+  (
+    cd "$FIBER_DIR"
+    PATH="$TOOL_BIN_DIR:$PATH" \
+      tests/bruno/e2e/external-funding-open/run-restart-test.sh
+  ) >"$log_file" 2>&1
+  jq -n \
+    --arg suite "e2e/external-funding-open/restart" \
+    --arg status "passed" \
+    --arg log "$log_file" \
+    '{suite:$suite,status:$status,log:$log}' >"$OUT_DIR/fiber-external-funding-restart.json"
+}
+
+run_coexistence_gate() {
+  assert_clean_for_production
+  start_fiber_stack "$FIBER_COEXISTENCE_SUITE" "$LOG_DIR/fiber-stack-coexistence.log"
+  run_morph_stateful_on_fiber_ckb
+  run_bruno_suite "$FIBER_COEXISTENCE_SUITE"
+  run_fiber_restart_regression
+  stop_fiber_stack
+}
+
+run_extended_fiber_suites() {
+  local suite
+  for suite in $FIBER_BRUNO_SUITES; do
+    start_fiber_stack "$suite" "$LOG_DIR/fiber-stack-${suite//\//_}.log"
+    run_bruno_suite "$suite"
+    stop_fiber_stack
+  done
+}
+
+write_acceptance_matrix() {
+  local path="$OUT_DIR/acceptance-matrix.json"
+  jq -n \
+    --arg mode "$MODE" \
+    --arg morph_stateful "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
+    --arg fiber_external "$OUT_DIR/fiber-bruno-${FIBER_COEXISTENCE_SUITE//\//_}.json" \
+    '{
+      schema: "morph.fiber_morph_devnet_acceptance_matrix",
+      mode: $mode,
+      gates: [
+        {
+          id: "same_ckb_devnet_coexistence",
+          required: true,
+          evidence: [
+            "Fiber three-node devnet started on CKB RPC",
+            $morph_stateful,
+            $fiber_external
+          ]
+        },
+        {
+          id: "morph_channel_factory_matrix",
+          required: true,
+          evidence: [
+            "Morph devnet-stateful-assert on Fiber CKB RPC",
+            "factory_lifecycle_matrix",
+            "factory_splice_then_exit",
+            "extreme_state_value_cases",
+            "negative_attack_matrix"
+          ]
+        },
+        {
+          id: "fiber_channel_external_funding",
+          required: true,
+          evidence: [
+            "Fiber Bruno external-funding-open",
+            "optional restart regression before submit_signed_funding_tx"
+          ]
+        }
+      ]
+    }' >"$path"
+  log "acceptance matrix -> $path"
+}
+
+write_summary() {
+  write_acceptance_matrix
+  cat >>"$OUT_DIR/manifest.txt" <<EOF
+finished_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+status=passed
+EOF
+  jq -n \
+    --arg manifest "$OUT_DIR/manifest.txt" \
+    --arg repo_state "$OUT_DIR/repo-state.json" \
+    --arg matrix "$OUT_DIR/acceptance-matrix.json" \
+    --arg status "passed" \
+    '{schema:"morph.fiber_morph_devnet_acceptance_summary",status:$status,manifest:$manifest,repo_state:$repo_state,acceptance_matrix:$matrix}' \
+    >"$OUT_DIR/summary.json"
+  log "summary -> $OUT_DIR/summary.json"
+}
+
+preflight() {
+  require_tool git
+  require_tool cargo
+  require_tool jq
+  require_tool curl
+  require_tool nc
+  require_tool node
+  require_tool npm
+  clone_repo_if_missing "$FIBER_DIR" "https://github.com/nervosnetwork/fiber.git"
+  clone_repo_if_missing "$CKB_SOURCE_DIR" "https://github.com/nervosnetwork/ckb.git"
+  clone_repo_if_missing "$CKB_CLI_SOURCE_DIR" "https://github.com/nervosnetwork/ckb-cli.git"
+  [ -f "$FIBER_DIR/Cargo.toml" ] || fail "Fiber checkout missing Cargo.toml: $FIBER_DIR"
+  [ -f "$CKB_SOURCE_DIR/Cargo.toml" ] || fail "CKB checkout missing Cargo.toml: $CKB_SOURCE_DIR"
+  [ -f "$CKB_CLI_SOURCE_DIR/Cargo.toml" ] || fail "ckb-cli checkout missing Cargo.toml: $CKB_CLI_SOURCE_DIR"
+  prepare_tool_path
+  write_manifest
+  write_repo_state
+}
+
+case "$MODE" in
+  preflight)
+    preflight
+    cat >>"$OUT_DIR/manifest.txt" <<EOF
+finished_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+status=preflight-passed
+EOF
+    log "preflight passed; artifacts are in $OUT_DIR"
+    ;;
+  coexistence)
+    preflight
+    run_coexistence_gate
+    write_summary
+    log "coexistence acceptance passed; artifacts are in $OUT_DIR"
+    ;;
+  fiber)
+    preflight
+    assert_clean_for_production
+    run_extended_fiber_suites
+    write_summary
+    log "Fiber acceptance passed; artifacts are in $OUT_DIR"
+    ;;
+  full)
+    preflight
+    run_coexistence_gate
+    run_extended_fiber_suites
+    write_summary
+    log "full Fiber/Morph acceptance passed; artifacts are in $OUT_DIR"
+    ;;
+  *)
+    fail "unknown mode: $MODE (expected preflight, coexistence, fiber, full)"
+    ;;
+esac
