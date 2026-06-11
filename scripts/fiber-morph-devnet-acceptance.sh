@@ -20,6 +20,7 @@ FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
 FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/udt e2e/udt-router-pay}"
+FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 21716 8343 8344 8345 8346}"
 BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
 BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
 RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
@@ -27,6 +28,7 @@ RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
 CKB_BIN="${CKB_BIN:-}"
 CKB_CLI_BIN="${CKB_CLI_BIN:-}"
 FIBER_STACK_PID=""
+FIBER_STACK_STARTED=0
 
 if [ "${1:-}" = "--preflight" ]; then
   MODE="preflight"
@@ -190,6 +192,7 @@ fiber_node3_rpc_url=$FIBER_NODE3_RPC_URL
 fiber_test_env=$FIBER_TEST_ENV
 fiber_coexistence_suite=$FIBER_COEXISTENCE_SUITE
 fiber_bruno_suites=$FIBER_BRUNO_SUITES
+fiber_acceptance_tcp_ports=$FIBER_ACCEPTANCE_TCP_PORTS
 build_morph_contracts=$BUILD_MORPH_CONTRACTS
 run_fiber_restart_regression=$RUN_FIBER_RESTART_REGRESSION
 EOF
@@ -234,13 +237,74 @@ kill_tree() {
   kill "$pid" >/dev/null 2>&1 || true
 }
 
+acceptance_port_listener_pids() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local port args=()
+  for port in $FIBER_ACCEPTANCE_TCP_PORTS; do
+    args+=("-iTCP:$port")
+  done
+
+  lsof -nP "${args[@]}" -sTCP:LISTEN -t 2>/dev/null | sort -u
+}
+
+wait_for_acceptance_ports_free() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local deadline=$((SECONDS + 30))
+  local pids
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    pids="$(acceptance_port_listener_pids || true)"
+    if [ -z "$pids" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+stop_acceptance_port_listeners() {
+  command -v lsof >/dev/null 2>&1 || return 0
+
+  local pids pid
+  pids="$(acceptance_port_listener_pids || true)"
+  if [ -z "$pids" ]; then
+    return 0
+  fi
+
+  log "stopping lingering Fiber acceptance listeners on ports: $FIBER_ACCEPTANCE_TCP_PORTS"
+  for pid in $pids; do
+    kill_tree "$pid"
+  done
+
+  sleep 2
+  pids="$(acceptance_port_listener_pids || true)"
+  if [ -n "$pids" ]; then
+    log "force-stopping lingering Fiber acceptance listener pids: $(printf '%s' "$pids" | tr '\n' ' ')"
+    for pid in $pids; do
+      kill -KILL "$pid" >/dev/null 2>&1 || true
+    done
+  fi
+}
+
 stop_fiber_stack() {
+  local should_clean_ports=0
   if [ -n "$FIBER_STACK_PID" ] && kill -0 "$FIBER_STACK_PID" >/dev/null 2>&1; then
     log "stopping Fiber stack pid=$FIBER_STACK_PID"
     kill_tree "$FIBER_STACK_PID"
     wait "$FIBER_STACK_PID" >/dev/null 2>&1 || true
+    should_clean_ports=1
+  elif [ "$FIBER_STACK_STARTED" = "1" ]; then
+    should_clean_ports=1
   fi
   FIBER_STACK_PID=""
+  if [ "$should_clean_ports" = "1" ]; then
+    if ! wait_for_acceptance_ports_free; then
+      stop_acceptance_port_listeners
+      wait_for_acceptance_ports_free || fail "Fiber acceptance ports stayed busy after teardown: $FIBER_ACCEPTANCE_TCP_PORTS"
+    fi
+  fi
 }
 
 trap stop_fiber_stack EXIT
@@ -249,6 +313,7 @@ start_fiber_stack() {
   local testcase="$1"
   local log_file="$2"
   stop_fiber_stack
+  wait_for_acceptance_ports_free || fail "Fiber acceptance ports are busy before starting $testcase: $FIBER_ACCEPTANCE_TCP_PORTS"
   log "starting Fiber stack for $testcase"
   (
     cd "$FIBER_DIR"
@@ -258,6 +323,7 @@ start_fiber_stack() {
       ./tests/nodes/start.sh "$testcase"
   ) >"$log_file" 2>&1 &
   FIBER_STACK_PID="$!"
+  FIBER_STACK_STARTED=1
   wait_for_rpc "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB"
   wait_for_rpc "$FIBER_NODE1_RPC_URL" "node_info" "Fiber node1"
   wait_for_rpc "$FIBER_NODE2_RPC_URL" "node_info" "Fiber node2"
