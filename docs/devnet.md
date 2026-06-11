@@ -211,6 +211,16 @@ flowchart LR
     E --> F
 ```
 
+For factory work, stateful acceptance is deliberately stricter than merely
+referencing smoke artefacts. `devnet-stateful-assert` rejects a scenario set
+unless the factory lifecycle, factory splice, one-sided/extreme factory cases,
+and factory negative xUDT paths are named in the scenario-level required
+committed checks or expected failures. This covers open/update, child
+materialisation/finalisation, reduced-rights, sparse-Merkle updates, reduced
+CKB and xUDT exits, conservative and reduced CKB/xUDT splices, asymmetric CKB
+variants, one-sided xUDT variants, and exact expected factory xUDT rejection
+errors.
+
 Generate or assert a report:
 
 ```sh

@@ -126,18 +126,18 @@ write_scenario \
 write_scenario \
   factory_lifecycle_matrix \
   factory \
-  "Factory state advances through all-participant update, reduced rights, sparse Merkle decrease, local child exit, and typed reduced exits." \
-  '["smoke/factory/update.json","smoke/factory/exit-channel.json","smoke/factory/child-publish.json","smoke/factory/child-finalise.json","smoke/factory-reduced-rights-smoke.json","smoke/factory-reduced-rights-tight-smoke.json","smoke/factory-merkle-update-smoke.json","smoke/factory-merkle-update-tight-smoke.json","smoke/factory-reduced-exit-smoke.json","smoke/factory-reduced-exit-asymmetric-smoke.json","smoke/factory-reduced-xudt-exit-smoke.json","smoke/factory-reduced-xudt-exit-full-smoke.json","smoke/factory-reduced-xudt-exit-one-sided-smoke.json","smoke/factory-xudt/smoke.json","smoke/factory-xudt-one-sided/smoke.json"]' \
-  '["factory/update","factory/exit-channel","factory/child-publish","factory/child-finalise","factory-reduced-rights-smoke","factory-merkle-update-smoke","factory-reduced-exit-smoke","factory-reduced-xudt-exit-smoke","factory-xudt/smoke"]' \
+  "Factory state advances through open, all-participant update, reduced rights, sparse Merkle decrease, local child exit, and typed reduced exits." \
+  '["smoke/factory-smoke.json","smoke/factory/open.json","smoke/factory/update.json","smoke/factory/exit-channel.json","smoke/factory/child-publish.json","smoke/factory/child-finalise.json","smoke/factory-reduced-rights-smoke.json","smoke/factory-reduced-rights-tight-smoke.json","smoke/factory-merkle-update-smoke.json","smoke/factory-merkle-update-tight-smoke.json","smoke/factory-reduced-exit-smoke.json","smoke/factory-reduced-exit-asymmetric-smoke.json","smoke/factory-reduced-xudt-exit-smoke.json","smoke/factory-reduced-xudt-exit-full-smoke.json","smoke/factory-reduced-xudt-exit-one-sided-smoke.json","smoke/factory-xudt/smoke.json","smoke/factory-xudt-one-sided/smoke.json"]' \
+  '["factory-smoke","factory/open","factory/update","factory/exit-channel","factory/child-publish","factory/child-finalise","factory-reduced-rights-smoke","factory-reduced-rights-tight-smoke","factory-merkle-update-smoke","factory-merkle-update-tight-smoke","factory-reduced-exit-smoke","factory-reduced-exit-asymmetric-smoke","factory-reduced-xudt-exit-smoke","factory-reduced-xudt-exit-full-smoke","factory-reduced-xudt-exit-one-sided-smoke","factory-xudt/smoke","factory-xudt-one-sided/smoke"]' \
   '[]' \
   '["state_retirement_non_orphaning","non_interference_not_authorisation","factory_value_delta_binding","typed_asset_binding","negative_recovery_continuity"]'
 
 write_scenario \
   factory_splice_then_exit \
   factory \
-  "Factory CKB/xUDT conservative and reduced splice paths can be followed by child materialisation and finalisation." \
-  '["smoke/factory-splice-in-smoke.json","smoke/factory-splice-out-smoke.json","smoke/factory-splice-in-asymmetric-smoke.json","smoke/factory-splice-out-asymmetric-smoke.json","smoke/factory-reduced-splice-in-smoke.json","smoke/factory-reduced-splice-out-smoke.json","smoke/factory-reduced-xudt-splice-in-smoke.json","smoke/factory-reduced-xudt-splice-out-smoke.json","smoke/factory-xudt-splice-in-smoke.json","smoke/factory-xudt-splice-out-smoke.json","smoke/factory/child-finalise.json"]' \
-  '["factory-splice-in-smoke","factory-splice-out-smoke","factory-reduced-splice-in-smoke","factory-reduced-splice-out-smoke","factory-reduced-xudt-splice-in-smoke","factory-reduced-xudt-splice-out-smoke","factory-xudt-splice-in-smoke","factory-xudt-splice-out-smoke","factory/child-finalise"]' \
+  "Factory CKB/xUDT conservative and reduced splice paths, including asymmetric CKB capacity cases, can be followed by child materialisation and finalisation." \
+  '["smoke/factory-splice-in-smoke.json","smoke/factory-splice-out-smoke.json","smoke/factory-splice-in-asymmetric-smoke.json","smoke/factory-splice-out-asymmetric-smoke.json","smoke/factory-reduced-splice-in-smoke.json","smoke/factory-reduced-splice-out-smoke.json","smoke/factory-reduced-splice-in-asymmetric-smoke.json","smoke/factory-reduced-splice-out-asymmetric-smoke.json","smoke/factory-reduced-xudt-splice-in-smoke.json","smoke/factory-reduced-xudt-splice-out-smoke.json","smoke/factory-xudt-splice-in-smoke.json","smoke/factory-xudt-splice-out-smoke.json","smoke/factory/child-finalise.json"]' \
+  '["factory-splice-in-smoke","factory-splice-out-smoke","factory-splice-in-asymmetric-smoke","factory-splice-out-asymmetric-smoke","factory-reduced-splice-in-smoke","factory-reduced-splice-out-smoke","factory-reduced-splice-in-asymmetric-smoke","factory-reduced-splice-out-asymmetric-smoke","factory-reduced-xudt-splice-in-smoke","factory-reduced-xudt-splice-out-smoke","factory-xudt-splice-in-smoke","factory-xudt-splice-out-smoke","factory/child-finalise"]' \
   '[]' \
   '["signed_descriptor_evolution","factory_value_delta_binding","typed_asset_binding","budget_regression"]'
 
@@ -153,9 +153,9 @@ write_scenario \
 write_scenario \
   extreme_state_value_cases \
   extremes \
-  "Asymmetric capacities, one-sided xUDT allocations, tight reduced-right updates, and multi-epoch splice/finalise paths remain valid." \
-  '["smoke/xudt-one-sided-smoke.json","smoke/splice-in-asymmetric-smoke.json","smoke/splice-out-asymmetric-smoke.json","smoke/xudt-splice-in-one-sided-smoke.json","smoke/xudt-splice-out-one-sided-smoke.json","smoke/factory-reduced-rights-tight-smoke.json","smoke/factory-merkle-update-tight-smoke.json","smoke/factory-xudt-one-sided/smoke.json","smoke/factory-reduced-xudt-exit-one-sided-smoke.json","smoke/factory-reduced-xudt-splice-in-one-sided-smoke.json","smoke/factory-reduced-xudt-splice-out-one-sided-smoke.json"]' \
-  '["xudt-one-sided-smoke","splice-in-asymmetric-smoke","splice-out-asymmetric-smoke","factory-reduced-rights-tight-smoke","factory-merkle-update-tight-smoke","factory-xudt-one-sided/smoke","factory-reduced-xudt-exit-one-sided-smoke"]' \
+  "Asymmetric capacities, one-sided xUDT allocations, tight reduced-right updates, and one-sided factory splice/finalise paths remain valid." \
+  '["smoke/xudt-one-sided-smoke.json","smoke/splice-in-asymmetric-smoke.json","smoke/splice-out-asymmetric-smoke.json","smoke/xudt-splice-in-one-sided-smoke.json","smoke/xudt-splice-out-one-sided-smoke.json","smoke/factory-reduced-rights-tight-smoke.json","smoke/factory-merkle-update-tight-smoke.json","smoke/factory-xudt-one-sided/smoke.json","smoke/factory-reduced-xudt-exit-one-sided-smoke.json","smoke/factory-reduced-xudt-splice-in-one-sided-smoke.json","smoke/factory-reduced-xudt-splice-out-one-sided-smoke.json","smoke/factory-xudt-splice-in-one-sided-smoke.json","smoke/factory-xudt-splice-out-one-sided-smoke.json"]' \
+  '["xudt-one-sided-smoke","splice-in-asymmetric-smoke","splice-out-asymmetric-smoke","xudt-splice-in-one-sided-smoke","xudt-splice-out-one-sided-smoke","factory-reduced-rights-tight-smoke","factory-merkle-update-tight-smoke","factory-xudt-one-sided/smoke","factory-reduced-xudt-exit-one-sided-smoke","factory-reduced-xudt-splice-in-one-sided-smoke","factory-reduced-xudt-splice-out-one-sided-smoke","factory-xudt-splice-in-one-sided-smoke","factory-xudt-splice-out-one-sided-smoke"]' \
   '[]' \
   '["typed_asset_binding","budget_regression"]'
 

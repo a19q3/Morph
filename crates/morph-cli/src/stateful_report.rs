@@ -26,6 +26,62 @@ const REQUIRED_SCENARIOS: &[&str] = &[
     "extreme_state_value_cases",
     "negative_attack_matrix",
 ];
+const FACTORY_LIFECYCLE_REQUIRED_CHECKS: &[&str] = &[
+    "factory-smoke",
+    "factory/open",
+    "factory/update",
+    "factory/exit-channel",
+    "factory/child-publish",
+    "factory/child-finalise",
+    "factory-reduced-rights-smoke",
+    "factory-reduced-rights-tight-smoke",
+    "factory-merkle-update-smoke",
+    "factory-merkle-update-tight-smoke",
+    "factory-reduced-exit-smoke",
+    "factory-reduced-exit-asymmetric-smoke",
+    "factory-reduced-xudt-exit-smoke",
+    "factory-reduced-xudt-exit-full-smoke",
+    "factory-reduced-xudt-exit-one-sided-smoke",
+    "factory-xudt/smoke",
+    "factory-xudt-one-sided/smoke",
+];
+const FACTORY_SPLICE_REQUIRED_CHECKS: &[&str] = &[
+    "factory-splice-in-smoke",
+    "factory-splice-out-smoke",
+    "factory-splice-in-asymmetric-smoke",
+    "factory-splice-out-asymmetric-smoke",
+    "factory-reduced-splice-in-smoke",
+    "factory-reduced-splice-out-smoke",
+    "factory-reduced-splice-in-asymmetric-smoke",
+    "factory-reduced-splice-out-asymmetric-smoke",
+    "factory-reduced-xudt-splice-in-smoke",
+    "factory-reduced-xudt-splice-out-smoke",
+    "factory-xudt-splice-in-smoke",
+    "factory-xudt-splice-out-smoke",
+    "factory/child-finalise",
+];
+const FACTORY_EXTREME_REQUIRED_CHECKS: &[&str] = &[
+    "factory-reduced-rights-tight-smoke",
+    "factory-merkle-update-tight-smoke",
+    "factory-xudt-one-sided/smoke",
+    "factory-reduced-xudt-exit-one-sided-smoke",
+    "factory-reduced-xudt-splice-in-one-sided-smoke",
+    "factory-reduced-xudt-splice-out-one-sided-smoke",
+    "factory-xudt-splice-in-one-sided-smoke",
+    "factory-xudt-splice-out-one-sided-smoke",
+];
+const FACTORY_NEGATIVE_REQUIRED_FAILURES: &[(&str, &str, i64)] = &[
+    (
+        "factory-xudt-negative/smoke",
+        "SettlementOutputMismatch",
+        28,
+    ),
+    (
+        "factory-reduced-xudt-negative-exit-smoke",
+        "SettlementOutputMismatch",
+        28,
+    ),
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DevnetStatefulSummary {
@@ -546,6 +602,7 @@ fn assert_stateful_summary(summary: &DevnetStatefulSummary) -> Result<()> {
             );
         }
     }
+    assert_factory_stateful_acceptance_contract(summary)?;
     let smoke = summary
         .smoke
         .as_ref()
@@ -581,6 +638,90 @@ fn assert_stateful_summary(summary: &DevnetStatefulSummary) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn assert_factory_stateful_acceptance_contract(summary: &DevnetStatefulSummary) -> Result<()> {
+    assert_scenario_requires_committed_checks(
+        summary,
+        "factory_lifecycle_matrix",
+        FACTORY_LIFECYCLE_REQUIRED_CHECKS,
+    )?;
+    assert_scenario_requires_committed_checks(
+        summary,
+        "factory_splice_then_exit",
+        FACTORY_SPLICE_REQUIRED_CHECKS,
+    )?;
+    assert_scenario_requires_committed_checks(
+        summary,
+        "extreme_state_value_cases",
+        FACTORY_EXTREME_REQUIRED_CHECKS,
+    )?;
+    assert_scenario_expects_failures(
+        summary,
+        "negative_attack_matrix",
+        FACTORY_NEGATIVE_REQUIRED_FAILURES,
+    )?;
+    Ok(())
+}
+
+fn assert_scenario_requires_committed_checks(
+    summary: &DevnetStatefulSummary,
+    scenario_id: &str,
+    required: &[&str],
+) -> Result<()> {
+    let scenario = scenario_by_id(summary, scenario_id)?;
+    let checks = scenario
+        .required_committed_checks
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let missing = required
+        .iter()
+        .copied()
+        .filter(|check| !checks.contains(check))
+        .collect::<Vec<_>>();
+    ensure!(
+        missing.is_empty(),
+        "scenario {scenario_id} missing strict factory committed checks: {:?}",
+        missing
+    );
+    Ok(())
+}
+
+fn assert_scenario_expects_failures(
+    summary: &DevnetStatefulSummary,
+    scenario_id: &str,
+    required: &[(&str, &str, i64)],
+) -> Result<()> {
+    let scenario = scenario_by_id(summary, scenario_id)?;
+    let missing = required
+        .iter()
+        .filter(|(check, morph_error, error_code)| {
+            !scenario.expected_failures.iter().any(|failure| {
+                failure.check == *check
+                    && failure.morph_error == *morph_error
+                    && failure.error_code == *error_code
+            })
+        })
+        .map(|(check, morph_error, error_code)| format!("{check} {morph_error} {error_code}"))
+        .collect::<Vec<_>>();
+    ensure!(
+        missing.is_empty(),
+        "scenario {scenario_id} missing strict factory expected failures: {:?}",
+        missing
+    );
+    Ok(())
+}
+
+fn scenario_by_id<'a>(
+    summary: &'a DevnetStatefulSummary,
+    scenario_id: &str,
+) -> Result<&'a StatefulScenarioSummary> {
+    summary
+        .scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .ok_or_else(|| anyhow!("missing required stateful scenario {scenario_id}"))
 }
 
 fn assert_stateful_artifact_fresh(summary: &DevnetStatefulSummary) -> Result<()> {
@@ -1013,6 +1154,82 @@ mod tests {
     }
 
     #[test]
+    fn complete_factory_stateful_contract_passes() {
+        let summary = summary_with_scenarios(vec![
+            scenario_with_committed_checks(
+                "factory_lifecycle_matrix",
+                FACTORY_LIFECYCLE_REQUIRED_CHECKS,
+            ),
+            scenario_with_committed_checks(
+                "factory_splice_then_exit",
+                FACTORY_SPLICE_REQUIRED_CHECKS,
+            ),
+            scenario_with_committed_checks(
+                "extreme_state_value_cases",
+                FACTORY_EXTREME_REQUIRED_CHECKS,
+            ),
+            factory_negative_scenario(),
+        ]);
+
+        assert_factory_stateful_acceptance_contract(&summary).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_factory_stateful_required_check() {
+        let mut lifecycle = scenario_with_committed_checks(
+            "factory_lifecycle_matrix",
+            FACTORY_LIFECYCLE_REQUIRED_CHECKS,
+        );
+        lifecycle
+            .required_committed_checks
+            .retain(|check| check != "factory-reduced-xudt-exit-one-sided-smoke");
+        let summary = summary_with_scenarios(vec![
+            lifecycle,
+            scenario_with_committed_checks(
+                "factory_splice_then_exit",
+                FACTORY_SPLICE_REQUIRED_CHECKS,
+            ),
+            scenario_with_committed_checks(
+                "extreme_state_value_cases",
+                FACTORY_EXTREME_REQUIRED_CHECKS,
+            ),
+            factory_negative_scenario(),
+        ]);
+
+        let err = assert_factory_stateful_acceptance_contract(&summary).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("factory-reduced-xudt-exit-one-sided-smoke")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_factory_stateful_expected_failure() {
+        let mut negative = factory_negative_scenario();
+        negative
+            .expected_failures
+            .retain(|failure| failure.check != "factory-xudt-negative/smoke");
+        let summary = summary_with_scenarios(vec![
+            scenario_with_committed_checks(
+                "factory_lifecycle_matrix",
+                FACTORY_LIFECYCLE_REQUIRED_CHECKS,
+            ),
+            scenario_with_committed_checks(
+                "factory_splice_then_exit",
+                FACTORY_SPLICE_REQUIRED_CHECKS,
+            ),
+            scenario_with_committed_checks(
+                "extreme_state_value_cases",
+                FACTORY_EXTREME_REQUIRED_CHECKS,
+            ),
+            negative,
+        ]);
+
+        let err = assert_factory_stateful_acceptance_contract(&summary).unwrap_err();
+        assert!(err.to_string().contains("factory-xudt-negative/smoke"));
+    }
+
+    #[test]
     fn comparison_detects_audit_family_status_regression() {
         let mut baseline = summary_with_scenario(StatefulScenarioSummary {
             scenario_id: "scenario-a".to_string(),
@@ -1150,15 +1367,53 @@ mod tests {
     }
 
     fn summary_with_scenario(scenario: StatefulScenarioSummary) -> DevnetStatefulSummary {
+        summary_with_scenarios(vec![scenario])
+    }
+
+    fn summary_with_scenarios(scenarios: Vec<StatefulScenarioSummary>) -> DevnetStatefulSummary {
         let mut manifest = BTreeMap::new();
         manifest.insert("status".to_string(), "passed".to_string());
         DevnetStatefulSummary {
             directory: ".".to_string(),
             manifest,
-            scenarios: vec![scenario],
+            scenarios,
             audit_families: vec![],
             unknown_coverage_tags: vec![],
             smoke: Some(smoke_summary(vec![], vec![])),
+        }
+    }
+
+    fn scenario_with_committed_checks(
+        scenario_id: &str,
+        checks: &[&str],
+    ) -> StatefulScenarioSummary {
+        StatefulScenarioSummary {
+            scenario_id: scenario_id.to_string(),
+            category: "factory".to_string(),
+            description: "test".to_string(),
+            references: vec!["a.json".to_string()],
+            required_committed_checks: checks.iter().map(|check| (*check).to_string()).collect(),
+            expected_failures: vec![],
+            coverage: vec![],
+        }
+    }
+
+    fn factory_negative_scenario() -> StatefulScenarioSummary {
+        StatefulScenarioSummary {
+            scenario_id: "negative_attack_matrix".to_string(),
+            category: "negative".to_string(),
+            description: "test".to_string(),
+            references: vec!["a.json".to_string()],
+            required_committed_checks: vec![],
+            expected_failures: FACTORY_NEGATIVE_REQUIRED_FAILURES
+                .iter()
+                .map(|(check, morph_error, error_code)| StatefulExpectedFailure {
+                    check: (*check).to_string(),
+                    morph_error: (*morph_error).to_string(),
+                    error_code: *error_code,
+                })
+                .collect(),
+            coverage: vec![],
         }
     }
 
