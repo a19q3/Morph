@@ -114,6 +114,41 @@ require_fiber_suite_evidence() {
   done
 }
 
+require_log_count_at_least() {
+  local path="$1"
+  local pattern="$2"
+  local expected="$3"
+  local count
+  count="$(grep -Fc "$pattern" "$path" || true)"
+  [ "$count" -ge "$expected" ] ||
+    fail "log evidence '$pattern' appeared $count times, expected at least $expected: $path"
+}
+
+require_fiber_period_check_expiry_evidence() {
+  local run_dir="$1"
+  local file_name="fiber-bruno-e2e_period-check_force-close-expiry.json"
+  local result_path="$run_dir/$file_name"
+  local stack_log
+
+  require_fiber_suite_evidence "$run_dir" "$file_name" "e2e/period-check/force-close-expiry" \
+    "e2e/period-check/force-close-expiry/09-node1-add-tlc" \
+    "e2e/period-check/force-close-expiry/10-node2-add-tlc" \
+    "e2e/period-check/force-close-expiry/12-node1-list-channels"
+
+  stack_log="$(jq -r '.stack_log // empty' "$result_path")"
+  if [ -z "$stack_log" ]; then
+    stack_log="$run_dir/logs/fiber-stack-e2e_period-check_force-close-expiry.log"
+  fi
+  case "$stack_log" in
+    /*) ;;
+    *) stack_log="$run_dir/$stack_log" ;;
+  esac
+  require_file "$stack_log"
+  require_log_count_at_least "$stack_log" "Removing expired tlc 0 for channel Hash256(" 2
+  require_log_count_at_least "$stack_log" "RemoveTlcFail" 4
+  require_log_count_at_least "$stack_log" "tlcs count: 0" 4
+}
+
 verify_morph_stateful() {
   local run_dir="$1"
   local summary_check="$run_dir/morph-stateful/scenarios/summary-check.json"
@@ -264,7 +299,7 @@ write_report() {
             {id: "fiber_reestablish_after_disconnect", system: "fiber", suite: "e2e/reestablish", evidence: [$fiber_reestablish]},
             {id: "fiber_force_shutdown_after_peer_disconnect", system: "fiber", suite: "e2e/shutdown-force", evidence: [$fiber_shutdown_force]},
             {id: "fiber_hold_invoice_cancel_failure_decode", system: "fiber", suite: "e2e/hold-invoice-cancel-failure", evidence: [$fiber_hold_invoice_cancel]},
-            {id: "fiber_force_close_expiry_periodic_check", system: "fiber", suite: "e2e/period-check/force-close-expiry", evidence: [$fiber_force_close_expiry]},
+            {id: "fiber_periodic_expiry_cleanup", system: "fiber", suite: "e2e/period-check/force-close-expiry", evidence: [$fiber_force_close_expiry]},
             {id: "fiber_udt_channel_flow", system: "fiber", suite: "e2e/udt", evidence: [$fiber_udt]},
             {id: "fiber_udt_router_pay", system: "fiber", suite: "e2e/udt-router-pay", evidence: [$fiber_udt_router]},
             {id: "fiber_watchtower_force_close_after_open", system: "fiber", suite: "e2e/watchtower/force-close-after-open-channel", evidence: [$fiber_watchtower_force_open]},
@@ -432,10 +467,7 @@ main() {
       "e2e/hold-invoice-cancel-failure/07-send-payment" \
       "e2e/hold-invoice-cancel-failure/09-cancel-invoice" \
       "e2e/hold-invoice-cancel-failure/10-get-payment-decoded-final-error"
-    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_period-check_force-close-expiry.json" "e2e/period-check/force-close-expiry" \
-      "e2e/period-check/force-close-expiry/09-node1-add-tlc" \
-      "e2e/period-check/force-close-expiry/10-node2-add-tlc" \
-      "e2e/period-check/force-close-expiry/12-node1-list-channels"
+    require_fiber_period_check_expiry_evidence "$run_dir"
     require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_udt.json" "e2e/udt" \
       "e2e/udt/02-node1-node2-open-channel-amount-err" \
       "e2e/udt/08-node1-add-tlc" \

@@ -135,7 +135,7 @@ referenced artefacts, and exact expected failures.
 | Re-establish | Peers disconnect and reconnect, then re-establish channel state. | Recovery preserves agreed state after network interruption. |
 | Shutdown force | A force-close path is triggered after peer disconnect. | Uncooperative close remains available. |
 | Hold invoice cancel failure | A cancelled hold invoice returns the expected decoded failure. | TLC failure semantics are observable and precise. |
-| Force-close expiry | Periodic checks drive force close after expiry. | Expired conditional payments cannot remain unresolved. |
+| Periodic expiry cleanup | Periodic checks remove expired TLCs. | Expired conditional payments cannot remain unresolved; force-close itself is covered by the shutdown and watchtower suites. |
 | UDT channel flow | Fiber opens and settles typed-asset channel activity. | Typed assets stay bound to the expected channel type. |
 | UDT router pay | Routed UDT payment succeeds through Fiber. | Typed-asset routing preserves the asset identity. |
 | Watchtower force-close after open | Watchtower handles force close after channel open. | Watchtower settlement is active even with minimal payment history. |

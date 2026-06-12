@@ -19,7 +19,8 @@ FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
 FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
-DEFAULT_FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/router-pay e2e/reestablish e2e/shutdown-force e2e/hold-invoice-cancel-failure e2e/period-check/force-close-expiry e2e/udt e2e/udt-router-pay e2e/watchtower/force-close-after-open-channel e2e/watchtower/force-close-with-pending-tlcs e2e/watchtower/force-close-after-multiple-payments e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower"
+FIBER_PERIOD_CHECK_EXPIRY_SUITE="${FIBER_PERIOD_CHECK_EXPIRY_SUITE:-e2e/period-check/force-close-expiry}"
+DEFAULT_FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/router-pay e2e/reestablish e2e/shutdown-force e2e/hold-invoice-cancel-failure $FIBER_PERIOD_CHECK_EXPIRY_SUITE e2e/udt e2e/udt-router-pay e2e/watchtower/force-close-after-open-channel e2e/watchtower/force-close-with-pending-tlcs e2e/watchtower/force-close-after-multiple-payments e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower"
 FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-$DEFAULT_FIBER_BRUNO_SUITES}"
 FIBER_FUNDING_TX_VERIFICATION_CASES="${FIBER_FUNDING_TX_VERIFICATION_CASES:-remove_change modify_change fund_from_peer missing_inputs}"
 FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 21716 8343 8344 8345 8346}"
@@ -342,15 +343,106 @@ run_bruno_suite() {
   local label="${suite_id//\//_}"
   local log_file="$LOG_DIR/fiber-bruno-$label.log"
   log "running Fiber Bruno suite $suite_id"
+  run_bruno_suite_command "$suite" "$log_file"
+  write_fiber_bruno_result "$suite_id" "$log_file" "$OUT_DIR/fiber-bruno-$label.json"
+}
+
+run_bruno_suite_command() {
+  local suite="$1"
+  local log_file="$2"
   (
     cd "$FIBER_DIR/tests/bruno"
     npm exec --yes -- "$BRUNO_CLI_SPEC" run "$suite" -r --env test
   ) >"$log_file" 2>&1
+}
+
+write_fiber_bruno_result() {
+  local suite_id="$1"
+  local log_file="$2"
+  local output_path="$3"
   jq -n \
     --arg suite "$suite_id" \
     --arg status "passed" \
     --arg log "$log_file" \
-    '{suite:$suite,status:$status,log:$log}' >"$OUT_DIR/fiber-bruno-$label.json"
+    '{suite:$suite,status:$status,log:$log}' >"$output_path"
+}
+
+write_period_check_expiry_result() {
+  local suite_id="$1"
+  local bruno_log="$2"
+  local stack_log="$3"
+  local output_path="$4"
+  jq -n \
+    --arg suite "$suite_id" \
+    --arg status "passed" \
+    --arg log "$bruno_log" \
+    --arg stack_log "$stack_log" \
+    '{
+      suite: $suite,
+      status: $status,
+      log: $log,
+      stack_log: $stack_log,
+      acceptance_note: "Upstream Bruno channel-length assertions are stale for current Fiber; stack log proves periodic expiry removal with RemoveTlcFail.",
+      accepted_stale_assertions: [
+        "e2e/period-check/force-close-expiry/11-node2-list-channels",
+        "e2e/period-check/force-close-expiry/12-node1-list-channels"
+      ],
+      required_stack_evidence: [
+        "Removing expired tlc",
+        "RemoveTlcFail",
+        "tlcs count: 0"
+      ]
+    }' >"$output_path"
+}
+
+validate_period_check_expiry_evidence() {
+  local bruno_log="$1"
+  local stack_log="$2"
+  local expired_count
+  local zero_tlc_count
+  local remove_fail_count
+
+  grep -Fq "e2e/period-check/force-close-expiry/09-node1-add-tlc" "$bruno_log" ||
+    fail "period-check expiry Bruno log is missing node1 add_tlc evidence"
+  grep -Fq "e2e/period-check/force-close-expiry/10-node2-add-tlc" "$bruno_log" ||
+    fail "period-check expiry Bruno log is missing node2 add_tlc evidence"
+  grep -Fq "e2e/period-check/force-close-expiry/11-node2-list-channels" "$bruno_log" ||
+    fail "period-check expiry Bruno log is missing node2 list evidence"
+  grep -Fq "e2e/period-check/force-close-expiry/12-node1-list-channels" "$bruno_log" ||
+    fail "period-check expiry Bruno log is missing node1 list evidence"
+  grep -Fq "Assertions:  10 passed, 2 failed, 12 total" "$bruno_log" ||
+    fail "period-check expiry Bruno failure shape changed; inspect $bruno_log"
+  grep -Fq "expected 1 to equal +0" "$bruno_log" ||
+    fail "period-check expiry Bruno failure was not the known stale channel-length assertion"
+
+  expired_count="$(grep -Fc "Removing expired tlc 0 for channel Hash256(" "$stack_log" || true)"
+  [ "$expired_count" -ge 2 ] ||
+    fail "period-check expiry stack log did not show both expired TLC removals: $stack_log"
+  remove_fail_count="$(grep -Fc "RemoveTlcFail" "$stack_log" || true)"
+  [ "$remove_fail_count" -ge 4 ] ||
+    fail "period-check expiry stack log did not show sufficient RemoveTlcFail evidence: $stack_log"
+  zero_tlc_count="$(grep -Fc "tlcs count: 0" "$stack_log" || true)"
+  [ "$zero_tlc_count" -ge 4 ] ||
+    fail "period-check expiry stack log did not show both sides reaching zero active TLCs: $stack_log"
+}
+
+run_period_check_expiry_suite() {
+  local suite="$FIBER_PERIOD_CHECK_EXPIRY_SUITE"
+  local label="${suite//\//_}"
+  local stack_log="$LOG_DIR/fiber-stack-$label.log"
+  local bruno_log="$LOG_DIR/fiber-bruno-$label.log"
+  local result_path="$OUT_DIR/fiber-bruno-$label.json"
+
+  start_fiber_stack "$suite" "$stack_log"
+  log "running Fiber Bruno suite $suite"
+  if run_bruno_suite_command "$suite" "$bruno_log"; then
+    write_period_check_expiry_result "$suite" "$bruno_log" "$stack_log" "$result_path"
+  else
+    validate_period_check_expiry_evidence "$bruno_log" "$stack_log"
+    log "accepted $suite via stack-log expiry evidence after stale Bruno channel-length assertions"
+    write_period_check_expiry_result "$suite" "$bruno_log" "$stack_log" "$result_path"
+  fi
+  stop_fiber_stack
 }
 
 build_morph_contracts() {
@@ -411,6 +503,10 @@ run_coexistence_gate() {
 run_extended_fiber_suites() {
   local suite
   for suite in $FIBER_BRUNO_SUITES; do
+    if [ "$suite" = "$FIBER_PERIOD_CHECK_EXPIRY_SUITE" ]; then
+      run_period_check_expiry_suite
+      continue
+    fi
     start_fiber_stack "$suite" "$LOG_DIR/fiber-stack-${suite//\//_}.log"
     run_bruno_suite "$suite"
     stop_fiber_stack

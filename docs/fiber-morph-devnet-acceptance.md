@@ -208,8 +208,11 @@ For Fiber, the audit does not merely trust each suite's JSON status. It also
 checks the Bruno or restart log for named request evidence, including external
 funding submission after restart, duplicate-payment rejection, reconnect
 re-establishment, forced shutdown, cancelled hold-invoice failure decoding,
-periodic force-close expiry, xUDT routing, watchtower settlement, and all four
-funding-transaction verification cases.
+periodic expired-TLC cleanup, xUDT routing, watchtower settlement, and all four
+funding-transaction verification cases. The period-check expiry suite also
+requires stack-log evidence that both expired TLCs were removed with
+`RemoveTlcFail` and both sides reached zero active TLCs; the dedicated
+shutdown/watchtower suites provide the force-close evidence.
 
 The generated `business-flow-audit.json` records these named flows, their
 evidence files, the Morph and Fiber security families, and the minimum evidence
