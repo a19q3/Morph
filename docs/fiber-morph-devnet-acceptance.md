@@ -37,12 +37,25 @@ Full gate, including additional Fiber Bruno suites:
 make fiber-morph-devnet-acceptance-full
 ```
 
+Audit the latest completed run without rerunning devnet:
+
+```sh
+make fiber-morph-devnet-audit
+```
+
+Audit a specific run directory:
+
+```sh
+make fiber-morph-devnet-audit FIBER_MORPH_ACCEPTANCE_RUN=target/fiber-morph-devnet-acceptance/<run-id>
+```
+
 The script is also directly callable:
 
 ```sh
 scripts/fiber-morph-devnet-acceptance.sh preflight
 scripts/fiber-morph-devnet-acceptance.sh coexistence
 scripts/fiber-morph-devnet-acceptance.sh full
+scripts/fiber-morph-devnet-audit.sh target/fiber-morph-devnet-acceptance/<run-id>
 ```
 
 ## Dependency Resolution
@@ -113,9 +126,51 @@ Key files:
 - `manifest.txt`: run parameters and final status;
 - `repo-state.json`: Morph, Fiber, CKB, and ckb-cli checkout state;
 - `acceptance-matrix.json`: required evidence families;
+- `business-flow-audit.json`: machine-checked Morph/Fiber business-flow and
+  security-family coverage;
 - `summary.json`: top-level pass summary;
 - `logs/`: Fiber stack logs, Morph stateful logs, Bruno logs, and build logs;
 - `morph-stateful/scenarios/`: Morph stateful scenario and smoke artifacts.
+
+## Business-Flow And Security Audit
+
+Every `coexistence` and `full` run now executes
+`scripts/fiber-morph-devnet-audit.sh` after writing the top-level summary. The
+audit fails the run unless the completed artefacts prove the expected flow set.
+
+For Morph, the required business scenarios are:
+
+- `bilateral_direct_publish_finalise`
+- `bilateral_supersede_watchtower_finalise`
+- `sponsor_fee_pressure`
+- `splice_lifecycle_matrix`
+- `factory_lifecycle_matrix`
+- `factory_splice_then_exit`
+- `watchtower_operations`
+- `extreme_state_value_cases`
+- `negative_attack_matrix`
+
+The same audit also requires all 11 Morph security families from
+`docs/devnet-audit-profile.example.json` to pass, including the P0 authority,
+maturity, non-interference, factory value-delta, and typed-asset binding
+families.
+
+For Fiber, `coexistence` requires:
+
+- `e2e/external-funding-open`
+- `e2e/external-funding-open/restart`
+
+The `full` gate additionally requires:
+
+- `e2e/open-use-close-a-channel`
+- `e2e/3-nodes-transfer`
+- `e2e/udt`
+- `e2e/udt-router-pay`
+
+The generated `business-flow-audit.json` records these named flows, their
+evidence files, the security families, and the minimum Morph evidence floors
+for committed transactions, factory exits, factory splices, watchtower alerts,
+expected failures, and referenced artefacts.
 
 ## Production Strictness
 

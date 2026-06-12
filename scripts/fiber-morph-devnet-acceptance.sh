@@ -81,7 +81,7 @@ write_repo_state() {
     --arg fiber_dir "$FIBER_DIR" \
     --arg fiber_branch "$(git_value "$FIBER_DIR" branch --show-current)" \
     --arg fiber_head "$(git_value "$FIBER_DIR" rev-parse --short HEAD)" \
-    --arg fiber_status "$(git_value "$FIBER_DIR" status --porcelain)" \
+    --arg fiber_status "$(git_value "$FIBER_DIR" status --porcelain --untracked-files=no)" \
     --arg ckb_dir "$CKB_SOURCE_DIR" \
     --arg ckb_branch "$(git_value "$CKB_SOURCE_DIR" branch --show-current)" \
     --arg ckb_head "$(git_value "$CKB_SOURCE_DIR" rev-parse --short HEAD)" \
@@ -417,6 +417,7 @@ write_acceptance_matrix() {
     --arg mode "$MODE" \
     --arg morph_stateful "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
     --arg fiber_external "$OUT_DIR/fiber-bruno-${FIBER_COEXISTENCE_SUITE//\//_}.json" \
+    --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     '{
       schema: "morph.fiber_morph_devnet_acceptance_matrix",
       mode: $mode,
@@ -448,6 +449,16 @@ write_acceptance_matrix() {
             "Fiber Bruno external-funding-open",
             "optional restart regression before submit_signed_funding_tx"
           ]
+        },
+        {
+          id: "business_flow_and_security_audit",
+          required: true,
+          evidence: [
+            $business_flow_audit,
+            "named Morph scenarios",
+            "named Morph security families",
+            "named Fiber business suites"
+          ]
         }
       ]
     }' >"$path"
@@ -464,9 +475,22 @@ EOF
     --arg manifest "$OUT_DIR/manifest.txt" \
     --arg repo_state "$OUT_DIR/repo-state.json" \
     --arg matrix "$OUT_DIR/acceptance-matrix.json" \
+    --arg mode "$MODE" \
+    --arg morph_stateful_summary_check "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
+    --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     --arg status "passed" \
-    '{schema:"morph.fiber_morph_devnet_acceptance_summary",status:$status,manifest:$manifest,repo_state:$repo_state,acceptance_matrix:$matrix}' \
+    '{
+      schema:"morph.fiber_morph_devnet_acceptance_summary",
+      status:$status,
+      mode:$mode,
+      manifest:$manifest,
+      repo_state:$repo_state,
+      acceptance_matrix:$matrix,
+      morph_stateful_summary_check:$morph_stateful_summary_check,
+      business_flow_audit:$business_flow_audit
+    }' \
     >"$OUT_DIR/summary.json"
+  "$ROOT_DIR/scripts/fiber-morph-devnet-audit.sh" "$OUT_DIR"
   log "summary -> $OUT_DIR/summary.json"
 }
 
