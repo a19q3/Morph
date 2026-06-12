@@ -19,11 +19,14 @@ FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
 FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
-FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/udt e2e/udt-router-pay}"
+DEFAULT_FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/router-pay e2e/reestablish e2e/shutdown-force e2e/hold-invoice-cancel-failure e2e/period-check/force-close-expiry e2e/udt e2e/udt-router-pay e2e/watchtower/force-close-after-open-channel e2e/watchtower/force-close-with-pending-tlcs e2e/watchtower/force-close-after-multiple-payments e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower"
+FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-$DEFAULT_FIBER_BRUNO_SUITES}"
+FIBER_FUNDING_TX_VERIFICATION_CASES="${FIBER_FUNDING_TX_VERIFICATION_CASES:-remove_change modify_change fund_from_peer missing_inputs}"
 FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 21716 8343 8344 8345 8346}"
 BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
 BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
 RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
+FIBER_STACK_EXTRA_BRU_ARGS=""
 
 CKB_BIN="${CKB_BIN:-}"
 CKB_CLI_BIN="${CKB_CLI_BIN:-}"
@@ -192,6 +195,7 @@ fiber_node3_rpc_url=$FIBER_NODE3_RPC_URL
 fiber_test_env=$FIBER_TEST_ENV
 fiber_coexistence_suite=$FIBER_COEXISTENCE_SUITE
 fiber_bruno_suites=$FIBER_BRUNO_SUITES
+fiber_funding_tx_verification_cases=$FIBER_FUNDING_TX_VERIFICATION_CASES
 fiber_acceptance_tcp_ports=$FIBER_ACCEPTANCE_TCP_PORTS
 build_morph_contracts=$BUILD_MORPH_CONTRACTS
 run_fiber_restart_regression=$RUN_FIBER_RESTART_REGRESSION
@@ -319,6 +323,7 @@ start_fiber_stack() {
     cd "$FIBER_DIR"
     REMOVE_OLD_STATE=y \
     TEST_ENV="$FIBER_TEST_ENV" \
+    EXTRA_BRU_ARGS="$FIBER_STACK_EXTRA_BRU_ARGS" \
     PATH="$TOOL_BIN_DIR:$PATH" \
       ./tests/nodes/start.sh "$testcase"
   ) >"$log_file" 2>&1 &
@@ -333,15 +338,16 @@ start_fiber_stack() {
 
 run_bruno_suite() {
   local suite="$1"
-  local label="${suite//\//_}"
+  local suite_id="${2:-$suite}"
+  local label="${suite_id//\//_}"
   local log_file="$LOG_DIR/fiber-bruno-$label.log"
-  log "running Fiber Bruno suite $suite"
+  log "running Fiber Bruno suite $suite_id"
   (
     cd "$FIBER_DIR/tests/bruno"
     npm exec --yes -- "$BRUNO_CLI_SPEC" run "$suite" -r --env test
   ) >"$log_file" 2>&1
   jq -n \
-    --arg suite "$suite" \
+    --arg suite "$suite_id" \
     --arg status "passed" \
     --arg log "$log_file" \
     '{suite:$suite,status:$status,log:$log}' >"$OUT_DIR/fiber-bruno-$label.json"
@@ -409,6 +415,24 @@ run_extended_fiber_suites() {
     run_bruno_suite "$suite"
     stop_fiber_stack
   done
+  run_fiber_funding_tx_verification_cases
+}
+
+run_fiber_funding_tx_verification_cases() {
+  local case_name previous_extra_args
+  if [ -z "$FIBER_FUNDING_TX_VERIFICATION_CASES" ]; then
+    log "Fiber funding-tx verification cases skipped"
+    return
+  fi
+
+  previous_extra_args="$FIBER_STACK_EXTRA_BRU_ARGS"
+  for case_name in $FIBER_FUNDING_TX_VERIFICATION_CASES; do
+    FIBER_STACK_EXTRA_BRU_ARGS="--env-var FUNDING_TX_VERIFICATION_CASE=$case_name"
+    start_fiber_stack "e2e/funding-tx-verification" "$LOG_DIR/fiber-stack-e2e_funding-tx-verification_$case_name.log"
+    run_bruno_suite "e2e/funding-tx-verification" "e2e/funding-tx-verification/$case_name"
+    stop_fiber_stack
+  done
+  FIBER_STACK_EXTRA_BRU_ARGS="$previous_extra_args"
 }
 
 write_acceptance_matrix() {
@@ -448,6 +472,14 @@ write_acceptance_matrix() {
           evidence: [
             "Fiber Bruno external-funding-open",
             "optional restart regression before submit_signed_funding_tx"
+          ]
+        },
+        {
+          id: "fiber_security_and_recovery_matrix",
+          required: true,
+          evidence: [
+            "Fiber router-pay, reestablish, force-close, expiry, UDT, watchtower, hold-invoice, and funding-tx verification Bruno suites",
+            "Funding tx verification cases: remove_change, modify_change, fund_from_peer, missing_inputs"
           ]
         },
         {

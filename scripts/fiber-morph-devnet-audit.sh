@@ -84,6 +84,36 @@ require_fiber_result() {
   require_file "$log_path"
 }
 
+fiber_result_log_path() {
+  local run_dir="$1"
+  local file_name="$2"
+  local path="$run_dir/$file_name"
+  local log_path
+  require_file "$path"
+  log_path="$(jq -r '.log' "$path")"
+  case "$log_path" in
+    /*) ;;
+    *) log_path="$run_dir/$log_path" ;;
+  esac
+  require_file "$log_path"
+  printf '%s\n' "$log_path"
+}
+
+require_fiber_suite_evidence() {
+  local run_dir="$1"
+  local file_name="$2"
+  local suite="$3"
+  shift 3
+  require_fiber_result "$run_dir" "$file_name" "$suite"
+
+  local log_path pattern
+  log_path="$(fiber_result_log_path "$run_dir" "$file_name")"
+  for pattern in "$@"; do
+    grep -Fq "$pattern" "$log_path" ||
+      fail "Fiber suite log is missing required evidence '$pattern': $log_path"
+  done
+}
+
 verify_morph_stateful() {
   local run_dir="$1"
   local summary_check="$run_dir/morph-stateful/scenarios/summary-check.json"
@@ -170,8 +200,21 @@ write_report() {
     --arg fiber_restart "$run_dir/fiber-external-funding-restart.json" \
     --arg fiber_open_close "$run_dir/fiber-bruno-e2e_open-use-close-a-channel.json" \
     --arg fiber_three_nodes "$run_dir/fiber-bruno-e2e_3-nodes-transfer.json" \
+    --arg fiber_router_pay "$run_dir/fiber-bruno-e2e_router-pay.json" \
+    --arg fiber_reestablish "$run_dir/fiber-bruno-e2e_reestablish.json" \
+    --arg fiber_shutdown_force "$run_dir/fiber-bruno-e2e_shutdown-force.json" \
+    --arg fiber_hold_invoice_cancel "$run_dir/fiber-bruno-e2e_hold-invoice-cancel-failure.json" \
+    --arg fiber_force_close_expiry "$run_dir/fiber-bruno-e2e_period-check_force-close-expiry.json" \
     --arg fiber_udt "$run_dir/fiber-bruno-e2e_udt.json" \
     --arg fiber_udt_router "$run_dir/fiber-bruno-e2e_udt-router-pay.json" \
+    --arg fiber_watchtower_force_open "$run_dir/fiber-bruno-e2e_watchtower_force-close-after-open-channel.json" \
+    --arg fiber_watchtower_force_pending "$run_dir/fiber-bruno-e2e_watchtower_force-close-with-pending-tlcs.json" \
+    --arg fiber_watchtower_force_multiple "$run_dir/fiber-bruno-e2e_watchtower_force-close-after-multiple-payments.json" \
+    --arg fiber_watchtower_remote_stopped "$run_dir/fiber-bruno-e2e_watchtower_force-close-remote-with-pending-tlcs-and-stop-watchtower.json" \
+    --arg fiber_funding_remove_change "$run_dir/fiber-bruno-e2e_funding-tx-verification_remove_change.json" \
+    --arg fiber_funding_modify_change "$run_dir/fiber-bruno-e2e_funding-tx-verification_modify_change.json" \
+    --arg fiber_funding_from_peer "$run_dir/fiber-bruno-e2e_funding-tx-verification_fund_from_peer.json" \
+    --arg fiber_funding_missing_inputs "$run_dir/fiber-bruno-e2e_funding-tx-verification_missing_inputs.json" \
     --argjson include_morph "$include_morph" \
     --argjson include_coexistence_fiber "$include_coexistence_fiber" \
     --argjson include_extended_fiber "$include_extended_fiber" \
@@ -217,36 +260,71 @@ write_report() {
           + (if $include_extended_fiber == 1 then [
             {id: "fiber_open_use_close_channel", system: "fiber", suite: "e2e/open-use-close-a-channel", evidence: [$fiber_open_close]},
             {id: "fiber_three_node_transfer", system: "fiber", suite: "e2e/3-nodes-transfer", evidence: [$fiber_three_nodes]},
+            {id: "fiber_router_pay_graph_invoice_and_failure", system: "fiber", suite: "e2e/router-pay", evidence: [$fiber_router_pay]},
+            {id: "fiber_reestablish_after_disconnect", system: "fiber", suite: "e2e/reestablish", evidence: [$fiber_reestablish]},
+            {id: "fiber_force_shutdown_after_peer_disconnect", system: "fiber", suite: "e2e/shutdown-force", evidence: [$fiber_shutdown_force]},
+            {id: "fiber_hold_invoice_cancel_failure_decode", system: "fiber", suite: "e2e/hold-invoice-cancel-failure", evidence: [$fiber_hold_invoice_cancel]},
+            {id: "fiber_force_close_expiry_periodic_check", system: "fiber", suite: "e2e/period-check/force-close-expiry", evidence: [$fiber_force_close_expiry]},
             {id: "fiber_udt_channel_flow", system: "fiber", suite: "e2e/udt", evidence: [$fiber_udt]},
-            {id: "fiber_udt_router_pay", system: "fiber", suite: "e2e/udt-router-pay", evidence: [$fiber_udt_router]}
+            {id: "fiber_udt_router_pay", system: "fiber", suite: "e2e/udt-router-pay", evidence: [$fiber_udt_router]},
+            {id: "fiber_watchtower_force_close_after_open", system: "fiber", suite: "e2e/watchtower/force-close-after-open-channel", evidence: [$fiber_watchtower_force_open]},
+            {id: "fiber_watchtower_force_close_with_pending_tlcs", system: "fiber", suite: "e2e/watchtower/force-close-with-pending-tlcs", evidence: [$fiber_watchtower_force_pending]},
+            {id: "fiber_watchtower_force_close_after_multiple_payments", system: "fiber", suite: "e2e/watchtower/force-close-after-multiple-payments", evidence: [$fiber_watchtower_force_multiple]},
+            {id: "fiber_watchtower_remote_force_close_with_watchtower_stopped", system: "fiber", suite: "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower", evidence: [$fiber_watchtower_remote_stopped]},
+            {id: "fiber_funding_tx_verify_remove_change", system: "fiber", suite: "e2e/funding-tx-verification/remove_change", evidence: [$fiber_funding_remove_change]},
+            {id: "fiber_funding_tx_verify_modify_change", system: "fiber", suite: "e2e/funding-tx-verification/modify_change", evidence: [$fiber_funding_modify_change]},
+            {id: "fiber_funding_tx_verify_fund_from_peer", system: "fiber", suite: "e2e/funding-tx-verification/fund_from_peer", evidence: [$fiber_funding_from_peer]},
+            {id: "fiber_funding_tx_verify_missing_inputs", system: "fiber", suite: "e2e/funding-tx-verification/missing_inputs", evidence: [$fiber_funding_missing_inputs]}
           ] else [] end)
         ),
       security_families:
-        (if $include_morph == 1 then [
-          {id: "state_authority_authenticity", severity: "P0", evidence: [$morph_summary]},
-          {id: "canonical_relative_maturity", severity: "P0", evidence: [$morph_summary]},
-          {id: "state_retirement_non_orphaning", severity: "P0", evidence: [$morph_summary]},
-          {id: "signed_descriptor_evolution", severity: "P0", evidence: [$morph_summary]},
-          {id: "non_interference_not_authorisation", severity: "P0", evidence: [$morph_summary]},
-          {id: "factory_value_delta_binding", severity: "P0", evidence: [$morph_summary]},
-          {id: "typed_asset_binding", severity: "P0", evidence: [$morph_summary]},
-          {id: "sponsor_policy_boundary", severity: "P1", evidence: [$morph_summary]},
-          {id: "watchtower_authority_and_cursor", severity: "P2", evidence: [$morph_summary]},
-          {id: "negative_recovery_continuity", severity: "P1", evidence: [$morph_summary]},
-          {id: "budget_regression", severity: "P2", evidence: [$morph_summary]}
-        ] else [] end),
+        (
+          (if $include_morph == 1 then [
+            {id: "state_authority_authenticity", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "canonical_relative_maturity", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "state_retirement_non_orphaning", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "signed_descriptor_evolution", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "non_interference_not_authorisation", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "factory_value_delta_binding", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "typed_asset_binding", system: "morph", severity: "P0", evidence: [$morph_summary]},
+            {id: "sponsor_policy_boundary", system: "morph", severity: "P1", evidence: [$morph_summary]},
+            {id: "watchtower_authority_and_cursor", system: "morph", severity: "P2", evidence: [$morph_summary]},
+            {id: "negative_recovery_continuity", system: "morph", severity: "P1", evidence: [$morph_summary]},
+            {id: "budget_regression", system: "morph", severity: "P2", evidence: [$morph_summary]}
+          ] else [] end)
+          + (if $include_coexistence_fiber == 1 then [
+            {id: "fiber_external_funding_persistence", system: "fiber", severity: "P0", evidence: [$fiber_external, $fiber_restart]}
+          ] else [] end)
+          + (if $include_extended_fiber == 1 then [
+            {id: "fiber_funding_tx_shape_validation", system: "fiber", severity: "P0", evidence: [$fiber_funding_remove_change, $fiber_funding_modify_change, $fiber_funding_from_peer, $fiber_funding_missing_inputs]},
+            {id: "fiber_cooperative_close_settlement", system: "fiber", severity: "P0", evidence: [$fiber_open_close, $fiber_three_nodes]},
+            {id: "fiber_force_close_watchtower_settlement", system: "fiber", severity: "P0", evidence: [$fiber_shutdown_force, $fiber_watchtower_force_open, $fiber_watchtower_force_pending, $fiber_watchtower_force_multiple, $fiber_watchtower_remote_stopped]},
+            {id: "fiber_tlc_error_and_failure_semantics", system: "fiber", severity: "P1", evidence: [$fiber_open_close, $fiber_hold_invoice_cancel, $fiber_force_close_expiry]},
+            {id: "fiber_routing_graph_and_duplicate_payment_controls", system: "fiber", severity: "P1", evidence: [$fiber_router_pay, $fiber_three_nodes]},
+            {id: "fiber_reconnect_reestablish_recovery", system: "fiber", severity: "P1", evidence: [$fiber_reestablish]},
+            {id: "fiber_typed_asset_channel_binding", system: "fiber", severity: "P0", evidence: [$fiber_udt, $fiber_udt_router]},
+            {id: "fiber_periodic_expiry_recovery", system: "fiber", severity: "P1", evidence: [$fiber_force_close_expiry]}
+          ] else [] end)
+        ),
       minimum_evidence:
-        (if $include_morph == 1 then {
-          morph_scenarios: 9,
-          morph_security_families: 11,
-          morph_referenced_artifacts: 87,
-          morph_committed_checks: 62,
-          morph_expected_failures: 9,
-          morph_committed_transactions: 190,
-          morph_factory_splices: 32,
-          morph_factory_local_exits: 24,
-          morph_watchtower_alerts: 9
-        } else {} end)
+        (
+          (if $include_morph == 1 then {
+            morph_scenarios: 9,
+            morph_security_families: 11,
+            morph_referenced_artifacts: 87,
+            morph_committed_checks: 62,
+            morph_expected_failures: 9,
+            morph_committed_transactions: 190,
+            morph_factory_splices: 32,
+            morph_factory_local_exits: 24,
+            morph_watchtower_alerts: 9
+          } else {} end)
+          + (if $include_extended_fiber == 1 then {
+            fiber_required_business_flows: (17 + (if $include_coexistence_fiber == 1 then 2 else 0 end)),
+            fiber_required_security_families: (8 + (if $include_coexistence_fiber == 1 then 1 else 0 end)),
+            fiber_funding_tx_verification_cases: 4
+          } else {} end)
+        )
     }' >"$report"
 
   log "business-flow audit -> $report"
@@ -309,15 +387,98 @@ main() {
   fi
 
   if [ "$include_coexistence_fiber" = "1" ]; then
-    require_fiber_result "$run_dir" "fiber-bruno-e2e_external-funding-open.json" "e2e/external-funding-open"
-    require_fiber_result "$run_dir" "fiber-external-funding-restart.json" "e2e/external-funding-open/restart"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_external-funding-open.json" "e2e/external-funding-open" \
+      "e2e/external-funding-open/08-open-channel-with-external-funding" \
+      "e2e/external-funding-open/09-sign-external-funding-tx" \
+      "e2e/external-funding-open/10-submit-signed-funding-tx" \
+      "e2e/external-funding-open/18-wait-channel-closed-and-capture-shutdown-tx" \
+      "e2e/external-funding-open/19-inspect-shutdown-tx"
+    require_fiber_suite_evidence "$run_dir" "fiber-external-funding-restart.json" "e2e/external-funding-open/restart" \
+      "opening external-funded channel" \
+      "restarting node1" \
+      "submitting signed funding tx" \
+      "waiting for Closed" \
+      "success"
   fi
 
   if [ "$include_extended_fiber" = "1" ]; then
-    require_fiber_result "$run_dir" "fiber-bruno-e2e_open-use-close-a-channel.json" "e2e/open-use-close-a-channel"
-    require_fiber_result "$run_dir" "fiber-bruno-e2e_3-nodes-transfer.json" "e2e/3-nodes-transfer"
-    require_fiber_result "$run_dir" "fiber-bruno-e2e_udt.json" "e2e/udt"
-    require_fiber_result "$run_dir" "fiber-bruno-e2e_udt-router-pay.json" "e2e/udt-router-pay"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_open-use-close-a-channel.json" "e2e/open-use-close-a-channel" \
+      "e2e/open-use-close-a-channel/08-add-tlc-from-NODE1-err" \
+      "e2e/open-use-close-a-channel/10-add-tlc-from-NODE1-amount-err" \
+      "e2e/open-use-close-a-channel/15-shutdown-from-NODE1" \
+      "e2e/open-use-close-a-channel/23-list-channel-with-closed-status-NODE1"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_3-nodes-transfer.json" "e2e/3-nodes-transfer" \
+      "e2e/3-nodes-transfer/12-node1-add-tlc" \
+      "e2e/3-nodes-transfer/14-node3-remove-tlc" \
+      "e2e/3-nodes-transfer/21-node1-send-shutdown-channel-1" \
+      "e2e/3-nodes-transfer/23-node2-send-shutdown-channel-2"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_router-pay.json" "e2e/router-pay" \
+      "e2e/router-pay/13-node-send-duplicate-payment-err" \
+      "e2e/router-pay/23-node1-send-payment-will-fail" \
+      "e2e/router-pay/25-node1-pay-self-with-node2-err" \
+      "e2e/router-pay/29-node1-pay-self-with-node2-succ" \
+      "e2e/router-pay/33-node2-update-channel"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_reestablish.json" "e2e/reestablish" \
+      "e2e/reestablish/08-disconnect-NODE1" \
+      "e2e/reestablish/09-reconnect-peer-NODE1" \
+      "e2e/reestablish/10-remove-tlc-from-NODE1" \
+      "e2e/reestablish/11-shutdown-from-NODE1"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_shutdown-force.json" "e2e/shutdown-force" \
+      "e2e/shutdown-force/05-disconnect-peer" \
+      "e2e/shutdown-force/06-shutdown-force-NODE1" \
+      "e2e/shutdown-force/11-trigger-check-shutdown" \
+      "e2e/shutdown-force/12-list-channel-NODE3"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_hold-invoice-cancel-failure.json" "e2e/hold-invoice-cancel-failure" \
+      "e2e/hold-invoice-cancel-failure/07-send-payment" \
+      "e2e/hold-invoice-cancel-failure/09-cancel-invoice" \
+      "e2e/hold-invoice-cancel-failure/10-get-payment-decoded-final-error"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_period-check_force-close-expiry.json" "e2e/period-check/force-close-expiry" \
+      "e2e/period-check/force-close-expiry/09-node1-add-tlc" \
+      "e2e/period-check/force-close-expiry/10-node2-add-tlc" \
+      "e2e/period-check/force-close-expiry/12-node1-list-channels"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_udt.json" "e2e/udt" \
+      "e2e/udt/02-node1-node2-open-channel-amount-err" \
+      "e2e/udt/08-node1-add-tlc" \
+      "e2e/udt/10-node1-node2-open-channel-invalid" \
+      "e2e/udt/12-node2-accept-channel"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_udt-router-pay.json" "e2e/udt-router-pay" \
+      "e2e/udt-router-pay/12-node1-send-payment" \
+      "e2e/udt-router-pay/14-node1-send-payment-with-invoice" \
+      "e2e/udt-router-pay/16-node1-send-payment-keysend-large-amount"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_watchtower_force-close-after-open-channel.json" "e2e/watchtower/force-close-after-open-channel" \
+      "e2e/watchtower/force-close-after-open-channel/09-force-close" \
+      "e2e/watchtower/force-close-after-open-channel/15-check-commitment-tx" \
+      "e2e/watchtower/force-close-after-open-channel/16-check-balance-node1" \
+      "e2e/watchtower/force-close-after-open-channel/17-check-balance-node2"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_watchtower_force-close-with-pending-tlcs.json" "e2e/watchtower/force-close-with-pending-tlcs" \
+      "e2e/watchtower/force-close-with-pending-tlcs/12-force-close" \
+      "e2e/watchtower/force-close-with-pending-tlcs/13-node2-remove-tlc" \
+      "e2e/watchtower/force-close-with-pending-tlcs/21-check-commitment-tx" \
+      "e2e/watchtower/force-close-with-pending-tlcs/22-check-balance-node1" \
+      "e2e/watchtower/force-close-with-pending-tlcs/23-check-balance-node2"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_watchtower_force-close-after-multiple-payments.json" "e2e/watchtower/force-close-after-multiple-payments" \
+      "e2e/watchtower/force-close-after-multiple-payments/10-node1-send-payment-with-invoice" \
+      "e2e/watchtower/force-close-after-multiple-payments/12-node2-send-payment-with-invoice" \
+      "e2e/watchtower/force-close-after-multiple-payments/13-force-close" \
+      "e2e/watchtower/force-close-after-multiple-payments/19-check-commitment-tx"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_watchtower_force-close-remote-with-pending-tlcs-and-stop-watchtower.json" "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower" \
+      "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower/10-node2-stop-watchtower" \
+      "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower/11-force-close" \
+      "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower/18-check-commitment-tx" \
+      "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower/19-check-balance-node1" \
+      "e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower/20-check-balance-node2"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_funding-tx-verification_remove_change.json" "e2e/funding-tx-verification/remove_change" \
+      "e2e/funding-tx-verification/02-open-channel" \
+      "e2e/funding-tx-verification/03-get-auto-accepted-channel"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_funding-tx-verification_modify_change.json" "e2e/funding-tx-verification/modify_change" \
+      "e2e/funding-tx-verification/02-open-channel" \
+      "e2e/funding-tx-verification/03-get-auto-accepted-channel"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_funding-tx-verification_fund_from_peer.json" "e2e/funding-tx-verification/fund_from_peer" \
+      "e2e/funding-tx-verification/02-open-channel" \
+      "e2e/funding-tx-verification/03-get-auto-accepted-channel"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_funding-tx-verification_missing_inputs.json" "e2e/funding-tx-verification/missing_inputs" \
+      "e2e/funding-tx-verification/02-open-channel" \
+      "e2e/funding-tx-verification/03-get-auto-accepted-channel"
   fi
 
   write_report "$run_dir" "$mode" "$include_morph" "$include_coexistence_fiber" "$include_extended_fiber"

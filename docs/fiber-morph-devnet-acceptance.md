@@ -97,20 +97,40 @@ The production coexistence gate:
 
 ### `fiber`
 
-Runs the extended Fiber suite set without Morph's stateful matrix.
+Runs the strict Fiber suite set without Morph's stateful matrix. This is useful
+when debugging Fiber-only business-flow coverage before paying the cost of the
+full cross-repository run.
 
 ### `full`
 
-Runs `coexistence`, then starts fresh Fiber devnets for the extended Fiber
-suites listed in `FIBER_BRUNO_SUITES`.
+Runs `coexistence`, then starts fresh Fiber devnets for the strict Fiber suite
+set listed in `FIBER_BRUNO_SUITES`.
 
-Default extended suites:
+Default strict Fiber suites:
 
 ```text
 e2e/open-use-close-a-channel
 e2e/3-nodes-transfer
+e2e/router-pay
+e2e/reestablish
+e2e/shutdown-force
+e2e/hold-invoice-cancel-failure
+e2e/period-check/force-close-expiry
 e2e/udt
 e2e/udt-router-pay
+e2e/watchtower/force-close-after-open-channel
+e2e/watchtower/force-close-with-pending-tlcs
+e2e/watchtower/force-close-after-multiple-payments
+e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower
+```
+
+The strict Fiber gate also runs every funding-transaction verification case:
+
+```text
+remove_change
+modify_change
+fund_from_peer
+missing_inputs
 ```
 
 ## Evidence
@@ -134,7 +154,7 @@ Key files:
 
 ## Business-Flow And Security Audit
 
-Every `coexistence` and `full` run now executes
+Every `coexistence`, `fiber`, and `full` run now executes
 `scripts/fiber-morph-devnet-audit.sh` after writing the top-level summary. The
 audit fails the run unless the completed artefacts prove the expected flow set.
 
@@ -164,13 +184,34 @@ The `full` gate additionally requires:
 
 - `e2e/open-use-close-a-channel`
 - `e2e/3-nodes-transfer`
+- `e2e/router-pay`
+- `e2e/reestablish`
+- `e2e/shutdown-force`
+- `e2e/hold-invoice-cancel-failure`
+- `e2e/period-check/force-close-expiry`
 - `e2e/udt`
 - `e2e/udt-router-pay`
+- `e2e/watchtower/force-close-after-open-channel`
+- `e2e/watchtower/force-close-with-pending-tlcs`
+- `e2e/watchtower/force-close-after-multiple-payments`
+- `e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower`
+- `e2e/funding-tx-verification/remove_change`
+- `e2e/funding-tx-verification/modify_change`
+- `e2e/funding-tx-verification/fund_from_peer`
+- `e2e/funding-tx-verification/missing_inputs`
+
+For Fiber, the audit does not merely trust each suite's JSON status. It also
+checks the Bruno or restart log for named request evidence, including external
+funding submission after restart, duplicate-payment rejection, reconnect
+re-establishment, forced shutdown, cancelled hold-invoice failure decoding,
+periodic force-close expiry, xUDT routing, watchtower settlement, and all four
+funding-transaction verification cases.
 
 The generated `business-flow-audit.json` records these named flows, their
-evidence files, the security families, and the minimum Morph evidence floors
-for committed transactions, factory exits, factory splices, watchtower alerts,
-expected failures, and referenced artefacts.
+evidence files, the Morph and Fiber security families, and the minimum evidence
+floors for committed transactions, factory exits, factory splices, watchtower
+alerts, expected failures, referenced artefacts, Fiber business flows, and
+funding-transaction verification cases.
 
 ## Production Strictness
 
@@ -200,9 +241,14 @@ CKB_CLI_BIN=/absolute/path/to/ckb-cli
 FIBER_MORPH_ACCEPTANCE_MODE=coexistence
 FIBER_TEST_ENV=debug
 FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/udt"
+FIBER_FUNDING_TX_VERIFICATION_CASES="remove_change missing_inputs"
 RUN_FIBER_RESTART_REGRESSION=0
 BUILD_MORPH_CONTRACTS=0
 ```
+
+`FIBER_BRUNO_SUITES` and `FIBER_FUNDING_TX_VERIFICATION_CASES` are useful for
+local debugging. Production `fiber` and `full` audit runs expect the strict
+default suite and case set above.
 
 ## Current Boundary
 
