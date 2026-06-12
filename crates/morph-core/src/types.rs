@@ -22,6 +22,7 @@ pub enum Phase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelOperation {
+    Fund,
     Publish,
     Supersede,
     Finalise,
@@ -370,7 +371,7 @@ impl ClassifiedCell {
             carries_registered_xudt: false,
             uses_channel_vault_lock: false,
             read_by_channel_script: true,
-            contributes_to_conservation: false,
+            contributes_to_conservation: true,
         }
     }
 
@@ -419,6 +420,8 @@ pub struct PartitionTotals {
     pub business_ckb_out: Capacity,
     pub xudt_in: BTreeMap<Bytes32, Amount>,
     pub xudt_out: BTreeMap<Bytes32, Amount>,
+    pub state_carrier_in: Capacity,
+    pub state_carrier_out: Capacity,
     pub sponsor_in: Capacity,
     pub sponsor_out: Capacity,
 }

@@ -187,8 +187,8 @@ pub fn factory_vault_delta_commitment(deltas: &[FactoryVaultDelta]) -> Bytes32 {
 impl Mode {
     pub const fn as_u8(self) -> u8 {
         match self {
-            Self::BilateralPlain => 0,
-            Self::FactoryProof => 1,
+            Self::BilateralPlain => 1,
+            Self::FactoryProof => 2,
         }
     }
 }

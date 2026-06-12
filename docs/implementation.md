@@ -57,6 +57,23 @@ state, but they cannot rewrite vault settlement or drain participant assets.
 Names ending in `current` usually identify a fixed-layout body schema. They are not
 a claim that the current factory witness boundary is the old current boundary.
 
+In the current devnet profile, `funding_anchor` means the signed funding anchor
+identity. It is derived in a Type-ID-style way from the first funding input and
+the State Cell output index, and it is not a live output locator.
+
+The current public mode surface is intentionally narrow. Host code names the
+implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
+wire profile uses mode bytes `1` and `2`. These correspond to the paper's
+current `bilateral_plaintext` profile and the implemented factory
+commitment/proof profile. Bilateral commitment mode is reserved and is not
+emitted by current package or devnet flows.
+
+Initial funding approval is split across layers. The scripts enforce canonical
+anchor derivation, active phase, state number zero, lock/type binding, and
+capacity shape. Participant approval of the initial descriptor, asset registry,
+and challenge policy is handled by wallet, host, and package policy rather than
+by a separate script-checked initial-configuration signature object.
+
 ## Script Boundary
 
 ```mermaid
@@ -89,9 +106,15 @@ script. Transition rules remain in the type script.
 `morph-vault-lock` owns channel value. It finalises only against an authentic
 current settling State Cell with a matching descriptor commitment and matured
 relative `since`. It also verifies the vault side of splice transitions.
+The current bilateral finalisation profile is atomic: it consumes the committed
+vault value and does not create terminal receipt Cells.
+Cooperative close is modelled in the host operation taxonomy, but it is not part
+of the current State type, vault contract, CLI, or devnet execution profile.
 
 `morph-sponsor-lock` pays only bounded publication fees for admitted channel
 state numbers and clean sponsor change.
+It does not sponsor funding, finalisation, splice, materialisation, or
+cooperative close transactions in the current profile.
 
 ### Factory Scripts
 
@@ -99,10 +122,39 @@ state numbers and clean sponsor change.
 conservative full-participant signatures, local-exit evidence, reduced-rights
 proofs, sparse-Merkle updates, reduced exits, factory splices, and
 reduced-splice bodies.
+Value-bearing factory materialisation consumes and recreates the parent Factory
+State Cell with updated roots; read-only `unchanged_reference` materialisation
+is not part of the current conservative contract profile.
 
 `morph-factory-vault-lock` owns factory reserve conservation. It ensures a
 factory exit or splice changes the FactoryVaultCell exactly as the factory
 evidence permits.
+
+## Resolution And Packages
+
+The paper's `ResolvedStateContext` is an audit abstraction. The implementation
+does not allocate one shared Rust struct with that name; it resolves commitments
+at the boundary that needs them:
+
+- fixed-layout State Header and witness parsers live in `morph-script-common`;
+- `morph-state-type` verifies the State Cell progression context and
+  participant signatures;
+- `morph-vault-lock` parses descriptor witnesses and checks settlement outputs
+  against the committed descriptor;
+- `morph-sponsor-lock` checks the publication State type hash and bounded
+  sponsor policy;
+- `morph-factory-type` and `morph-factory-vault-lock` resolve factory envelopes,
+  local-exit descriptors, rights proofs, and vault descriptors for the admitted
+  factory branch.
+
+The bilateral `StoredStatePackage` used by the CLI stores the signed State
+Header bytes, bilateral signature witness bytes, channel id, funding anchor,
+state number, signing digest, source State outpoint, and descriptor
+commitment/version metadata. It validates signatures and metadata before write
+and read, and latest-package selection is by channel id and state number. The
+broader paper `StatePackage` object is the protocol requirement for arbitrary
+representation profiles; the current bilateral devnet package is the
+implemented plaintext profile.
 
 ## Factory Witness Envelope
 
@@ -164,6 +216,7 @@ attack-shaped variants.
 | Stale state publication | `rejects_stale_or_equal_state_number`, state type negative tests. |
 | Signature forgery | host invariant tests, script-common signature tests, state/factory script tests. |
 | Vault settlement drift | vault-lock tests and devnet finalisation smokes. |
+| State carrier capacity leakage | `rejects_state_carrier_capacity_leakage`. |
 | Sponsor fee drain | sponsor-lock budget and clean-change tests. |
 | Fake StateHeader bytes | script tests require authentic State Cell type identity. |
 | Splice value loss | splice invariant tests, script bridge tests, devnet splice negative smokes. |
@@ -171,8 +224,10 @@ attack-shaped variants.
 | Reserve release mismatch | reduced-exit host, script, and devnet smoke coverage. |
 | Witness envelope tamper | `WitnessEnvelope` parser and factory script negative tests. |
 
-The executable audit matrix is in [audit-matrix.md](audit-matrix.md). Devnet
-assertion gates are described in [devnet.md](devnet.md).
+The executable audit matrix is in [audit-matrix.md](audit-matrix.md). The
+paper-to-implementation alignment audit is tracked in
+[paper-implementation-audit.md](paper-implementation-audit.md). Devnet assertion
+gates are described in [devnet.md](devnet.md).
 
 ## Where To Inspect The Code
 

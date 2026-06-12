@@ -46,6 +46,8 @@ pub enum MorphError {
     UnregisteredXudtType,
     #[error("xUDT amount is not conserved for registered type")]
     XudtNotConserved,
+    #[error("State Cell carrier capacity is not conserved")]
+    StateCarrierNotConserved,
     #[error("sponsor partition does not exactly pay the transaction fee")]
     SponsorFeeMismatch,
     #[error("sponsor output carries channel business asset or vault lock")]
@@ -834,7 +836,7 @@ pub fn validate_vault_spend(spend: &VaultSpend) -> Result<()> {
         | ChannelOperation::CooperativeClose
         | ChannelOperation::Splice
         | ChannelOperation::Materialise => {}
-        ChannelOperation::Publish | ChannelOperation::Supersede => {
+        ChannelOperation::Fund | ChannelOperation::Publish | ChannelOperation::Supersede => {
             return Err(MorphError::VaultOperationNotAllowed);
         }
     }
@@ -884,6 +886,8 @@ pub fn validate_partition_conservation(
         business_ckb_out: 0,
         xudt_in: BTreeMap::new(),
         xudt_out: BTreeMap::new(),
+        state_carrier_in: 0,
+        state_carrier_out: 0,
         sponsor_in: 0,
         sponsor_out: 0,
     };
@@ -897,6 +901,9 @@ pub fn validate_partition_conservation(
         .ok_or(MorphError::ReserveNotConserved)?;
     if reserve_out_with_refund != totals.reserve_in {
         return Err(MorphError::ReserveNotConserved);
+    }
+    if totals.state_carrier_in != totals.state_carrier_out {
+        return Err(MorphError::StateCarrierNotConserved);
     }
     if totals.business_ckb_in != totals.business_ckb_out {
         return Err(MorphError::BusinessCkbNotConserved);
@@ -1423,7 +1430,20 @@ fn fold_cells(
                         .ok_or(MorphError::SponsorFeeMismatch)?;
                 }
             }
-            CellClass::StateCarrier | CellClass::Unrelated => {}
+            CellClass::StateCarrier => {
+                if input {
+                    totals.state_carrier_in = totals
+                        .state_carrier_in
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::StateCarrierNotConserved)?;
+                } else {
+                    totals.state_carrier_out = totals
+                        .state_carrier_out
+                        .checked_add(cell.capacity)
+                        .ok_or(MorphError::StateCarrierNotConserved)?;
+                }
+            }
+            CellClass::Unrelated => {}
         }
     }
     Ok(())

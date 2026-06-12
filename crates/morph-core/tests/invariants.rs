@@ -600,6 +600,12 @@ fn state_header_digest_binds_epoch_and_vault_set() {
 }
 
 #[test]
+fn mode_signing_codes_match_wire_profile() {
+    assert_eq!(Mode::BilateralPlain.as_u8(), 1);
+    assert_eq!(Mode::FactoryProof.as_u8(), 2);
+}
+
+#[test]
 fn state_header_context_rejects_epoch_and_vault_set_changes() {
     let old = header_with_epoch(1, Phase::Active, 3);
     let mut new = header_with_epoch(9, Phase::Settling, 3);
@@ -993,6 +999,8 @@ fn rejects_invalid_state_signature() {
 #[test]
 fn partition_conservation_accepts_valid_partition() {
     let totals = validate_partition_conservation(&good_partition(), &registry()).unwrap();
+    assert_eq!(totals.state_carrier_in, 10_000);
+    assert_eq!(totals.state_carrier_out, 10_000);
     assert_eq!(totals.sponsor_in - totals.sponsor_out, 100);
 }
 
@@ -1003,6 +1011,15 @@ fn rejects_channel_paid_fee_leakage() {
 
     let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
     assert_eq!(err, MorphError::ReserveNotConserved);
+}
+
+#[test]
+fn rejects_state_carrier_capacity_leakage() {
+    let mut tx = good_partition();
+    tx.outputs[3].capacity -= 1;
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
 }
 
 #[test]
@@ -1316,6 +1333,32 @@ fn sponsor_policy_rejects_wrong_publication_state_type() {
 }
 
 #[test]
+fn sponsor_policy_rejects_fund_operation() {
+    let policy = SponsorPolicy {
+        channel_id: bytes32(2),
+        min_state_number: 1,
+        max_state_number: 10,
+        max_fee_per_tx: 200,
+        max_total_fee: 1_000,
+        already_spent: 100,
+        expiry: u64::MAX,
+        publication_state_type_hash: bytes32(10),
+        change_lock: bytes32(11),
+    };
+    let spend = SponsorSpend {
+        channel_id: bytes32(2),
+        state_number: 2,
+        fee: 100,
+        publication_state_type_hash: bytes32(10),
+        change_lock: bytes32(11),
+        operation: ChannelOperation::Fund,
+    };
+
+    let err = validate_sponsor_policy(&policy, &spend).unwrap_err();
+    assert_eq!(err, MorphError::SponsorOperationNotAllowed);
+}
+
+#[test]
 fn vault_spend_accepts_finalise_after_since() {
     let spend = VaultSpend {
         operation: ChannelOperation::Finalise,
@@ -1346,4 +1389,21 @@ fn vault_spend_rejects_unmatured_finalise() {
 
     let err = validate_vault_spend(&spend).unwrap_err();
     assert_eq!(err, MorphError::SinceNotSatisfied);
+}
+
+#[test]
+fn vault_spend_rejects_fund_operation() {
+    let spend = VaultSpend {
+        operation: ChannelOperation::Fund,
+        state_cell: state(0, Phase::Active),
+        signatures_or_phase_authorised: true,
+        since_satisfied: true,
+        expected_funding_anchor: bytes32(3),
+        descriptor_outputs_match: true,
+        asset_registry: registry(),
+        partition: good_partition(),
+    };
+
+    let err = validate_vault_spend(&spend).unwrap_err();
+    assert_eq!(err, MorphError::VaultOperationNotAllowed);
 }

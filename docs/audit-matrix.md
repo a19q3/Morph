@@ -25,6 +25,7 @@ convention.
 | Authentic StateCell authority gates value and monitoring | `vault_lock_rejects_fake_state_header_without_state_type`, `state_type_rejects_standalone_settling_close_without_matching_vault`, `state_type_rejects_standalone_active_splice_retire_without_matching_vault`, `watchtower_state_detection_requires_authentic_state_scripts` |
 | Splice-out payouts stay participant-owned in the conservative splice policy | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
 | Channel-owned capacity never pays publication fees | `rejects_channel_paid_fee_leakage` |
+| State carrier capacity is conserved independently | `partition_conservation_accepts_valid_partition`, `rejects_state_carrier_capacity_leakage` |
 | Reserve and business CKB are not confused | `rejects_business_ckb_confusion` |
 | xUDT value is conserved by canonical type script | `rejects_xudt_type_mismatch`, `rejects_xudt_amount_mismatch` |
 | Sponsor change is uncontaminated | `rejects_sponsor_change_contamination` |
