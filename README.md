@@ -215,7 +215,9 @@ successful run when it is safe to refresh.
 The Fiber/Morph gate starts Fiber's local devnet stack, runs Morph's strict
 stateful channel/factory matrix on Fiber's CKB RPC, and then runs Fiber channel
 acceptance on the same devnet. See
-[fiber-morph-devnet-acceptance.md](docs/fiber-morph-devnet-acceptance.md).
+[fiber-morph-devnet-acceptance.md](docs/fiber-morph-devnet-acceptance.md) and
+the operator runbook
+[fiber-morph-devnet-runbook.md](docs/fiber-morph-devnet-runbook.md).
 
 ## Common CLI Workflows
 

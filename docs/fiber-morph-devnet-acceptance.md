@@ -3,6 +3,10 @@
 This document defines the cross-repository devnet acceptance gate for running
 Fiber and Morph against the same local CKB devnet.
 
+For an operator-facing walkthrough of the commands, covered business flows,
+evidence files, and failure handling, use
+[`fiber-morph-devnet-runbook.md`](fiber-morph-devnet-runbook.md).
+
 ## Purpose
 
 The gate proves coexistence before protocol merger:
