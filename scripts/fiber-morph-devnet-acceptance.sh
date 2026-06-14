@@ -394,23 +394,24 @@ start_fiber_stack_once() {
 start_fiber_stack() {
   local testcase="$1"
   local log_file="$2"
-  local attempt status
+  local attempt status last_status=0
   : >"$log_file"
   for ((attempt = 1; attempt <= FIBER_STACK_START_ATTEMPTS; attempt++)); do
     status=0
     start_fiber_stack_once "$testcase" "$log_file" "$attempt" || status=$?
+    last_status="$status"
     if [ "$status" -eq 0 ]; then
       return
     fi
     log "Fiber stack startup attempt $attempt/$FIBER_STACK_START_ATTEMPTS failed for $testcase with status $status; see $log_file"
     stop_fiber_stack
-    if [ "$status" -eq 3 ]; then
-      fail "Fiber acceptance ports are busy before starting $testcase: $FIBER_ACCEPTANCE_TCP_PORTS"
-    fi
     if [ "$attempt" -lt "$FIBER_STACK_START_ATTEMPTS" ]; then
       sleep 5
     fi
   done
+  if [ "$last_status" -eq 3 ]; then
+    fail "Fiber acceptance ports stayed busy before starting $testcase: $FIBER_ACCEPTANCE_TCP_PORTS"
+  fi
   fail "Fiber stack failed to become ready for $testcase after $FIBER_STACK_START_ATTEMPTS attempts; see $log_file"
 }
 
