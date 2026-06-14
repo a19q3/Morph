@@ -231,6 +231,21 @@ wait_for_rpc() {
   fail "timed out waiting for $label at $url"
 }
 
+wait_for_stable_rpc() {
+  local url="$1"
+  local method="$2"
+  local label="$3"
+  local checks="${4:-3}"
+  local interval="${5:-2}"
+  local check
+  for ((check = 1; check <= checks; check++)); do
+    wait_for_rpc "$url" "$method" "$label stable check $check/$checks"
+    if [ "$check" -lt "$checks" ]; then
+      sleep "$interval"
+    fi
+  done
+}
+
 kill_tree() {
   local pid="$1"
   local child
@@ -334,6 +349,7 @@ start_fiber_stack() {
   wait_for_rpc "$FIBER_NODE1_RPC_URL" "node_info" "Fiber node1"
   wait_for_rpc "$FIBER_NODE2_RPC_URL" "node_info" "Fiber node2"
   wait_for_rpc "$FIBER_NODE3_RPC_URL" "node_info" "Fiber node3"
+  wait_for_stable_rpc "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB" 4 2
   log "Fiber stack ready for $testcase"
 }
 

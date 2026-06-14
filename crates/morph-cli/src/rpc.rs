@@ -13,8 +13,11 @@ use serde_json::{Value, json};
 
 const CKB_RPC_REQUEST_TIMEOUT_SECS: u64 = 90;
 const CKB_RPC_CONNECT_TIMEOUT_SECS: u64 = 10;
-const CKB_RPC_MAX_ATTEMPTS: usize = 4;
+const CKB_RPC_MAX_ATTEMPTS: usize = 12;
+const CKB_RPC_TRANSPORT_MAX_ATTEMPTS: usize = 4;
+const CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS: usize = 12;
 const CKB_RPC_RETRY_BASE_DELAY_MS: u64 = 250;
+const CKB_RPC_RETRY_MAX_DELAY_MS: u64 = 2_000;
 
 #[derive(Debug, Clone)]
 pub struct CkbRpcClient {
@@ -162,7 +165,9 @@ impl CkbRpcClient {
             let response = match self.client.post(&self.url).json(&request).send() {
                 Ok(response) => response,
                 Err(err) => {
-                    if is_retryable_rpc_transport_error(&err) && attempt < CKB_RPC_MAX_ATTEMPTS {
+                    if is_retryable_rpc_transport_error(&err)
+                        && attempt < CKB_RPC_TRANSPORT_MAX_ATTEMPTS
+                    {
                         sleep_before_rpc_retry(attempt);
                         continue;
                     }
@@ -175,7 +180,9 @@ impl CkbRpcClient {
                 .text()
                 .context("failed to read CKB RPC response body")?;
             if !status.is_success() {
-                if is_retryable_rpc_status(status) && attempt < CKB_RPC_MAX_ATTEMPTS {
+                if is_retryable_rpc_status(status)
+                    && attempt < CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS
+                {
                     sleep_before_rpc_retry(attempt);
                     continue;
                 }
@@ -214,7 +221,10 @@ fn is_retryable_rpc_status(status: reqwest::StatusCode) -> bool {
 }
 
 fn sleep_before_rpc_retry(attempt: usize) {
-    let delay_ms = CKB_RPC_RETRY_BASE_DELAY_MS.saturating_mul(1u64 << (attempt - 1));
+    let retry_index = attempt.saturating_sub(1).min(8);
+    let delay_ms = CKB_RPC_RETRY_BASE_DELAY_MS
+        .saturating_mul(1u64 << retry_index)
+        .min(CKB_RPC_RETRY_MAX_DELAY_MS);
     std::thread::sleep(Duration::from_millis(delay_ms));
 }
 
