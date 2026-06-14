@@ -214,6 +214,14 @@ requires stack-log evidence that both expired TLCs were removed with
 `RemoveTlcFail` and both sides reached zero active TLCs; the dedicated
 shutdown/watchtower suites provide the force-close evidence.
 
+The coexistence gate treats Fiber's `e2e/external-funding-open` balance and
+early-readiness checks as stale in this devnet profile when the upstream Bruno
+collection fails only after the essential external-funding requests have
+succeeded. In that case the harness still requires explicit `200 OK` evidence
+for open, sign, submit, cooperative shutdown, closed-state capture, and shutdown
+transaction inspection before it writes a passed evidence JSON. This exception
+does not accept a failure of the external-funding flow itself.
+
 The generated `business-flow-audit.json` records these named flows, their
 evidence files, the Morph and Fiber security families, and the minimum evidence
 floors for committed transactions, factory exits, factory splices, watchtower

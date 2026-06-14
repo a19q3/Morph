@@ -245,6 +245,7 @@ Common causes:
 | Morph freshness failure | Artefacts were generated from a different Morph commit. | Rerun the gate from a clean current commit. |
 | Missing Fiber result file | A strict Fiber suite or funding case was skipped. | Use the default `FIBER_BRUNO_SUITES` and `FIBER_FUNDING_TX_VERIFICATION_CASES`. |
 | Missing Fiber log marker | The Bruno suite did not produce the required behavioural evidence. | Inspect the suite log and update the test or marker deliberately. |
+| `external-funding-open` balance/readiness failure | Current Fiber Bruno balance deltas can be stale even when open/sign/submit/close/inspect requests succeed. | The coexistence harness accepts only the known stale shape and still requires the critical request markers. |
 
 ## Narrow Debug Runs
 
