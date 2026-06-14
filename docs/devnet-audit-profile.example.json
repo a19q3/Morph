@@ -185,7 +185,7 @@
     {
       "id": "watchtower_authority_and_cursor",
       "severity": "P2",
-      "principle": "Watchtower detection, publication, cursor recovery, and stale-package handling are funding-anchor aware.",
+      "principle": "Watchtower detection, publication, cursor recovery, and stale-package handling are funding-context aware, with funding-anchor fallback for older packages.",
       "required_coverage_tags": [
         "watchtower_authority_and_cursor"
       ],

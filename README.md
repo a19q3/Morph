@@ -112,8 +112,8 @@ may pay the transaction fee, but the sponsor script enforces strict budget and
 clean-change rules.
 
 Watchtower tooling can monitor confirmed State Cells and publish matching saved
-packages. It refuses stale packages after a funding-anchor change, which matters
-after splice operations.
+packages. It tracks the derived funding context id, with funding-anchor fallback
+for older package stores, so stale packages are refused after resize operations.
 
 ### 4. Finalise The Vault
 

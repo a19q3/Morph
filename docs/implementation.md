@@ -61,6 +61,12 @@ In the current devnet profile, `funding_anchor` means the signed funding anchor
 identity. It is derived in a Type-ID-style way from the first funding input and
 the State Cell output index, and it is not a live output locator.
 
+Tooling derives `funding_context_id = H("CKB_MORPH_FUNDING_CONTEXT",
+chain_id, channel_id, funding_anchor, vault_set_commitment)` from the signed
+State Header context. This identifier is an integration and audit key for the
+current funding context. It is not an additional consensus field, and it does
+not replace the current signed `funding_epoch` semantics.
+
 The current public mode surface is intentionally narrow. Host code names the
 implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
 wire profile uses mode bytes `1` and `2`. These correspond to the paper's
@@ -149,11 +155,13 @@ at the boundary that needs them:
 
 The bilateral `StoredStatePackage` used by the CLI stores the signed State
 Header bytes, bilateral signature witness bytes, channel id, funding anchor,
-state number, signing digest, source State outpoint, and descriptor
-commitment/version metadata. It validates signatures and metadata before write
-and read, and latest-package selection is by channel id and state number. The
-broader paper `StatePackage` object is the protocol requirement for arbitrary
-representation profiles; the current bilateral devnet package is the
+derived funding context id, state number, signing digest, source State
+outpoint, and descriptor commitment/version metadata. It validates signatures
+and metadata before write and read. Latest-package selection is by channel id
+and state number, while watchtower re-anchor handling prefers the derived
+funding context id and falls back to the funding anchor for older package
+stores. The broader paper `StatePackage` object is the protocol requirement for
+arbitrary representation profiles; the current bilateral devnet package is the
 implemented plaintext profile.
 
 ## Factory Witness Envelope

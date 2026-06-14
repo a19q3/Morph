@@ -30,7 +30,7 @@ kind/body/digest envelope.
 | FactoryVault splice checks signed token delta but not the full materialised Cell shape | Signed FactoryVault descriptors bind actual lock, capacity, type, and amount on-chain | `factory_value_delta_binding`, `typed_asset_binding` |
 | xUDT amount/type/change can mismatch while total supply appears conserved | Typed asset identity, amount, descriptor, child vault, and FactoryVault change agree | `typed_asset_binding` |
 | Sponsor script policy and operator policy are conflated | Script-enforced sponsor bounds are separated from watchtower/operator policy | `sponsor_policy_boundary` |
-| Watchtower selects stale or fake authority after restart or splice | Watchtower detection and cursor recovery are funding-anchor aware | `watchtower_authority_and_cursor` |
+| Watchtower selects stale or fake authority after restart or splice | Watchtower detection and cursor recovery are funding-context aware, with funding-anchor fallback for older packages | `watchtower_authority_and_cursor` |
 | A negative path rejects but leaves later valid state unproven | Expected failures are exact and the system continues to commit later valid transitions | `negative_recovery_continuity` |
 | Proof/witness growth silently exceeds release budgets | Cycles, bytes, witness length, and proof profiles are budget-gated | `budget_regression` |
 

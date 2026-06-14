@@ -42,6 +42,10 @@ pub struct WatchtowerAlert {
     pub selected_funding_anchor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub observed_funding_anchor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_funding_context_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_funding_context_id: Option<String>,
     pub scanned_to_block: u64,
     pub next_from_block: u64,
 }
@@ -69,6 +73,8 @@ impl WatchtowerAlert {
             publication_tx_hash: None,
             selected_funding_anchor: None,
             observed_funding_anchor: None,
+            selected_funding_context_id: None,
+            observed_funding_context_id: None,
             scanned_to_block,
             next_from_block,
         })
@@ -88,6 +94,16 @@ impl WatchtowerAlert {
     pub fn with_funding_anchors(mut self, selected: String, observed: String) -> Self {
         self.selected_funding_anchor = Some(selected);
         self.observed_funding_anchor = Some(observed);
+        self
+    }
+
+    pub fn with_optional_funding_contexts(
+        mut self,
+        selected: Option<String>,
+        observed: Option<String>,
+    ) -> Self {
+        self.selected_funding_context_id = selected;
+        self.observed_funding_context_id = observed;
         self
     }
 }

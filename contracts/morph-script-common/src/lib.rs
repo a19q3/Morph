@@ -136,6 +136,7 @@ pub const WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT: u16 = 5;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_SPLICE: u16 = 6;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE: u16 = 7;
 pub const STATE_DOMAIN: &[u8] = b"CKB_MORPH_CHANNEL_STATE";
+pub const FUNDING_CONTEXT_DOMAIN: &[u8] = b"CKB_MORPH_FUNDING_CONTEXT";
 pub const WITNESS_ENVELOPE_BODY_DOMAIN: &[u8] = b"CKB_MORPH_WITNESS_ENVELOPE_BODY";
 pub const SPLICE_HEADER_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_HEADER";
 pub const SPLICE_DELTA_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_DELTA";
@@ -3679,6 +3680,21 @@ pub fn blake2b256(chunks: &[&[u8]]) -> [u8; 32] {
     }
     hasher.finalize(&mut out);
     out
+}
+
+pub fn funding_context_id(
+    chain_id: &[u8],
+    channel_id: &[u8],
+    funding_anchor: &[u8],
+    vault_set_commitment: &[u8],
+) -> [u8; 32] {
+    blake2b256(&[
+        FUNDING_CONTEXT_DOMAIN,
+        chain_id,
+        channel_id,
+        funding_anchor,
+        vault_set_commitment,
+    ])
 }
 
 pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> [u8; 32] {

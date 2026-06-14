@@ -7,6 +7,7 @@ use crate::types::{
 };
 
 pub const STATE_DOMAIN: &[u8] = b"CKB_MORPH_CHANNEL_STATE";
+pub const FUNDING_CONTEXT_DOMAIN: &[u8] = b"CKB_MORPH_FUNDING_CONTEXT";
 pub const PARTICIPANTS_DOMAIN: &[u8] = b"CKB_MORPH_PARTICIPANTS";
 pub const SPLICE_HEADER_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_HEADER";
 pub const SPLICE_DELTA_DOMAIN: &[u8] = b"CKB_MORPH_SPLICE_DELTA";
@@ -44,6 +45,21 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
     out
 }
 
+pub fn funding_context_id(
+    chain_id: &Bytes32,
+    channel_id: &Bytes32,
+    funding_anchor: &Bytes32,
+    vault_set_commitment: &Bytes32,
+) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(FUNDING_CONTEXT_DOMAIN.len() + 32 * 4);
+    bytes.extend_from_slice(FUNDING_CONTEXT_DOMAIN);
+    bytes.extend_from_slice(chain_id);
+    bytes.extend_from_slice(channel_id);
+    bytes.extend_from_slice(funding_anchor);
+    bytes.extend_from_slice(vault_set_commitment);
+    blake2b256(&bytes)
+}
+
 impl SigningBytes for StateHeader {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(STATE_DOMAIN);
@@ -72,6 +88,15 @@ impl StateHeader {
         let mut bytes = Vec::with_capacity(384);
         self.encode_signing_bytes(&mut bytes);
         blake2b256(&bytes)
+    }
+
+    pub fn funding_context_id(&self) -> [u8; 32] {
+        funding_context_id(
+            &self.chain_id,
+            &self.channel_id,
+            &self.funding_anchor,
+            &self.vault_set_commitment,
+        )
     }
 }
 

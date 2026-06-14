@@ -587,6 +587,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
   --state-number 1 \
   --store-dir "$WATCH_SPLICE_DIR/state-packages" \
   --json >"$WATCH_SPLICE_DIR/state-package.json"
+WATCH_SPLICE_OLD_FUNDING_CONTEXT_ID="$(jq -r '.package.funding_context_id' "$WATCH_SPLICE_DIR/state-package.json")"
 
 log "watch-splice-stale-splice-package -> $WATCH_SPLICE_DIR/splice-package.json"
 cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-splice-package \
@@ -611,6 +612,7 @@ WATCH_SPLICE_UPDATED_MS="$(($(date +%s) * 1000))"
 jq -n \
   --arg channel_id "$WATCH_SPLICE_CHANNEL_ID" \
   --arg current_funding_anchor "$WATCH_SPLICE_OLD_FUNDING_ANCHOR" \
+  --arg current_funding_context_id "$WATCH_SPLICE_OLD_FUNDING_CONTEXT_ID" \
   --arg last_observed_out_point "$WATCH_SPLICE_STATE_OUT_POINT" \
   --argjson next_block "$WATCH_SPLICE_APPLY_BLOCK" \
   --argjson scanned_to_block "$WATCH_SPLICE_SCANNED_TO_BLOCK" \
@@ -621,6 +623,7 @@ jq -n \
     next_block: $next_block,
     scanned_to_block: $scanned_to_block,
     current_funding_anchor: $current_funding_anchor,
+    current_funding_context_id: $current_funding_context_id,
     last_observed_state_number: 0,
     last_observed_out_point: $last_observed_out_point,
     updated_unix_ms: $updated_unix_ms
