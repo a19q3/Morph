@@ -13,9 +13,11 @@ use serde_json::{Value, json};
 
 const CKB_RPC_REQUEST_TIMEOUT_SECS: u64 = 90;
 const CKB_RPC_CONNECT_TIMEOUT_SECS: u64 = 10;
-const CKB_RPC_MAX_ATTEMPTS: usize = 12;
 const CKB_RPC_TRANSPORT_MAX_ATTEMPTS: usize = 4;
-const CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS: usize = 12;
+// Keep transport retries short because a request timeout is already expensive.
+// Fiber-backed local devnets can surface longer 502 windows while CKB remains live.
+const CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS: usize = 32;
+const CKB_RPC_MAX_ATTEMPTS: usize = CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS;
 const CKB_RPC_RETRY_BASE_DELAY_MS: u64 = 250;
 const CKB_RPC_RETRY_MAX_DELAY_MS: u64 = 2_000;
 
