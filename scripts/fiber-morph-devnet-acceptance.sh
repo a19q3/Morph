@@ -27,6 +27,7 @@ FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 
 BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
 BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
 RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
+FIBER_STACK_START_ATTEMPTS="${FIBER_STACK_START_ATTEMPTS:-3}"
 FIBER_STACK_EXTRA_BRU_ARGS=""
 
 CKB_BIN="${CKB_BIN:-}"
@@ -200,6 +201,7 @@ fiber_funding_tx_verification_cases=$FIBER_FUNDING_TX_VERIFICATION_CASES
 fiber_acceptance_tcp_ports=$FIBER_ACCEPTANCE_TCP_PORTS
 build_morph_contracts=$BUILD_MORPH_CONTRACTS
 run_fiber_restart_regression=$RUN_FIBER_RESTART_REGRESSION
+fiber_stack_start_attempts=$FIBER_STACK_START_ATTEMPTS
 EOF
 }
 
@@ -214,21 +216,52 @@ rpc_ready() {
     jq -e '.result != null' >/dev/null
 }
 
-wait_for_rpc() {
+wait_for_rpc_ready() {
   local url="$1"
   local method="$2"
   local label="$3"
   local deadline=$((SECONDS + 240))
   while [ "$SECONDS" -lt "$deadline" ]; do
     if rpc_ready "$url" "$method" "[]"; then
-      return
+      return 0
     fi
     if [ -n "$FIBER_STACK_PID" ] && ! kill -0 "$FIBER_STACK_PID" >/dev/null 2>&1; then
-      fail "Fiber stack exited while waiting for $label; see $LOG_DIR/fiber-stack.log"
+      return 2
     fi
     sleep 2
   done
+  return 1
+}
+
+wait_for_rpc() {
+  local url="$1"
+  local method="$2"
+  local label="$3"
+  local status=0
+  wait_for_rpc_ready "$url" "$method" "$label" || status=$?
+  if [ "$status" -eq 0 ]; then
+    return
+  fi
+  if [ "$status" -eq 2 ]; then
+    fail "Fiber stack exited while waiting for $label; see the current fiber-stack*.log under $LOG_DIR"
+  fi
   fail "timed out waiting for $label at $url"
+}
+
+wait_for_stable_rpc_ready() {
+  local url="$1"
+  local method="$2"
+  local label="$3"
+  local checks="${4:-3}"
+  local interval="${5:-2}"
+  local check
+  for ((check = 1; check <= checks; check++)); do
+    wait_for_rpc_ready "$url" "$method" "$label stable check $check/$checks" || return $?
+    if [ "$check" -lt "$checks" ]; then
+      sleep "$interval"
+    fi
+  done
+  return 0
 }
 
 wait_for_stable_rpc() {
@@ -237,13 +270,15 @@ wait_for_stable_rpc() {
   local label="$3"
   local checks="${4:-3}"
   local interval="${5:-2}"
-  local check
-  for ((check = 1; check <= checks; check++)); do
-    wait_for_rpc "$url" "$method" "$label stable check $check/$checks"
-    if [ "$check" -lt "$checks" ]; then
-      sleep "$interval"
-    fi
-  done
+  local status=0
+  wait_for_stable_rpc_ready "$url" "$method" "$label" "$checks" "$interval" || status=$?
+  if [ "$status" -eq 0 ]; then
+    return
+  fi
+  if [ "$status" -eq 2 ]; then
+    fail "Fiber stack exited while waiting for $label; see the current fiber-stack*.log under $LOG_DIR"
+  fi
+  fail "timed out waiting for stable $label at $url"
 }
 
 kill_tree() {
@@ -329,28 +364,54 @@ stop_fiber_stack() {
 
 trap stop_fiber_stack EXIT
 
-start_fiber_stack() {
+start_fiber_stack_once() {
   local testcase="$1"
   local log_file="$2"
+  local attempt="$3"
   stop_fiber_stack
-  wait_for_acceptance_ports_free || fail "Fiber acceptance ports are busy before starting $testcase: $FIBER_ACCEPTANCE_TCP_PORTS"
-  log "starting Fiber stack for $testcase"
+  wait_for_acceptance_ports_free || return 3
+  log "starting Fiber stack for $testcase (attempt $attempt/$FIBER_STACK_START_ATTEMPTS)"
   (
+    printf '\n=== Fiber stack attempt %s/%s for %s at %s ===\n' \
+      "$attempt" "$FIBER_STACK_START_ATTEMPTS" "$testcase" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     cd "$FIBER_DIR"
     REMOVE_OLD_STATE=y \
     TEST_ENV="$FIBER_TEST_ENV" \
     EXTRA_BRU_ARGS="$FIBER_STACK_EXTRA_BRU_ARGS" \
     PATH="$TOOL_BIN_DIR:$PATH" \
       ./tests/nodes/start.sh "$testcase"
-  ) >"$log_file" 2>&1 &
+  ) >>"$log_file" 2>&1 &
   FIBER_STACK_PID="$!"
   FIBER_STACK_STARTED=1
-  wait_for_rpc "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB"
-  wait_for_rpc "$FIBER_NODE1_RPC_URL" "node_info" "Fiber node1"
-  wait_for_rpc "$FIBER_NODE2_RPC_URL" "node_info" "Fiber node2"
-  wait_for_rpc "$FIBER_NODE3_RPC_URL" "node_info" "Fiber node3"
-  wait_for_stable_rpc "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB" 4 2
+  wait_for_rpc_ready "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB" || return $?
+  wait_for_rpc_ready "$FIBER_NODE1_RPC_URL" "node_info" "Fiber node1" || return $?
+  wait_for_rpc_ready "$FIBER_NODE2_RPC_URL" "node_info" "Fiber node2" || return $?
+  wait_for_rpc_ready "$FIBER_NODE3_RPC_URL" "node_info" "Fiber node3" || return $?
+  wait_for_stable_rpc_ready "$FIBER_CKB_RPC_URL" "get_tip_header" "Fiber CKB" 4 2 || return $?
   log "Fiber stack ready for $testcase"
+}
+
+start_fiber_stack() {
+  local testcase="$1"
+  local log_file="$2"
+  local attempt status
+  : >"$log_file"
+  for ((attempt = 1; attempt <= FIBER_STACK_START_ATTEMPTS; attempt++)); do
+    status=0
+    start_fiber_stack_once "$testcase" "$log_file" "$attempt" || status=$?
+    if [ "$status" -eq 0 ]; then
+      return
+    fi
+    log "Fiber stack startup attempt $attempt/$FIBER_STACK_START_ATTEMPTS failed for $testcase with status $status; see $log_file"
+    stop_fiber_stack
+    if [ "$status" -eq 3 ]; then
+      fail "Fiber acceptance ports are busy before starting $testcase: $FIBER_ACCEPTANCE_TCP_PORTS"
+    fi
+    if [ "$attempt" -lt "$FIBER_STACK_START_ATTEMPTS" ]; then
+      sleep 5
+    fi
+  done
+  fail "Fiber stack failed to become ready for $testcase after $FIBER_STACK_START_ATTEMPTS attempts; see $log_file"
 }
 
 run_bruno_suite() {
