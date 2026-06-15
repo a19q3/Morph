@@ -80,6 +80,24 @@ capacity shape. Participant approval of the initial descriptor, asset registry,
 and challenge policy is handled by wallet, host, and package policy rather than
 by a separate script-checked initial-configuration signature object.
 
+**Accepted risk.** Because the initial `participants_commitment`,
+`settlement_descriptor_commitment`, `asset_registry_commitment`, and
+`challenge_policy_commitment` are not participant-signed at script level, a
+malicious funder (or wallet compromise at funding time) can plant a channel
+whose committed descriptor / registry / challenge-policy the counterparty never
+agreed to. Mitigations are entirely off chain:
+
+- the funding tx must be reviewed by every participant before it is confirmed;
+- the host / wallet must reject a funding tx whose commitments do not match the
+  mutually-derived initial configuration;
+- watchtowsers and package validators must treat the initial on-chain
+  commitment as authoritative only after at least one participant has
+  co-signed the resulting initial package.
+
+Any deployment that cannot enforce these off-chain reviews must add an explicit
+initial-configuration signature object checked by the state-type script before
+mainnet.
+
 ## Script Boundary
 
 ```mermaid

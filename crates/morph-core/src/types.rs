@@ -231,6 +231,8 @@ pub struct FactoryVaultDelta {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactorySpliceHeader {
     pub protocol_version: u16,
+    pub chain_id: Bytes32,
+    pub signature_scheme_id: u16,
     pub factory_id: Bytes32,
     pub old_update_number: u64,
     pub new_update_number: u64,

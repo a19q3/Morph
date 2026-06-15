@@ -205,7 +205,11 @@ impl CkbRpcClient {
                 .ok_or_else(|| anyhow!("CKB RPC response for {method} has no result"));
         }
 
-        unreachable!("CKB RPC retry loop always returns before exhaustion")
+        anyhow::bail!(
+            "CKB RPC retry loop exhausted for {method} after {attempts} attempts (this is a bug; \
+             the loop should always return inside the iteration body)",
+            attempts = CKB_RPC_MAX_ATTEMPTS
+        )
     }
 }
 

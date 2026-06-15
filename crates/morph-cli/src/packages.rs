@@ -1099,7 +1099,7 @@ pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary package {}", tmp.display()))?;
@@ -1121,7 +1121,7 @@ pub fn write_factory_state_cell_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary package {}", tmp.display()))?;
@@ -1143,7 +1143,7 @@ pub fn write_factory_reduced_rights_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -1169,7 +1169,7 @@ pub fn write_factory_merkle_update_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -1215,7 +1215,7 @@ pub fn write_watch_cursor(path: &Path, cursor: &WatchCursor) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create cursor directory {}", parent.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(path);
     let json = serde_json::to_vec_pretty(cursor)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary watch cursor {}", tmp.display()))?;
@@ -1821,6 +1821,27 @@ pub fn canonical_hex32(value: &str) -> Result<String> {
     Ok(hex_prefixed(&bytes))
 }
 
+pub fn atomic_json_tmp_path(final_path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.subsec_nanos())
+        .unwrap_or(0);
+    let parent = final_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = final_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "package.json".to_string());
+    let tmp_name = format!(".{}.{}.{}.{}.tmp", file_name, pid, counter, nanos);
+    parent.join(tmp_name)
+}
+
 fn parse_header(raw: &[u8]) -> Result<StateHeader<'_>> {
     StateHeader::parse(raw).map_err(|err| anyhow!("invalid state header encoding: {err:?}"))
 }
@@ -1981,7 +2002,11 @@ fn validate_factory_local_exit_pair(
     let expected_descriptor_version = match witness.settlement_descriptor().len() {
         BILATERAL_CKB_DESCRIPTOR_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION,
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
-        _ => unreachable!("FactoryLocalExitWitness::parse accepted only known descriptors"),
+        other => {
+            return Err(anyhow!(
+                "FactoryLocalExitWitness carried an unknown settlement descriptor length {other}"
+            ));
+        }
     };
     ensure!(
         exit_state.descriptor_version() == expected_descriptor_version,

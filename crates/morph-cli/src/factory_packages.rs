@@ -31,10 +31,11 @@ use morph_script_common::{
     FACTORY_SPLICE_WITNESS_VERSION, FACTORY_VAULT_ASSET_AMOUNT_LEN, FACTORY_VAULT_DELTA_LEN,
     FACTORY_VAULT_DELTAS_LEN, FACTORY_VAULT_DESCRIPTOR_LEN,
     FactoryReducedSpliceWitness as WireFactoryReducedSpliceWitness,
-    FactorySpliceWitness as WireFactorySpliceWitness, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
-    WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, witness_envelope_body_commitment,
+    FactorySpliceWitness as WireFactorySpliceWitness, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope,
+    witness_envelope_body_commitment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -172,6 +173,8 @@ pub struct StoredFactorySplicePackage {
     pub created_unix_ms: u64,
     pub kind: String,
     pub factory_id: String,
+    pub chain_id: String,
+    pub signature_scheme_id: u16,
     pub old_update_number: u64,
     pub new_update_number: u64,
     pub old_state_root: String,
@@ -197,6 +200,8 @@ pub struct StoredFactoryReducedSplicePackage {
     pub created_unix_ms: u64,
     pub kind: String,
     pub factory_id: String,
+    pub chain_id: String,
+    pub signature_scheme_id: u16,
     pub old_update_number: u64,
     pub new_update_number: u64,
     pub old_state_root: String,
@@ -274,6 +279,8 @@ pub struct FactoryMerkleUpdatePackageSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactorySplicePackageSummary {
     pub factory_id: String,
+    pub chain_id: String,
+    pub signature_scheme_id: u16,
     pub kind: String,
     pub old_update_number: u64,
     pub new_update_number: u64,
@@ -302,6 +309,8 @@ pub struct FactorySplicePackageSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryReducedSplicePackageSummary {
     pub factory_id: String,
+    pub chain_id: String,
+    pub signature_scheme_id: u16,
     pub kind: String,
     pub old_update_number: u64,
     pub new_update_number: u64,
@@ -649,7 +658,14 @@ impl StoredFactoryStatePackage {
                 .iter()
                 .map(|value| canonical_hex32(value))
                 .collect::<Result<BTreeSet<_>>>()?,
-            _ => unreachable!(),
+            _ => {
+                return Err(anyhow::anyhow!(
+                    "unknown signature_mode {} (expected {} or {})",
+                    self.signature_mode,
+                    FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS,
+                    FACTORY_SIGNATURE_MODE_AUTHORISED_PARTICIPANTS
+                ));
+            }
         };
         ensure!(
             !expected_participants.is_empty(),
@@ -1145,6 +1161,8 @@ impl StoredFactorySplicePackage {
             created_unix_ms: now_unix_ms()?,
             kind: factory_splice_kind_name(transition.header.kind).to_string(),
             factory_id: hex_prefixed(&transition.header.factory_id),
+            chain_id: hex_prefixed(&transition.header.chain_id),
+            signature_scheme_id: transition.header.signature_scheme_id,
             old_update_number: transition.header.old_update_number,
             new_update_number: transition.header.new_update_number,
             old_state_root: hex_prefixed(&transition.header.old_state_root),
@@ -1201,6 +1219,14 @@ impl StoredFactorySplicePackage {
         ensure!(
             self.factory_id == canonical_hex32(&self.factory_id)?,
             "factory_id must be canonical"
+        );
+        ensure!(
+            self.chain_id == canonical_hex32(&self.chain_id)?,
+            "chain_id must be canonical"
+        );
+        ensure!(
+            self.signature_scheme_id == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
+            "signature_scheme_id must be SECP256K1_BLAKE2B (1)"
         );
         ensure!(
             self.old_state_root == canonical_hex32(&self.old_state_root)?,
@@ -1374,6 +1400,8 @@ impl StoredFactorySplicePackage {
         let contract_witness = contract_witness_bytes_from_transition(&transition)?;
         Ok(FactorySplicePackageSummary {
             factory_id: self.factory_id.clone(),
+            chain_id: self.chain_id.clone(),
+            signature_scheme_id: self.signature_scheme_id,
             kind: self.kind.clone(),
             old_update_number: self.old_update_number,
             new_update_number: self.new_update_number,
@@ -1438,6 +1466,8 @@ impl StoredFactorySplicePackage {
     fn header(&self) -> Result<FactorySpliceHeader> {
         Ok(FactorySpliceHeader {
             protocol_version: 1,
+            chain_id: hex32_bytes(&self.chain_id)?,
+            signature_scheme_id: self.signature_scheme_id,
             factory_id: hex32_bytes(&self.factory_id)?,
             old_update_number: self.old_update_number,
             new_update_number: self.new_update_number,
@@ -1508,6 +1538,8 @@ impl StoredFactoryReducedSplicePackage {
             created_unix_ms: now_unix_ms()?,
             kind: factory_splice_kind_name(transition.header.kind).to_string(),
             factory_id: hex_prefixed(&transition.header.factory_id),
+            chain_id: hex_prefixed(&transition.header.chain_id),
+            signature_scheme_id: transition.header.signature_scheme_id,
             old_update_number: transition.header.old_update_number,
             new_update_number: transition.header.new_update_number,
             old_state_root: hex_prefixed(&transition.header.old_state_root),
@@ -1571,6 +1603,14 @@ impl StoredFactoryReducedSplicePackage {
         ensure!(
             self.factory_id == canonical_hex32(&self.factory_id)?,
             "factory_id must be canonical"
+        );
+        ensure!(
+            self.chain_id == canonical_hex32(&self.chain_id)?,
+            "chain_id must be canonical"
+        );
+        ensure!(
+            self.signature_scheme_id == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
+            "signature_scheme_id must be SECP256K1_BLAKE2B (1)"
         );
         ensure!(
             self.old_state_root == canonical_hex32(&self.old_state_root)?,
@@ -1765,6 +1805,8 @@ impl StoredFactoryReducedSplicePackage {
         let contract_witness = contract_reduced_splice_witness_bytes_from_transition(&transition)?;
         Ok(FactoryReducedSplicePackageSummary {
             factory_id: self.factory_id.clone(),
+            chain_id: self.chain_id.clone(),
+            signature_scheme_id: self.signature_scheme_id,
             kind: self.kind.clone(),
             old_update_number: self.old_update_number,
             new_update_number: self.new_update_number,
@@ -1831,6 +1873,8 @@ impl StoredFactoryReducedSplicePackage {
     fn header(&self) -> Result<FactorySpliceHeader> {
         Ok(FactorySpliceHeader {
             protocol_version: 1,
+            chain_id: hex32_bytes(&self.chain_id)?,
+            signature_scheme_id: self.signature_scheme_id,
             factory_id: hex32_bytes(&self.factory_id)?,
             old_update_number: self.old_update_number,
             new_update_number: self.new_update_number,
@@ -2099,7 +2143,7 @@ pub fn write_factory_splice_package(
         )
     })?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -2129,7 +2173,7 @@ pub fn write_factory_reduced_splice_package(
         )
     })?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -2208,6 +2252,8 @@ pub fn fixture_factory_splice_package_with_kind(
     }];
     let mut header = FactorySpliceHeader {
         protocol_version: 1,
+        chain_id: bytes32(2),
+        signature_scheme_id: 1,
         factory_id: bytes32(90),
         old_update_number: 1,
         new_update_number: 2,
@@ -2958,17 +3004,19 @@ fn factory_splice_header_wire_bytes(
 ) -> [u8; FACTORY_SPLICE_HEADER_LEN] {
     let mut raw = [0u8; FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
-    raw[2..34].copy_from_slice(&header.factory_id);
-    put_u64(&mut raw, 34, header.old_update_number);
-    put_u64(&mut raw, 42, header.new_update_number);
-    raw[50..82].copy_from_slice(&header.old_state_root);
-    raw[82..114].copy_from_slice(&header.new_state_root);
-    raw[114..146].copy_from_slice(&header.old_access_manifest_root);
-    raw[146..178].copy_from_slice(&header.new_access_manifest_root);
-    raw[178] = factory_splice_kind_wire_byte(header.kind);
-    raw[179..211].copy_from_slice(&header.vault_delta_commitment);
-    raw[211..243].copy_from_slice(&header.non_interference_digest);
-    raw[243..275].copy_from_slice(&header.participants_commitment);
+    raw[2..34].copy_from_slice(&header.chain_id);
+    put_u16(&mut raw, 34, header.signature_scheme_id);
+    raw[36..68].copy_from_slice(&header.factory_id);
+    put_u64(&mut raw, 68, header.old_update_number);
+    put_u64(&mut raw, 76, header.new_update_number);
+    raw[84..116].copy_from_slice(&header.old_state_root);
+    raw[116..148].copy_from_slice(&header.new_state_root);
+    raw[148..180].copy_from_slice(&header.old_access_manifest_root);
+    raw[180..212].copy_from_slice(&header.new_access_manifest_root);
+    raw[212] = factory_splice_kind_wire_byte(header.kind);
+    raw[213..245].copy_from_slice(&header.vault_delta_commitment);
+    raw[245..277].copy_from_slice(&header.non_interference_digest);
+    raw[277..309].copy_from_slice(&header.participants_commitment);
     raw
 }
 

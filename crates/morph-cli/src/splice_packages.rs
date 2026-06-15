@@ -748,7 +748,7 @@ pub fn write_splice_package(
         )
     })?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary splice package {}", tmp.display()))?;

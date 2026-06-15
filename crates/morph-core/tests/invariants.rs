@@ -474,6 +474,8 @@ fn factory_splice_transition(
     }];
     let mut header = FactorySpliceHeader {
         protocol_version: 1,
+        chain_id: bytes32(7),
+        signature_scheme_id: 1,
         factory_id: bytes32(90),
         old_update_number: 1,
         new_update_number: 2,
@@ -765,6 +767,8 @@ fn factory_splice_rejects_reserve_claim_without_vault_input() {
 fn factory_splice_rejects_vault_release_without_rights_decrease() {
     let mut splice = factory_splice_transition(FactorySpliceKind::Out, VaultAsset::Ckb);
     splice.update.after[1].quantity = splice.update.before[1].quantity;
+    splice.header.new_state_root = factory_right_sparse_root(&splice.update.after).unwrap();
+    splice.witness = factory_splice_witness_for(&mut splice.header);
 
     let err = validate_factory_splice_transition(&splice).unwrap_err();
     assert_eq!(err, MorphError::FactorySpliceReserveClaimInvalid);
@@ -792,10 +796,30 @@ fn factory_splice_rejects_invalid_signature() {
 }
 
 #[test]
+fn factory_splice_rejects_unsupported_signature_scheme() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.header.signature_scheme_id = 2;
+    splice.witness = factory_splice_witness_for(&mut splice.header);
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceUnsupportedSignatureScheme);
+}
+
+#[test]
 fn accepts_valid_reduced_factory_splice_transition() {
     let splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
 
     validate_factory_reduced_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn reduced_factory_splice_rejects_unsupported_signature_scheme() {
+    let mut splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.header.signature_scheme_id = 2;
+    splice.witness = factory_reduced_splice_witness_for(&mut splice.header);
+
+    let err = validate_factory_reduced_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceUnsupportedSignatureScheme);
 }
 
 #[test]

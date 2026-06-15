@@ -134,6 +134,8 @@ impl SigningBytes for FactorySpliceHeader {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(FACTORY_SPLICE_HEADER_DOMAIN);
         out.extend_from_slice(&self.protocol_version.to_le_bytes());
+        out.extend_from_slice(&self.chain_id);
+        out.extend_from_slice(&self.signature_scheme_id.to_le_bytes());
         out.extend_from_slice(&self.factory_id);
         out.extend_from_slice(&self.old_update_number.to_le_bytes());
         out.extend_from_slice(&self.new_update_number.to_le_bytes());

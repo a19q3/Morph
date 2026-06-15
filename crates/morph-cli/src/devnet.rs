@@ -40,9 +40,9 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
     ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
     FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
-    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_EXIT_WITNESS_LEN,
-    FACTORY_REDUCED_EXIT_WITNESS_VERSION, FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN,
-    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT, FACTORY_REDUCED_RIGHTS_COUNT,
+    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_EXIT_RIGHTS_COUNT,
+    FACTORY_REDUCED_EXIT_WITNESS_LEN, FACTORY_REDUCED_EXIT_WITNESS_VERSION,
+    FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
     FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD,
@@ -81,7 +81,7 @@ use crate::rpc::CkbRpcClient;
 use crate::splice_packages::{StoredSplicePackage, read_splice_package, write_splice_package};
 use crate::watch_alert::{
     WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert, append_watchtower_alert,
-    post_watchtower_alert_webhook,
+    post_watchtower_alert_webhook_with_secret,
 };
 use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
@@ -2666,6 +2666,8 @@ pub fn save_factory_splice_package(
     }];
     let header = FactorySpliceHeader {
         protocol_version: old_header.protocol_version(),
+        chain_id: bytes32_from_slice("factory chain id", old_header.chain_id())?,
+        signature_scheme_id: old_header.signature_scheme_id(),
         factory_id,
         old_update_number,
         new_update_number,
@@ -2903,6 +2905,8 @@ pub fn save_factory_reduced_splice_package(
     }];
     let header = FactorySpliceHeader {
         protocol_version: old_header.protocol_version(),
+        chain_id: bytes32_from_slice("factory chain id", old_header.chain_id())?,
+        signature_scheme_id: old_header.signature_scheme_id(),
         factory_id,
         old_update_number,
         new_update_number,
@@ -5601,6 +5605,8 @@ pub fn factory_exit_channel(
                                 || anyhow!("child xUDT amount exceeds factory vault amount"),
                             )?,
                             asset_type: Some(*xudt_type_hash),
+                            ckb_before_quantity: options.vault_capacity as u128,
+                            ckb_after_quantity: 0,
                         }
                     }
                     None => ReducedExitReserveClaim {
@@ -5608,6 +5614,8 @@ pub fn factory_exit_channel(
                         before_quantity: options.vault_capacity as u128,
                         after_quantity: 0,
                         asset_type: None,
+                        ckb_before_quantity: 100,
+                        ckb_after_quantity: 100,
                     },
                 };
                 let reduced = reduced_exit_from_factory_header(
@@ -7194,7 +7202,8 @@ fn append_watch_alert_if_requested(
         append_watchtower_alert(path, &alert)?;
     }
     if let Some(url) = alert_webhook_url {
-        post_watchtower_alert_webhook(url, &alert)?;
+        let secret = std::env::var("MORPH_WATCHTOWER_WEBHOOK_SECRET").ok();
+        post_watchtower_alert_webhook_with_secret(url, &alert, secret.as_deref())?;
     }
     Ok(())
 }
@@ -8791,7 +8800,7 @@ fn write_negative_splice_package(
         )
     })?;
     let path = dir.join(format!("splice-negative-{case}.json"));
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -11014,6 +11023,8 @@ struct ReducedExitReserveClaim {
     before_quantity: u128,
     after_quantity: u128,
     asset_type: Option<[u8; BYTE32_LEN]>,
+    ckb_before_quantity: u128,
+    ckb_after_quantity: u128,
 }
 
 fn reduced_exit_initial_roots(
@@ -11030,6 +11041,8 @@ fn reduced_exit_initial_roots(
             before_quantity: release_quantity,
             after_quantity: 0,
             asset_type: None,
+            ckb_before_quantity: 100,
+            ckb_after_quantity: 100,
         },
         &descriptor,
     )
@@ -11068,6 +11081,8 @@ fn reduced_xudt_exit_initial_roots(
             before_quantity: reserve_claim_before_quantity,
             after_quantity: reserve_claim_after_quantity,
             asset_type: Some(reserve_asset_type),
+            ckb_before_quantity: child_vault_capacity as u128,
+            ckb_after_quantity: 0,
         },
         &descriptor,
     )
@@ -11298,7 +11313,7 @@ fn reduced_exit_witness_bytes(
     raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
     raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
     raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
-    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT;
+    raw[5] = FACTORY_REDUCED_EXIT_RIGHTS_COUNT;
     for (index, (participant, pubkey)) in entries.iter().enumerate() {
         let offset = reduced_exit_participant_offset(index);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
@@ -11334,7 +11349,7 @@ fn reduced_exit_witness_bytes(
         .copy_from_slice(state_header);
     raw[reduced_exit_descriptor_offset()..reduced_exit_descriptor_offset() + descriptor.len()]
         .copy_from_slice(descriptor);
-    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT as usize {
+    for index in 0..FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize {
         let before_offset = reduced_exit_right_offset(false, descriptor.len(), index);
         raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&before[index]);
         let after_offset = reduced_exit_right_offset(true, descriptor.len(), index);
@@ -11358,8 +11373,8 @@ fn reduced_exit_participant_entries(
 fn reduced_exit_rights_pair(
     reserve_claim: ReducedExitReserveClaim,
 ) -> (
-    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
-    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_RIGHTS_COUNT as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize],
+    [[u8; FACTORY_RIGHT_LEN]; FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize],
 ) {
     let before = [
         factory_right_bytes(1, 10, 0, 100),
@@ -11373,11 +11388,25 @@ fn reduced_exit_rights_pair(
         factory_right_bytes(1, 10, 2, 1),
         factory_right_bytes(1, 10, 3, 1),
         factory_right_bytes(1, 10, 4, 20),
+        factory_right_bytes_with_asset(
+            1,
+            11,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            reserve_claim.ckb_before_quantity,
+            None,
+        ),
         factory_right_bytes(2, 10, 0, 100),
         factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
         factory_right_bytes(2, 10, 2, 1),
         factory_right_bytes(2, 10, 3, 1),
         factory_right_bytes(2, 10, 4, 20),
+        factory_right_bytes_with_asset(
+            2,
+            11,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            reserve_claim.ckb_before_quantity,
+            None,
+        ),
     ];
     let mut after = before;
     after[1] = factory_right_bytes_with_asset(
@@ -11386,6 +11415,13 @@ fn reduced_exit_rights_pair(
         FACTORY_RIGHT_KIND_RESERVE_CLAIM,
         reserve_claim.after_quantity,
         reserve_claim.asset_type,
+    );
+    after[5] = factory_right_bytes_with_asset(
+        1,
+        11,
+        FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+        reserve_claim.ckb_after_quantity,
+        None,
     );
     (before, after)
 }
@@ -11483,7 +11519,7 @@ fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -
     let before_offset = reduced_exit_descriptor_offset() + descriptor_len;
     if after {
         before_offset
-            + FACTORY_REDUCED_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN
+            + FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN
             + index * FACTORY_RIGHT_LEN
     } else {
         before_offset + index * FACTORY_RIGHT_LEN
