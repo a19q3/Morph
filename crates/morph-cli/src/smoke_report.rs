@@ -2988,11 +2988,23 @@ fn transaction_map(transactions: &[TransactionSummary]) -> BTreeMap<String, &Tra
 }
 
 fn signed_delta_u64(baseline: u64, candidate: u64) -> i64 {
-    candidate.saturating_sub(baseline) as i64 - baseline.saturating_sub(candidate) as i64
+    i64_saturating_from_i128(i128::from(candidate) - i128::from(baseline))
 }
 
 fn signed_delta_usize(baseline: usize, candidate: usize) -> i64 {
-    candidate.saturating_sub(baseline) as i64 - baseline.saturating_sub(candidate) as i64
+    let baseline = i128::try_from(baseline).unwrap_or(i128::MAX);
+    let candidate = i128::try_from(candidate).unwrap_or(i128::MAX);
+    i64_saturating_from_i128(candidate - baseline)
+}
+
+fn i64_saturating_from_i128(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| {
+        if value.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        }
+    })
 }
 
 fn abs_i64(value: i64) -> u64 {

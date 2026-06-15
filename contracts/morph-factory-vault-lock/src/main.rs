@@ -398,11 +398,7 @@ fn validate_factory_splice_cell_delta(
 ) -> Result<()> {
     match delta.asset_kind() {
         VAULT_ASSET_KIND_CKB => {
-            if input_type.is_some()
-                || output_type.is_some()
-                || !input_data.is_empty()
-                || !output_data.is_empty()
-                || input_capacity as u128 != delta.old_amount()
+            if input_capacity as u128 != delta.old_amount()
                 || output_capacity as u128 != delta.new_amount()
             {
                 return Err(ScriptError::FactorySpliceProofMismatch);

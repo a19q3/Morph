@@ -29,6 +29,8 @@ pub enum MorphError {
     HeaderContextChanged,
     #[error("participant signatures over canonical header are invalid")]
     InvalidStateSignatures,
+    #[error("state signature scheme is unsupported")]
+    UnsupportedSignatureScheme,
     #[error("participant set does not match signed state header")]
     ParticipantSetMismatch,
     #[error("participant signature encoding is invalid")]
@@ -109,6 +111,8 @@ pub enum MorphError {
     SpliceDeltaCommitmentMismatch,
     #[error("splice participant signatures are invalid")]
     InvalidSpliceSignatures,
+    #[error("splice signature scheme is unsupported")]
+    SpliceUnsupportedSignatureScheme,
     #[error("splice participant set does not match the header")]
     SpliceParticipantSetMismatch,
     #[error("splice asset delta is invalid")]
@@ -168,6 +172,9 @@ pub fn validate_state_authorization(
     header: &StateHeader,
     authorization: &StateAuthorization,
 ) -> Result<()> {
+    if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(MorphError::UnsupportedSignatureScheme);
+    }
     if authorization.threshold == 0
         || authorization.signatures.len() < authorization.threshold as usize
     {
@@ -293,6 +300,9 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
 }
 
 pub fn validate_splice_authorization(header: &SpliceHeader, witness: &SpliceWitness) -> Result<()> {
+    if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(MorphError::SpliceUnsupportedSignatureScheme);
+    }
     if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
         return Err(MorphError::SpliceParticipantSetMismatch);
     }
@@ -743,6 +753,9 @@ pub fn validate_factory_splice_authorization(
         .iter()
         .map(|signature| signature.pubkey_sec1.as_slice())
         .collect();
+    if !pubkeys.windows(2).all(|window| window[0] < window[1]) {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
     if participants_commitment(witness.threshold, &pubkeys) != header.participants_commitment {
         return Err(MorphError::FactorySpliceParticipantSetMismatch);
     }

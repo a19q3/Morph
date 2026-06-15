@@ -1153,7 +1153,12 @@ impl StoredFactorySplicePackage {
             .iter()
             .map(|(_, pubkey, _)| decode_hex_exact(pubkey, 33, "pubkey_sec1"))
             .collect::<Result<Vec<_>>>()?;
-        let pubkey_refs = pubkeys.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let mut witness_pubkeys = pubkeys;
+        witness_pubkeys.sort();
+        let pubkey_refs = witness_pubkeys
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
         let participants_commitment =
             participants_commitment(signing_keys.len() as u8, &pubkey_refs);
         let mut package = Self {
@@ -1338,24 +1343,23 @@ impl StoredFactorySplicePackage {
             "factory splice participant_keys do not match update participants"
         );
 
+        let mut witness_signatures = self
+            .signatures
+            .iter()
+            .map(|signature| {
+                Ok(ParticipantSignature {
+                    pubkey_sec1: decode_hex_exact(&signature.pubkey_sec1, 33, "pubkey_sec1")?,
+                    signature: decode_hex_exact(&signature.signature, 64, "signature")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        witness_signatures.sort_by(|left, right| left.pubkey_sec1.cmp(&right.pubkey_sec1));
+
         let transition = FactorySpliceTransition {
             header: self.header()?,
             witness: SpliceWitness {
                 threshold: self.signature_threshold,
-                signatures: self
-                    .signatures
-                    .iter()
-                    .map(|signature| {
-                        Ok(ParticipantSignature {
-                            pubkey_sec1: decode_hex_exact(
-                                &signature.pubkey_sec1,
-                                33,
-                                "pubkey_sec1",
-                            )?,
-                            signature: decode_hex_exact(&signature.signature, 64, "signature")?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
+                signatures: witness_signatures,
             },
             update,
             old_vault: FactoryVaultDescriptor {
