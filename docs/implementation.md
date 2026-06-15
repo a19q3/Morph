@@ -61,6 +61,12 @@ In the current devnet profile, `funding_anchor` means the signed funding anchor
 identity. It is derived in a Type-ID-style way from the first funding input and
 the State Cell output index, and it is not a live output locator.
 
+Tooling derives `funding_context_id = H("CKB_MORPH_FUNDING_CONTEXT",
+chain_id, channel_id, funding_anchor, vault_set_commitment)` from the signed
+State Header context. This identifier is an integration and audit key for the
+current funding context. It is not an additional consensus field, and it does
+not replace the current signed `funding_epoch` semantics.
+
 The current public mode surface is intentionally narrow. Host code names the
 implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
 wire profile uses mode bytes `1` and `2`. These correspond to the paper's
@@ -73,6 +79,24 @@ anchor derivation, active phase, state number zero, lock/type binding, and
 capacity shape. Participant approval of the initial descriptor, asset registry,
 and challenge policy is handled by wallet, host, and package policy rather than
 by a separate script-checked initial-configuration signature object.
+
+**Accepted risk.** Because the initial `participants_commitment`,
+`settlement_descriptor_commitment`, `asset_registry_commitment`, and
+`challenge_policy_commitment` are not participant-signed at script level, a
+malicious funder (or wallet compromise at funding time) can plant a channel
+whose committed descriptor / registry / challenge-policy the counterparty never
+agreed to. Mitigations are entirely off chain:
+
+- the funding tx must be reviewed by every participant before it is confirmed;
+- the host / wallet must reject a funding tx whose commitments do not match the
+  mutually-derived initial configuration;
+- watchtowsers and package validators must treat the initial on-chain
+  commitment as authoritative only after at least one participant has
+  co-signed the resulting initial package.
+
+Any deployment that cannot enforce these off-chain reviews must add an explicit
+initial-configuration signature object checked by the state-type script before
+mainnet.
 
 ## Script Boundary
 
@@ -149,11 +173,13 @@ at the boundary that needs them:
 
 The bilateral `StoredStatePackage` used by the CLI stores the signed State
 Header bytes, bilateral signature witness bytes, channel id, funding anchor,
-state number, signing digest, source State outpoint, and descriptor
-commitment/version metadata. It validates signatures and metadata before write
-and read, and latest-package selection is by channel id and state number. The
-broader paper `StatePackage` object is the protocol requirement for arbitrary
-representation profiles; the current bilateral devnet package is the
+derived funding context id, state number, signing digest, source State
+outpoint, and descriptor commitment/version metadata. It validates signatures
+and metadata before write and read. Latest-package selection is by channel id
+and state number, while watchtower re-anchor handling prefers the derived
+funding context id and falls back to the funding anchor for older package
+stores. The broader paper `StatePackage` object is the protocol requirement for
+arbitrary representation profiles; the current bilateral devnet package is the
 implemented plaintext profile.
 
 ## Factory Witness Envelope

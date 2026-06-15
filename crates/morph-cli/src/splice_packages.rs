@@ -13,8 +13,8 @@ use k256::ecdsa::{Signature, SigningKey};
 use morph_core::{
     Amount, Bytes32, Mode, ParticipantSignature, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind,
     SpliceTransition, SpliceWitness, StateCell, StateHeader, VaultAsset, VaultAssetAmount,
-    VaultDescriptor, bytes32, participants_commitment, splice_asset_delta_commitment,
-    validate_splice_transition, vault_descriptor_commitment,
+    VaultDescriptor, bytes32, funding_context_id, participants_commitment,
+    splice_asset_delta_commitment, validate_splice_transition, vault_descriptor_commitment,
 };
 use morph_script_common::{
     COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_LEN,
@@ -48,6 +48,8 @@ pub struct StoredSpliceStateRef {
     pub channel_id: String,
     pub funding_epoch: u64,
     pub funding_anchor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_context_id: Option<String>,
     pub vault_set_commitment: String,
     pub state_number: u64,
     pub mode: String,
@@ -108,6 +110,10 @@ pub struct StoredSplicePackage {
     pub channel_id: String,
     pub old_funding_anchor: String,
     pub new_funding_anchor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_funding_context_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_funding_context_id: Option<String>,
     pub old_funding_epoch: u64,
     pub new_funding_epoch: u64,
     pub base_state_number: u64,
@@ -187,6 +193,18 @@ impl StoredSplicePackage {
             channel_id: hex_prefixed(&transition.header.channel_id),
             old_funding_anchor: hex_prefixed(&transition.header.old_funding_anchor),
             new_funding_anchor: hex_prefixed(&transition.header.new_funding_anchor),
+            old_funding_context_id: Some(funding_context_id_hex(
+                &transition.header.chain_id,
+                &transition.header.channel_id,
+                &transition.header.old_funding_anchor,
+                &transition.header.old_vault_commitment,
+            )),
+            new_funding_context_id: Some(funding_context_id_hex(
+                &transition.header.chain_id,
+                &transition.header.channel_id,
+                &transition.header.new_funding_anchor,
+                &transition.header.new_vault_commitment,
+            )),
             old_funding_epoch: transition.header.old_funding_epoch,
             new_funding_epoch: transition.header.new_funding_epoch,
             base_state_number: transition.header.base_state_number,
@@ -255,6 +273,18 @@ impl StoredSplicePackage {
             self.new_funding_anchor == canonical_hex32(&self.new_funding_anchor)?,
             "new_funding_anchor must be canonical"
         );
+        if let Some(context_id) = &self.old_funding_context_id {
+            ensure!(
+                *context_id == canonical_hex32(context_id)?,
+                "old_funding_context_id must be canonical"
+            );
+        }
+        if let Some(context_id) = &self.new_funding_context_id {
+            ensure!(
+                *context_id == canonical_hex32(context_id)?,
+                "new_funding_context_id must be canonical"
+            );
+        }
         ensure!(
             self.old_vault_commitment == canonical_hex32(&self.old_vault_commitment)?,
             "old_vault_commitment must be canonical"
@@ -326,6 +356,30 @@ impl StoredSplicePackage {
             self.signing_digest == hex_prefixed(&transition.header.signing_digest()),
             "signing_digest does not match splice header"
         );
+        if let Some(context_id) = &self.old_funding_context_id {
+            ensure!(
+                context_id
+                    == &funding_context_id_hex(
+                        &transition.header.chain_id,
+                        &transition.header.channel_id,
+                        &transition.header.old_funding_anchor,
+                        &transition.header.old_vault_commitment,
+                    ),
+                "old_funding_context_id does not match splice old funding context"
+            );
+        }
+        if let Some(context_id) = &self.new_funding_context_id {
+            ensure!(
+                context_id
+                    == &funding_context_id_hex(
+                        &transition.header.chain_id,
+                        &transition.header.channel_id,
+                        &transition.header.new_funding_anchor,
+                        &transition.header.new_vault_commitment,
+                    ),
+                "new_funding_context_id does not match splice new funding context"
+            );
+        }
 
         validate_splice_transition(&transition)
             .map_err(|err| anyhow!("splice transition check failed: {err}"))?;
@@ -452,6 +506,7 @@ impl StoredSpliceStateRef {
             channel_id: hex_prefixed(&state.header.channel_id),
             funding_epoch: state.header.funding_epoch,
             funding_anchor: hex_prefixed(&state.header.funding_anchor),
+            funding_context_id: Some(hex_prefixed(&state.header.funding_context_id())),
             vault_set_commitment: hex_prefixed(&state.header.vault_set_commitment),
             state_number: state.header.state_number,
             mode: mode_label(state.header.mode).to_string(),
@@ -497,6 +552,12 @@ impl StoredSpliceStateRef {
             self.vault_set_commitment == canonical_hex32(&self.vault_set_commitment)?,
             "current_state.vault_set_commitment must be canonical"
         );
+        if let Some(context_id) = &self.funding_context_id {
+            ensure!(
+                *context_id == canonical_hex32(context_id)?,
+                "current_state.funding_context_id must be canonical"
+            );
+        }
         ensure!(
             self.participants_commitment == canonical_hex32(&self.participants_commitment)?,
             "current_state.participants_commitment must be canonical"
@@ -518,7 +579,7 @@ impl StoredSpliceStateRef {
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
             "current_state.challenge_policy_commitment must be canonical"
         );
-        Ok(StateCell {
+        let state = StateCell {
             header: StateHeader {
                 protocol_version: self.protocol_version,
                 chain_id: hex32_bytes(&self.chain_id)?,
@@ -542,7 +603,14 @@ impl StoredSpliceStateRef {
             },
             capacity: self.capacity,
             occupied_capacity: self.occupied_capacity,
-        })
+        };
+        if let Some(context_id) = &self.funding_context_id {
+            ensure!(
+                context_id == &hex_prefixed(&state.header.funding_context_id()),
+                "current_state.funding_context_id does not match current_state funding context"
+            );
+        }
+        Ok(state)
     }
 }
 
@@ -680,7 +748,7 @@ pub fn write_splice_package(
         )
     })?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary splice package {}", tmp.display()))?;
@@ -762,6 +830,18 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         channel_id: hex_prefixed(&header.channel_id),
         old_funding_anchor: hex_prefixed(&header.old_funding_anchor),
         new_funding_anchor: hex_prefixed(&header.new_funding_anchor),
+        old_funding_context_id: Some(funding_context_id_hex(
+            &header.chain_id,
+            &header.channel_id,
+            &header.old_funding_anchor,
+            &header.old_vault_commitment,
+        )),
+        new_funding_context_id: Some(funding_context_id_hex(
+            &header.chain_id,
+            &header.channel_id,
+            &header.new_funding_anchor,
+            &header.new_vault_commitment,
+        )),
         old_funding_epoch: header.old_funding_epoch,
         new_funding_epoch: header.new_funding_epoch,
         base_state_number: header.base_state_number,
@@ -1501,6 +1581,20 @@ fn hex32_bytes(value: &str) -> Result<Bytes32> {
     let mut out = [0u8; 32];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn funding_context_id_hex(
+    chain_id: &Bytes32,
+    channel_id: &Bytes32,
+    funding_anchor: &Bytes32,
+    vault_set_commitment: &Bytes32,
+) -> String {
+    hex_prefixed(&funding_context_id(
+        chain_id,
+        channel_id,
+        funding_anchor,
+        vault_set_commitment,
+    ))
 }
 
 fn hex_prefixed(bytes: &[u8]) -> String {

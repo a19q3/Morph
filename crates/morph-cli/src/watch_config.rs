@@ -644,7 +644,7 @@ fn write_service_health(path: &Path, health: &WatchtowerConfigServiceHealth) -> 
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create health directory {}", parent.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = crate::packages::atomic_json_tmp_path(path);
     let json = serde_json::to_vec_pretty(health)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary health file {}", tmp.display()))?;

@@ -12,6 +12,7 @@ convention.
 | --- | --- |
 | One live State Cell controls the channel pointer | `accepts_valid_state_supersession`, `rejects_stale_or_equal_state_number` |
 | Funding anchor identity is canonical | `rejects_wrong_funding_anchor_reference`, `rejects_changed_header_context` |
+| Funding context id is derived from signed context for tooling | `writes_lists_and_selects_latest_package`, `selects_latest_state_package_for_funding_anchor`, `watch_cursor_for_state_records_observed_funding_anchor` |
 | StateHeader funding epoch and vault-set commitments are signed state semantics | `state_header_digest_binds_epoch_and_vault_set`, `state_header_context_rejects_epoch_and_vault_set_changes`, `state_header_fields_are_fixed_width`, `verifies_splice_state_transition_epoch_bridge` |
 | State numbers are strictly monotonic | `rejects_stale_or_equal_state_number` |
 | State evidence is signed by participants | `rejects_invalid_state_signature`, `state_type_rejects_invalid_participant_signature` |

@@ -3391,6 +3391,7 @@ fn main() -> Result<()> {
 }
 
 fn resolve_watchtower_private_key(
+    rpc_url: &str,
     private_key: Option<String>,
     private_key_file: Option<PathBuf>,
 ) -> Result<String> {
@@ -3406,9 +3407,35 @@ fn resolve_watchtower_private_key(
             .with_context(|| format!("failed to read private key file {}", path.display()))?;
         return canonical_private_key(&value, &format!("private key file {}", path.display()));
     }
+    if !rpc_is_loopback_or_devnet(rpc_url) {
+        anyhow::bail!(
+            "refusing to fall back to the public devnet private key for non-loopback RPC {} \
+             (--private-key or --private-key-file is required for any non-local CKB network)",
+            rpc_url
+        );
+    }
+    eprintln!(
+        "warning: no --private-key / --private-key-file supplied; falling back to the public \
+         devnet private key. This is only safe on a local devnet RPC ({}) and must never be used \
+         on a public, testnet, or mainnet endpoint.",
+        rpc_url
+    );
     canonical_private_key(
         DEFAULT_DEVNET_PRIVATE_KEY,
         "default local-devnet private key",
+    )
+}
+
+fn rpc_is_loopback_or_devnet(rpc_url: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(rpc_url) else {
+        return false;
+    };
+    if parsed.scheme() != "http" {
+        return false;
+    }
+    matches!(
+        parsed.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("::1")
     )
 }
 
@@ -5737,7 +5764,11 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &rpc,
                 WatchLatestStatePackageOptions {
                     contracts_dir,
-                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
+                    private_key: resolve_watchtower_private_key(
+                        rpc_url,
+                        private_key,
+                        private_key_file,
+                    )?,
                     sponsor_out_point,
                     store_dir,
                     channel_id,
@@ -5824,7 +5855,11 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &config_data,
                 watch_config::WatchtowerRuntimeOptions {
                     contracts_dir,
-                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
+                    private_key: resolve_watchtower_private_key(
+                        rpc_url,
+                        private_key,
+                        private_key_file,
+                    )?,
                 },
             )?;
             if json {
@@ -5862,7 +5897,11 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &config_data,
                 watch_config::WatchtowerRuntimeOptions {
                     contracts_dir,
-                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
+                    private_key: resolve_watchtower_private_key(
+                        rpc_url,
+                        private_key,
+                        private_key_file,
+                    )?,
                 },
                 watch_config::WatchtowerConfigLoopOptions {
                     passes,
@@ -5914,7 +5953,11 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 &config_data,
                 watch_config::WatchtowerRuntimeOptions {
                     contracts_dir,
-                    private_key: resolve_watchtower_private_key(private_key, private_key_file)?,
+                    private_key: resolve_watchtower_private_key(
+                        rpc_url,
+                        private_key,
+                        private_key_file,
+                    )?,
                 },
                 watch_config::WatchtowerConfigServiceOptions {
                     max_passes,
@@ -7256,7 +7299,9 @@ mod cli_secret_tests {
             "file"
         ));
         fs::write(&path, format!("{}\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
-        let resolved = resolve_watchtower_private_key(None, Some(path.clone())).unwrap();
+        let resolved =
+            resolve_watchtower_private_key("http://127.0.0.1:18114", None, Some(path.clone()))
+                .unwrap();
         fs::remove_file(path).unwrap();
         assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
     }
@@ -7264,6 +7309,7 @@ mod cli_secret_tests {
     #[test]
     fn rejects_ambiguous_private_key_sources() {
         let err = resolve_watchtower_private_key(
+            "http://127.0.0.1:18114",
             Some(DEFAULT_DEVNET_PRIVATE_KEY.to_string()),
             Some(PathBuf::from("key.txt")),
         )
@@ -7282,14 +7328,24 @@ mod cli_secret_tests {
             "multi"
         ));
         fs::write(&path, format!("{} extra\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
-        let err = resolve_watchtower_private_key(None, Some(path.clone())).unwrap_err();
+        let err =
+            resolve_watchtower_private_key("http://127.0.0.1:18114", None, Some(path.clone()))
+                .unwrap_err();
         fs::remove_file(path).unwrap();
         assert!(err.to_string().contains("exactly one hex private key"));
     }
 
     #[test]
     fn falls_back_to_devnet_key_for_local_watchers() {
-        let resolved = resolve_watchtower_private_key(None, None).unwrap();
+        let resolved =
+            resolve_watchtower_private_key("http://127.0.0.1:18114", None, None).unwrap();
         assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
+    }
+
+    #[test]
+    fn rejects_devnet_key_fallback_for_non_loopback_rpc() {
+        let err =
+            resolve_watchtower_private_key("https://mainnet.example.com", None, None).unwrap_err();
+        assert!(err.to_string().contains("non-loopback RPC"), "got: {err}");
     }
 }

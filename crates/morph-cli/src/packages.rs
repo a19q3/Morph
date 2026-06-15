@@ -21,10 +21,10 @@ use morph_script_common::{
     WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
     WitnessEnvelope, blake2b256 as script_blake2b256, factory_local_exit_digest,
-    factory_participants_commitment, participants_commitment, settlement_descriptor_commitment,
-    verify_bilateral_state_signatures, verify_factory_merkle_update,
-    verify_factory_state_signatures, verify_reduced_factory_rights_update,
-    witness_envelope_body_commitment,
+    factory_participants_commitment, funding_context_id, participants_commitment,
+    settlement_descriptor_commitment, verify_bilateral_state_signatures,
+    verify_factory_merkle_update, verify_factory_state_signatures,
+    verify_reduced_factory_rights_update, witness_envelope_body_commitment,
 };
 #[cfg(test)]
 use morph_script_common::{
@@ -52,6 +52,8 @@ pub struct StoredStatePackage {
     pub created_unix_ms: u64,
     pub channel_id: String,
     pub funding_anchor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub funding_context_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub funding_epoch: Option<u64>,
     pub state_number: u64,
@@ -301,6 +303,8 @@ pub struct WatchCursor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_funding_anchor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_funding_context_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_observed_state_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_observed_out_point: Option<String>,
@@ -327,6 +331,7 @@ impl StoredStatePackage {
             created_unix_ms: now_unix_ms()?,
             channel_id: hex_prefixed(header.channel_id()),
             funding_anchor: hex_prefixed(header.funding_anchor()),
+            funding_context_id: Some(funding_context_id_for_header(&header)),
             funding_epoch: None,
             state_number: header.state_number(),
             phase: "settling".to_string(),
@@ -374,6 +379,16 @@ impl StoredStatePackage {
             self.funding_anchor == hex_prefixed(header.funding_anchor()),
             "state package funding_anchor does not match header"
         );
+        if let Some(context_id) = &self.funding_context_id {
+            ensure!(
+                *context_id == canonical_hex32(context_id)?,
+                "state package funding_context_id must be canonical"
+            );
+            ensure!(
+                context_id == &funding_context_id_for_header(&header),
+                "state package funding_context_id does not match header funding context"
+            );
+        }
         if let Some(commitment) = &self.settlement_descriptor_commitment {
             ensure!(
                 *commitment == canonical_hex32(commitment)?,
@@ -403,6 +418,15 @@ impl StoredStatePackage {
             "state package signing_digest does not match header"
         );
         Ok(())
+    }
+
+    pub fn funding_context_id(&self) -> Result<String> {
+        if let Some(context_id) = &self.funding_context_id {
+            return canonical_hex32(context_id);
+        }
+        let header_bytes = self.header_bytes()?;
+        let header = parse_header(&header_bytes)?;
+        Ok(funding_context_id_for_header(&header))
     }
 
     pub fn header_bytes(&self) -> Result<Vec<u8>> {
@@ -436,6 +460,7 @@ impl WatchCursor {
             next_block,
             scanned_to_block,
             current_funding_anchor: None,
+            current_funding_context_id: None,
             last_observed_state_number: None,
             last_observed_out_point: None,
             updated_unix_ms: now_unix_ms()?,
@@ -444,13 +469,15 @@ impl WatchCursor {
         Ok(cursor)
     }
 
-    pub fn with_observed_state(
+    pub fn with_observed_context_state(
         mut self,
         funding_anchor: &str,
+        funding_context_id: &str,
         state_number: u64,
         out_point: &str,
     ) -> Result<Self> {
         self.current_funding_anchor = Some(canonical_hex32(funding_anchor)?);
+        self.current_funding_context_id = Some(canonical_hex32(funding_context_id)?);
         self.last_observed_state_number = Some(state_number);
         self.last_observed_out_point = Some(out_point.to_string());
         self.validate()?;
@@ -472,6 +499,12 @@ impl WatchCursor {
             ensure!(
                 *anchor == canonical_hex32(anchor)?,
                 "watch cursor current_funding_anchor must be canonical"
+            );
+        }
+        if let Some(context_id) = &self.current_funding_context_id {
+            ensure!(
+                *context_id == canonical_hex32(context_id)?,
+                "watch cursor current_funding_context_id must be canonical"
             );
         }
         ensure!(
@@ -1066,7 +1099,7 @@ pub fn write_package(dir: &Path, package: &StoredStatePackage) -> Result<PathBuf
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary package {}", tmp.display()))?;
@@ -1088,7 +1121,7 @@ pub fn write_factory_state_cell_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary package {}", tmp.display()))?;
@@ -1110,7 +1143,7 @@ pub fn write_factory_reduced_rights_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -1136,7 +1169,7 @@ pub fn write_factory_merkle_update_package(
     fs::create_dir_all(dir)
         .with_context(|| format!("failed to create package directory {}", dir.display()))?;
     let path = dir.join(package.file_name());
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(&path);
     let json = serde_json::to_vec_pretty(package)?;
     fs::write(&tmp, json).with_context(|| {
         format!(
@@ -1182,7 +1215,7 @@ pub fn write_watch_cursor(path: &Path, cursor: &WatchCursor) -> Result<()> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create cursor directory {}", parent.display()))?;
     }
-    let tmp = path.with_extension("json.tmp");
+    let tmp = atomic_json_tmp_path(path);
     let json = serde_json::to_vec_pretty(cursor)?;
     fs::write(&tmp, json)
         .with_context(|| format!("failed to write temporary watch cursor {}", tmp.display()))?;
@@ -1788,8 +1821,38 @@ pub fn canonical_hex32(value: &str) -> Result<String> {
     Ok(hex_prefixed(&bytes))
 }
 
+pub fn atomic_json_tmp_path(final_path: &Path) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let pid = std::process::id();
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.subsec_nanos())
+        .unwrap_or(0);
+    let parent = final_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = final_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "package.json".to_string());
+    let tmp_name = format!(".{}.{}.{}.{}.tmp", file_name, pid, counter, nanos);
+    parent.join(tmp_name)
+}
+
 fn parse_header(raw: &[u8]) -> Result<StateHeader<'_>> {
     StateHeader::parse(raw).map_err(|err| anyhow!("invalid state header encoding: {err:?}"))
+}
+
+pub fn funding_context_id_for_header(header: &StateHeader<'_>) -> String {
+    hex_prefixed(&funding_context_id(
+        header.chain_id(),
+        header.channel_id(),
+        header.funding_anchor(),
+        header.vault_set_commitment(),
+    ))
 }
 
 fn parse_witness(raw: &[u8]) -> Result<BilateralSignatureWitness<'_>> {
@@ -1939,7 +2002,11 @@ fn validate_factory_local_exit_pair(
     let expected_descriptor_version = match witness.settlement_descriptor().len() {
         BILATERAL_CKB_DESCRIPTOR_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION,
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
-        _ => unreachable!("FactoryLocalExitWitness::parse accepted only known descriptors"),
+        other => {
+            return Err(anyhow!(
+                "FactoryLocalExitWitness carried an unknown settlement descriptor length {other}"
+            ));
+        }
     };
     ensure!(
         exit_state.descriptor_version() == expected_descriptor_version,
@@ -2404,6 +2471,10 @@ mod tests {
         assert_eq!(selected.path, latest_path);
         assert_eq!(selected.package.funding_epoch, None);
         assert_eq!(
+            selected.package.funding_context_id,
+            Some(selected.package.funding_context_id().unwrap())
+        );
+        assert_eq!(
             selected.package.settlement_descriptor_commitment,
             Some(hex_prefixed(&[0u8; BYTE32_LEN]))
         );
@@ -2539,10 +2610,11 @@ mod tests {
         let dir = temp_dir("cursor");
         let channel_id = format!("0x{}", "11".repeat(BYTE32_LEN));
         let funding_anchor = format!("0x{}", "22".repeat(BYTE32_LEN));
+        let funding_context_id = format!("0x{}", "23".repeat(BYTE32_LEN));
         let path = default_watch_cursor_path(&dir, &channel_id).unwrap();
         let cursor = WatchCursor::new(&channel_id, 43, 42)
             .unwrap()
-            .with_observed_state(&funding_anchor, 7, "0xabc:0")
+            .with_observed_context_state(&funding_anchor, &funding_context_id, 7, "0xabc:0")
             .unwrap();
 
         assert!(read_watch_cursor(&path).unwrap().is_none());
@@ -2555,6 +2627,10 @@ mod tests {
         assert_eq!(
             loaded.current_funding_anchor.as_deref(),
             Some(funding_anchor.as_str())
+        );
+        assert_eq!(
+            loaded.current_funding_context_id.as_deref(),
+            Some(funding_context_id.as_str())
         );
         assert_eq!(loaded.last_observed_state_number, Some(7));
         assert_eq!(loaded.last_observed_out_point.as_deref(), Some("0xabc:0"));

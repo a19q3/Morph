@@ -15,6 +15,7 @@ const FACTORY_RIGHT_LEAF_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF";
 const FACTORY_RIGHT_NODE_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE";
 const FACTORY_RIGHT_EMPTY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY";
 const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
+const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B: u16 = 1;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MorphError {
@@ -122,6 +123,8 @@ pub enum MorphError {
     FactorySpliceUpdateNotAdvanced,
     #[error("factory splice header does not match the factory update")]
     FactorySpliceHeaderMismatch,
+    #[error("factory splice signature scheme is unsupported")]
+    FactorySpliceUnsupportedSignatureScheme,
     #[error("factory splice participant signatures are invalid")]
     InvalidFactorySpliceSignatures,
     #[error("factory splice participant set does not match the header")]
@@ -487,6 +490,13 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
     if splice.header.new_update_number <= splice.header.old_update_number {
         return Err(MorphError::FactorySpliceUpdateNotAdvanced);
     }
+    let computed_old_root = factory_right_sparse_root(&splice.update.before)?;
+    let computed_new_root = factory_right_sparse_root(&splice.update.after)?;
+    if splice.header.old_state_root != computed_old_root
+        || splice.header.new_state_root != computed_new_root
+    {
+        return Err(MorphError::FactorySpliceHeaderMismatch);
+    }
     if splice.old_vault.factory_id != splice.header.factory_id
         || splice.new_vault.factory_id != splice.header.factory_id
     {
@@ -656,6 +666,9 @@ pub fn validate_factory_reduced_splice_authorization(
     update: &FactorySingleRightMerkleUpdate,
     witness: &FactoryReducedSpliceWitness,
 ) -> Result<()> {
+    if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
+    }
     if witness.participant_threshold == 0
         || witness.participant_keys.len() < witness.participant_threshold as usize
         || witness.signatures.is_empty()
@@ -718,6 +731,9 @@ pub fn validate_factory_splice_authorization(
     header: &FactorySpliceHeader,
     witness: &SpliceWitness,
 ) -> Result<()> {
+    if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
+    }
     if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
         return Err(MorphError::FactorySpliceParticipantSetMismatch);
     }

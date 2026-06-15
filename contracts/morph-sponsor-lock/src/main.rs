@@ -102,10 +102,33 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
         }
     }
     if found {
+        ensure_publication_backed_by_state_type_input(policy)?;
         Ok(())
     } else {
         Err(ScriptError::StateCellMissing)
     }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn ensure_publication_backed_by_state_type_input(policy: &SponsorPolicy) -> Result<()> {
+    let mut index = 0;
+    loop {
+        match load_cell_type_hash(index, Source::Input) {
+            Ok(Some(type_hash)) => {
+                if type_hash.as_slice() == policy.publication_state_type_hash() {
+                    return Ok(());
+                }
+                index += 1;
+            }
+            Ok(None) => index += 1,
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    if policy.min_state_number() != 0 {
+        return Err(ScriptError::SponsorStateOutOfRange);
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]

@@ -115,7 +115,7 @@ the expected files and log markers are present.
 | Splice lifecycle matrix | CKB and xUDT splice-in and splice-out update funding anchors and vault sets. | Funding-anchor and descriptor changes require signed evidence. |
 | Factory lifecycle matrix | Factory open, update, reduced rights, sparse Merkle update, local child exit, and reduced exit all execute. | Factory rights and child value cannot be changed without the required proof. |
 | Factory splice then exit | Conservative and reduced CKB/xUDT factory splice paths can be followed by child materialisation and finalisation. | Factory value deltas are bound across reserve, balance, and vault cells. |
-| Watchtower operations | Auto-sponsor, direct sponsor, config-loop, health-file, cursor, service stop, and stale-splice watching are recorded. | Watchtower publication is cursor-aware and funding-anchor-aware. |
+| Watchtower operations | Auto-sponsor, direct sponsor, config-loop, health-file, cursor, service stop, and stale-splice watching are recorded. | Watchtower publication is cursor-aware and funding-context-aware, with funding-anchor fallback for older packages. |
 | Extreme state value cases | Asymmetric capacities and one-sided xUDT paths remain valid. | Edge-value cases do not bypass typed-asset or budget checks. |
 | Negative attack matrix | Known attack-shaped transactions fail with exact expected errors, then later valid transitions still commit. | Rejection paths are precise and recovery continues afterwards. |
 
@@ -245,6 +245,7 @@ Common causes:
 | Morph freshness failure | Artefacts were generated from a different Morph commit. | Rerun the gate from a clean current commit. |
 | Missing Fiber result file | A strict Fiber suite or funding case was skipped. | Use the default `FIBER_BRUNO_SUITES` and `FIBER_FUNDING_TX_VERIFICATION_CASES`. |
 | Missing Fiber log marker | The Bruno suite did not produce the required behavioural evidence. | Inspect the suite log and update the test or marker deliberately. |
+| `external-funding-open` balance/readiness failure | Current Fiber Bruno balance deltas can be stale even when open/sign/submit/close/inspect requests succeed. | The coexistence harness accepts only the known stale shape and still requires the critical request markers. |
 
 ## Narrow Debug Runs
 

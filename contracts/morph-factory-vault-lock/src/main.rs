@@ -22,6 +22,7 @@ use morph_script_common::{
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
     WitnessEnvelope, read_u128, verify_factory_reduced_splice_update, verify_factory_splice_update,
+    verify_factory_state_signatures, verify_reduced_factory_exit_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -71,6 +72,8 @@ fn main() -> Result<()> {
             if new_header.non_interference_digest() != witness.exit_digest().as_slice() {
                 return Err(ScriptError::FactoryLocalExitMismatch);
             }
+            let factory_signature = witness.factory_signature()?;
+            verify_factory_state_signatures(&new_header, &factory_signature)?;
             let child_release = validate_child_vault(
                 witness.vault_output_index(),
                 witness.vault_lock_hash(),
@@ -84,6 +87,7 @@ fn main() -> Result<()> {
             if new_header.non_interference_digest() != digest.as_slice() {
                 return Err(ScriptError::FactoryReducedProofMismatch);
             }
+            verify_reduced_factory_exit_update(&old_header, &new_header, &witness)?;
             let child_release = validate_child_vault(
                 witness.vault_output_index(),
                 witness.vault_lock_hash(),
