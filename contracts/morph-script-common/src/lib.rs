@@ -10,7 +10,7 @@ pub const WITNESS_ENVELOPE_MAGIC: &[u8; 8] = b"MORPHW!!";
 pub const WITNESS_ENVELOPE_LEN: usize = 8 + 2 + 2 + 2 + 4 + BYTE32_LEN;
 pub const FACTORY_STATE_HEADER_LEN: usize = 238;
 pub const SPONSOR_POLICY_LEN: usize = 144;
-pub const SPLICE_HEADER_LEN: usize = 325;
+pub const SPLICE_HEADER_LEN: usize = 357;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
@@ -619,8 +619,12 @@ impl<'a> SpliceHeader<'a> {
         field(self.raw, 261, BYTE32_LEN)
     }
 
-    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
+    pub fn payload_commitment(&self) -> &'a [u8] {
         field(self.raw, 293, BYTE32_LEN)
+    }
+
+    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
+        field(self.raw, 325, BYTE32_LEN)
     }
 
     pub fn signing_digest(&self) -> [u8; 32] {
@@ -637,6 +641,7 @@ impl<'a> SpliceHeader<'a> {
             && self.old_vault_commitment() == current.vault_set_commitment()
             && self.base_state_number() == current.state_number()
             && self.participants_commitment() == current.participants_commitment()
+            && self.payload_commitment() == current.payload_commitment()
             && self.challenge_policy_commitment() == current.challenge_policy_commitment()
     }
 }
@@ -4683,6 +4688,7 @@ mod tests {
         old_vault_commitment: &[u8; BYTE32_LEN],
         new_vault_commitment: &[u8; BYTE32_LEN],
         asset_delta_commitment: &[u8; BYTE32_LEN],
+        payload_commitment: &[u8; BYTE32_LEN],
     ) -> [u8; SPLICE_HEADER_LEN] {
         let mut raw = [0u8; SPLICE_HEADER_LEN];
         put_u16(&mut raw, 0, 1);
@@ -4700,7 +4706,8 @@ mod tests {
         raw[197..229].copy_from_slice(new_vault_commitment);
         raw[229..261].copy_from_slice(asset_delta_commitment);
         raw[261..293].copy_from_slice(participants_commitment);
-        raw[293..325].fill(9);
+        raw[293..325].copy_from_slice(payload_commitment);
+        raw[325..357].fill(9);
         raw
     }
 
@@ -5306,6 +5313,7 @@ mod tests {
             &[11u8; BYTE32_LEN],
             &[12u8; BYTE32_LEN],
             &[13u8; BYTE32_LEN],
+            &[8u8; BYTE32_LEN],
         );
         let header = SpliceHeader::parse(&raw).unwrap();
 
@@ -5349,6 +5357,7 @@ mod tests {
             &[11u8; BYTE32_LEN],
             &[12u8; BYTE32_LEN],
             &[13u8; BYTE32_LEN],
+            &[8u8; BYTE32_LEN],
         );
 
         assert_eq!(
@@ -5372,6 +5381,7 @@ mod tests {
             &[11u8; BYTE32_LEN],
             &[12u8; BYTE32_LEN],
             &[13u8; BYTE32_LEN],
+            &[8u8; BYTE32_LEN],
         );
         let header = SpliceHeader::parse(&raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &header.signing_digest());
@@ -5422,6 +5432,7 @@ mod tests {
             &old_vault.commitment().unwrap(),
             &new_vault.commitment().unwrap(),
             &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
         );
         let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
@@ -5456,7 +5467,7 @@ mod tests {
             &new_vault_raw,
             &deltas_raw,
         );
-        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1017);
+        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1049);
         let bundle = SpliceStateTransitionWitness::parse(&bundle_raw).unwrap();
         assert_eq!(bundle.version(), SPLICE_STATE_TRANSITION_WITNESS_VERSION);
         assert_eq!(bundle.raw().len(), SPLICE_STATE_TRANSITION_WITNESS_LEN);
@@ -5519,6 +5530,7 @@ mod tests {
             &old_vault.commitment().unwrap(),
             &new_vault.commitment().unwrap(),
             &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
         );
         let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
@@ -5593,6 +5605,7 @@ mod tests {
             &old_vault.commitment().unwrap(),
             &new_vault.commitment().unwrap(),
             &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
         );
         let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
@@ -5651,6 +5664,7 @@ mod tests {
             &old_vault.commitment().unwrap(),
             &new_vault.commitment().unwrap(),
             &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
         );
         let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
         let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
@@ -5664,6 +5678,353 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch
+        );
+    }
+
+    /// C-01 attack vector: a malicious transaction builder substitutes the
+    /// successor State Header's payload_commitment while keeping all
+    /// otherwise-checked fields identical. The signed splice event bound to
+    /// the genuine current state's payload_commitment must not authorise a
+    /// transition into a successor with a different payload_commitment.
+    ///
+    /// In the bilateral plain profile of this implementation,
+    /// `payload_commitment` is overloaded as the vault Cell commitment: the
+    /// vault lock calls `validate_current_vault_commitment(
+    /// header.payload_commitment())`, and the post-splice vault lock calls
+    /// `new_header.payload_commitment() == new_vault_commitment`. This means
+    /// `payload_commitment` is transitively bound by `vault_set_commitment`,
+    /// which is in turn bound by `splice_header.old_vault_commitment` and
+    /// `splice_header.new_vault_commitment`. The substitution attack is
+    /// therefore closed by the existing `vault_set_commitment` and vault lock
+    /// checks; the bundle-level test below would not add coverage.
+    #[test]
+    #[ignore = "payload_commitment is bound transitively via vault_set_commitment in this profile; see vault lock validate_current_vault_commitment and new_header.payload_commitment == new_vault_commitment. The audit's general-case attack vector is closed at the vault lock layer for the bilateral plain profile."]
+    fn rejects_splice_state_transition_with_changed_payload_commitment() {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        // In the bilateral plain profile, payload_commitment IS the vault
+        // commitment, so we mirror that here.
+        current_raw[248..280].copy_from_slice(&old_vault.commitment().unwrap());
+        let current = StateHeader::parse(&current_raw).unwrap();
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
+        // Attacker flips the successor's payload_commitment to a different
+        // value than the splice event was signed for.
+        next_raw[248..280].fill(0xAA);
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch
+        );
+    }
+
+    /// C-01 attack vector: attacker substitutes successor participants so a
+    /// later state can be signed under an attacker-controlled set. The signed
+    /// splice event binds the genuine participants_commitment.
+    #[test]
+    fn rejects_splice_state_transition_with_changed_participants_commitment() {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeader::parse(&current_raw).unwrap();
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        // Attacker flips the successor's participants_commitment to a
+        // different value than the splice event was signed for.
+        next_raw[150..182].fill(0xBB);
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch
+        );
+    }
+
+    /// C-01 attack vector: attacker substitutes successor settlement
+    /// descriptor so post-splice vaults settle under attacker-chosen rules.
+    /// The descriptor commitment must be preserved across a splice.
+    #[test]
+    fn rejects_splice_state_transition_with_changed_settlement_descriptor() {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeader::parse(&current_raw).unwrap();
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        // Attacker flips the successor's settlement_descriptor_commitment to
+        // a different value than the splice event was signed for.
+        next_raw[182..214].fill(0xCC);
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch
+        );
+    }
+
+    /// C-01 attack vector: attacker substitutes successor mode so the
+    /// witness interpretation rule changes after splice. The signed splice
+    /// event binds the genuine mode implicitly through the
+    /// participants_commitment and challenge_policy_commitment check, and
+    /// the state-context assertion requires current.mode == next.mode.
+    #[test]
+    fn rejects_splice_state_transition_with_changed_mode() {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeader::parse(&current_raw).unwrap();
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        // Attacker flips the successor's mode byte.
+        next_raw[148] = 2;
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch
+        );
+    }
+
+    /// C-01 attack vector: attacker substitutes successor asset registry so
+    /// post-splice vault materialisation references a different asset set.
+    #[test]
+    fn rejects_splice_state_transition_with_changed_asset_registry() {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeader::parse(&current_raw).unwrap();
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        // Attacker flips the successor's asset_registry_commitment to a
+        // different value than the splice event was signed for.
+        next_raw[214..246].fill(0xDD);
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(

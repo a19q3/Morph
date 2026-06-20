@@ -313,6 +313,7 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         new_vault_commitment: vault_descriptor_commitment(&new_vault),
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment: current_state.header.participants_commitment,
+        payload_commitment: current_state.header.payload_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);

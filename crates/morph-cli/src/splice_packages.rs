@@ -122,6 +122,7 @@ pub struct StoredSplicePackage {
     pub new_vault_commitment: String,
     pub asset_delta_commitment: String,
     pub participants_commitment: String,
+    pub payload_commitment: String,
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
@@ -213,6 +214,7 @@ impl StoredSplicePackage {
             new_vault_commitment: hex_prefixed(&transition.header.new_vault_commitment),
             asset_delta_commitment: hex_prefixed(&transition.header.asset_delta_commitment),
             participants_commitment: hex_prefixed(&transition.header.participants_commitment),
+            payload_commitment: hex_prefixed(&transition.header.payload_commitment),
             challenge_policy_commitment: hex_prefixed(
                 &transition.header.challenge_policy_commitment,
             ),
@@ -474,6 +476,7 @@ impl StoredSplicePackage {
             new_vault_commitment: hex32_bytes(&self.new_vault_commitment)?,
             asset_delta_commitment: hex32_bytes(&self.asset_delta_commitment)?,
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
+            payload_commitment: hex32_bytes(&self.payload_commitment)?,
             challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
         };
         Ok(SpliceTransition {
@@ -815,6 +818,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_commitment: vault_descriptor_commitment(&new_vault),
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment,
+        payload_commitment: current_state.header.payload_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let digest = header.signing_digest();
@@ -850,6 +854,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_commitment: hex_prefixed(&header.new_vault_commitment),
         asset_delta_commitment: hex_prefixed(&header.asset_delta_commitment),
         participants_commitment: hex_prefixed(&header.participants_commitment),
+        payload_commitment: hex_prefixed(&header.payload_commitment),
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
@@ -1279,7 +1284,8 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
     raw[197..229].copy_from_slice(&header.new_vault_commitment);
     raw[229..261].copy_from_slice(&header.asset_delta_commitment);
     raw[261..293].copy_from_slice(&header.participants_commitment);
-    raw[293..325].copy_from_slice(&header.challenge_policy_commitment);
+    raw[293..325].copy_from_slice(&header.payload_commitment);
+    raw[325..357].copy_from_slice(&header.challenge_policy_commitment);
     raw
 }
 
@@ -1762,7 +1768,7 @@ mod tests {
         assert_eq!(package.asset_deltas[0].external_input, 25);
         assert_eq!(package.asset_deltas[0].withdrawal, 0);
         assert!(package.withdrawals.is_empty());
-        assert_eq!(summary.contract_witness_len, 1017);
+        assert_eq!(summary.contract_witness_len, SPLICE_STATE_TRANSITION_WITNESS_LEN);
         assert_contract_witness_verifies(&package);
     }
 
@@ -1787,7 +1793,7 @@ mod tests {
         assert_eq!(package.asset_deltas[0].old_amount, 100);
         assert_eq!(package.asset_deltas[0].new_amount, 70);
         assert_eq!(package.withdrawals[0].amount, 30);
-        assert_eq!(summary.contract_witness_len, 1017);
+        assert_eq!(summary.contract_witness_len, SPLICE_STATE_TRANSITION_WITNESS_LEN);
         assert_contract_witness_verifies(&package);
     }
 

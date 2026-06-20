@@ -2678,7 +2678,7 @@ pub fn save_factory_splice_package(
         kind: splice_kind,
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: [0u8; BYTE32_LEN],
-        participants_commitment: [0u8; BYTE32_LEN],
+        participants_commitment: expected_participants,
     };
     let transition = FactorySpliceTransition {
         header,
@@ -2917,7 +2917,7 @@ pub fn save_factory_reduced_splice_package(
         kind: splice_kind,
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: [0u8; BYTE32_LEN],
-        participants_commitment: [0u8; BYTE32_LEN],
+        participants_commitment: expected_participants,
     };
     let update = FactorySingleRightMerkleUpdate {
         before_root: old_state_root,
@@ -6629,6 +6629,7 @@ pub fn save_splice_package(
         new_vault_commitment: [0u8; BYTE32_LEN],
         asset_delta_commitment: [0u8; BYTE32_LEN],
         participants_commitment: current_state.header.participants_commitment,
+        payload_commitment: current_state.header.payload_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     header.old_vault_commitment = vault_descriptor_commitment(&old_vault);

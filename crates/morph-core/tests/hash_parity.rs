@@ -130,6 +130,7 @@ fn splice_header_signing_digest_matches_script_common() {
         new_vault_commitment: bytes32(10),
         asset_delta_commitment: bytes32(11),
         participants_commitment: bytes32(12),
+        payload_commitment: bytes32(14),
         challenge_policy_commitment: bytes32(13),
     };
     let mut raw = [0u8; wire::SPLICE_HEADER_LEN];
@@ -148,7 +149,8 @@ fn splice_header_signing_digest_matches_script_common() {
     raw[197..229].copy_from_slice(&header.new_vault_commitment);
     raw[229..261].copy_from_slice(&header.asset_delta_commitment);
     raw[261..293].copy_from_slice(&header.participants_commitment);
-    raw[293..325].copy_from_slice(&header.challenge_policy_commitment);
+    raw[293..325].copy_from_slice(&header.payload_commitment);
+    raw[325..357].copy_from_slice(&header.challenge_policy_commitment);
     let wire_header = wire::SpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());
