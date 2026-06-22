@@ -105,8 +105,8 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
             Err(_) => return Err(ScriptError::Encoding),
         }
     }
-    if let Some((state_number, funding_anchor)) = sponsored_state {
-        ensure_publication_backed_by_state_type_input(policy, state_number, &funding_anchor)?;
+    if let Some((_, funding_anchor)) = sponsored_state {
+        ensure_publication_backed_by_state_type_input(policy, &funding_anchor)?;
         Ok(())
     } else {
         Err(ScriptError::StateCellMissing)
@@ -116,7 +116,6 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
 #[cfg(target_arch = "riscv64")]
 fn ensure_publication_backed_by_state_type_input(
     policy: &SponsorPolicy,
-    state_number: u64,
     output_funding_anchor: &[u8],
 ) -> Result<()> {
     let mut index = 0;
@@ -139,10 +138,7 @@ fn ensure_publication_backed_by_state_type_input(
             Err(_) => return Err(ScriptError::Encoding),
         }
     }
-    if policy.min_state_number() != 0 || state_number != 0 {
-        return Err(ScriptError::SponsorStateOutOfRange);
-    }
-    Ok(())
+    Err(ScriptError::SponsorStateOutOfRange)
 }
 
 #[cfg(target_arch = "riscv64")]

@@ -753,7 +753,8 @@ pub fn validate_factory_splice_authorization(
         .iter()
         .map(|signature| signature.pubkey_sec1.as_slice())
         .collect();
-    if !pubkeys.windows(2).all(|window| window[0] < window[1]) {
+    let unique_pubkeys = pubkeys.iter().copied().collect::<BTreeSet<_>>();
+    if unique_pubkeys.len() != pubkeys.len() {
         return Err(MorphError::FactorySpliceParticipantSetMismatch);
     }
     if participants_commitment(witness.threshold, &pubkeys) != header.participants_commitment {

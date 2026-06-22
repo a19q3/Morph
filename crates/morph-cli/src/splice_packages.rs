@@ -1768,7 +1768,10 @@ mod tests {
         assert_eq!(package.asset_deltas[0].external_input, 25);
         assert_eq!(package.asset_deltas[0].withdrawal, 0);
         assert!(package.withdrawals.is_empty());
-        assert_eq!(summary.contract_witness_len, SPLICE_STATE_TRANSITION_WITNESS_LEN);
+        assert_eq!(
+            summary.contract_witness_len,
+            SPLICE_STATE_TRANSITION_WITNESS_LEN
+        );
         assert_contract_witness_verifies(&package);
     }
 
@@ -1793,7 +1796,10 @@ mod tests {
         assert_eq!(package.asset_deltas[0].old_amount, 100);
         assert_eq!(package.asset_deltas[0].new_amount, 70);
         assert_eq!(package.withdrawals[0].amount, 30);
-        assert_eq!(summary.contract_witness_len, SPLICE_STATE_TRANSITION_WITNESS_LEN);
+        assert_eq!(
+            summary.contract_witness_len,
+            SPLICE_STATE_TRANSITION_WITNESS_LEN
+        );
         assert_contract_witness_verifies(&package);
     }
 

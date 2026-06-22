@@ -6153,13 +6153,13 @@ mod tests {
         let schema = include_str!("../../../schemas/morph.mol");
         for expected in [
             "StateHeader: 314 bytes",
-            "SpliceHeader: 325 bytes",
+            "SpliceHeader: 357 bytes",
             "SpliceSignatureWitness: 198 bytes",
             "SpliceVaultAssetAmount: 49 bytes",
             "SpliceVaultDescriptor: 132 bytes",
             "SpliceAssetDelta: 113 bytes",
             "SpliceAssetDeltas: 228 bytes",
-            "SpliceStateTransitionWitness: 1017 bytes",
+            "SpliceStateTransitionWitness: 1049 bytes",
             "BilateralSignatureWitness: 198 bytes",
             "BilateralCkbSettlementDescriptor: 84 bytes",
             "BilateralCkbXudtSettlementDescriptor: 148 bytes",

@@ -12,13 +12,13 @@
 // part of the audited transaction shape:
 //
 // - StateHeader: 314 bytes
-// - SpliceHeader: 325 bytes
+// - SpliceHeader: 357 bytes
 // - SpliceSignatureWitness: 198 bytes
 // - SpliceVaultAssetAmount: 49 bytes
 // - SpliceVaultDescriptor: 132 bytes
 // - SpliceAssetDelta: 113 bytes
 // - SpliceAssetDeltas: 228 bytes
-// - SpliceStateTransitionWitness: 1017 bytes
+// - SpliceStateTransitionWitness: 1049 bytes
 // - FactoryStateHeader: 238 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness: 262 bytes
@@ -112,6 +112,7 @@ struct SpliceHeader {
     new_vault_commitment: Byte32,
     asset_delta_commitment: Byte32,
     participants_commitment: Byte32,
+    payload_commitment: Byte32,
     challenge_policy_commitment: Byte32,
 }
 

@@ -101,8 +101,12 @@ splice-time `payload_commitment` signing rule.
      `challenge_policy_commitment` to 325.
    - `SpliceHeader::matches_current_state` now also checks
      `splice.payload_commitment == current.payload_commitment`.
-   - `state_context_matches_splice_next` now also checks
-     `current.payload_commitment == next.payload_commitment`.
+   - `state_context_matches_splice_next` intentionally does not compare
+     `current.payload_commitment` and `next.payload_commitment` directly under
+     the bilateral plain profile, because that field tracks the vault Cell
+     commitment and therefore changes across splice-in/out. The old payload is
+     signed by the splice header; the new payload is bound by the vault lock's
+     `new_header.payload_commitment == new_vault_commitment` check.
 
 2. `crates/morph-core/src/types.rs`:
    - `SpliceHeader` struct gains `payload_commitment: Bytes32`.
