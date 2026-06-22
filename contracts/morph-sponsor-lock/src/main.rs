@@ -12,7 +12,9 @@ use ckb_std::high_level::{
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
-use morph_script_common::{PHASE_SETTLING, Result, ScriptError, SponsorPolicy, StateHeader};
+use morph_script_common::{
+    BYTE32_LEN, PHASE_SETTLING, Result, ScriptError, SponsorPolicy, StateHeader,
+};
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -68,14 +70,14 @@ fn validate_script_enforced_policy(policy: &SponsorPolicy) -> Result<()> {
 
 #[cfg(target_arch = "riscv64")]
 fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
-    let mut found = false;
+    let mut sponsored_state: Option<(u64, [u8; BYTE32_LEN])> = None;
     let mut index = 0;
     loop {
         match load_cell_data(index, Source::Output) {
             Ok(data) => {
                 if let Ok(header) = StateHeader::parse(&data) {
                     if header.channel_id() == policy.channel_id() {
-                        if found {
+                        if sponsored_state.is_some() {
                             return Err(ScriptError::StateCellAmbiguous);
                         }
                         if header.phase() != PHASE_SETTLING {
@@ -92,7 +94,9 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
                         if type_hash.as_slice() != policy.publication_state_type_hash() {
                             return Err(ScriptError::StateTypeMismatch);
                         }
-                        found = true;
+                        let mut funding_anchor = [0u8; BYTE32_LEN];
+                        funding_anchor.copy_from_slice(header.funding_anchor());
+                        sponsored_state = Some((header.state_number(), funding_anchor));
                     }
                 }
                 index += 1;
@@ -101,8 +105,8 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
             Err(_) => return Err(ScriptError::Encoding),
         }
     }
-    if found {
-        ensure_publication_backed_by_state_type_input(policy)?;
+    if let Some((_, funding_anchor)) = sponsored_state {
+        ensure_publication_backed_by_state_type_input(policy, &funding_anchor)?;
         Ok(())
     } else {
         Err(ScriptError::StateCellMissing)
@@ -110,12 +114,21 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn ensure_publication_backed_by_state_type_input(policy: &SponsorPolicy) -> Result<()> {
+fn ensure_publication_backed_by_state_type_input(
+    policy: &SponsorPolicy,
+    output_funding_anchor: &[u8],
+) -> Result<()> {
     let mut index = 0;
     loop {
         match load_cell_type_hash(index, Source::Input) {
             Ok(Some(type_hash)) => {
                 if type_hash.as_slice() == policy.publication_state_type_hash() {
+                    let data =
+                        load_cell_data(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+                    let header = StateHeader::parse(&data)?;
+                    if header.funding_anchor() != output_funding_anchor {
+                        return Err(ScriptError::FundingAnchorMismatch);
+                    }
                     return Ok(());
                 }
                 index += 1;
@@ -125,10 +138,7 @@ fn ensure_publication_backed_by_state_type_input(policy: &SponsorPolicy) -> Resu
             Err(_) => return Err(ScriptError::Encoding),
         }
     }
-    if policy.min_state_number() != 0 {
-        return Err(ScriptError::SponsorStateOutOfRange);
-    }
-    Ok(())
+    Err(ScriptError::SponsorStateOutOfRange)
 }
 
 #[cfg(target_arch = "riscv64")]

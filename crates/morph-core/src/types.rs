@@ -499,6 +499,7 @@ pub struct SpliceHeader {
     pub new_vault_commitment: Bytes32,
     pub asset_delta_commitment: Bytes32,
     pub participants_commitment: Bytes32,
+    pub payload_commitment: Bytes32,
     pub challenge_policy_commitment: Bytes32,
 }
 

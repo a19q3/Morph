@@ -1,151 +1,123 @@
 # Morph Channel
 
-Morph Channel is a CKB-native payment-channel and factory-channel prototype.
-It explores how channel state, vault assets, sponsored publication, and factory
-reserve rights can be represented directly as CKB Cells without changing CKB
-consensus.
+Morph Channel is a CKB-native channel prototype. It shows how two people, or a
+small factory of people, can move channel state off chain while CKB keeps the
+enforceable evidence on chain.
 
-The repository is not mainnet software. It is a devnet implementation and
-research workbench with executable protocol checks, CKB script tests, local
-smoke tests, and stateful acceptance reports.
+The short version is:
 
-## The Idea
+- channel value stays in vault cells;
+- the latest enforceable state is carried by a state cell;
+- publication fees are paid by sponsor cells, not by channel balances;
+- newer signed state can replace older settling state before finalisation;
+- factories can hold shared reserve rights and materialise child channels.
 
-CKB already gives us programmable Cells, lock scripts, type scripts, capacity,
-and finality. Morph Channel uses those primitives to build a channel system in
-which the chain stores only the latest enforceable evidence, while most state
-movement remains off chain.
+This is devnet software and a research implementation, not mainnet
+infrastructure. The useful claim today is narrower: the repository contains
+executable protocol checks, CKB script tests, local devnet flows, and stateful
+acceptance reports for the channel and factory paths it implements.
 
-The core model is simple:
+## Why This Exists
+
+In many channel systems, the object that holds value and the object that proves
+the latest state are tightly coupled. CKB lets Morph separate those jobs.
 
 ```mermaid
 flowchart LR
-    A["Participants"] <-->|"signed states"| B["Off-chain updates"]
-    B --> S["State Cell<br/>latest enforceable evidence"]
-    S --> V["Vault Cell<br/>channel assets"]
-    P["Sponsor Cell<br/>fee budget"] --> S
-    V --> O["Settlement outputs"]
+    U["Alice and Bob"] <-->|"signed updates"| O["Off-chain state"]
+    O --> S["State Cell<br/>latest enforceable evidence"]
+    S --> V["Vault Cell<br/>channel value"]
+    P["Sponsor Cell<br/>publication fees"] --> S
+    V --> W["Withdrawal outputs"]
 ```
 
-- a **State Cell** is the public pointer to the channel's latest on-chain
-  status;
-- a **Vault Cell** holds the assets that the channel controls;
-- participants sign newer states off chain;
-- a participant or watchtower can publish a newer signed state when needed;
-- the vault can be finalised only against the current settling state;
-- sponsor capacity can pay publication fees without letting the sponsor steal
-  channel value;
-- factory cells can hold shared reserve rights and materialise child channels
-  when a participant exits or repartitions reserve.
+This separation is the core idea from the paper:
 
-The design goal is not to hide all complexity. It is to make each boundary
-auditable: who signed, which state is current, which vault assets are conserved,
-which reserve right changed, and which script is responsible for rejecting an
-invalid transition.
+- the vault protects user value;
+- the state cell says which state can settle that value;
+- sponsor funds pay for publication and fee bumping;
+- factory state tracks shared reserve rights without exposing every unrelated
+  participant detail on every local action.
 
-## What Is Implemented
+The design tries to make disputes boring. A script should be able to answer
+simple questions: who signed this state, is it newer, does it match the current
+funding context, do the vault outputs match the descriptor, and did any channel
+value leak into fees or sponsor change?
 
-The current factory witness design uses `WitnessEnvelope`. Factory scripts
-dispatch by envelope kind, bounded body length, and checked body digest. Some
-body and JSON schema names still end in `current`; those names identify fixed-layout
-body schemas, not the current authorisation boundary.
+## What Works Today
 
 Implemented locally:
 
-- bilateral CKB channels with state publication, supersession, relative-since
-  vault finalisation, and sponsored publication;
-- CKB+xUDT settlement through the same State Cell and Vault Cell authority
-  model;
-- splice-in and splice-out flows that move a channel across funding anchors
-  while preserving signed state semantics;
+- bilateral CKB channels: open, publish, supersede, finalise, and sponsored
+  publication;
+- CKB and xUDT settlement through the same state/vault authority model;
+- splice-in and splice-out, so a channel can be resized without starting over;
 - watchtower-style package publication with cursor persistence, policy checks,
   JSONL alerts, and optional webhook alerts;
-- conservative factory state updates signed by all factory participants;
+- conservative factory updates signed by all factory participants;
 - factory local exits that materialise child bilateral channels;
-- bounded reduced-rights, reduced-exit, sparse-Merkle update, and reduced-splice
-  factory proof bodies carried by `WitnessEnvelope`;
-- local devnet smoke reports and stateful acceptance reports that bind protocol
-  scenarios to transaction evidence, cycle budgets, and expected negative-path
-  failures.
+- reduced factory paths for bounded rights updates, exits, sparse-Merkle
+  updates, and splices, carried by `WitnessEnvelope`;
+- devnet smoke and stateful acceptance reports that bind scenarios to real
+  transactions, cycle estimates, and expected negative-path failures.
 
-Open release gates remain: external review, mainnet-like fee and reorg
-evidence, release/CI supply-chain revalidation, operational runbooks,
-multi-operator watchtower evidence, and an explicit value-limit policy.
+Still not claimed:
 
-## Business Flow
+- mainnet readiness;
+- independent external review;
+- long-running multi-operator watchtower evidence;
+- production fee and reorganisation measurements;
+- release artefact and supply-chain sign-off;
+- real-asset value limits.
+
+## Main Business Flows
 
 ```mermaid
 flowchart LR
-    O["Open"] --> U["Update off chain"]
-    U --> P["Publish if needed"]
-    P --> F["Finalise vault"]
-    U --> S["Splice"]
-    S --> U
-    O --> X["Factory reserve"]
-    X --> C["Child channel"]
+    A["Open"] --> B["Update off chain"]
+    B --> C["Publish if needed"]
+    C --> D["Finalise / withdraw"]
+    B --> E["Splice / resize"]
+    E --> B
+    A --> F["Factory reserve"]
+    F --> G["Child channel"]
 ```
 
-### 1. Open A Channel
+### Open A Channel
 
-Alice and Bob create a State Cell and a Vault Cell. The State Cell records the
-channel identity, state number, funding anchor, vault-set commitment, settlement
-descriptor commitment, and participant authorisation context. The Vault Cell
-holds the actual CKB or xUDT assets.
+Opening creates a State Cell and a Vault Cell. From the user's point of view,
+this is the deposit step: funds move from a normal wallet cell into cells
+controlled by channel rules.
 
-From a user perspective, this is the deposit step: funds become controlled by
-channel rules rather than by a normal wallet lock.
+### Update Off Chain
 
-### 2. Move State Off Chain
+Participants exchange signed states. Most updates do not touch CKB. A higher
+state number beats a lower one when a dispute reaches the chain.
 
-Participants exchange signed state updates. A newer state number supersedes an
-older one. Most updates do not touch the chain.
+### Publish If Needed
 
-This is the ordinary payment-channel experience: the business state changes
-quickly, while the chain is only needed for opening, dispute/publication,
-splicing, and final settlement.
+If cooperation fails, a participant or watchtower can publish a saved package.
+The transaction may use sponsor capacity for fees, but sponsor funds do not
+become channel value and channel value does not become sponsor change.
 
-### 3. Publish When Necessary
+### Finalise And Withdraw
 
-If the channel needs to settle, or if a participant must prove the latest known
-state, a signed package can be published to a new State Cell. Sponsor capacity
-may pay the transaction fee, but the sponsor script enforces strict budget and
-clean-change rules.
+After the relative `since` delay, the vault can be spent only against the
+current settling State Cell and its settlement descriptor. This is the withdrawal
+step.
 
-Watchtower tooling can monitor confirmed State Cells and publish matching saved
-packages. It tracks the derived funding context id, with funding-anchor fallback
-for older package stores, so stale packages are refused after resize operations.
+### Resize With Splice
 
-### 4. Finalise The Vault
+Splice-in adds value and splice-out removes value while keeping the logical
+channel identity. Old watch packages must not be reused after a splice unless
+their signed funding context still matches the live state track.
 
-After the required relative `since` window, the Vault Cell can be spent only if
-it matches the current settling State Cell and the committed settlement
-descriptor. CKB and xUDT settlement paths both check exact recipient and asset
-amount semantics.
-
-This is the withdrawal step: channel-controlled assets return to ordinary
-recipient cells according to the latest enforceable state.
-
-### 5. Splice Without Restarting The Channel
-
-A splice changes the funding anchor and vault set while preserving the channel's
-logical identity and state progression. Splice-in adds assets; splice-out
-withdraws assets. The old and new State/Vault pairs are linked by signed
-transition evidence.
-
-In business terms, users can resize the channel without closing and reopening
-the whole relationship.
-
-### 6. Use A Factory For Many Child Channels
+### Use A Factory
 
 A factory groups reserve rights under a Factory State Cell and Factory Vault
-Cell. Conservative updates require all factory participants. Reduced paths prove
-that only a bounded touched right changed while the rest of the factory state
-remained committed.
-
-Factory exits can materialise child bilateral channels. Factory splice paths
-can repartition CKB or xUDT reserve. The current contract-facing witness surface
-uses `WitnessEnvelope`, so the scripts first authenticate the envelope and
-then parse the specific fixed-layout body.
+Cell. Conservative updates require all participants. Reduced paths are allowed
+only when the proof shows that a bounded local right changed and unrelated
+rights stayed committed.
 
 ## Repository Layout
 
@@ -161,9 +133,9 @@ scripts/               Devnet, smoke, and environment helpers.
 
 Important scripts:
 
-- `morph-state-type`: one-live-State-Cell progression and signed state checks;
-- `morph-state-lock`: State Cell lock boundary;
-- `morph-vault-lock`: vault settlement and splice vault checks;
+- `morph-state-type`: state-cell progression and signed-state checks;
+- `morph-state-lock`: state-cell lock boundary;
+- `morph-vault-lock`: vault settlement and splice checks;
 - `morph-sponsor-lock`: bounded sponsor fee spending;
 - `morph-factory-type`: factory state progression, signatures, reduced proofs,
   exits, and envelope dispatch;
@@ -208,20 +180,19 @@ make fiber-morph-devnet-preflight
 make fiber-morph-devnet-acceptance
 ```
 
-The generated reports live under `target/devnet-smoke/` and
-`target/devnet-stateful-e2e/`. The `latest` symlink points to the most recent
+Reports are written under `target/devnet-smoke/` and
+`target/devnet-stateful-e2e/`. The `latest` symlink points to the newest
 successful run when it is safe to refresh.
 
-The Fiber/Morph gate starts Fiber's local devnet stack, runs Morph's strict
-stateful channel/factory matrix on Fiber's CKB RPC, and then runs Fiber channel
-acceptance on the same devnet. See
+The Fiber/Morph acceptance path starts Fiber's local CKB devnet stack, runs
+Morph's stateful channel/factory matrix against that CKB RPC, and then runs
+Fiber channel acceptance on the same devnet. See
 [fiber-morph-devnet-acceptance.md](docs/fiber-morph-devnet-acceptance.md) and
-the operator runbook
 [fiber-morph-devnet-runbook.md](docs/fiber-morph-devnet-runbook.md).
 
 ## Common CLI Workflows
 
-Generate and validate reusable state and factory packages:
+Generate and validate factory packages:
 
 ```sh
 cargo run -p morph-cli -- print-factory-fixture > target/factory-update.json
@@ -240,7 +211,7 @@ cargo run -p morph-cli -- validate-factory-merkle-update-package \
   target/factory-merkle-update.json --json
 ```
 
-Generate splice packages:
+Generate and validate splice packages:
 
 ```sh
 cargo run -p morph-cli -- print-splice-fixture --kind splice-in \
@@ -280,10 +251,9 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 
 ## Reading Guide
 
-- [Devnet guide](docs/devnet.md): local node setup, smoke paths, report
-  generation, and assertion gates.
+- [Devnet guide](docs/devnet.md): local node setup, smoke paths, and reports.
 - [Implementation notes](docs/implementation.md): protocol objects, script
-  boundary, factory witness envelope, and invariant coverage.
+  boundaries, and invariant coverage.
 - [Roadmap](docs/roadmap.md): milestone status and deferred work.
 - [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
   production or real-assets claim.
@@ -294,11 +264,10 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 
 ## Maturity
 
-Morph Channel should be read as a serious devnet research implementation, not
-as production infrastructure. The useful evidence today is local and
-executable: invariant tests, CKB script tests, smoke reports, stateful
-acceptance reports, and negative-path assertions.
+Morph Channel should be read as a serious devnet research implementation. It is
+not production infrastructure yet.
 
-The next maturity step is external validation: independent review, repeated
-devnet runs under realistic fee and reorg conditions, CI-backed release
-artefacts, operational runbooks, and conservative value limits.
+The bar for that claim is concrete: independent review, repeated devnet and
+testnet runs under realistic fees and reorg conditions, CI-backed release
+artefacts, operator runbooks, multi-operator watchtower evidence, and explicit
+value limits.

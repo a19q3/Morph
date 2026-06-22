@@ -313,6 +313,7 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         new_vault_commitment: vault_descriptor_commitment(&new_vault),
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment: current_state.header.participants_commitment,
+        payload_commitment: current_state.header.payload_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
@@ -738,6 +739,26 @@ fn splice_rejects_invalid_signature() {
 }
 
 #[test]
+fn state_authorization_rejects_unsupported_signature_scheme() {
+    let mut header = header(2, Phase::Settling);
+    header.signature_scheme_id = 2;
+    let authorization = authorization_for(&mut header);
+
+    let err = validate_state_authorization(&header, &authorization).unwrap_err();
+    assert_eq!(err, MorphError::UnsupportedSignatureScheme);
+}
+
+#[test]
+fn splice_authorization_rejects_unsupported_signature_scheme() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.header.signature_scheme_id = 2;
+    splice.witness = splice_witness_for(&mut splice.header);
+
+    let err = validate_splice_authorization(&splice.header, &splice.witness).unwrap_err();
+    assert_eq!(err, MorphError::SpliceUnsupportedSignatureScheme);
+}
+
+#[test]
 fn accepts_valid_factory_splice_in_transition() {
     let splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
 
@@ -803,6 +824,15 @@ fn factory_splice_rejects_unsupported_signature_scheme() {
 
     let err = validate_factory_splice_transition(&splice).unwrap_err();
     assert_eq!(err, MorphError::FactorySpliceUnsupportedSignatureScheme);
+}
+
+#[test]
+fn factory_splice_rejects_unsorted_pubkeys() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness.signatures.reverse();
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceParticipantSetMismatch);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1338,24 +1338,22 @@ impl StoredFactorySplicePackage {
             "factory splice participant_keys do not match update participants"
         );
 
+        let witness_signatures = self
+            .signatures
+            .iter()
+            .map(|signature| {
+                Ok(ParticipantSignature {
+                    pubkey_sec1: decode_hex_exact(&signature.pubkey_sec1, 33, "pubkey_sec1")?,
+                    signature: decode_hex_exact(&signature.signature, 64, "signature")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         let transition = FactorySpliceTransition {
             header: self.header()?,
             witness: SpliceWitness {
                 threshold: self.signature_threshold,
-                signatures: self
-                    .signatures
-                    .iter()
-                    .map(|signature| {
-                        Ok(ParticipantSignature {
-                            pubkey_sec1: decode_hex_exact(
-                                &signature.pubkey_sec1,
-                                33,
-                                "pubkey_sec1",
-                            )?,
-                            signature: decode_hex_exact(&signature.signature, 64, "signature")?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
+                signatures: witness_signatures,
             },
             update,
             old_vault: FactoryVaultDescriptor {
@@ -1397,7 +1395,11 @@ impl StoredFactorySplicePackage {
             .deltas
             .first()
             .ok_or_else(|| anyhow::anyhow!("factory splice package has no vault delta"))?;
-        let contract_witness = contract_witness_bytes_from_transition(&transition)?;
+        let contract_witness = contract_witness_bytes_from_transition(
+            &transition,
+            &self.participant_keys,
+            &self.signatures,
+        )?;
         Ok(FactorySplicePackageSummary {
             factory_id: self.factory_id.clone(),
             chain_id: self.chain_id.clone(),
@@ -1460,7 +1462,11 @@ impl StoredFactorySplicePackage {
 
     pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
         let transition = self.validate()?;
-        contract_witness_bytes_from_transition(&transition)
+        contract_witness_bytes_from_transition(
+            &transition,
+            &self.participant_keys,
+            &self.signatures,
+        )
     }
 
     fn header(&self) -> Result<FactorySpliceHeader> {
@@ -2865,9 +2871,18 @@ fn changed_merkle_reserve_claim(
     Ok((&update.before.right, &update.after.right))
 }
 
-fn contract_witness_bytes_from_transition(transition: &FactorySpliceTransition) -> Result<Vec<u8>> {
+fn contract_witness_bytes_from_transition(
+    transition: &FactorySpliceTransition,
+    participant_keys: &[StoredFactoryParticipantKey],
+    signatures: &[StoredFactorySignature],
+) -> Result<Vec<u8>> {
     let header = factory_splice_header_wire_bytes(&transition.header);
-    let signatures = factory_signature_witness_wire_bytes(&transition.witness, &transition.update)?;
+    let signatures = factory_signature_witness_wire_bytes(
+        &transition.header,
+        &transition.update,
+        participant_keys,
+        signatures,
+    )?;
     let old_vault =
         factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.old_vault)?;
     let new_vault =
@@ -3021,45 +3036,97 @@ fn factory_splice_header_wire_bytes(
 }
 
 fn factory_signature_witness_wire_bytes(
-    witness: &SpliceWitness,
+    header: &FactorySpliceHeader,
     update: &FactoryUpdate,
+    participant_keys: &[StoredFactoryParticipantKey],
+    signatures: &[StoredFactorySignature],
 ) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_LEN]> {
     ensure!(
-        witness.threshold == FACTORY_SIGNATURE_THRESHOLD
-            && witness.signatures.len() == FACTORY_SIGNATURE_COUNT as usize,
-        "contract factory splice witness requires exactly two participant signatures"
+        participant_keys.len() == FACTORY_SIGNATURE_COUNT as usize
+            && signatures.len() == FACTORY_SIGNATURE_COUNT as usize,
+        "contract factory splice witness requires exactly two participant keys and signatures"
     );
     let participants = factory_participants_from_update(update)?;
     ensure!(
         participants.len() == FACTORY_SIGNATURE_COUNT as usize,
         "contract factory splice witness requires exactly two participant ids"
     );
+    let mut key_by_participant = BTreeMap::new();
+    for key in participant_keys {
+        let participant = hex32_bytes(&key.participant)?;
+        let pubkey = decode_hex_exact(&key.pubkey_sec1, 33, "pubkey_sec1")?;
+        ensure!(
+            key_by_participant.insert(participant, pubkey).is_none(),
+            "factory splice participant keys must be unique"
+        );
+    }
+    let mut signature_by_participant = BTreeMap::new();
+    for signature in signatures {
+        let participant = hex32_bytes(&signature.participant)?;
+        let pubkey = decode_hex_exact(&signature.pubkey_sec1, 33, "pubkey_sec1")?;
+        let signature_bytes = decode_hex_exact(&signature.signature, 64, "signature")?;
+        let expected_pubkey = key_by_participant
+            .get(&participant)
+            .ok_or_else(|| anyhow::anyhow!("factory splice signature has unknown participant"))?;
+        ensure!(
+            expected_pubkey == &pubkey,
+            "factory splice signature pubkey does not match participant key"
+        );
+        ensure!(
+            signature_by_participant
+                .insert(participant, (pubkey, signature_bytes))
+                .is_none(),
+            "factory splice signatures must be unique by participant"
+        );
+    }
+    ensure!(
+        participants
+            .iter()
+            .all(|participant| key_by_participant.contains_key(participant))
+            && participants
+                .iter()
+                .all(|participant| signature_by_participant.contains_key(participant)),
+        "factory splice witness keys and signatures must cover update participants"
+    );
+    let pubkey_refs = participants
+        .iter()
+        .map(|participant| {
+            key_by_participant
+                .get(participant)
+                .map(Vec::as_slice)
+                .ok_or_else(|| anyhow::anyhow!("factory splice participant key missing"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        participants_commitment(FACTORY_SIGNATURE_THRESHOLD, &pubkey_refs)
+            == header.participants_commitment,
+        "factory splice header participant commitment does not match witness pubkeys"
+    );
 
     let mut raw = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
     put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
     raw[2] = FACTORY_SIGNATURE_THRESHOLD;
     raw[3] = FACTORY_SIGNATURE_COUNT;
-    for (index, (participant, signature)) in participants
-        .iter()
-        .zip(witness.signatures.iter())
-        .enumerate()
-    {
+    for (index, participant) in participants.iter().enumerate() {
+        let (pubkey, signature) = signature_by_participant
+            .get(participant)
+            .ok_or_else(|| anyhow::anyhow!("factory splice signature missing participant"))?;
         ensure!(
-            signature.pubkey_sec1.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
+            pubkey.len() == COMPRESSED_SECP256K1_PUBKEY_LEN,
             "factory splice participant pubkey must be compressed secp256k1"
         );
         ensure!(
-            signature.signature.len() == ECDSA_SIGNATURE_LEN,
+            signature.len() == ECDSA_SIGNATURE_LEN,
             "factory splice participant signature must be 64 bytes"
         );
         let offset =
             4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
         raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
-            .copy_from_slice(&signature.pubkey_sec1);
+            .copy_from_slice(pubkey);
         raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
             ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
-            .copy_from_slice(&signature.signature);
+            .copy_from_slice(signature);
     }
     Ok(raw)
 }
@@ -3588,11 +3655,7 @@ mod tests {
             "contract_witness_hex",
         )
         .unwrap();
-        let transition = package.validate().unwrap();
-        assert_eq!(
-            summary_bytes,
-            contract_witness_bytes_from_transition(&transition).unwrap()
-        );
+        assert_eq!(summary_bytes, package.contract_witness_bytes().unwrap());
 
         let envelope = WitnessEnvelope::parse(&summary_bytes).unwrap();
         assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SPLICE);

@@ -118,6 +118,7 @@ impl SigningBytes for SpliceHeader {
         out.extend_from_slice(&self.new_vault_commitment);
         out.extend_from_slice(&self.asset_delta_commitment);
         out.extend_from_slice(&self.participants_commitment);
+        out.extend_from_slice(&self.payload_commitment);
         out.extend_from_slice(&self.challenge_policy_commitment);
     }
 }
