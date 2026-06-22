@@ -5,6 +5,7 @@
 //! body schemas and current-envelope-carried factory authorisation.
 
 pub mod hash;
+pub mod node;
 pub mod types;
 pub mod validation;
 
@@ -13,5 +14,6 @@ pub use hash::{
     funding_context_id, participants_commitment, splice_asset_delta_commitment,
     vault_descriptor_commitment,
 };
+pub use node::*;
 pub use types::*;
 pub use validation::*;

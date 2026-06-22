@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -76,6 +76,19 @@ enum SpliceAssetArg {
     Xudt,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum InvoiceNetworkArg {
+    Devnet,
+    Testnet,
+    Mainnet,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum InvoiceAssetArg {
+    Ckb,
+    Xudt,
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum Command {
@@ -83,6 +96,67 @@ enum Command {
     ValidateFixture,
     /// Print a JSON state header fixture and signing digest.
     PrintFixture,
+    /// Create a Morph-native invoice. This is not a Fiber or Lightning invoice.
+    NewInvoice {
+        /// Payee Morph node id as a 32-byte 0x-prefixed hex value.
+        #[arg(long)]
+        payee_node_id: String,
+        /// Amount in the asset's smallest unit. CKB amounts are shannons.
+        #[arg(long)]
+        amount: u128,
+        /// Short human description.
+        #[arg(long)]
+        description: String,
+        /// Morph network for the invoice.
+        #[arg(long, value_enum, default_value = "devnet")]
+        network: InvoiceNetworkArg,
+        /// Invoice asset.
+        #[arg(long, value_enum, default_value = "ckb")]
+        asset: InvoiceAssetArg,
+        /// xUDT type hash. Required when --asset xudt.
+        #[arg(long)]
+        xudt_type_hash: Option<String>,
+        /// Optional channel hint as a 32-byte 0x-prefixed hex value.
+        #[arg(long)]
+        channel_id: Option<String>,
+        /// 32-byte payment preimage. Mutually exclusive with --payment-hash.
+        #[arg(long)]
+        payment_preimage: Option<String>,
+        /// 32-byte payment hash for a hold invoice. Mutually exclusive with --payment-preimage.
+        #[arg(long)]
+        payment_hash: Option<String>,
+        /// Creation time. Defaults to the current Unix time.
+        #[arg(long)]
+        created_at_unix: Option<u64>,
+        /// Expiry in seconds from creation time.
+        #[arg(long, default_value_t = 3600)]
+        expiry_secs: u64,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Decode and validate a Morph-native invoice.
+    DecodeInvoice {
+        /// Encoded Morph invoice.
+        invoice: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify that a payment preimage settles a Morph-native invoice.
+    SettleInvoice {
+        /// Encoded Morph invoice.
+        invoice: String,
+        /// 32-byte payment preimage.
+        #[arg(long)]
+        payment_preimage: String,
+        /// Verification time. Defaults to the current Unix time.
+        #[arg(long)]
+        now_unix: Option<u64>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
     /// Print a conservative all-participant signed factory state package fixture.
@@ -2722,6 +2796,40 @@ fn main() -> Result<()> {
     match cli.command {
         Command::ValidateFixture => validate_fixture(),
         Command::PrintFixture => print_fixture(),
+        Command::NewInvoice {
+            payee_node_id,
+            amount,
+            description,
+            network,
+            asset,
+            xudt_type_hash,
+            channel_id,
+            payment_preimage,
+            payment_hash,
+            created_at_unix,
+            expiry_secs,
+            json,
+        } => new_invoice_command(NewInvoiceCommand {
+            payee_node_id,
+            amount,
+            description,
+            network,
+            asset,
+            xudt_type_hash,
+            channel_id,
+            payment_preimage,
+            payment_hash,
+            created_at_unix,
+            expiry_secs,
+            json,
+        }),
+        Command::DecodeInvoice { invoice, json } => decode_invoice_command(&invoice, json),
+        Command::SettleInvoice {
+            invoice,
+            payment_preimage,
+            now_unix,
+            json,
+        } => settle_invoice_command(&invoice, &payment_preimage, now_unix, json),
         Command::PrintFactoryFixture => {
             let package = factory_packages::fixture_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -7104,6 +7212,197 @@ fn tip_json(tip: &HeaderView) -> Result<serde_json::Value> {
         "timestamp": tip.timestamp,
         "timestamp_value": tip.timestamp_value()?,
     }))
+}
+
+struct NewInvoiceCommand {
+    payee_node_id: String,
+    amount: u128,
+    description: String,
+    network: InvoiceNetworkArg,
+    asset: InvoiceAssetArg,
+    xudt_type_hash: Option<String>,
+    channel_id: Option<String>,
+    payment_preimage: Option<String>,
+    payment_hash: Option<String>,
+    created_at_unix: Option<u64>,
+    expiry_secs: u64,
+    json: bool,
+}
+
+fn new_invoice_command(command: NewInvoiceCommand) -> Result<()> {
+    ensure!(command.amount > 0, "--amount must be greater than zero");
+    ensure!(
+        command.expiry_secs > 0,
+        "--expiry-secs must be greater than zero"
+    );
+    ensure!(
+        command.payment_preimage.is_some() ^ command.payment_hash.is_some(),
+        "set exactly one of --payment-preimage or --payment-hash"
+    );
+
+    let payee_node_id = parse_cli_bytes32("payee_node_id", &command.payee_node_id)?;
+    let channel_id = command
+        .channel_id
+        .as_deref()
+        .map(|value| parse_cli_bytes32("channel_id", value))
+        .transpose()?;
+    let asset = parse_invoice_asset(command.asset, command.xudt_type_hash.as_deref())?;
+    let payment_preimage = command
+        .payment_preimage
+        .as_deref()
+        .map(|value| parse_cli_bytes32("payment_preimage", value))
+        .transpose()?;
+    let payment_hash = command
+        .payment_hash
+        .as_deref()
+        .map(|value| parse_cli_bytes32("payment_hash", value))
+        .transpose()?;
+    let created_at_unix = command
+        .created_at_unix
+        .map(Ok)
+        .unwrap_or_else(current_unix_time)?;
+    let expires_at_unix = created_at_unix
+        .checked_add(command.expiry_secs)
+        .context("invoice expiry overflows u64")?;
+
+    let invoice = MorphInvoice::new(NewMorphInvoice {
+        network: morph_network(command.network),
+        payee_node_id,
+        channel_id,
+        asset,
+        amount: command.amount,
+        created_at_unix,
+        expires_at_unix,
+        payment_preimage,
+        payment_hash,
+        description: command.description,
+    })?;
+    print_invoice_result(&invoice, command.json)
+}
+
+fn decode_invoice_command(invoice: &str, json: bool) -> Result<()> {
+    let invoice = MorphInvoice::decode(invoice)?;
+    print_invoice_result(&invoice, json)
+}
+
+fn settle_invoice_command(
+    invoice: &str,
+    payment_preimage: &str,
+    now_unix: Option<u64>,
+    json: bool,
+) -> Result<()> {
+    let invoice = MorphInvoice::decode(invoice)?;
+    let preimage = parse_cli_bytes32("payment_preimage", payment_preimage)?;
+    let now_unix = now_unix.map(Ok).unwrap_or_else(current_unix_time)?;
+    ensure!(
+        !invoice.is_expired_at(now_unix),
+        "invoice expired at {}",
+        invoice.expires_at_unix
+    );
+    invoice.verify_preimage(&preimage)?;
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "status": "paid",
+                "invoice_id": hex_prefixed_cli(&invoice.invoice_id),
+                "payment_hash": hex_prefixed_cli(&invoice.payment_hash),
+                "paid_at_unix": now_unix,
+            }))?
+        );
+    } else {
+        println!("status=paid");
+        println!("invoice_id={}", hex_prefixed_cli(&invoice.invoice_id));
+        println!("payment_hash={}", hex_prefixed_cli(&invoice.payment_hash));
+        println!("paid_at_unix={now_unix}");
+    }
+    Ok(())
+}
+
+fn print_invoice_result(invoice: &MorphInvoice, json: bool) -> Result<()> {
+    let encoded_invoice = invoice.encode();
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "encoded_invoice": encoded_invoice,
+                "invoice_id": hex_prefixed_cli(&invoice.invoice_id),
+                "network": invoice.network,
+                "payee_node_id": hex_prefixed_cli(&invoice.payee_node_id),
+                "channel_id": invoice.channel_id.map(|id| hex_prefixed_cli(&id)),
+                "asset": invoice_asset_json(&invoice.asset),
+                "amount": invoice.amount,
+                "created_at_unix": invoice.created_at_unix,
+                "expires_at_unix": invoice.expires_at_unix,
+                "payment_hash": hex_prefixed_cli(&invoice.payment_hash),
+                "description": invoice.description,
+            }))?
+        );
+    } else {
+        println!("invoice={encoded_invoice}");
+        println!("invoice_id={}", hex_prefixed_cli(&invoice.invoice_id));
+        println!("payment_hash={}", hex_prefixed_cli(&invoice.payment_hash));
+        println!("amount={}", invoice.amount);
+        println!("expires_at_unix={}", invoice.expires_at_unix);
+    }
+    Ok(())
+}
+
+fn invoice_asset_json(asset: &MorphAsset) -> serde_json::Value {
+    match asset {
+        MorphAsset::Ckb => serde_json::json!({ "kind": "ckb" }),
+        MorphAsset::Xudt(type_hash) => {
+            serde_json::json!({ "kind": "xudt", "type_hash": hex_prefixed_cli(type_hash) })
+        }
+    }
+}
+
+fn parse_invoice_asset(asset: InvoiceAssetArg, xudt_type_hash: Option<&str>) -> Result<MorphAsset> {
+    match asset {
+        InvoiceAssetArg::Ckb => {
+            ensure!(
+                xudt_type_hash.is_none(),
+                "--xudt-type-hash is only valid with --asset xudt"
+            );
+            Ok(MorphAsset::Ckb)
+        }
+        InvoiceAssetArg::Xudt => Ok(MorphAsset::Xudt(parse_cli_bytes32(
+            "xudt_type_hash",
+            xudt_type_hash.context("--xudt-type-hash is required with --asset xudt")?,
+        )?)),
+    }
+}
+
+fn morph_network(network: InvoiceNetworkArg) -> MorphNetwork {
+    match network {
+        InvoiceNetworkArg::Devnet => MorphNetwork::Devnet,
+        InvoiceNetworkArg::Testnet => MorphNetwork::Testnet,
+        InvoiceNetworkArg::Mainnet => MorphNetwork::Mainnet,
+    }
+}
+
+fn parse_cli_bytes32(label: &str, value: &str) -> Result<[u8; 32]> {
+    let value = value.trim();
+    let hex = value
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow::anyhow!("{label} must be 0x-prefixed"))?;
+    ensure!(hex.len() == 64, "{label} must be 32 bytes");
+    let raw = hex::decode(hex).with_context(|| format!("{label} is not valid hex"))?;
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&raw);
+    Ok(out)
+}
+
+fn hex_prefixed_cli(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn current_unix_time() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time is before Unix epoch")?
+        .as_secs())
 }
 
 fn validate_fixture() -> Result<()> {

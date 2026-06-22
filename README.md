@@ -129,6 +129,8 @@ contracts/             no-std CKB scripts and shared script parsers.
 schemas/               Molecule schema draft for the wire format.
 docs/                  Devnet, implementation, readiness, and tutorial notes.
 scripts/               Devnet, smoke, and environment helpers.
+ui/morph-hub           Local Morph operator console for invoices, channels,
+                       factories, and watchtower state.
 ```
 
 Important scripts:
@@ -159,6 +161,14 @@ Check the devnet environment:
 
 ```sh
 scripts/check-devnet-env.sh
+```
+
+Run the local operator console:
+
+```sh
+cd ui/morph-hub
+npm install
+npm run dev -- --port 5173
 ```
 
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
