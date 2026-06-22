@@ -4,8 +4,8 @@ import {
   BadgeCheck,
   Blocks,
   CheckCircle2,
-  CircleDollarSign,
   Copy,
+  Database,
   Factory,
   FileJson,
   GitBranch,
@@ -21,79 +21,105 @@ import {
   WalletCards,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import type React from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { getState, getStateFile, postAction, replaceStateFile } from './api';
 import {
+  Asset,
+  Balance,
   ChannelRecord,
   FactoryRecord,
+  FlowKey,
   Hex32,
+  HubEvent,
   InvoiceRecord,
   NodeState,
-  addAlert,
-  completeFlow,
-  createInvoice,
-  decodeInvoice,
+  PeerRecord,
+  assertHex32,
+  assertNonNegativeInteger,
+  assertPositiveInteger,
+  emptyState,
   formatAmount,
-  freshState,
-  normaliseHex32,
-  nowUnix,
-  parseState,
-  requiredFlows,
-  serialiseState,
+  formatBalance,
   shortHex,
-  verifyInvoicePreimage,
 } from './domain';
 
-type ActionPanel = 'invoice' | 'channel' | 'factory' | 'import';
+type ActionPanel = 'invoice' | 'channel' | 'factory' | 'state';
+type RunAction = (label: string, action: () => Promise<NodeState>) => Promise<void>;
 
-const storageKey = 'morph-hub-state-v1';
-const defaultPreimage = '0x0909090909090909090909090909090909090909090909090909090909090909';
-const defaultHex = '0x2222222222222222222222222222222222222222222222222222222222222222';
-
-const navItems: { label: string; Icon: LucideIcon }[] = [
-  { label: 'Overview', Icon: Activity },
-  { label: 'Channels', Icon: GitBranch },
-  { label: 'Invoices', Icon: ReceiptText },
-  { label: 'Factories', Icon: Factory },
-  { label: 'Watchtower', Icon: RadioTower },
-  { label: 'Reports', Icon: FileJson },
+const actionItems: { key: ActionPanel; label: string; Icon: LucideIcon }[] = [
+  { key: 'invoice', label: 'Invoices', Icon: ReceiptText },
+  { key: 'channel', label: 'Channels', Icon: GitBranch },
+  { key: 'factory', label: 'Factories', Icon: Factory },
+  { key: 'state', label: 'State file', Icon: FileJson },
 ];
 
-const actionItems: { key: ActionPanel; Icon: LucideIcon }[] = [
-  { key: 'invoice', Icon: ReceiptText },
-  { key: 'channel', Icon: GitBranch },
-  { key: 'factory', Icon: Factory },
-  { key: 'import', Icon: Upload },
-];
+const flowLabels: Record<FlowKey, string> = {
+  peer: 'Peer',
+  'invoice-created': 'Invoice created',
+  'invoice-received': 'Invoice received',
+  'invoice-settled': 'Invoice settled',
+  'channel-opened': 'Channel opened',
+  'state-published': 'State published',
+  'channel-finalised': 'Channel finalised',
+  'channel-spliced': 'Channel spliced',
+  'factory-opened': 'Factory opened',
+  'factory-advanced': 'Factory advanced',
+  'factory-child': 'Factory child',
+};
 
 export function App() {
-  const [state, setState] = useState<NodeState>(() => {
-    const saved = localStorage.getItem(storageKey);
-    return saved ? parseState(saved) : freshState();
-  });
+  const [state, setState] = useState<NodeState>(emptyState);
   const [activeAction, setActiveAction] = useState<ActionPanel>('invoice');
-  const [status, setStatus] = useState('Ready');
+  const [status, setStatus] = useState('Loading Morph Hub API');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const next = await getState();
+    setState(next);
+    setError('');
+    setStatus('State refreshed from Morph Hub API');
+    return next;
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(storageKey, serialiseState(state));
-  }, [state]);
+    refresh().catch(err => {
+      setError(String((err as Error).message));
+      setStatus('Morph Hub API is not reachable');
+    });
+  }, [refresh]);
+
+  const runAction: RunAction = async (label, action) => {
+    setBusy(true);
+    setError('');
+    setStatus(`${label} submitted`);
+    try {
+      const next = await action();
+      setState(next);
+      setStatus(`${label} accepted by Morph Hub API`);
+    } catch (err) {
+      setError(String((err as Error).message));
+      setStatus(`${label} rejected`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const totals = useMemo(() => {
-    const vaultValue = state.channels.reduce(
-      (sum, channel) => sum + channel.local + channel.remote + channel.pending,
+    const vaultValue = state.channels.reduce((sum, channel) => sum + balanceTotal(channel.balances[0]), 0n);
+    const sponsorBudget = state.channels.reduce((sum, channel) => sum + BigInt(channel.sponsor_budget), 0n);
+    const settlingStates = state.channels.filter(channel => channel.phase === 'settling').length;
+    const factoryReserve = state.factories.reduce(
+      (sum, factory) => sum + factory.reserve_balances.reduce((inner, balance) => inner + balanceTotal(balance), 0n),
       0n
     );
-    const sponsorBudget = state.channels.reduce((sum, channel) => sum + channel.sponsorBudget, 0n);
-    const settlingStates = state.channels.filter(channel => channel.phase === 'settling').length;
-    const factoryReserve = state.factories.reduce((sum, factory) => sum + factory.reserve, 0n);
     return { vaultValue, sponsorBudget, settlingStates, factoryReserve };
   }, [state.channels, state.factories]);
 
-  const flowCoverage = Math.round((state.completedFlows.length / requiredFlows.length) * 100);
-
-  const updateState = (next: NodeState, message: string) => {
-    setState(next);
-    setStatus(message);
-  };
+  const completedCount = state.completed_flows.length;
+  const requiredCount = Math.max(state.required_flows.length, 1);
+  const flowCoverage = Math.round((completedCount / requiredCount) * 100);
 
   return (
     <main className="app-shell">
@@ -102,26 +128,28 @@ export function App() {
           <div className="brand-mark">M</div>
           <div>
             <strong>Morph Hub</strong>
-            <span>Cell-native node console</span>
+            <span>Operator console</span>
           </div>
         </div>
-        <nav className="nav-list">
-          {navItems.map(({ label, Icon }) => (
-            <button className="nav-item" key={label}>
-              <Icon size={17} />
-              {label}
-            </button>
-          ))}
-        </nav>
+        <div className="node-card">
+          <span>Node</span>
+          <strong>{shortHex(state.node_id)}</strong>
+          <small>{state.network}</small>
+        </div>
+        <div className="node-card">
+          <span>State file</span>
+          <strong>{state.state_path ? state.state_path.split('/').pop() : 'not loaded'}</strong>
+          <small>{state.state_path}</small>
+        </div>
         <div className="coverage">
           <div className="coverage-top">
-            <span>Flow coverage</span>
-            <strong>{flowCoverage}%</strong>
+            <span>Business flows</span>
+            <strong>{completedCount}/{state.required_flows.length}</strong>
           </div>
           <div className="meter">
             <span style={{ width: `${flowCoverage}%` }} />
           </div>
-          <small>{state.completedFlows.length} of {requiredFlows.length} flows observed</small>
+          <small>{state.missing_flows.length === 0 ? 'All required flows recorded' : `${state.missing_flows.length} flows remaining`}</small>
         </div>
       </aside>
 
@@ -129,20 +157,18 @@ export function App() {
         <header className="topbar">
           <div>
             <h1>Morph Node</h1>
-            <p>{shortHex(state.nodeId)} · {state.network}</p>
+            <p>{status}</p>
           </div>
           <div className="topbar-status">
-            <StatusPill tone="good" icon={<ShieldCheck size={15} />} label={state.rpcHealth} />
-            <StatusPill tone="neutral" icon={<Blocks size={15} />} label={`tip ${state.tipHeight}`} />
-            <button
-              className="icon-button"
-              title="Advance local tip"
-              onClick={() => updateState({ ...state, tipHeight: state.tipHeight + 1 }, 'Tip advanced')}
-            >
+            <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
+            <StatusPill tone="neutral" icon={<Blocks size={15} />} label={state.rpc.tip_height == null ? 'tip unavailable' : `tip ${state.rpc.tip_height}`} />
+            <button className="icon-button" title="Refresh from API" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
               <RefreshCw size={16} />
             </button>
           </div>
         </header>
+
+        {error && <div className="error banner">{error}</div>}
 
         <section className="metric-grid">
           <Metric label="Vault value" value={formatAmount(totals.vaultValue, { kind: 'ckb' })} icon={<Landmark />} />
@@ -151,117 +177,49 @@ export function App() {
           <Metric label="Factory reserve" value={formatAmount(totals.factoryReserve, { kind: 'ckb' })} icon={<Factory />} />
         </section>
 
-        <section className="flow-panel">
-          <div className="section-head">
-            <h2>Business Flow</h2>
-            <span>{status}</span>
-          </div>
-          <div className="flow-line">
-            {['Open', 'Update', 'Publish', 'Finalise'].map((step, index) => (
-              <div className="flow-step" key={step}>
-                <span>{index + 1}</span>
-                <strong>{step}</strong>
-              </div>
-            ))}
-            <div className="flow-branch"><Split size={18} /> Splice / resize</div>
-          </div>
-        </section>
+        <FlowPanel state={state} />
 
         <section className="content-grid">
-          <ChannelTable
-            channels={state.channels}
-            onSplice={channelId => {
-              const next = state.channels.map(channel =>
-                channel.channelId === channelId
-                  ? {
-                      ...channel,
-                      fundingEpoch: channel.fundingEpoch + 1,
-                      fundingContextId: randomHex32(),
-                    }
-                  : channel
-              );
-              updateState(
-                addAlert(completeFlow({ ...state, channels: next }, 'channel-spliced'), {
-                  severity: 'info',
-                  event: 'splice_detected',
-                  channelId,
-                  message: 'Funding context advanced',
-                }),
-                'Channel spliced'
-              );
-            }}
-            onPublish={channelId => {
-              const next = state.channels.map(channel =>
-                channel.channelId === channelId
-                  ? { ...channel, phase: 'settling' as const, stateNumber: channel.stateNumber + 1 }
-                  : channel
-              );
-              updateState(
-                addAlert(completeFlow({ ...state, channels: next }, 'state-published'), {
-                  severity: 'warning',
-                  event: 'publication_submitted',
-                  channelId,
-                  message: 'Latest state published',
-                }),
-                'State published'
-              );
-            }}
-            onFinalise={channelId => {
-              const next = state.channels.map(channel =>
-                channel.channelId === channelId && channel.phase === 'settling'
-                  ? { ...channel, phase: 'closed' as const }
-                  : channel
-              );
-              updateState(completeFlow({ ...state, channels: next }, 'channel-finalised'), 'Channel finalised');
-            }}
-          />
-
-          <InvoicePanel
-            invoices={state.invoices}
-            onReceive={invoiceId => {
-              updateState(
-                completeFlow(
-                  {
-                    ...state,
-                    invoices: state.invoices.map(invoice =>
-                      invoice.invoiceId === invoiceId ? { ...invoice, status: 'received' } : invoice
-                    ),
-                  },
-                  'invoice-received'
-                ),
-                'Invoice marked received'
-              );
-            }}
-          />
-
+          <ChannelTable channels={state.channels} />
+          <InvoicePanel invoices={state.invoices} />
+          <PeerPanel peers={state.peers} />
           <FactoryPanel factories={state.factories} />
-          <WatchtowerPanel alerts={state.watchtowerAlerts} />
+          <EventPanel events={state.events} />
         </section>
       </section>
 
       <aside className="action-drawer">
         <div className="drawer-tabs">
-          {actionItems.map(({ key, Icon }) => (
+          {actionItems.map(({ key, label, Icon }) => (
             <button
               className={activeAction === key ? 'selected' : ''}
               key={key}
               onClick={() => setActiveAction(key)}
-              title={key}
+              title={label}
+              disabled={busy}
             >
               <Icon size={16} />
             </button>
           ))}
         </div>
-        {activeAction === 'invoice' && <InvoiceActions state={state} updateState={updateState} />}
-        {activeAction === 'channel' && <ChannelActions state={state} updateState={updateState} />}
-        {activeAction === 'factory' && <FactoryActions state={state} updateState={updateState} />}
-        {activeAction === 'import' && <ImportActions state={state} updateState={updateState} />}
+        {activeAction === 'invoice' && <InvoiceActions state={state} runAction={runAction} busy={busy} />}
+        {activeAction === 'channel' && <ChannelActions state={state} runAction={runAction} busy={busy} />}
+        {activeAction === 'factory' && <FactoryActions state={state} runAction={runAction} busy={busy} />}
+        {activeAction === 'state' && <StateActions state={state} runAction={runAction} busy={busy} />}
       </aside>
     </main>
   );
 }
 
-function StatusPill({ icon, label, tone }: { icon: React.ReactNode; label: string; tone: 'good' | 'neutral' }) {
+function StatusPill({
+  icon,
+  label,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  tone: 'good' | 'neutral' | 'warn' | 'bad';
+}) {
   return <span className={`status-pill ${tone}`}>{icon}{label}</span>;
 }
 
@@ -275,17 +233,30 @@ function Metric({ label, value, icon, tone = 'base' }: { label: string; value: s
   );
 }
 
-function ChannelTable({
-  channels,
-  onSplice,
-  onPublish,
-  onFinalise,
-}: {
-  channels: ChannelRecord[];
-  onSplice: (channelId: Hex32) => void;
-  onPublish: (channelId: Hex32) => void;
-  onFinalise: (channelId: Hex32) => void;
-}) {
+function FlowPanel({ state }: { state: NodeState }) {
+  const flows = state.required_flows.length ? state.required_flows : Object.keys(flowLabels) as FlowKey[];
+  return (
+    <section className="flow-panel">
+      <div className="section-head">
+        <h2>Business Flow</h2>
+        <span>{state.missing_flows.length === 0 ? 'complete' : `${state.missing_flows.length} remaining`}</span>
+      </div>
+      <div className="flow-grid">
+        {flows.map(flow => {
+          const done = state.completed_flows.includes(flow);
+          return (
+            <div className={`flow-step ${done ? 'done' : ''}`} key={flow}>
+              <span>{done ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span>
+              <strong>{flowLabels[flow]}</strong>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
   return (
     <section className="panel table-panel">
       <div className="section-head">
@@ -298,27 +269,23 @@ function ChannelTable({
             <th>Channel</th>
             <th>Phase</th>
             <th>State</th>
-            <th>Funding context</th>
+            <th>Funding</th>
+            <th>Value</th>
             <th>Sponsor</th>
-            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {channels.length === 0 && (
-            <tr><td colSpan={6} className="empty">No channels loaded</td></tr>
+            <tr><td colSpan={6} className="empty">No channels in the hub state file</td></tr>
           )}
           {channels.map(channel => (
-            <tr key={channel.channelId}>
-              <td><strong>{shortHex(channel.channelId)}</strong><small>{channel.counterparty}</small></td>
+            <tr key={channel.channel_id}>
+              <td><strong>{shortHex(channel.channel_id)}</strong><small>{shortHex(channel.counterparty_node_id)}</small></td>
               <td><span className={`phase ${channel.phase}`}>{channel.phase}</span></td>
-              <td>{channel.stateNumber}</td>
-              <td>{shortHex(channel.fundingContextId)}</td>
-              <td>{formatAmount(channel.sponsorBudget, { kind: 'ckb' })}</td>
-              <td className="row-actions">
-                <button title="Splice" onClick={() => onSplice(channel.channelId)}><Split size={14} /></button>
-                <button title="Publish" onClick={() => onPublish(channel.channelId)}><RadioTower size={14} /></button>
-                <button title="Finalise" onClick={() => onFinalise(channel.channelId)}><CheckCircle2 size={14} /></button>
-              </td>
+              <td>{channel.state_number}</td>
+              <td><strong>{channel.funding_epoch}</strong><small>{shortHex(channel.funding_context_id)}</small></td>
+              <td>{formatBalance(channel.balances[0])}</td>
+              <td>{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
             </tr>
           ))}
         </tbody>
@@ -327,7 +294,7 @@ function ChannelTable({
   );
 }
 
-function InvoicePanel({ invoices, onReceive }: { invoices: InvoiceRecord[]; onReceive: (invoiceId: Hex32) => void }) {
+function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
   return (
     <section className="panel">
       <div className="section-head">
@@ -335,16 +302,36 @@ function InvoicePanel({ invoices, onReceive }: { invoices: InvoiceRecord[]; onRe
         <span>{invoices.filter(invoice => invoice.status === 'open').length} open</span>
       </div>
       <div className="stack-list">
-        {invoices.length === 0 && <div className="empty">No invoices loaded</div>}
+        {invoices.length === 0 && <div className="empty">No invoices in the hub state file</div>}
         {invoices.slice(0, 5).map(invoice => (
-          <div className="list-row" key={invoice.invoiceId}>
+          <div className="list-row" key={invoice.invoice_id}>
             <div>
-              <strong>{invoice.description || shortHex(invoice.invoiceId)}</strong>
-              <small>{formatAmount(invoice.amount, invoice.asset)} · {shortHex(invoice.paymentHash)}</small>
+              <strong>{invoice.description || shortHex(invoice.invoice_id)}</strong>
+              <small>{formatAmount(invoice.amount, invoice.asset)} · {shortHex(invoice.payment_hash)}</small>
             </div>
-            <button className={`status ${invoice.status}`} onClick={() => onReceive(invoice.invoiceId)}>
-              {invoice.status}
-            </button>
+            <span className={`status ${invoice.status}`}>{invoice.status}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PeerPanel({ peers }: { peers: PeerRecord[] }) {
+  return (
+    <section className="panel">
+      <div className="section-head">
+        <h2>Peers</h2>
+        <span>{peers.length} connected</span>
+      </div>
+      <div className="stack-list">
+        {peers.length === 0 && <div className="empty">No peers in the hub state file</div>}
+        {peers.slice(0, 5).map(peer => (
+          <div className="list-row" key={peer.node_id}>
+            <div>
+              <strong>{peer.alias}</strong>
+              <small>{shortHex(peer.node_id)}</small>
+            </div>
           </div>
         ))}
       </div>
@@ -360,14 +347,14 @@ function FactoryPanel({ factories }: { factories: FactoryRecord[] }) {
         <span>{factories.length} active</span>
       </div>
       <div className="stack-list">
-        {factories.length === 0 && <div className="empty">No factories loaded</div>}
+        {factories.length === 0 && <div className="empty">No factories in the hub state file</div>}
         {factories.map(factory => (
-          <div className="list-row" key={factory.factoryId}>
+          <div className="list-row" key={factory.factory_id}>
             <div>
-              <strong>{shortHex(factory.factoryId)}</strong>
-              <small>update {factory.updateNumber} · {factory.materialisedChildren.length} children</small>
+              <strong>{shortHex(factory.factory_id)}</strong>
+              <small>update {factory.update_number} · {factory.materialised_child_channels.length} children</small>
             </div>
-            <span className="amount">{formatAmount(factory.reserve, factory.asset)}</span>
+            <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
           </div>
         ))}
       </div>
@@ -375,21 +362,21 @@ function FactoryPanel({ factories }: { factories: FactoryRecord[] }) {
   );
 }
 
-function WatchtowerPanel({ alerts }: { alerts: NodeState['watchtowerAlerts'] }) {
+function EventPanel({ events }: { events: HubEvent[] }) {
   return (
     <section className="panel">
       <div className="section-head">
-        <h2>Watchtower</h2>
-        <span>{alerts.length} alerts</span>
+        <h2>Events</h2>
+        <span>{events.length} recorded</span>
       </div>
       <div className="alert-strip">
-        {alerts.length === 0 && <div className="empty">No watchtower alerts</div>}
-        {alerts.map(alert => (
-          <div className={`alert ${alert.severity}`} key={alert.id}>
+        {events.length === 0 && <div className="empty">No API events recorded</div>}
+        {events.slice(0, 8).map(event => (
+          <div className={`alert ${event.severity}`} key={event.id}>
             <AlertTriangle size={15} />
             <div>
-              <strong>{alert.event}</strong>
-              <small>{alert.message}</small>
+              <strong>{event.event}</strong>
+              <small>{event.message}{event.subject_id ? ` · ${shortHex(event.subject_id)}` : ''}</small>
             </div>
           </div>
         ))}
@@ -398,67 +385,54 @@ function WatchtowerPanel({ alerts }: { alerts: NodeState['watchtowerAlerts'] }) 
   );
 }
 
-function InvoiceActions({ state, updateState }: { state: NodeState; updateState: (state: NodeState, message: string) => void }) {
-  const [amount, setAmount] = useState('100000000');
-  const [description, setDescription] = useState('Morph channel payment');
-  const [preimage, setPreimage] = useState<Hex32>(defaultPreimage);
+function InvoiceActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
+  const [amount, setAmount] = useState('');
+  const [description, setDescription] = useState('');
+  const [expirySecs, setExpirySecs] = useState('3600');
+  const [paymentMode, setPaymentMode] = useState<'preimage' | 'hash'>('preimage');
+  const [paymentSecret, setPaymentSecret] = useState('');
+  const [channelId, setChannelId] = useState('');
   const [decodeText, setDecodeText] = useState('');
-  const [settlePreimage, setSettlePreimage] = useState<Hex32>(defaultPreimage);
-  const [error, setError] = useState('');
+  const [receiveInvoiceId, setReceiveInvoiceId] = useState('');
+  const [settleInvoiceId, setSettleInvoiceId] = useState('');
+  const [settlePreimage, setSettlePreimage] = useState('');
 
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
-    setError('');
-    try {
-      const invoice = createInvoice({
-        state,
-        amount: BigInt(amount),
-        description,
-        preimage: normaliseHex32(preimage),
-        expirySecs: 3600,
-      });
-      updateState(completeFlow({ ...state, invoices: [invoice, ...state.invoices] }, 'invoice-created'), 'Invoice created');
-    } catch (err) {
-      setError(String((err as Error).message));
-    }
+    void runAction('Create invoice', async () => {
+      const body = {
+        amount: assertPositiveInteger(amount, 'Amount'),
+        description: requiredText(description, 'Description'),
+        expiry_secs: Number(assertPositiveInteger(expirySecs, 'Expiry seconds')),
+        channel_id: channelId.trim() ? assertHex32(channelId, 'Channel id') : undefined,
+        payment_preimage: paymentMode === 'preimage' ? assertHex32(paymentSecret, 'Payment preimage') : undefined,
+        payment_hash: paymentMode === 'hash' ? assertHex32(paymentSecret, 'Payment hash') : undefined,
+        asset: { kind: 'ckb' },
+      };
+      return postAction('/api/invoices', body);
+    });
   };
 
   const submitDecode = (event: FormEvent) => {
     event.preventDefault();
-    setError('');
-    try {
-      const invoice = decodeInvoice(decodeText.trim());
-      updateState(completeFlow({ ...state, invoices: [invoice, ...state.invoices] }, 'invoice-received'), 'Invoice decoded');
-    } catch (err) {
-      setError(String((err as Error).message));
-    }
+    void runAction('Decode invoice', () => postAction('/api/invoices/decode', { encoded_invoice: requiredText(decodeText, 'Encoded invoice') }));
   };
 
-  const settleLatest = () => {
-    setError('');
-    const invoice = state.invoices.find(item => item.status === 'open' || item.status === 'received');
-    if (!invoice) {
-      setError('No open invoice available.');
-      return;
-    }
-    try {
-      const preimageHex = normaliseHex32(settlePreimage);
-      if (!verifyInvoicePreimage(invoice, preimageHex)) throw new Error('Preimage does not match invoice.');
-      updateState(
-        completeFlow(
-          {
-            ...state,
-            invoices: state.invoices.map(item =>
-              item.invoiceId === invoice.invoiceId ? { ...item, status: 'paid' } : item
-            ),
-          },
-          'invoice-settled'
-        ),
-        'Invoice settled'
-      );
-    } catch (err) {
-      setError(String((err as Error).message));
-    }
+  const submitReceive = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Receive invoice', () => {
+      const invoiceId = assertHex32(receiveInvoiceId, 'Invoice id');
+      return postAction(`/api/invoices/${invoiceId}/receive`);
+    });
+  };
+
+  const submitSettle = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Settle invoice', () => {
+      const invoiceId = assertHex32(settleInvoiceId, 'Invoice id');
+      const paymentPreimage = assertHex32(settlePreimage, 'Payment preimage');
+      return postAction(`/api/invoices/${invoiceId}/settle`, { payment_preimage: paymentPreimage });
+    });
   };
 
   return (
@@ -467,167 +441,326 @@ function InvoiceActions({ state, updateState }: { state: NodeState; updateState:
       <form onSubmit={submitCreate} className="form-grid">
         <label>Amount<input value={amount} onChange={event => setAmount(event.target.value)} /></label>
         <label>Description<input value={description} onChange={event => setDescription(event.target.value)} /></label>
-        <label>Preimage<input value={preimage} onChange={event => setPreimage(event.target.value as Hex32)} /></label>
-        <button><Plus size={15} /> Create</button>
+        <label>Expiry seconds<input value={expirySecs} onChange={event => setExpirySecs(event.target.value)} /></label>
+        <label>Payment input
+          <select value={paymentMode} onChange={event => setPaymentMode(event.target.value as 'preimage' | 'hash')}>
+            <option value="preimage">preimage</option>
+            <option value="hash">hash</option>
+          </select>
+        </label>
+        <label>{paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}<input value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} /></label>
+        <label>Channel id<input value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
+        <button disabled={busy}><Plus size={15} /> Create</button>
       </form>
-      <form onSubmit={submitDecode} className="form-grid">
+
+      <form onSubmit={submitDecode} className="form-grid form-section">
         <label>Encoded invoice<textarea value={decodeText} onChange={event => setDecodeText(event.target.value)} /></label>
-        <button><ReceiptText size={15} /> Decode</button>
+        <button disabled={busy}><ReceiptText size={15} /> Decode</button>
       </form>
-      <div className="form-grid">
-        <label>Settlement preimage<input value={settlePreimage} onChange={event => setSettlePreimage(event.target.value as Hex32)} /></label>
-        <button onClick={settleLatest}><BadgeCheck size={15} /> Settle latest</button>
-      </div>
+
+      <form onSubmit={submitReceive} className="form-grid form-section">
+        <label>Invoice id<input value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} /></label>
+        <button disabled={busy}><Database size={15} /> Mark received</button>
+      </form>
+
+      <form onSubmit={submitSettle} className="form-grid form-section">
+        <label>Invoice id<input value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} /></label>
+        <label>Payment preimage<input value={settlePreimage} onChange={event => setSettlePreimage(event.target.value)} /></label>
+        <button disabled={busy}><BadgeCheck size={15} /> Settle</button>
+      </form>
+
       {state.invoices[0] && (
-        <button className="copy-button" onClick={() => navigator.clipboard.writeText(state.invoices[0].encodedInvoice)}>
+        <button className="copy-button" onClick={() => navigator.clipboard.writeText(state.invoices[0].encoded_invoice)} disabled={busy}>
           <Copy size={15} /> Copy latest invoice
         </button>
       )}
-      {error && <div className="error">{error}</div>}
     </div>
   );
 }
 
-function ChannelActions({ state, updateState }: { state: NodeState; updateState: (state: NodeState, message: string) => void }) {
-  const [counterparty, setCounterparty] = useState('bob');
-  const [local, setLocal] = useState('1000000000');
-  const [remote, setRemote] = useState('500000000');
-  const [sponsor, setSponsor] = useState('5000000000');
+function ChannelActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
+  const [channelId, setChannelId] = useState('');
+  const [counterpartyNodeId, setCounterpartyNodeId] = useState('');
+  const [counterpartyAlias, setCounterpartyAlias] = useState('');
+  const [fundingContextId, setFundingContextId] = useState('');
+  const [local, setLocal] = useState('');
+  const [remote, setRemote] = useState('');
+  const [pending, setPending] = useState('0');
+  const [sponsorBudget, setSponsorBudget] = useState('');
+  const [selectedChannelId, setSelectedChannelId] = useState('');
+  const [spliceEpoch, setSpliceEpoch] = useState('');
+  const [spliceContextId, setSpliceContextId] = useState('');
+  const [publishContextId, setPublishContextId] = useState('');
+  const [publishStateNumber, setPublishStateNumber] = useState('');
 
-  const submit = (event: FormEvent) => {
+  const submitOpen = (event: FormEvent) => {
     event.preventDefault();
-    const channel: ChannelRecord = {
-      channelId: randomHex32(),
-      counterparty,
-      phase: 'active',
-      stateNumber: 1,
-      fundingEpoch: 0,
-      fundingContextId: randomHex32(),
-      local: BigInt(local),
-      remote: BigInt(remote),
-      pending: 0n,
-      sponsorBudget: BigInt(sponsor),
-      asset: { kind: 'ckb' },
-    };
-    const next = completeFlow(
-      completeFlow({ ...state, peers: state.peers.includes(counterparty) ? state.peers : [...state.peers, counterparty], channels: [channel, ...state.channels] }, 'peer'),
-      'channel-opened'
-    );
-    updateState(next, 'Channel opened');
+    void runAction('Open channel', () => postAction('/api/channels', channelBody({
+      channelId,
+      counterpartyNodeId,
+      counterpartyAlias,
+      fundingContextId,
+      local,
+      remote,
+      pending,
+      sponsorBudget,
+    })));
+  };
+
+  const submitSplice = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Splice channel', () => {
+      const id = assertHex32(selectedChannelId, 'Channel id');
+      return postAction(`/api/channels/${id}/splice`, {
+        new_funding_epoch: Number(assertPositiveInteger(spliceEpoch, 'New funding epoch')),
+        new_funding_context_id: assertHex32(spliceContextId, 'New funding context id'),
+      });
+    });
+  };
+
+  const submitPublish = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Publish state', () => {
+      const id = assertHex32(selectedChannelId, 'Channel id');
+      return postAction(`/api/channels/${id}/publish`, {
+        funding_context_id: assertHex32(publishContextId, 'Funding context id'),
+        state_number: Number(assertPositiveInteger(publishStateNumber, 'State number')),
+      });
+    });
+  };
+
+  const submitFinalise = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Finalise channel', () => {
+      const id = assertHex32(selectedChannelId, 'Channel id');
+      return postAction(`/api/channels/${id}/finalise`);
+    });
   };
 
   return (
     <div className="drawer-section">
       <h2>Node Layer</h2>
-      <form onSubmit={submit} className="form-grid">
-        <label>Counterparty<input value={counterparty} onChange={event => setCounterparty(event.target.value)} /></label>
+      <form onSubmit={submitOpen} className="form-grid">
+        <label>Channel id<input value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
+        <label>Counterparty node id<input value={counterpartyNodeId} onChange={event => setCounterpartyNodeId(event.target.value)} /></label>
+        <label>Counterparty alias<input value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
+        <label>Funding context id<input value={fundingContextId} onChange={event => setFundingContextId(event.target.value)} /></label>
         <label>Local capacity<input value={local} onChange={event => setLocal(event.target.value)} /></label>
         <label>Remote capacity<input value={remote} onChange={event => setRemote(event.target.value)} /></label>
-        <label>Sponsor budget<input value={sponsor} onChange={event => setSponsor(event.target.value)} /></label>
-        <button><GitBranch size={15} /> Open channel</button>
+        <label>Pending capacity<input value={pending} onChange={event => setPending(event.target.value)} /></label>
+        <label>Sponsor budget<input value={sponsorBudget} onChange={event => setSponsorBudget(event.target.value)} /></label>
+        <button disabled={busy}><GitBranch size={15} /> Open channel</button>
+      </form>
+
+      <form onSubmit={submitSplice} className="form-grid form-section">
+        <ChannelSelect channels={state.channels} value={selectedChannelId} onChange={setSelectedChannelId} />
+        <label>New funding epoch<input value={spliceEpoch} onChange={event => setSpliceEpoch(event.target.value)} /></label>
+        <label>New funding context id<input value={spliceContextId} onChange={event => setSpliceContextId(event.target.value)} /></label>
+        <button disabled={busy || state.channels.length === 0}><Split size={15} /> Splice</button>
+      </form>
+
+      <form onSubmit={submitPublish} className="form-grid form-section">
+        <ChannelSelect channels={state.channels} value={selectedChannelId} onChange={setSelectedChannelId} />
+        <label>Funding context id<input value={publishContextId} onChange={event => setPublishContextId(event.target.value)} /></label>
+        <label>State number<input value={publishStateNumber} onChange={event => setPublishStateNumber(event.target.value)} /></label>
+        <button disabled={busy || state.channels.length === 0}><RadioTower size={15} /> Publish</button>
+      </form>
+
+      <form onSubmit={submitFinalise} className="form-grid form-section">
+        <ChannelSelect channels={state.channels} value={selectedChannelId} onChange={setSelectedChannelId} />
+        <button disabled={busy || state.channels.length === 0}><CheckCircle2 size={15} /> Finalise</button>
       </form>
     </div>
   );
 }
 
-function FactoryActions({ state, updateState }: { state: NodeState; updateState: (state: NodeState, message: string) => void }) {
-  const [reserve, setReserve] = useState('10000000000');
-  const [participants, setParticipants] = useState('alice,bob');
+function FactoryActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
+  const [factoryId, setFactoryId] = useState('');
+  const [participants, setParticipants] = useState('');
+  const [reserve, setReserve] = useState('');
+  const [selectedFactoryId, setSelectedFactoryId] = useState('');
+  const [newUpdateNumber, setNewUpdateNumber] = useState('');
+  const [childChannelId, setChildChannelId] = useState('');
+  const [childCounterpartyNodeId, setChildCounterpartyNodeId] = useState('');
+  const [childCounterpartyAlias, setChildCounterpartyAlias] = useState('');
+  const [childFundingContextId, setChildFundingContextId] = useState('');
+  const [childLocal, setChildLocal] = useState('');
+  const [childRemote, setChildRemote] = useState('');
+  const [childPending, setChildPending] = useState('0');
+  const [childSponsorBudget, setChildSponsorBudget] = useState('');
 
-  const openFactory = () => {
-    const factory: FactoryRecord = {
-      factoryId: randomHex32(),
-      updateNumber: 0,
-      reserve: BigInt(reserve),
-      asset: { kind: 'ckb' },
-      participants: participants.split(',').map(value => value.trim()).filter(Boolean),
-      materialisedChildren: [],
-    };
-    updateState(completeFlow({ ...state, factories: [factory, ...state.factories] }, 'factory-opened'), 'Factory opened');
+  const submitOpen = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Open factory', () => {
+      const participant_node_ids = participants.split(',').map(value => assertHex32(value, 'Participant node id'));
+      return postAction('/api/factories', {
+        factory_id: assertHex32(factoryId, 'Factory id'),
+        participant_node_ids,
+        reserve: assertPositiveInteger(reserve, 'Reserve'),
+        asset: { kind: 'ckb' },
+      });
+    });
   };
 
-  const advanceFactory = () => {
-    const first = state.factories[0];
-    if (!first) return;
-    updateState(
-      completeFlow(
-        { ...state, factories: state.factories.map(factory => factory.factoryId === first.factoryId ? { ...factory, updateNumber: factory.updateNumber + 1 } : factory) },
-        'factory-advanced'
-      ),
-      'Factory advanced'
-    );
+  const submitAdvance = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Advance factory', () => {
+      const id = assertHex32(selectedFactoryId, 'Factory id');
+      return postAction(`/api/factories/${id}/advance`, {
+        new_update_number: Number(assertPositiveInteger(newUpdateNumber, 'New update number')),
+      });
+    });
   };
 
-  const materialise = () => {
-    const first = state.factories[0];
-    if (!first) return;
-    const child = randomHex32();
-    updateState(
-      completeFlow(
-        { ...state, factories: state.factories.map(factory => factory.factoryId === first.factoryId ? { ...factory, materialisedChildren: [child, ...factory.materialisedChildren] } : factory) },
-        'factory-child'
-      ),
-      'Child channel materialised'
-    );
+  const submitMaterialise = (event: FormEvent) => {
+    event.preventDefault();
+    void runAction('Materialise factory child', () => {
+      const id = assertHex32(selectedFactoryId, 'Factory id');
+      return postAction(`/api/factories/${id}/materialise-child`, channelBody({
+        channelId: childChannelId,
+        counterpartyNodeId: childCounterpartyNodeId,
+        counterpartyAlias: childCounterpartyAlias,
+        fundingContextId: childFundingContextId,
+        local: childLocal,
+        remote: childRemote,
+        pending: childPending,
+        sponsorBudget: childSponsorBudget,
+        child: true,
+      }));
+    });
   };
 
   return (
     <div className="drawer-section">
       <h2>Factory Layer</h2>
-      <div className="form-grid">
+      <form onSubmit={submitOpen} className="form-grid">
+        <label>Factory id<input value={factoryId} onChange={event => setFactoryId(event.target.value)} /></label>
+        <label>Participant node ids<textarea value={participants} onChange={event => setParticipants(event.target.value)} /></label>
         <label>Reserve<input value={reserve} onChange={event => setReserve(event.target.value)} /></label>
-        <label>Participants<input value={participants} onChange={event => setParticipants(event.target.value)} /></label>
-        <button onClick={openFactory}><Factory size={15} /> Open factory</button>
-        <button onClick={advanceFactory}><RefreshCw size={15} /> Advance latest</button>
-        <button onClick={materialise}><Network size={15} /> Materialise child</button>
-      </div>
+        <button disabled={busy}><Factory size={15} /> Open factory</button>
+      </form>
+
+      <form onSubmit={submitAdvance} className="form-grid form-section">
+        <FactorySelect factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+        <label>New update number<input value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
+        <button disabled={busy || state.factories.length === 0}><RefreshCw size={15} /> Advance</button>
+      </form>
+
+      <form onSubmit={submitMaterialise} className="form-grid form-section">
+        <FactorySelect factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+        <label>Child channel id<input value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
+        <label>Counterparty node id<input value={childCounterpartyNodeId} onChange={event => setChildCounterpartyNodeId(event.target.value)} /></label>
+        <label>Counterparty alias<input value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
+        <label>Funding context id<input value={childFundingContextId} onChange={event => setChildFundingContextId(event.target.value)} /></label>
+        <label>Local capacity<input value={childLocal} onChange={event => setChildLocal(event.target.value)} /></label>
+        <label>Remote capacity<input value={childRemote} onChange={event => setChildRemote(event.target.value)} /></label>
+        <label>Pending capacity<input value={childPending} onChange={event => setChildPending(event.target.value)} /></label>
+        <label>Sponsor budget<input value={childSponsorBudget} onChange={event => setChildSponsorBudget(event.target.value)} /></label>
+        <button disabled={busy || state.factories.length === 0}><Network size={15} /> Materialise child</button>
+      </form>
     </div>
   );
 }
 
-function ImportActions({ state, updateState }: { state: NodeState; updateState: (state: NodeState, message: string) => void }) {
-  const [raw, setRaw] = useState(serialiseState(state));
-  const [error, setError] = useState('');
+function StateActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
+  const [raw, setRaw] = useState('');
 
-  const loadFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    file.text().then(setRaw).catch(err => setError(String(err)));
+  const exportState = async () => {
+    const file = await getStateFile();
+    setRaw(JSON.stringify(file, null, 2));
   };
 
-  const importState = () => {
-    try {
-      updateState(parseState(raw), 'Snapshot imported');
-      setError('');
-    } catch (err) {
-      setError(String((err as Error).message));
-    }
-  };
-
-  const exportState = () => {
-    const blob = new Blob([serialiseState(state)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'morph-node-snapshot.json';
-    anchor.click();
-    URL.revokeObjectURL(url);
+  const restoreState = () => {
+    void runAction('Restore state file', () => replaceStateFile(JSON.parse(requiredText(raw, 'State file JSON'))));
   };
 
   return (
     <div className="drawer-section">
-      <h2>Snapshot</h2>
-      <input type="file" accept="application/json" onChange={loadFile} />
+      <h2>State File</h2>
+      <div className="state-path">
+        <strong>{state.state_path || 'not loaded'}</strong>
+        <small>Backed by the Morph Hub API process</small>
+      </div>
+      <button className="copy-button" onClick={exportState} disabled={busy}><FileJson size={15} /> Load state JSON</button>
       <textarea className="snapshot" value={raw} onChange={event => setRaw(event.target.value)} />
-      <button onClick={importState}><Upload size={15} /> Import</button>
-      <button onClick={exportState}><FileJson size={15} /> Export current</button>
-      {error && <div className="error">{error}</div>}
+      <button className="danger-button" onClick={restoreState} disabled={busy || !raw.trim()}><Upload size={15} /> Restore state file</button>
     </div>
   );
 }
 
-function randomHex32(): Hex32 {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return `0x${[...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')}`;
+function ChannelSelect({ channels, value, onChange }: { channels: ChannelRecord[]; value: string; onChange: (value: string) => void }) {
+  return (
+    <label>Channel id
+      <select value={value} onChange={event => onChange(event.target.value)}>
+        <option value="">select channel</option>
+        {channels.map(channel => (
+          <option key={channel.channel_id} value={channel.channel_id}>{shortHex(channel.channel_id)} · {channel.phase}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function FactorySelect({ factories, value, onChange }: { factories: FactoryRecord[]; value: string; onChange: (value: string) => void }) {
+  return (
+    <label>Factory id
+      <select value={value} onChange={event => onChange(event.target.value)}>
+        <option value="">select factory</option>
+        {factories.map(factory => (
+          <option key={factory.factory_id} value={factory.factory_id}>{shortHex(factory.factory_id)} · update {factory.update_number}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function channelBody(input: {
+  channelId: string;
+  counterpartyNodeId: string;
+  counterpartyAlias: string;
+  fundingContextId: string;
+  local: string;
+  remote: string;
+  pending: string;
+  sponsorBudget: string;
+  child?: boolean;
+}) {
+  const base = {
+    counterparty_node_id: assertHex32(input.counterpartyNodeId, 'Counterparty node id'),
+    counterparty_alias: input.counterpartyAlias.trim() || undefined,
+    funding_context_id: assertHex32(input.fundingContextId, 'Funding context id'),
+    local: assertPositiveInteger(input.local, 'Local capacity'),
+    remote: assertPositiveInteger(input.remote, 'Remote capacity'),
+    pending: assertNonNegativeInteger(input.pending, 'Pending capacity'),
+    sponsor_budget: Number(assertPositiveInteger(input.sponsorBudget, 'Sponsor budget')),
+    asset: { kind: 'ckb' } satisfies Asset,
+  };
+  if (input.child) {
+    return { ...base, child_channel_id: assertHex32(input.channelId, 'Child channel id') };
+  }
+  return { ...base, channel_id: assertHex32(input.channelId, 'Channel id') };
+}
+
+function requiredText(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${label} must not be empty.`);
+  return trimmed;
+}
+
+function balanceTotal(balance?: Balance): bigint {
+  if (!balance) return 0n;
+  return BigInt(balance.local) + BigInt(balance.remote) + BigInt(balance.pending);
+}
+
+function rpcTone(status: NodeState['rpc']['status']): 'good' | 'neutral' | 'warn' | 'bad' {
+  if (status === 'connected') return 'good';
+  if (status === 'not_configured') return 'neutral';
+  if (status === 'degraded') return 'warn';
+  return 'bad';
+}
+
+function rpcLabel(state: NodeState): string {
+  if (state.rpc.status === 'not_configured') return 'rpc not configured';
+  if (state.rpc.status === 'connected') return state.rpc.chain ? `${state.rpc.chain} connected` : 'rpc connected';
+  return state.rpc.status;
 }

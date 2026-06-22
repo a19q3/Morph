@@ -168,8 +168,17 @@ Run the local operator console:
 ```sh
 cd ui/morph-hub
 npm install
-npm run dev -- --port 5173
+npm run build
+cd ../..
+cargo run -p morph-cli -- hub serve \
+  --listen 127.0.0.1:4617 \
+  --node-id "$MORPH_NODE_ID" \
+  --state-path target/morph-hub/node-state.json
 ```
+
+Set `MORPH_NODE_ID` to the local 32-byte Morph node id, then open
+`http://127.0.0.1:4617/`. During UI development, `npm run dev` proxies `/api`
+to that hub server.
 
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 

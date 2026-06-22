@@ -349,6 +349,22 @@ impl MorphInvoice {
 }
 
 impl MorphInvoiceBook {
+    pub fn records(&self) -> impl Iterator<Item = &StoredMorphInvoice> {
+        self.invoices.values()
+    }
+
+    pub fn insert_stored(&mut self, stored: StoredMorphInvoice) -> NodeResult<()> {
+        stored.invoice.validate()?;
+        if stored.encoded_invoice != stored.invoice.encode() {
+            return Err(NodeError::InvoiceIdMismatch);
+        }
+        if self.invoices.contains_key(&stored.invoice.invoice_id) {
+            return Err(NodeError::InvoiceAlreadyExists);
+        }
+        self.invoices.insert(stored.invoice.invoice_id, stored);
+        Ok(())
+    }
+
     pub fn create_invoice(&mut self, request: NewMorphInvoice) -> NodeResult<StoredMorphInvoice> {
         let preimage = request.payment_preimage;
         let invoice = MorphInvoice::new(request)?;

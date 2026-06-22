@@ -16,7 +16,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -72,27 +73,24 @@ small,
   font-size: 12px;
 }
 
-.nav-list {
+.node-card {
   display: grid;
   gap: 4px;
-}
-
-.nav-item {
-  height: 36px;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 0 10px;
+  border: 1px solid #dbe3df;
   border-radius: 6px;
-  color: #31403b;
-  background: transparent;
-  text-align: left;
+  padding: 11px;
+  overflow: hidden;
 }
 
-.nav-item:first-child,
-.nav-item:hover {
-  background: #eef5f1;
-  color: #0e6f4c;
+.node-card span {
+  color: #6b7874;
+  font-size: 12px;
+}
+
+.node-card strong,
+.node-card small {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .coverage {
@@ -169,6 +167,14 @@ small,
   color: #0e6f4c;
 }
 
+.status-pill.warn {
+  color: #925c08;
+}
+
+.status-pill.bad {
+  color: #963c2d;
+}
+
 .icon-button,
 .row-actions button,
 .drawer-tabs button {
@@ -179,6 +185,11 @@ small,
   border-radius: 6px;
   color: #4d5d58;
   background: #eef2f0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .metric-grid {
@@ -225,10 +236,9 @@ small,
   padding: 16px;
 }
 
-.flow-line {
+.flow-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr) 150px;
-  align-items: center;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin-top: 14px;
 }
@@ -255,6 +265,11 @@ small,
   color: white;
   font-size: 12px;
   font-weight: 700;
+}
+
+.flow-step.done {
+  border-color: #a5d3bd;
+  background: #f2faf6;
 }
 
 .flow-branch {
@@ -435,7 +450,8 @@ td small {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   border: 1px solid #d6dfdb;
   border-radius: 6px;
@@ -443,6 +459,10 @@ textarea {
   color: #18211f;
   background: #fbfcfc;
   min-width: 0;
+}
+
+select {
+  min-height: 38px;
 }
 
 textarea {
@@ -457,7 +477,8 @@ textarea.snapshot {
 }
 
 .form-grid button,
-.copy-button {
+.copy-button,
+.danger-button {
   min-height: 36px;
   border-radius: 6px;
   background: #117a55;
@@ -474,12 +495,40 @@ textarea.snapshot {
   color: #31403b;
 }
 
+.danger-button {
+  background: #963c2d;
+}
+
+.form-section {
+  border-top: 1px solid #edf1ef;
+  padding-top: 12px;
+  margin-top: 2px;
+}
+
+.state-path {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #dbe3df;
+  border-radius: 6px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+.state-path strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .error {
   border-radius: 6px;
   padding: 9px 10px;
   color: #963c2d;
   background: #f9e8e5;
   font-size: 13px;
+}
+
+.banner {
+  margin-bottom: 12px;
 }
 
 @media (max-width: 1120px) {
@@ -492,13 +541,8 @@ textarea.snapshot {
   }
 
   .brand div:not(.brand-mark),
-  .nav-item:not(:first-child),
-  .nav-item:first-child {
-    font-size: 0;
-  }
-
-  .nav-item {
-    justify-content: center;
+  .node-card {
+    display: none;
   }
 
   .coverage {
@@ -544,10 +588,6 @@ textarea.snapshot {
     display: none;
   }
 
-  .nav-list {
-    display: flex;
-  }
-
   .workspace {
     padding: 14px;
   }
@@ -561,7 +601,7 @@ textarea.snapshot {
 
   .metric-grid,
   .content-grid,
-  .flow-line {
+  .flow-grid {
     grid-template-columns: 1fr;
   }
 

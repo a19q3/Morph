@@ -31,6 +31,7 @@ use rpc::{CkbRpcClient, HeaderView};
 
 mod devnet;
 mod factory_packages;
+mod hub;
 mod packages;
 mod rpc;
 mod smoke_report;
@@ -156,6 +157,11 @@ enum Command {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Run the Morph Hub API and static UI server.
+    Hub {
+        #[command(subcommand)]
+        command: HubCommand,
     },
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
@@ -402,6 +408,31 @@ enum Command {
         rpc_url: String,
         #[command(subcommand)]
         command: DevnetCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum HubCommand {
+    /// Serve the Morph Hub API and production-built UI.
+    Serve {
+        /// Host and port for the hub server.
+        #[arg(long, default_value = "127.0.0.1:4617")]
+        listen: String,
+        /// Durable hub state file.
+        #[arg(long, default_value = "target/morph-hub/node-state.json")]
+        state_path: PathBuf,
+        /// Local Morph node id as a 32-byte 0x-prefixed hex value.
+        #[arg(long)]
+        node_id: String,
+        /// Morph network.
+        #[arg(long, value_enum, default_value = "devnet")]
+        network: InvoiceNetworkArg,
+        /// Optional CKB JSON-RPC URL for live chain health.
+        #[arg(long)]
+        ckb_rpc_url: Option<String>,
+        /// Directory containing the built Morph Hub UI.
+        #[arg(long, default_value = "ui/morph-hub/dist")]
+        ui_dir: PathBuf,
     },
 }
 
@@ -2830,6 +2861,23 @@ fn main() -> Result<()> {
             now_unix,
             json,
         } => settle_invoice_command(&invoice, &payment_preimage, now_unix, json),
+        Command::Hub { command } => match command {
+            HubCommand::Serve {
+                listen,
+                state_path,
+                node_id,
+                network,
+                ckb_rpc_url,
+                ui_dir,
+            } => hub::serve(hub::HubServeOptions {
+                listen,
+                state_path,
+                node_id: parse_cli_bytes32("node_id", &node_id)?,
+                network: morph_network(network),
+                ckb_rpc_url,
+                ui_dir,
+            }),
+        },
         Command::PrintFactoryFixture => {
             let package = factory_packages::fixture_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
