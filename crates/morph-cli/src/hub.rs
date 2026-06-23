@@ -1,11 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use morph_core::*;
@@ -16,6 +19,9 @@ use crate::rpc::CkbRpcClient;
 
 const STATE_FILE_VERSION: u16 = 1;
 const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
+const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_EVENTS: usize = 128;
 const EVENT_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(1_000);
 const EVENT_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -619,20 +625,7 @@ impl HubStore {
         }
         let persisted = self.persisted()?;
         let data = serde_json::to_vec_pretty(&persisted)?;
-        let file_name = self
-            .path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow!("hub state path must include a file name"))?;
-        let tmp_path = self.path.with_file_name(format!(".{file_name}.tmp"));
-        fs::write(&tmp_path, data)
-            .with_context(|| format!("failed to write {}", tmp_path.display()))?;
-        fs::rename(&tmp_path, &self.path).with_context(|| {
-            format!(
-                "failed to atomically replace hub state {}",
-                self.path.display()
-            )
-        })?;
+        write_private_file_atomic(&self.path, &data)?;
         Ok(())
     }
 
@@ -765,6 +758,12 @@ impl HubRuntimeState {
 }
 
 fn handle_connection(mut stream: TcpStream, server: &HubServer) -> Result<()> {
+    stream
+        .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
+        .context("failed to set Morph Hub request read timeout")?;
+    stream
+        .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
+        .context("failed to set Morph Hub response write timeout")?;
     let request = read_request(&mut stream)?;
     if request.method == "GET" && request.path == "/api/events" {
         server.stream_events(&request, &mut stream)?;
@@ -1396,6 +1395,52 @@ fn split_action_path<'a>(path: &'a str, prefix: &str) -> Result<(Bytes32, &'a st
     Ok((parse_bytes32("id", id)?, action))
 }
 
+fn write_private_file_atomic(path: &Path, data: &[u8]) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("hub state path must include a file name"))?;
+    let tmp_path = path.with_file_name(format!(".{file_name}.{}.tmp", std::process::id()));
+    let _ = fs::remove_file(&tmp_path);
+    let mut file = create_private_new_file(&tmp_path)?;
+    file.write_all(data)
+        .with_context(|| format!("failed to write {}", tmp_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync {}", tmp_path.display()))?;
+    drop(file);
+    fs::rename(&tmp_path, path)
+        .with_context(|| format!("failed to atomically replace hub state {}", path.display()))?;
+    sync_parent_dir(path)?;
+    Ok(())
+}
+
+fn create_private_new_file(path: &Path) -> Result<fs::File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("failed to create private file {}", path.display()))
+}
+
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::File::open(parent)
+            .and_then(|dir| dir.sync_all())
+            .with_context(|| format!("failed to sync directory {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_dir(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
 fn parse_body<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T> {
     ensure!(!body.is_empty(), "request body must not be empty");
     serde_json::from_slice(body).context("request body is not valid JSON")
@@ -1476,10 +1521,12 @@ fn parse_bytes32(label: &str, value: &str) -> Result<Bytes32> {
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    let mut reader = BufReader::new(stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    let request_line = request_line.trim_end_matches(['\r', '\n']);
+    read_request_from_reader(stream)
+}
+
+fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
+    let mut reader = BufReader::new(reader);
+    let (request_line, mut header_bytes) = read_limited_line(&mut reader, MAX_REQUEST_LINE_BYTES)?;
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
@@ -1489,14 +1536,28 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         .next()
         .ok_or_else(|| anyhow!("missing HTTP path"))?
         .to_string();
+    let version = parts
+        .next()
+        .ok_or_else(|| anyhow!("missing HTTP version"))?;
+    ensure!(parts.next().is_none(), "malformed HTTP request line");
+    ensure!(
+        version.starts_with("HTTP/"),
+        "unsupported HTTP request version"
+    );
     let path = uri.split('?').next().unwrap_or(&uri).to_string();
 
     let mut content_length = 0usize;
     let mut headers = BTreeMap::new();
     loop {
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let line = line.trim_end_matches(['\r', '\n']);
+        let (line, line_bytes) = read_limited_line(&mut reader, MAX_REQUEST_LINE_BYTES)?;
+        header_bytes = header_bytes
+            .checked_add(line_bytes)
+            .context("HTTP headers are too large")?;
+        ensure!(
+            header_bytes <= MAX_REQUEST_HEADER_BYTES,
+            "HTTP headers exceed {} bytes",
+            MAX_REQUEST_HEADER_BYTES
+        );
         if line.is_empty() {
             break;
         }
@@ -1527,6 +1588,42 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         headers,
         body,
     })
+}
+
+fn read_limited_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<(String, usize)> {
+    let mut buf = Vec::new();
+    loop {
+        let available = reader.fill_buf().context("failed to read HTTP line")?;
+        ensure!(
+            !available.is_empty(),
+            "unexpected EOF while reading HTTP line"
+        );
+        if let Some(newline_index) = available.iter().position(|byte| *byte == b'\n') {
+            let take = newline_index + 1;
+            ensure!(
+                buf.len() + take <= max_bytes,
+                "HTTP line exceeds {} bytes",
+                max_bytes
+            );
+            buf.extend_from_slice(&available[..take]);
+            reader.consume(take);
+            break;
+        }
+        ensure!(
+            buf.len() + available.len() <= max_bytes,
+            "HTTP line exceeds {} bytes",
+            max_bytes
+        );
+        let take = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(take);
+    }
+    let bytes = buf.len();
+    let line = String::from_utf8(buf)
+        .context("HTTP line is not valid UTF-8")?
+        .trim_end_matches(['\r', '\n'])
+        .to_string();
+    Ok((line, bytes))
 }
 
 fn write_response(
@@ -1853,10 +1950,60 @@ fn phase_label(phase: Phase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     static TEST_STATE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn request_parser_rejects_oversized_request_lines() {
+        let valid = b"GET /api/state HTTP/1.1\r\nHost: morph.local\r\n\r\n";
+        let request = read_request_from_reader(Cursor::new(valid)).unwrap();
+        assert_eq!(request.method, "GET");
+        assert_eq!(request.path, "/api/state");
+
+        let oversized = format!(
+            "GET /{} HTTP/1.1\r\nHost: morph.local\r\n\r\n",
+            "a".repeat(MAX_REQUEST_LINE_BYTES)
+        );
+        let err = read_request_from_reader(Cursor::new(oversized.into_bytes()))
+            .expect_err("oversized HTTP request line should be rejected");
+        assert!(
+            err.to_string().contains("HTTP line exceeds"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hub_state_file_is_owner_only_after_sensitive_invoice_persist() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server(&local_pubkey);
+        let path = server.store.lock().unwrap().path.clone();
+        assert_eq!(state_file_mode(&path), 0o600);
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/invoices",
+            json!({
+                "amount": "100000000",
+                "description": "private invoice",
+                "payment_preimage": bytes32_hex(51),
+                "expiry_secs": 3600,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+        assert_eq!(state_file_mode(&path), 0o600);
+
+        let persisted = fs::read_to_string(&path).unwrap();
+        assert!(persisted.contains("payment_preimage"));
+    }
 
     #[test]
     fn rejected_mutation_does_not_commit_partial_peer_state() {
@@ -2310,6 +2457,11 @@ mod tests {
                 .collect(),
             body: Vec::new(),
         }
+    }
+
+    #[cfg(unix)]
+    fn state_file_mode(path: &Path) -> u32 {
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
     fn hex_repeat(ch: char) -> String {
