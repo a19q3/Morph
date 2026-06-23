@@ -839,6 +839,8 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
   const [settleInvoiceId, setSettleInvoiceId] = useState('');
   const [settlePreimage, setSettlePreimage] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
+  const activeChannels = state.channels.filter(channel => channel.phase === 'active');
+  const latestActiveChannel = activeChannels[0];
 
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
@@ -903,8 +905,31 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
             <option value="hash">hash</option>
           </select>
         </label>
-        <label>{paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}<input className="mono" data-testid="invoice-payment-secret" value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} /></label>
-        <label>Channel id<input className="mono" data-testid="invoice-channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
+        <label>
+          <span className="field-label-row">
+            {paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}
+            {paymentMode === 'preimage' && (
+              <button type="button" className="field-action" onClick={() => setPaymentSecret(randomHex32())}>
+                <RefreshCw size={12} /> Generate
+              </button>
+            )}
+          </span>
+          <input className="mono" data-testid="invoice-payment-secret" value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} />
+        </label>
+        <label>
+          <span className="field-label-row">
+            Channel id
+            <button
+              type="button"
+              className="field-action"
+              onClick={() => setChannelId(latestActiveChannel?.channel_id ?? '')}
+              disabled={!latestActiveChannel}
+            >
+              <GitBranch size={12} /> Use active
+            </button>
+          </span>
+          <input className="mono" data-testid="invoice-channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} />
+        </label>
         <AssetSelect value={asset} onChange={setAsset} />
         <button data-testid="invoice-create" disabled={busy}><Plus size={15} /> Create invoice</button>
       </form>
@@ -920,7 +945,15 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
       <div className="form-section">
         <h3>Receive</h3>
         <form onSubmit={submitReceive} className="form-grid">
-          <label>Invoice id<input className="mono" data-testid="invoice-receive-id" value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} /></label>
+          <label>
+            <span className="field-label-row">
+              Invoice id
+              <button type="button" className="field-action" onClick={() => setReceiveInvoiceId(state.invoices[0]?.invoice_id ?? '')} disabled={!state.invoices[0]}>
+                <ReceiptText size={12} /> Latest
+              </button>
+            </span>
+            <input className="mono" data-testid="invoice-receive-id" value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} />
+          </label>
           <button data-testid="invoice-receive" disabled={busy}><Database size={15} /> Mark received</button>
         </form>
       </div>
@@ -928,7 +961,15 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
       <div className="form-section">
         <h3>Settle</h3>
         <form onSubmit={submitSettle} className="form-grid">
-          <label>Invoice id<input className="mono" data-testid="invoice-settle-id" value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} /></label>
+          <label>
+            <span className="field-label-row">
+              Invoice id
+              <button type="button" className="field-action" onClick={() => setSettleInvoiceId(state.invoices[0]?.invoice_id ?? '')} disabled={!state.invoices[0]}>
+                <ReceiptText size={12} /> Latest
+              </button>
+            </span>
+            <input className="mono" data-testid="invoice-settle-id" value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} />
+          </label>
           <label>Payment preimage<input className="mono" data-testid="invoice-settle-preimage" value={settlePreimage} onChange={event => setSettlePreimage(event.target.value)} /></label>
           <button data-testid="invoice-settle" disabled={busy}><BadgeCheck size={15} /> Settle</button>
         </form>
@@ -964,6 +1005,8 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
   const activeChannels = state.channels.filter(channel => channel.phase === 'active');
   const publishableChannels = state.channels.filter(channel => channel.phase === 'active' || channel.phase === 'settling');
   const settlingChannels = state.channels.filter(channel => channel.phase === 'settling');
+  const selectedSpliceChannel = activeChannels.find(channel => channel.channel_id === spliceChannelId);
+  const selectedPublishChannel = publishableChannels.find(channel => channel.channel_id === publishChannelId);
 
   const submitOpen = (event: FormEvent) => {
     event.preventDefault();
@@ -1011,10 +1054,32 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
     });
   };
 
+  const generateOpenChannelIds = () => {
+    setChannelId(randomHex32());
+    setFundingContextId(randomHex32());
+  };
+
+  const useSelectedSpliceDefaults = () => {
+    if (!selectedSpliceChannel) return;
+    setSpliceEpoch(String(selectedSpliceChannel.funding_epoch + 1));
+    setSpliceContextId(randomHex32());
+  };
+
+  const useSelectedPublishDefaults = () => {
+    if (!selectedPublishChannel) return;
+    setPublishContextId(selectedPublishChannel.funding_context_id);
+    setPublishStateNumber(String(selectedPublishChannel.state_number + 1));
+  };
+
   return (
     <div className="drawer-section">
       <h2>Node Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
+        <div className="field-action-row">
+          <button type="button" className="field-action" onClick={generateOpenChannelIds}>
+            <RefreshCw size={12} /> Generate ids
+          </button>
+        </div>
         <label>Channel id<input className="mono" data-testid="channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
         <label>Counterparty pubkey<input className="mono" data-testid="channel-counterparty-pubkey" value={counterpartyPubkey} onChange={event => setCounterpartyPubkey(event.target.value)} /></label>
         <label>Counterparty alias<input data-testid="channel-counterparty-alias" value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
@@ -1031,6 +1096,11 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
         <h3>Splice</h3>
         <form onSubmit={submitSplice} className="form-grid">
           <ChannelSelect testId="channel-splice-select" label="Active channel" channels={activeChannels} value={spliceChannelId} onChange={setSpliceChannelId} />
+          <div className="field-action-row">
+            <button type="button" className="field-action" onClick={useSelectedSpliceDefaults} disabled={!selectedSpliceChannel}>
+              <RefreshCw size={12} /> Use selected
+            </button>
+          </div>
           <label>New funding epoch<input className="mono" data-testid="channel-splice-epoch" value={spliceEpoch} onChange={event => setSpliceEpoch(event.target.value)} /></label>
           <label>New funding context id<input className="mono" data-testid="channel-splice-context-id" value={spliceContextId} onChange={event => setSpliceContextId(event.target.value)} /></label>
           <button data-testid="channel-splice" disabled={busy || activeChannels.length === 0}><Split size={15} /> Splice</button>
@@ -1041,6 +1111,11 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
         <h3>Publish state</h3>
         <form onSubmit={submitPublish} className="form-grid">
           <ChannelSelect testId="channel-publish-select" label="Publishable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
+          <div className="field-action-row">
+            <button type="button" className="field-action" onClick={useSelectedPublishDefaults} disabled={!selectedPublishChannel}>
+              <Activity size={12} /> Use selected
+            </button>
+          </div>
           <label>Funding context id<input className="mono" data-testid="channel-publish-context-id" value={publishContextId} onChange={event => setPublishContextId(event.target.value)} /></label>
           <label>State number<input className="mono" data-testid="channel-publish-state-number" value={publishStateNumber} onChange={event => setPublishStateNumber(event.target.value)} /></label>
           <button data-testid="channel-publish" disabled={busy || publishableChannels.length === 0}><RadioTower size={15} /> Publish</button>
@@ -1074,6 +1149,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
   const [childPending, setChildPending] = useState('');
   const [childSponsorBudget, setChildSponsorBudget] = useState('');
   const [childAsset, setChildAsset] = useState<Asset>({ kind: 'ckb' });
+  const selectedFactory = state.factories.find(factory => factory.factory_id === selectedFactoryId);
 
   const submitOpen = (event: FormEvent) => {
     event.preventDefault();
@@ -1119,12 +1195,49 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
     });
   };
 
+  const addLocalParticipant = () => {
+    const entries = parsePubkeyDraft(participants);
+    if (!entries.includes(state.pubkey)) {
+      setParticipants([...entries, state.pubkey].join('\n'));
+    }
+  };
+
+  const generateFactoryId = () => {
+    setFactoryId(randomHex32());
+  };
+
+  const useSelectedFactoryUpdate = () => {
+    if (!selectedFactory) return;
+    setNewUpdateNumber(String(selectedFactory.update_number + 1));
+  };
+
+  const generateChildIds = () => {
+    setChildChannelId(randomHex32());
+    setChildFundingContextId(randomHex32());
+  };
+
   return (
     <div className="drawer-section">
       <h2>Factory Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
-        <label>Factory id<input className="mono" data-testid="factory-id" value={factoryId} onChange={event => setFactoryId(event.target.value)} /></label>
-        <label>Participant pubkeys<textarea className="mono" data-testid="factory-participants" value={participants} onChange={event => setParticipants(event.target.value)} /></label>
+        <label>
+          <span className="field-label-row">
+            Factory id
+            <button type="button" className="field-action" onClick={generateFactoryId}>
+              <RefreshCw size={12} /> Generate
+            </button>
+          </span>
+          <input className="mono" data-testid="factory-id" value={factoryId} onChange={event => setFactoryId(event.target.value)} />
+        </label>
+        <label>
+          <span className="field-label-row">
+            Participant pubkeys
+            <button type="button" className="field-action" onClick={addLocalParticipant} disabled={!state.pubkey}>
+              <Plus size={12} /> Add local
+            </button>
+          </span>
+          <textarea className="mono" data-testid="factory-participants" value={participants} onChange={event => setParticipants(event.target.value)} />
+        </label>
         <label>Reserve<input className="mono" data-testid="factory-reserve" value={reserve} onChange={event => setReserve(event.target.value)} /></label>
         <AssetSelect value={factoryAsset} onChange={setFactoryAsset} />
         <button data-testid="factory-open" disabled={busy}><Factory size={15} /> Open factory</button>
@@ -1134,6 +1247,11 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <h3>Advance</h3>
         <form onSubmit={submitAdvance} className="form-grid">
           <FactorySelect testId="factory-advance-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <div className="field-action-row">
+            <button type="button" className="field-action" onClick={useSelectedFactoryUpdate} disabled={!selectedFactory}>
+              <Activity size={12} /> Use selected
+            </button>
+          </div>
           <label>New update number<input className="mono" data-testid="factory-new-update-number" value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
           <button data-testid="factory-advance" disabled={busy || state.factories.length === 0}><RefreshCw size={15} /> Advance</button>
         </form>
@@ -1143,6 +1261,11 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <h3>Materialise child</h3>
         <form onSubmit={submitMaterialise} className="form-grid">
           <FactorySelect testId="factory-materialise-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <div className="field-action-row">
+            <button type="button" className="field-action" onClick={generateChildIds}>
+              <RefreshCw size={12} /> Generate ids
+            </button>
+          </div>
           <label>Child channel id<input className="mono" data-testid="factory-child-channel-id" value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
           <label>Counterparty pubkey<input className="mono" data-testid="factory-child-counterparty-pubkey" value={childCounterpartyPubkey} onChange={event => setChildCounterpartyPubkey(event.target.value)} /></label>
           <label>Counterparty alias<input data-testid="factory-child-counterparty-alias" value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
@@ -1289,6 +1412,25 @@ function requiredText(value: string, label: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error(`${label} must not be empty.`);
   return trimmed;
+}
+
+function randomHex32(): Hex32 {
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error('Secure browser randomness is unavailable.');
+  }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  if (bytes.every(byte => byte === 0)) {
+    bytes[31] = 1;
+  }
+  return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}` as Hex32;
+}
+
+function parsePubkeyDraft(value: string): Pubkey[] {
+  return value
+    .split(/[\s,]+/)
+    .map(item => item.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function balanceTotal(balance?: Balance): bigint {
