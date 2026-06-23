@@ -429,6 +429,15 @@ enum HubCommand {
         /// Optional CKB JSON-RPC URL for live chain health.
         #[arg(long)]
         ckb_rpc_url: Option<String>,
+        /// Bearer token required for Morph Hub API requests. Required for non-loopback listen addresses.
+        #[arg(long, env = "MORPH_HUB_AUTH_TOKEN")]
+        auth_token: Option<String>,
+        /// Allow replacing the durable Hub state file through PUT /api/state-file.
+        #[arg(long)]
+        allow_state_restore: bool,
+        /// Explicit CORS origin for direct browser API access, for example http://127.0.0.1:5173.
+        #[arg(long, env = "MORPH_HUB_CORS_ORIGIN")]
+        cors_origin: Option<String>,
         /// Directory containing the built Morph Hub UI.
         #[arg(long, default_value = "ui/morph-hub/dist")]
         ui_dir: PathBuf,
@@ -2737,6 +2746,9 @@ fn main() -> Result<()> {
                 pubkey,
                 network,
                 ckb_rpc_url,
+                auth_token,
+                allow_state_restore,
+                cors_origin,
                 ui_dir,
             } => hub::serve(hub::HubServeOptions {
                 listen,
@@ -2745,6 +2757,9 @@ fn main() -> Result<()> {
                 network: morph_network(network),
                 ckb_rpc_url,
                 ui_dir,
+                auth_token,
+                allow_state_restore,
+                cors_origin,
             }),
         },
         Command::PrintFactoryFixture => {

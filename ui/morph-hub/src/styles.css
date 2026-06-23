@@ -390,6 +390,21 @@ a {
   border-color: transparent;
 }
 
+.provenance-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  min-height: 24px;
+  border-radius: var(--r-sm);
+  padding: 3px 7px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .icon-button {
   width: 30px;
   height: 30px;
@@ -436,6 +451,43 @@ a {
 
 .banner {
   margin-bottom: 14px;
+}
+
+.provenance-banner {
+  margin-bottom: 14px;
+  border-radius: var(--r-md);
+  padding: 11px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+}
+
+.provenance-banner.local {
+  border-color: #ecd8a7;
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.provenance-banner.connected {
+  border-color: #c8d8ef;
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.provenance-banner strong {
+  display: block;
+  color: inherit;
+  font-size: 13px;
+}
+
+.provenance-banner span {
+  display: block;
+  color: var(--text-2);
+  margin-top: 2px;
 }
 
 /* ============================================================
@@ -779,6 +831,14 @@ td small {
   border-bottom: 0;
 }
 
+.row-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
 .list-row strong {
   display: block;
   font-size: 13px;
@@ -1034,6 +1094,22 @@ input.mono {
 
 .danger-button:hover:not(:disabled) {
   background: #9a3627;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.check-row input {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  accent-color: var(--accent);
 }
 
 .inline-ok,

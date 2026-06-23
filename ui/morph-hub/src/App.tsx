@@ -37,6 +37,7 @@ import {
   NodeState,
   PeerRecord,
   Pubkey,
+  RecordProvenance,
   assertHex32,
   assertIncludesPubkey,
   assertNonNegativeInteger,
@@ -275,6 +276,7 @@ export function App() {
           </div>
           <div className="topbar-status">
             <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
+            <StatusPill tone={state.security.auth_required ? 'good' : 'warn'} icon={<ShieldCheck size={15} />} label={state.security.auth_required ? 'auth required' : 'loopback only'} />
             <StatusPill tone="neutral" icon={<Boxes size={15} />} label={state.rpc.tip_height == null ? 'tip unavailable' : `tip ${state.rpc.tip_height}`} />
             <button className={`icon-button ${busy ? 'spinning' : ''}`} title="Refresh from API" data-testid="hub-refresh" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
               <RefreshCw size={16} />
@@ -289,6 +291,13 @@ export function App() {
         </div>
 
         {error && <div className="error banner"><AlertTriangle size={15} />{error}</div>}
+        <div className={`provenance-banner ${state.rpc.status === 'connected' ? 'connected' : 'local'}`} data-testid="provenance-banner">
+          <ShieldCheck size={15} />
+          <div>
+            <strong>{state.rpc.status === 'connected' ? 'CKB RPC connected, records still require evidence' : 'Local Hub state only'}</strong>
+            <span>{state.provenance.message}</span>
+          </div>
+        </div>
 
         <section className="metric-grid">
           <Metric label="Vault value" value={formatAmount(totals.vaultValue, { kind: 'ckb' })} icon={<Landmark size={16} />} />
@@ -380,6 +389,14 @@ function StatusPill({
   return <span className={`status-pill ${tone}`}>{icon}{label}</span>;
 }
 
+function ProvenanceBadge({ provenance }: { provenance: RecordProvenance }) {
+  return (
+    <span className={`provenance-badge ${provenance.chain_status}`} title={provenance.message}>
+      {provenance.label}
+    </span>
+  );
+}
+
 function Metric({ label, value, icon, tone = 'base' }: { label: string; value: string; icon: React.ReactNode; tone?: 'base' | 'warn' }) {
   return (
     <article className={`metric ${tone}`}>
@@ -437,11 +454,12 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
             <th>Funding</th>
             <th>Value</th>
             <th>Sponsor</th>
+            <th>Source</th>
           </tr>
         </thead>
         <tbody>
           {channels.length === 0 && (
-            <tr><td colSpan={6} className="empty">No channels in the hub state file</td></tr>
+            <tr><td colSpan={7} className="empty">No channels in the hub state file</td></tr>
           )}
           {channels.map(channel => (
             <tr key={channel.channel_id}>
@@ -451,6 +469,7 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
               <td><strong>epoch {channel.funding_epoch}</strong><small>{shortHex(channel.funding_context_id)}</small></td>
               <td className="mono">{formatBalance(channel.balances[0])}</td>
               <td className="mono">{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
+              <td><ProvenanceBadge provenance={channel.provenance} /></td>
             </tr>
           ))}
         </tbody>
@@ -470,15 +489,18 @@ function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
       <div className="stack-list">
         {invoices.length === 0 && <div className="empty">No invoices in the hub state file</div>}
         {invoices.slice(0, 5).map(invoice => (
-          <div className="list-row" key={invoice.invoice_id}>
-            <div>
-              <strong>{invoice.description || shortHex(invoice.invoice_id)}</strong>
-              <small>{formatAmount(invoice.amount, invoice.asset)} · {assetLabel(invoice.asset)} · {shortHex(invoice.payment_hash)}</small>
-              <small>expires {formatTime(invoice.expires_at_unix)}</small>
+            <div className="list-row" key={invoice.invoice_id}>
+              <div>
+                <strong>{invoice.description || shortHex(invoice.invoice_id)}</strong>
+                <small>{formatAmount(invoice.amount, invoice.asset)} · {assetLabel(invoice.asset)} · {shortHex(invoice.payment_hash)}</small>
+                <small>expires {formatTime(invoice.expires_at_unix)}</small>
+              </div>
+              <div className="row-badges">
+                <span className={`status ${invoice.status}`}>{invoice.status}</span>
+                <ProvenanceBadge provenance={invoice.provenance} />
+              </div>
             </div>
-            <span className={`status ${invoice.status}`}>{invoice.status}</span>
-          </div>
-        ))}
+          ))}
       </div>
     </section>
   );
@@ -500,6 +522,7 @@ function PeerPanel({ peers }: { peers: PeerRecord[] }) {
               <small>{shortHex(peer.pubkey)}</small>
               <small>node {shortHex(peer.node_id)}</small>
             </div>
+            <ProvenanceBadge provenance={peer.provenance} />
           </div>
         ))}
       </div>
@@ -522,7 +545,10 @@ function FactoryPanel({ factories }: { factories: FactoryRecord[] }) {
               <strong>{shortHex(factory.factory_id)}</strong>
               <small>update {factory.update_number} · {factory.materialised_child_channels.length} children</small>
             </div>
-            <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
+            <div className="row-badges">
+              <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
+              <ProvenanceBadge provenance={factory.provenance} />
+            </div>
           </div>
         ))}
       </div>
@@ -951,6 +977,7 @@ function StateActions({ state, runAction, busy }: { state: NodeState; runAction:
   const [raw, setRaw] = useState('');
   const [stateFileStatus, setStateFileStatus] = useState('');
   const [stateFileBusy, setStateFileBusy] = useState(false);
+  const [confirmRestore, setConfirmRestore] = useState(false);
 
   const exportState = async () => {
     setStateFileBusy(true);
@@ -976,12 +1003,31 @@ function StateActions({ state, runAction, busy }: { state: NodeState; runAction:
       <h2>State File</h2>
       <div className="state-path">
         <strong>{state.state_path || 'not loaded'}</strong>
-        <small>Backed by the Morph Hub API process</small>
+        <small>{state.security.state_restore_enabled ? 'Restore is enabled for this API process' : 'Restore is disabled by default'}</small>
       </div>
       <button className="copy-button" data-testid="state-load-json" onClick={exportState} disabled={busy || stateFileBusy}><FileJson size={15} /> Load state JSON</button>
       {stateFileStatus && <small className={stateFileStatus === 'loaded' ? 'inline-ok' : 'inline-error'}>{stateFileStatus}</small>}
       <textarea className="mono" data-testid="state-json" value={raw} onChange={event => setRaw(event.target.value)} />
-      <button className="danger-button" data-testid="state-restore-json" onClick={restoreState} disabled={busy || !raw.trim()}><Upload size={15} /> Restore state file</button>
+      <label className="check-row">
+        <input
+          type="checkbox"
+          checked={confirmRestore}
+          onChange={event => setConfirmRestore(event.target.checked)}
+          disabled={!state.security.state_restore_enabled}
+        />
+        <span>I understand this replaces the local Hub state file.</span>
+      </label>
+      <button
+        className="danger-button"
+        data-testid="state-restore-json"
+        onClick={restoreState}
+        disabled={busy || !raw.trim() || !state.security.state_restore_enabled || !confirmRestore}
+      >
+        <Upload size={15} /> Restore state file
+      </button>
+      {!state.security.state_restore_enabled && (
+        <small className="inline-error">Restart with --allow-state-restore to enable this write path.</small>
+      )}
     </div>
   );
 }

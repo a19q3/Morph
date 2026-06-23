@@ -5,6 +5,8 @@ export type Phase = 'funding' | 'active' | 'settling' | 'closed';
 export type InvoiceStatus = 'open' | 'received' | 'paid' | 'cancelled' | 'expired';
 export type EventSeverity = 'info' | 'warning' | 'critical';
 export type RpcStatus = 'connected' | 'degraded' | 'offline' | 'not_configured';
+export type ProvenanceSource = 'hub_state_file';
+export type ChainStatus = 'not_chain_verified';
 export type FlowKey =
   | 'peer'
   | 'invoice-created'
@@ -30,10 +32,24 @@ export interface Balance {
   pending: string;
 }
 
+export interface RecordProvenance {
+  source: ProvenanceSource;
+  chain_status: ChainStatus;
+  label: string;
+  message: string;
+}
+
+export interface HubSecurity {
+  auth_required: boolean;
+  state_restore_enabled: boolean;
+  cors_origin?: string | null;
+}
+
 export interface PeerRecord {
   pubkey: Pubkey;
   node_id: Hex32;
   alias: string;
+  provenance: RecordProvenance;
 }
 
 export interface ChannelRecord {
@@ -46,6 +62,7 @@ export interface ChannelRecord {
   phase: Phase;
   balances: Balance[];
   sponsor_budget: number;
+  provenance: RecordProvenance;
 }
 
 export interface InvoiceRecord {
@@ -65,6 +82,7 @@ export interface InvoiceRecord {
   received_at_unix?: number;
   paid_at_unix?: number;
   cancelled_at_unix?: number;
+  provenance: RecordProvenance;
 }
 
 export interface FactoryRecord {
@@ -74,6 +92,7 @@ export interface FactoryRecord {
   update_number: number;
   reserve_balances: Balance[];
   materialised_child_channels: Hex32[];
+  provenance: RecordProvenance;
 }
 
 export interface HubEvent {
@@ -83,6 +102,7 @@ export interface HubEvent {
   subject_id?: Hex32;
   message: string;
   created_at_unix: number;
+  provenance: RecordProvenance;
 }
 
 export interface RpcHealth {
@@ -99,6 +119,8 @@ export interface NodeState {
   network: Network;
   state_path: string;
   rpc: RpcHealth;
+  security: HubSecurity;
+  provenance: RecordProvenance;
   peers: PeerRecord[];
   channels: ChannelRecord[];
   invoices: InvoiceRecord[];
@@ -115,6 +137,13 @@ export const emptyState: NodeState = {
   network: 'devnet',
   state_path: '',
   rpc: { status: 'offline', message: 'API not loaded' },
+  security: { auth_required: false, state_restore_enabled: false, cors_origin: null },
+  provenance: {
+    source: 'hub_state_file',
+    chain_status: 'not_chain_verified',
+    label: 'Local state',
+    message: 'API not loaded',
+  },
   peers: [],
   channels: [],
   invoices: [],

@@ -173,7 +173,8 @@ cd ../..
 cargo run -p morph-cli -- hub serve \
   --listen 127.0.0.1:4617 \
   --pubkey "${MORPH_PUBKEY:?set MORPH_PUBKEY to the local compressed secp256k1 pubkey}" \
-  --state-path target/morph-hub/node-state.json
+  --state-path target/morph-hub/node-state.json \
+  --ckb-rpc-url "${MORPH_CKB_RPC:-http://127.0.0.1:18114}"
 ```
 
 Set `MORPH_PUBKEY` to the local 33-byte compressed secp256k1 public key as
@@ -181,6 +182,14 @@ Set `MORPH_PUBKEY` to the local 33-byte compressed secp256k1 public key as
 format. Morph derives its internal 32-byte node id from that pubkey. Then open
 `http://127.0.0.1:4617/`. During UI development, `npm run dev` proxies `/api`
 to that hub server.
+
+Morph Hub is loopback-first. Binding to anything other than loopback requires
+`--auth-token` or `MORPH_HUB_AUTH_TOKEN`; direct cross-origin browser access is
+disabled unless `--cors-origin` is set to an explicit `http://` or `https://`
+origin. Replacing the durable state file through the UI/API is disabled by
+default; add `--allow-state-restore` only when you intentionally need that
+operator recovery path. Rows shown in the console are labelled as local Hub
+state unless future chain evidence fields prove otherwise.
 
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 

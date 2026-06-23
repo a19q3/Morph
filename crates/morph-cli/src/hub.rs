@@ -25,12 +25,18 @@ pub struct HubServeOptions {
     pub network: MorphNetwork,
     pub ckb_rpc_url: Option<String>,
     pub ui_dir: PathBuf,
+    pub auth_token: Option<String>,
+    pub allow_state_restore: bool,
+    pub cors_origin: Option<String>,
 }
 
 struct HubServer {
     store: Arc<Mutex<HubStore>>,
     ui_dir: PathBuf,
     ckb_rpc_url: Option<String>,
+    auth_token: Option<String>,
+    allow_state_restore: bool,
+    cors_origin: Option<String>,
 }
 
 #[derive(Clone)]
@@ -110,6 +116,7 @@ enum EventSeverity {
 struct HttpRequest {
     method: String,
     path: String,
+    headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -118,6 +125,14 @@ struct HttpResponse {
     reason: &'static str,
     content_type: &'static str,
     body: Vec<u8>,
+}
+
+impl HttpRequest {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .get(&name.to_ascii_lowercase())
+            .map(String::as_str)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +227,8 @@ struct HubView {
     network: &'static str,
     state_path: String,
     rpc: RpcView,
+    security: HubSecurityView,
+    provenance: RecordProvenanceView,
     peers: Vec<PeerView>,
     channels: Vec<ChannelView>,
     invoices: Vec<InvoiceView>,
@@ -220,6 +237,21 @@ struct HubView {
     required_flows: Vec<&'static str>,
     completed_flows: Vec<&'static str>,
     missing_flows: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct HubSecurityView {
+    auth_required: bool,
+    state_restore_enabled: bool,
+    cors_origin: Option<String>,
+}
+
+#[derive(Serialize, Clone, Copy)]
+struct RecordProvenanceView {
+    source: &'static str,
+    chain_status: &'static str,
+    label: &'static str,
+    message: &'static str,
 }
 
 #[derive(Serialize)]
@@ -236,6 +268,7 @@ struct PeerView {
     pubkey: String,
     node_id: String,
     alias: String,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -249,6 +282,7 @@ struct ChannelView {
     phase: &'static str,
     balances: Vec<BalanceView>,
     sponsor_budget: u64,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -277,6 +311,7 @@ struct InvoiceView {
     received_at_unix: Option<u64>,
     paid_at_unix: Option<u64>,
     cancelled_at_unix: Option<u64>,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -287,6 +322,7 @@ struct FactoryView {
     update_number: u64,
     reserve_balances: Vec<BalanceView>,
     materialised_child_channels: Vec<String>,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -297,6 +333,7 @@ struct EventView {
     subject_id: Option<String>,
     message: String,
     created_at_unix: u64,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -306,7 +343,61 @@ enum AssetView {
     Xudt { type_hash: String },
 }
 
+fn local_state_provenance() -> RecordProvenanceView {
+    RecordProvenanceView {
+        source: "hub_state_file",
+        chain_status: "not_chain_verified",
+        label: "Local state",
+        message: "Recorded in the Morph Hub state file; this is not CKB devnet confirmation.",
+    }
+}
+
+fn normalise_optional_secret(value: Option<String>) -> Option<String> {
+    value
+        .map(|raw| raw.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalise_cors_origin(value: Option<String>) -> Result<Option<String>> {
+    let Some(origin) = value.map(|raw| raw.trim().to_string()) else {
+        return Ok(None);
+    };
+    if origin.is_empty() {
+        return Ok(None);
+    }
+    ensure!(origin != "*", "--cors-origin must not be wildcard '*'");
+    ensure!(
+        origin.starts_with("http://") || origin.starts_with("https://"),
+        "--cors-origin must be an http:// or https:// origin"
+    );
+    Ok(Some(origin))
+}
+
+fn listen_is_loopback(listen: &str) -> bool {
+    listen_host(listen)
+        .is_some_and(|host| host == "localhost" || host == "127.0.0.1" || host == "::1")
+}
+
+fn listen_host(listen: &str) -> Option<String> {
+    let listen = listen.trim();
+    if listen.is_empty() {
+        return None;
+    }
+    if let Some(rest) = listen.strip_prefix('[') {
+        let (host, _) = rest.split_once(']')?;
+        return Some(host.to_string());
+    }
+    let (host, _) = listen.rsplit_once(':')?;
+    Some(host.to_string())
+}
+
 pub fn serve(options: HubServeOptions) -> Result<()> {
+    let auth_token = normalise_optional_secret(options.auth_token);
+    let cors_origin = normalise_cors_origin(options.cors_origin)?;
+    ensure!(
+        listen_is_loopback(&options.listen) || auth_token.is_some(),
+        "serving Morph Hub on a non-loopback address requires --auth-token or MORPH_HUB_AUTH_TOKEN"
+    );
     let listener = TcpListener::bind(&options.listen)
         .with_context(|| format!("failed to bind Morph hub to {}", options.listen))?;
     let store = HubStore::load_or_create(options.state_path, &options.pubkey, options.network)?;
@@ -314,6 +405,9 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
         store: Arc::new(Mutex::new(store)),
         ui_dir: options.ui_dir,
         ckb_rpc_url: options.ckb_rpc_url,
+        auth_token,
+        allow_state_restore: options.allow_state_restore,
+        cors_origin,
     });
 
     println!("morph_hub_listen=http://{}", options.listen);
@@ -322,6 +416,25 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
         server.store.lock().unwrap().path.display()
     );
     println!("morph_hub_ui={}", server.ui_dir.display());
+    println!(
+        "morph_hub_auth={}",
+        if server.auth_token.is_some() {
+            "required"
+        } else {
+            "loopback"
+        }
+    );
+    println!(
+        "morph_hub_state_restore={}",
+        if server.allow_state_restore {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    if let Some(origin) = &server.cors_origin {
+        println!("morph_hub_cors_origin={origin}");
+    }
 
     for stream in listener.incoming() {
         let stream = stream.context("failed to accept Morph hub connection")?;
@@ -389,13 +502,15 @@ impl HubStore {
         Ok(())
     }
 
-    fn view(&self, rpc: RpcView) -> Result<HubView> {
+    fn view(&self, rpc: RpcView, security: HubSecurityView) -> Result<HubView> {
         Ok(HubView {
             pubkey: self.state.pubkey.clone(),
             node_id: hex_prefixed(&self.state.node.node_id),
             network: network_label(self.state.node.network),
             state_path: self.path.display().to_string(),
             rpc,
+            security,
+            provenance: local_state_provenance(),
             peers: self
                 .state
                 .node
@@ -650,7 +765,7 @@ impl HubRuntimeState {
 fn handle_connection(mut stream: TcpStream, server: &HubServer) -> Result<()> {
     let request = read_request(&mut stream)?;
     let response = server.route(request);
-    write_response(&mut stream, response)?;
+    write_response(&mut stream, response, server.cors_origin.as_deref())?;
     Ok(())
 }
 
@@ -674,6 +789,9 @@ impl HubServer {
     }
 
     fn route_api(&self, request: HttpRequest) -> Result<HttpResponse> {
+        if let Some(response) = self.auth_failure_response(&request) {
+            return Ok(response);
+        }
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/api/health") | ("GET", "/api/state") => self.state_response(),
             ("GET", "/api/state-file") => {
@@ -682,10 +800,19 @@ impl HubServer {
                 Ok(json_response(200, "OK", &persisted))
             }
             ("PUT", "/api/state-file") => {
+                if !self.allow_state_restore {
+                    return Ok(json_response(
+                        403,
+                        "Forbidden",
+                        &json!({
+                            "error": "state restore is disabled; restart Morph Hub with --allow-state-restore to enable this write path"
+                        }),
+                    ));
+                }
                 let persisted: PersistedHubState = parse_body(&request.body)?;
                 let mut store = self.store.lock().unwrap();
                 store.replace(persisted)?;
-                let view = store.view(self.rpc_view())?;
+                let view = store.view(self.rpc_view(), self.security_view())?;
                 Ok(json_response(200, "OK", &view))
             }
             ("POST", "/api/peers") => self.mutate(|store| {
@@ -1037,7 +1164,7 @@ impl HubServer {
         let mut store = self.store.lock().unwrap();
         let mut candidate = store.clone();
         f(&mut candidate)?;
-        let view = candidate.view(self.rpc_view())?;
+        let view = candidate.view(self.rpc_view(), self.security_view())?;
         candidate.persist()?;
         *store = candidate;
         Ok(json_response(200, "OK", &view))
@@ -1045,8 +1172,34 @@ impl HubServer {
 
     fn state_response(&self) -> Result<HttpResponse> {
         let store = self.store.lock().unwrap();
-        let view = store.view(self.rpc_view())?;
+        let view = store.view(self.rpc_view(), self.security_view())?;
         Ok(json_response(200, "OK", &view))
+    }
+
+    fn auth_failure_response(&self, request: &HttpRequest) -> Option<HttpResponse> {
+        let token = self.auth_token.as_ref()?;
+        let bearer = format!("Bearer {token}");
+        let authorised = request
+            .header("authorization")
+            .is_some_and(|value| value == bearer)
+            || request
+                .header("x-morph-hub-token")
+                .is_some_and(|value| value == token);
+        (!authorised).then(|| {
+            json_response(
+                401,
+                "Unauthorized",
+                &json!({ "error": "missing or invalid Morph Hub auth token" }),
+            )
+        })
+    }
+
+    fn security_view(&self) -> HubSecurityView {
+        HubSecurityView {
+            auth_required: self.auth_token.is_some(),
+            state_restore_enabled: self.allow_state_restore,
+            cors_origin: self.cors_origin.clone(),
+        }
     }
 
     fn rpc_view(&self) -> RpcView {
@@ -1280,6 +1433,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let path = uri.split('?').next().unwrap_or(&uri).to_string();
 
     let mut content_length = 0usize;
+    let mut headers = BTreeMap::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line)?;
@@ -1288,6 +1442,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
             break;
         }
         if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
             if name.eq_ignore_ascii_case("content-length") {
                 content_length = value
                     .trim()
@@ -1307,18 +1462,34 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         reader.read_exact(&mut body)?;
     }
 
-    Ok(HttpRequest { method, path, body })
+    Ok(HttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
 }
 
-fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> {
+fn write_response(
+    stream: &mut TcpStream,
+    response: HttpResponse,
+    cors_origin: Option<&str>,
+) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n",
         response.status,
         response.reason,
         response.content_type,
         response.body.len()
     )?;
+    if let Some(origin) = cors_origin {
+        write!(
+            stream,
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, PUT, OPTIONS\r\nAccess-Control-Allow-Headers: content-type, authorization, x-morph-hub-token\r\n"
+        )?;
+    }
+    write!(stream, "Connection: close\r\n\r\n")?;
     stream.write_all(&response.body)?;
     stream.flush()?;
     Ok(())
@@ -1423,6 +1594,7 @@ fn peer_view(peer: &MorphPeer, peer_pubkeys: &BTreeMap<Bytes32, String>) -> Resu
         pubkey: pubkey_for_node_id(&peer.node_id, peer_pubkeys)?.to_string(),
         node_id: hex_prefixed(&peer.node_id),
         alias: peer.alias.clone(),
+        provenance: local_state_provenance(),
     })
 }
 
@@ -1441,6 +1613,7 @@ fn channel_view(
         phase: phase_label(channel.phase),
         balances: channel.balances.iter().map(balance_view).collect(),
         sponsor_budget: channel.sponsor_budget,
+        provenance: local_state_provenance(),
     })
 }
 
@@ -1467,6 +1640,7 @@ fn invoice_view(
         received_at_unix: stored.received_at_unix,
         paid_at_unix: stored.paid_at_unix,
         cancelled_at_unix: stored.cancelled_at_unix,
+        provenance: local_state_provenance(),
     }
 }
 
@@ -1496,6 +1670,7 @@ fn factory_view(
             .iter()
             .map(|id| hex_prefixed(id))
             .collect(),
+        provenance: local_state_provenance(),
     })
 }
 
@@ -1544,6 +1719,7 @@ fn event_view(event: &HubEvent) -> EventView {
         subject_id: event.subject_id.map(|id| hex_prefixed(&id)),
         message: event.message.clone(),
         created_at_unix: event.created_at_unix,
+        provenance: local_state_provenance(),
     }
 }
 
@@ -1576,6 +1752,10 @@ fn phase_label(phase: Phase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static TEST_STATE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn rejected_mutation_does_not_commit_partial_peer_state() {
@@ -1668,11 +1848,236 @@ mod tests {
         );
     }
 
+    #[test]
+    fn state_restore_is_disabled_by_default() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server(&local_pubkey);
+        let state = route_empty(&server, "GET", "/api/state");
+        let persisted: serde_json::Value = serde_json::from_slice(&state.body).unwrap();
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("--allow-state-restore")
+        );
+    }
+
+    #[test]
+    fn auth_token_protects_api_routes() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server_with_options(&local_pubkey, Some("secret-token"), false, None);
+
+        let response = route_empty(&server, "GET", "/api/state");
+        assert_eq!(response.status, 401);
+
+        let response = route_empty_with_headers(
+            &server,
+            "GET",
+            "/api/state",
+            [("authorization", "Bearer secret-token")],
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["security"]["auth_required"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn invoice_api_flow_creates_receives_and_settles() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server(&local_pubkey);
+        let preimage = bytes32_hex(11);
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/invoices",
+            json!({
+                "amount": "100000000",
+                "description": "integration invoice",
+                "payment_preimage": preimage,
+                "expiry_secs": 3600,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let invoice_id = body["invoices"][0]["invoice_id"].as_str().unwrap();
+        assert_eq!(
+            body["invoices"][0]["provenance"]["chain_status"].as_str(),
+            Some("not_chain_verified")
+        );
+
+        let response = route_empty(
+            &server,
+            "POST",
+            format!("/api/invoices/{invoice_id}/receive"),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/invoices/{invoice_id}/settle"),
+            json!({ "payment_preimage": preimage }),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["invoices"][0]["status"].as_str(), Some("paid"));
+        assert!(
+            body["completed_flows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flow| flow.as_str() == Some("invoice-settled"))
+        );
+    }
+
+    #[test]
+    fn channel_api_flow_opens_splices_publishes_and_finalises() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_pubkey = pubkey_from_scalar(2);
+        let server = test_server(&local_pubkey);
+        let channel_id = bytes32_hex(21);
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/channels",
+            json!({
+                "channel_id": channel_id,
+                "counterparty_pubkey": peer_pubkey,
+                "counterparty_alias": "counterparty",
+                "funding_context_id": bytes32_hex(22),
+                "local": "100000000",
+                "remote": "200000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/splice"),
+            json!({
+                "new_funding_epoch": 2,
+                "new_funding_context_id": bytes32_hex(23)
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/publish"),
+            json!({
+                "funding_context_id": bytes32_hex(23),
+                "state_number": 3
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_empty(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/finalise"),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["channels"][0]["phase"].as_str(), Some("closed"));
+        assert!(
+            body["completed_flows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flow| flow.as_str() == Some("channel-finalised"))
+        );
+    }
+
+    #[test]
+    fn factory_api_flow_opens_advances_and_materialises_child() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_pubkey = pubkey_from_scalar(2);
+        let server = test_server(&local_pubkey);
+        let factory_id = bytes32_hex(31);
+        let child_id = bytes32_hex(32);
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/factories",
+            json!({
+                "factory_id": factory_id,
+                "participant_pubkeys": [local_pubkey.as_str(), peer_pubkey.as_str()],
+                "reserve": "500000000",
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/factories/{factory_id}/advance"),
+            json!({ "new_update_number": 2 }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/factories/{factory_id}/materialise-child"),
+            json!({
+                "child_channel_id": child_id,
+                "counterparty_pubkey": peer_pubkey,
+                "counterparty_alias": "member",
+                "funding_context_id": bytes32_hex(33),
+                "local": "100000000",
+                "remote": "100000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["factories"][0]["update_number"].as_u64(), Some(2));
+        assert_eq!(
+            body["factories"][0]["materialised_child_channels"][0].as_str(),
+            Some(child_id.as_str())
+        );
+        assert!(
+            body["completed_flows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flow| flow.as_str() == Some("factory-child"))
+        );
+    }
+
     fn test_server(local_pubkey: &str) -> HubServer {
+        test_server_with_options(local_pubkey, None, false, None)
+    }
+
+    fn test_server_with_options(
+        local_pubkey: &str,
+        auth_token: Option<&str>,
+        allow_state_restore: bool,
+        cors_origin: Option<&str>,
+    ) -> HubServer {
         let path = std::env::temp_dir().join(format!(
-            "morph-hub-test-{}-{}.json",
+            "morph-hub-test-{}-{}-{}.json",
             std::process::id(),
-            now_unix().unwrap()
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            TEST_STATE_COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = fs::remove_file(&path);
         let store = HubStore::load_or_create(path, local_pubkey, MorphNetwork::Devnet).unwrap();
@@ -1680,6 +2085,9 @@ mod tests {
             store: Arc::new(Mutex::new(store)),
             ui_dir: PathBuf::from("ui/morph-hub/dist"),
             ckb_rpc_url: None,
+            auth_token: auth_token.map(str::to_string),
+            allow_state_restore,
+            cors_origin: cors_origin.map(str::to_string),
         }
     }
 
@@ -1689,9 +2097,29 @@ mod tests {
         path: impl Into<String>,
         value: serde_json::Value,
     ) -> HttpResponse {
+        route_json_with_headers(
+            server,
+            method,
+            path,
+            value,
+            std::iter::empty::<(&str, &str)>(),
+        )
+    }
+
+    fn route_json_with_headers(
+        server: &HubServer,
+        method: impl Into<String>,
+        path: impl Into<String>,
+        value: serde_json::Value,
+        headers: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> HttpResponse {
         server.route(HttpRequest {
             method: method.into(),
             path: path.into(),
+            headers: headers
+                .into_iter()
+                .map(|(key, value)| (key.to_ascii_lowercase(), value.to_string()))
+                .collect(),
             body: serde_json::to_vec(&value).unwrap(),
         })
     }
@@ -1701,15 +2129,35 @@ mod tests {
         method: impl Into<String>,
         path: impl Into<String>,
     ) -> HttpResponse {
+        route_empty_with_headers(server, method, path, std::iter::empty::<(&str, &str)>())
+    }
+
+    fn route_empty_with_headers(
+        server: &HubServer,
+        method: impl Into<String>,
+        path: impl Into<String>,
+        headers: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> HttpResponse {
         server.route(HttpRequest {
             method: method.into(),
             path: path.into(),
+            headers: headers
+                .into_iter()
+                .map(|(key, value)| (key.to_ascii_lowercase(), value.to_string()))
+                .collect(),
             body: Vec::new(),
         })
     }
 
     fn hex_repeat(ch: char) -> String {
         format!("0x{}", ch.to_string().repeat(64))
+    }
+
+    fn bytes32_hex(seed: u8) -> String {
+        let hex = (0..32)
+            .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
+            .collect::<String>();
+        format!("0x{hex}")
     }
 
     fn pubkey_from_scalar(value: u8) -> String {

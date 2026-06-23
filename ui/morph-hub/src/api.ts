@@ -1,6 +1,7 @@
 import type { NodeState } from './domain';
 
 const apiBase = import.meta.env.VITE_MORPH_HUB_API_URL ?? '';
+const apiToken = import.meta.env.VITE_MORPH_HUB_AUTH_TOKEN ?? '';
 
 export async function getState(): Promise<NodeState> {
   return request<NodeState>('/api/state');
@@ -31,6 +32,7 @@ export async function connectPeer(pubkey: string, alias: string): Promise<NodeSt
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('content-type', 'application/json');
+  if (apiToken) headers.set('authorization', `Bearer ${apiToken}`);
   const response = await fetch(`${apiBase}${path}`, { ...init, headers });
   if (!response.ok) {
     const message = await readError(response);
