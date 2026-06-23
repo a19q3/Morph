@@ -15,11 +15,13 @@ import {
   RadioTower,
   ReceiptText,
   RefreshCw,
+  Search,
   ShieldCheck,
   Split,
   Upload,
   Users,
   WalletCards,
+  X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
@@ -105,6 +107,7 @@ export function App() {
   const [tokenDraft, setTokenDraft] = useState('');
   const [initialStateLoaded, setInitialStateLoaded] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>('overview');
+  const [recordQuery, setRecordQuery] = useState('');
   const workspaceRef = useRef<HTMLElement | null>(null);
   const latestEventIdRef = useRef(0);
 
@@ -256,6 +259,32 @@ export function App() {
   const orderedChannels = useMemo(() => sortChannelsForOperator(state.channels, state.events), [state.channels, state.events]);
   const orderedPeers = useMemo(() => sortPeersForOperator(state.peers, state.events), [state.peers, state.events]);
   const orderedFactories = useMemo(() => sortFactoriesForOperator(state.factories, state.events), [state.factories, state.events]);
+  const recordSearchTokens = useMemo(() => queryTokens(recordQuery), [recordQuery]);
+  const searchActive = recordSearchTokens.length > 0;
+  const filteredChannels = useMemo(
+    () => filterRecords(orderedChannels, recordSearchTokens, channelSearchText),
+    [orderedChannels, recordSearchTokens]
+  );
+  const filteredInvoices = useMemo(
+    () => filterRecords(state.invoices, recordSearchTokens, invoiceSearchText),
+    [state.invoices, recordSearchTokens]
+  );
+  const filteredPeers = useMemo(
+    () => filterRecords(orderedPeers, recordSearchTokens, peerSearchText),
+    [orderedPeers, recordSearchTokens]
+  );
+  const filteredFactories = useMemo(
+    () => filterRecords(orderedFactories, recordSearchTokens, factorySearchText),
+    [orderedFactories, recordSearchTokens]
+  );
+  const filteredEvents = useMemo(
+    () => filterRecords(orderedEvents, recordSearchTokens, eventSearchText),
+    [orderedEvents, recordSearchTokens]
+  );
+  const totalRecordCount =
+    state.channels.length + state.invoices.length + state.peers.length + state.factories.length + state.events.length;
+  const matchedRecordCount =
+    filteredChannels.length + filteredInvoices.length + filteredPeers.length + filteredFactories.length + filteredEvents.length;
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -426,21 +455,29 @@ export function App() {
 
         <FlowPanel state={state} />
 
+        <OperationSearch
+          query={recordQuery}
+          onQueryChange={setRecordQuery}
+          active={searchActive}
+          matchedCount={matchedRecordCount}
+          totalCount={totalRecordCount}
+        />
+
         <section className="content-grid">
           <div id={sectionIds.channels}>
-            <ChannelTable channels={orderedChannels} />
+            <ChannelTable channels={filteredChannels} totalCount={orderedChannels.length} searchActive={searchActive} />
           </div>
           <div id={sectionIds.invoices}>
-            <InvoicePanel invoices={state.invoices} />
+            <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} />
           </div>
           <div id={sectionIds.peers}>
-            <PeerPanel peers={orderedPeers} />
+            <PeerPanel peers={filteredPeers} totalCount={orderedPeers.length} searchActive={searchActive} />
           </div>
           <div id={sectionIds.factories}>
-            <FactoryPanel factories={orderedFactories} />
+            <FactoryPanel factories={filteredFactories} totalCount={orderedFactories.length} searchActive={searchActive} />
           </div>
           <div id={sectionIds.events}>
-            <EventPanel events={orderedEvents} />
+            <EventPanel events={filteredEvents} totalCount={orderedEvents.length} searchActive={searchActive} />
           </div>
         </section>
       </section>
@@ -614,12 +651,49 @@ function FlowPanel({ state }: { state: NodeState }) {
   );
 }
 
-function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
+function OperationSearch({
+  query,
+  onQueryChange,
+  active,
+  matchedCount,
+  totalCount,
+}: {
+  query: string;
+  onQueryChange: (query: string) => void;
+  active: boolean;
+  matchedCount: number;
+  totalCount: number;
+}) {
+  return (
+    <section className="operator-search" data-testid="operator-search-panel">
+      <label>
+        <Search size={15} />
+        <span>Search records</span>
+        <input
+          data-testid="operator-search"
+          value={query}
+          onChange={event => onQueryChange(event.target.value)}
+          aria-label="Search Hub records"
+        />
+      </label>
+      <div className="operator-search-meta">
+        <span>{active ? `${matchedCount}/${totalCount} records` : `${totalCount} records`}</span>
+        {query && (
+          <button type="button" title="Clear search" aria-label="Clear search" data-testid="operator-search-clear" onClick={() => onQueryChange('')}>
+            <X size={14} />
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ChannelTable({ channels, totalCount, searchActive }: { channels: ChannelRecord[]; totalCount: number; searchActive: boolean }) {
   return (
     <section className="panel table-panel">
       <div className="section-head">
         <h2>Channels</h2>
-        <span className="badge">{channels.length} tracked</span>
+        <span className="badge">{searchActive ? `${channels.length}/${totalCount} tracked` : `${channels.length} tracked`}</span>
       </div>
       <table>
         <thead>
@@ -635,7 +709,7 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
         </thead>
         <tbody>
           {channels.length === 0 && (
-            <tr><td colSpan={7} className="empty">No channels in the hub state file</td></tr>
+            <tr><td colSpan={7} className="empty">{searchActive ? 'No channels match this filter' : 'No channels in the hub state file'}</td></tr>
           )}
           {channels.map(channel => (
             <tr key={channel.channel_id}>
@@ -654,17 +728,17 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
   );
 }
 
-function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
+function InvoicePanel({ invoices, totalCount, searchActive }: { invoices: InvoiceRecord[]; totalCount: number; searchActive: boolean }) {
   const orderedInvoices = sortInvoicesNewestFirst(invoices);
   const openCount = invoices.filter(invoice => invoice.status === 'open').length;
   return (
     <section className="panel">
       <div className="section-head">
         <h2>Invoices</h2>
-        <span className="badge">{openCount} open</span>
+        <span className="badge">{searchActive ? `${invoices.length}/${totalCount} shown` : `${openCount} open`}</span>
       </div>
       <div className="stack-list">
-        {invoices.length === 0 && <div className="empty">No invoices in the hub state file</div>}
+        {invoices.length === 0 && <div className="empty">{searchActive ? 'No invoices match this filter' : 'No invoices in the hub state file'}</div>}
         {orderedInvoices.slice(0, 5).map(invoice => (
             <div className="list-row" key={invoice.invoice_id}>
               <div>
@@ -683,15 +757,15 @@ function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
   );
 }
 
-function PeerPanel({ peers }: { peers: PeerRecord[] }) {
+function PeerPanel({ peers, totalCount, searchActive }: { peers: PeerRecord[]; totalCount: number; searchActive: boolean }) {
   return (
     <section className="panel">
       <div className="section-head">
         <h2>Peers</h2>
-        <span className="badge">{peers.length} connected</span>
+        <span className="badge">{searchActive ? `${peers.length}/${totalCount} connected` : `${peers.length} connected`}</span>
       </div>
       <div className="stack-list">
-        {peers.length === 0 && <div className="empty">No peers in the hub state file</div>}
+        {peers.length === 0 && <div className="empty">{searchActive ? 'No peers match this filter' : 'No peers in the hub state file'}</div>}
         {peers.slice(0, 5).map(peer => (
           <div className="list-row" key={peer.node_id}>
             <div>
@@ -707,15 +781,15 @@ function PeerPanel({ peers }: { peers: PeerRecord[] }) {
   );
 }
 
-function FactoryPanel({ factories }: { factories: FactoryRecord[] }) {
+function FactoryPanel({ factories, totalCount, searchActive }: { factories: FactoryRecord[]; totalCount: number; searchActive: boolean }) {
   return (
     <section className="panel">
       <div className="section-head">
         <h2>Factories</h2>
-        <span className="badge">{factories.length} active</span>
+        <span className="badge">{searchActive ? `${factories.length}/${totalCount} active` : `${factories.length} active`}</span>
       </div>
       <div className="stack-list">
-        {factories.length === 0 && <div className="empty">No factories in the hub state file</div>}
+        {factories.length === 0 && <div className="empty">{searchActive ? 'No factories match this filter' : 'No factories in the hub state file'}</div>}
         {factories.map(factory => (
           <div className="list-row" key={factory.factory_id}>
             <div>
@@ -733,15 +807,15 @@ function FactoryPanel({ factories }: { factories: FactoryRecord[] }) {
   );
 }
 
-function EventPanel({ events }: { events: HubEvent[] }) {
+function EventPanel({ events, totalCount, searchActive }: { events: HubEvent[]; totalCount: number; searchActive: boolean }) {
   return (
     <section className="panel">
       <div className="section-head">
         <h2>Events</h2>
-        <span className="badge">{events.length} recorded</span>
+        <span className="badge">{searchActive ? `${events.length}/${totalCount} recorded` : `${events.length} recorded`}</span>
       </div>
       <div className="event-log">
-        {events.length === 0 && <div className="empty">No API events recorded</div>}
+        {events.length === 0 && <div className="empty">{searchActive ? 'No events match this filter' : 'No API events recorded'}</div>}
         {events.slice(0, 10).map(event => (
           <div className={`event-entry ${event.severity}`} key={event.id}>
             <EventMark severity={event.severity} />
@@ -1444,6 +1518,92 @@ function parsePubkeyDraft(value: string): Pubkey[] {
     .split(/[\s,]+/)
     .map(item => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function queryTokens(value: string): string[] {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function filterRecords<T>(records: T[], tokens: string[], searchText: (record: T) => string[]): T[] {
+  if (tokens.length === 0) return records;
+  return records.filter(record => {
+    const haystack = searchText(record).join(' ').toLowerCase();
+    return tokens.every(token => haystack.includes(token));
+  });
+}
+
+function channelSearchText(channel: ChannelRecord): string[] {
+  return [
+    channel.channel_id,
+    channel.counterparty_pubkey,
+    channel.counterparty_node_id,
+    channel.phase,
+    channel.funding_context_id,
+    String(channel.funding_epoch),
+    String(channel.state_number),
+    String(channel.sponsor_budget),
+    channel.provenance.label,
+    channel.provenance.message,
+    ...channel.balances.map(balance => `${balance.local} ${balance.remote} ${balance.pending} ${assetLabel(balance.asset)}`),
+  ];
+}
+
+function invoiceSearchText(invoice: InvoiceRecord): string[] {
+  return [
+    invoice.invoice_id,
+    invoice.encoded_invoice,
+    invoice.status,
+    invoice.network,
+    invoice.payee_pubkey ?? '',
+    invoice.payee_node_id,
+    invoice.channel_id ?? '',
+    invoice.payment_hash,
+    invoice.description,
+    invoice.amount,
+    assetLabel(invoice.asset),
+    invoice.provenance.label,
+    invoice.provenance.message,
+  ];
+}
+
+function peerSearchText(peer: PeerRecord): string[] {
+  return [
+    peer.alias,
+    peer.pubkey,
+    peer.node_id,
+    peer.provenance.label,
+    peer.provenance.message,
+  ];
+}
+
+function factorySearchText(factory: FactoryRecord): string[] {
+  return [
+    factory.factory_id,
+    String(factory.update_number),
+    ...factory.participant_pubkeys,
+    ...factory.participant_node_ids,
+    ...factory.materialised_child_channels,
+    factory.provenance.label,
+    factory.provenance.message,
+    ...factory.reserve_balances.map(balance => `${balance.local} ${balance.remote} ${balance.pending} ${assetLabel(balance.asset)}`),
+  ];
+}
+
+function eventSearchText(event: HubEvent): string[] {
+  return [
+    String(event.id),
+    event.severity,
+    event.event,
+    event.subject_id ?? '',
+    event.message,
+    String(event.created_at_unix),
+    event.provenance.label,
+    event.provenance.message,
+  ];
 }
 
 function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
