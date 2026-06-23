@@ -246,10 +246,12 @@ export function App() {
     return { vaultValue, sponsorBudget, settlingStates, factoryReserve };
   }, [state.channels, state.factories]);
 
+  const flowDataLoaded = state.required_flows.length > 0;
   const completedCount = state.completed_flows.length;
-  const requiredCount = Math.max(state.required_flows.length, 1);
-  const flowCoverage = Math.round((completedCount / requiredCount) * 100);
+  const requiredCount = flowDataLoaded ? state.required_flows.length : 1;
+  const flowCoverage = flowDataLoaded ? Math.round((completedCount / requiredCount) * 100) : 0;
   const authRequired = requiresToken || state.security.auth_required;
+  const activeActionLabel = actionItems.find(item => item.key === activeAction)?.label ?? 'Actions';
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -357,12 +359,12 @@ export function App() {
         <div className="coverage">
           <div className="coverage-top">
             <span>Business flows</span>
-            <strong>{completedCount}/{state.required_flows.length}</strong>
+            <strong>{flowDataLoaded ? `${completedCount}/${state.required_flows.length}` : 'not loaded'}</strong>
           </div>
           <div className="meter">
             <span style={{ width: `${flowCoverage}%` }} />
           </div>
-          <small>{state.missing_flows.length === 0 ? 'All required flows recorded' : `${state.missing_flows.length} flows remaining`}</small>
+          <small>{flowDataLoaded ? (state.missing_flows.length === 0 ? 'All required flows recorded' : `${state.missing_flows.length} flows remaining`) : 'Waiting for Hub API'}</small>
         </div>
       </aside>
 
@@ -383,11 +385,7 @@ export function App() {
           </div>
         </header>
 
-        <div className="mobile-node-strip">
-          <span>Pubkey</span>
-          <strong>{shortHex(state.pubkey) || '—'}</strong>
-          <small>{state.network}</small>
-        </div>
+        <NodeInfoStrip state={state} liveMode={liveMode} flowDataLoaded={flowDataLoaded} />
 
         {error && <div className="error banner"><AlertTriangle size={15} />{error}</div>}
         {requiresToken && (
@@ -443,6 +441,10 @@ export function App() {
       </section>
 
       <aside className="action-drawer">
+        <div className="drawer-head">
+          <span>Operate</span>
+          <strong>{activeActionLabel}</strong>
+        </div>
         <div className="drawer-tabs">
           {actionItems.map(({ key, label, Icon }) => (
             <button
@@ -504,6 +506,59 @@ function StatusPill({
   return <span className={`status-pill ${tone}`}>{icon}{label}</span>;
 }
 
+function NodeInfoStrip({
+  state,
+  liveMode,
+  flowDataLoaded,
+}: {
+  state: NodeState;
+  liveMode: LiveMode;
+  flowDataLoaded: boolean;
+}) {
+  const flowsValue = flowDataLoaded ? `${state.completed_flows.length}/${state.required_flows.length}` : 'not loaded';
+  const stateFile = state.state_path ? state.state_path.split('/').pop() || state.state_path : 'not loaded';
+  return (
+    <div className="node-info-strip" data-testid="node-info-strip">
+      <NodeInfoPill Icon={Network} label="Pubkey" value={shortHex(state.pubkey) || 'not loaded'} title={state.pubkey} monospace />
+      <NodeInfoPill Icon={Database} label="Node id" value={shortHex(state.node_id)} title={state.node_id} monospace />
+      <span className="node-info-separator" />
+      <NodeInfoPill Icon={Activity} label="Flows" value={flowsValue} tone={flowDataLoaded && state.missing_flows.length === 0 ? 'good' : 'warn'} />
+      <NodeInfoPill Icon={GitBranch} label="Channels" value={String(state.channels.length)} />
+      <NodeInfoPill Icon={Users} label="Peers" value={String(state.peers.length)} />
+      <NodeInfoPill Icon={ReceiptText} label="Invoices" value={String(state.invoices.length)} />
+      <NodeInfoPill Icon={Factory} label="Factories" value={String(state.factories.length)} />
+      <span className="node-info-separator" />
+      <NodeInfoPill Icon={ShieldCheck} label="RPC" value={rpcLabel(state)} tone={rpcTone(state.rpc.status)} />
+      <NodeInfoPill Icon={RadioTower} label="Live" value={liveLabel(liveMode).replace('live ', '')} tone={liveTone(liveMode)} />
+      <NodeInfoPill Icon={FileJson} label="State" value={stateFile} title={state.state_path} monospace />
+    </div>
+  );
+}
+
+function NodeInfoPill({
+  Icon,
+  label,
+  value,
+  tone = 'neutral',
+  title,
+  monospace = false,
+}: {
+  Icon: LucideIcon;
+  label: string;
+  value: string;
+  tone?: 'good' | 'neutral' | 'warn' | 'bad';
+  title?: string;
+  monospace?: boolean;
+}) {
+  return (
+    <span className={`node-info-pill ${tone}`} title={title || value}>
+      <span className="node-info-icon"><Icon size={14} /></span>
+      <span className="node-info-label">{label}</span>
+      <strong className={monospace ? 'mono' : ''}>{value}</strong>
+    </span>
+  );
+}
+
 function ProvenanceBadge({ provenance }: { provenance: RecordProvenance }) {
   return (
     <span className={`provenance-badge ${provenance.chain_status}`} title={provenance.message}>
@@ -525,14 +580,15 @@ function Metric({ label, value, icon, tone = 'base' }: { label: string; value: s
 }
 
 function FlowPanel({ state }: { state: NodeState }) {
-  const flows = state.required_flows.length ? state.required_flows : (Object.keys(flowLabels) as FlowKey[]);
-  const complete = state.missing_flows.length === 0;
+  const flowDataLoaded = state.required_flows.length > 0;
+  const flows = flowDataLoaded ? state.required_flows : (Object.keys(flowLabels) as FlowKey[]);
+  const complete = flowDataLoaded && state.missing_flows.length === 0;
   return (
     <section className="flow-panel">
       <div className="section-head">
         <h2>Business Flow</h2>
         <span className={`badge ${complete ? 'complete' : 'remaining'}`}>
-          {complete ? 'complete' : `${state.missing_flows.length} remaining`}
+          {!flowDataLoaded ? 'not loaded' : complete ? 'complete' : `${state.missing_flows.length} remaining`}
         </span>
       </div>
       <div className="flow-grid">
@@ -678,20 +734,35 @@ function EventPanel({ events }: { events: HubEvent[] }) {
         <h2>Events</h2>
         <span className="badge">{events.length} recorded</span>
       </div>
-      <div className="alert-strip">
+      <div className="event-log">
         {events.length === 0 && <div className="empty">No API events recorded</div>}
-        {events.slice(0, 8).map(event => (
-          <div className={`alert ${event.severity}`} key={event.id}>
-            <AlertTriangle size={15} />
-            <div>
-              <strong>{event.event}</strong>
-              <small>{event.message}{event.subject_id ? ` · ${shortHex(event.subject_id)}` : ''}</small>
-              <small>{formatTime(event.created_at_unix)}</small>
+        {events.slice(0, 10).map(event => (
+          <div className={`event-entry ${event.severity}`} key={event.id}>
+            <EventMark severity={event.severity} />
+            <div className="event-main">
+              <div className="event-line">
+                <strong>{event.event}</strong>
+                <time dateTime={new Date(event.created_at_unix * 1000).toISOString()}>{formatTime(event.created_at_unix)}</time>
+              </div>
+              <small>{event.message}</small>
+              <div className="event-meta">
+                {event.subject_id && <span className="mono">{shortHex(event.subject_id)}</span>}
+                <ProvenanceBadge provenance={event.provenance} />
+              </div>
             </div>
           </div>
         ))}
       </div>
     </section>
+  );
+}
+
+function EventMark({ severity }: { severity: HubEvent['severity'] }) {
+  const Icon = severity === 'info' ? Activity : AlertTriangle;
+  return (
+    <span className={`event-mark ${severity}`}>
+      <Icon size={14} />
+    </span>
   );
 }
 
