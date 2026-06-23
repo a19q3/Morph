@@ -650,6 +650,7 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
 }
 
 function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
+  const orderedInvoices = sortInvoicesNewestFirst(invoices);
   const openCount = invoices.filter(invoice => invoice.status === 'open').length;
   return (
     <section className="panel">
@@ -659,7 +660,7 @@ function InvoicePanel({ invoices }: { invoices: InvoiceRecord[] }) {
       </div>
       <div className="stack-list">
         {invoices.length === 0 && <div className="empty">No invoices in the hub state file</div>}
-        {invoices.slice(0, 5).map(invoice => (
+        {orderedInvoices.slice(0, 5).map(invoice => (
             <div className="list-row" key={invoice.invoice_id}>
               <div>
                 <strong>{invoice.description || shortHex(invoice.invoice_id)}</strong>
@@ -841,6 +842,10 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
   const [copyStatus, setCopyStatus] = useState('');
   const activeChannels = state.channels.filter(channel => channel.phase === 'active');
   const latestActiveChannel = activeChannels[0];
+  const latestOpenInvoice = newestInvoice(state.invoices.filter(invoice => invoice.status === 'open'));
+  const latestSettleableInvoice = newestInvoice(
+    state.invoices.filter(invoice => invoice.status === 'open' || invoice.status === 'received')
+  );
 
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
@@ -881,11 +886,11 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
   };
 
   const copyLatestInvoice = async () => {
-    const encodedInvoice = state.invoices[0]?.encoded_invoice;
+    const encodedInvoice = latestSettleableInvoice?.encoded_invoice;
     if (!encodedInvoice) return;
     setCopyStatus('');
     try {
-      await navigator.clipboard.writeText(encodedInvoice);
+      await copyTextToClipboard(encodedInvoice);
       setCopyStatus('copied');
     } catch (err) {
       setCopyStatus(String((err as Error).message));
@@ -909,7 +914,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
           <span className="field-label-row">
             {paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}
             {paymentMode === 'preimage' && (
-              <button type="button" className="field-action" onClick={() => setPaymentSecret(randomHex32())}>
+              <button type="button" className="field-action" data-testid="invoice-generate-payment-secret" onClick={() => setPaymentSecret(randomHex32())}>
                 <RefreshCw size={12} /> Generate
               </button>
             )}
@@ -922,6 +927,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
             <button
               type="button"
               className="field-action"
+              data-testid="invoice-use-active-channel"
               onClick={() => setChannelId(latestActiveChannel?.channel_id ?? '')}
               disabled={!latestActiveChannel}
             >
@@ -948,7 +954,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
           <label>
             <span className="field-label-row">
               Invoice id
-              <button type="button" className="field-action" onClick={() => setReceiveInvoiceId(state.invoices[0]?.invoice_id ?? '')} disabled={!state.invoices[0]}>
+              <button type="button" className="field-action" data-testid="invoice-receive-latest" onClick={() => setReceiveInvoiceId(latestOpenInvoice?.invoice_id ?? '')} disabled={!latestOpenInvoice}>
                 <ReceiptText size={12} /> Latest
               </button>
             </span>
@@ -964,7 +970,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
           <label>
             <span className="field-label-row">
               Invoice id
-              <button type="button" className="field-action" onClick={() => setSettleInvoiceId(state.invoices[0]?.invoice_id ?? '')} disabled={!state.invoices[0]}>
+              <button type="button" className="field-action" data-testid="invoice-settle-latest" onClick={() => setSettleInvoiceId(latestSettleableInvoice?.invoice_id ?? '')} disabled={!latestSettleableInvoice}>
                 <ReceiptText size={12} /> Latest
               </button>
             </span>
@@ -975,7 +981,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
         </form>
       </div>
 
-      {state.invoices[0] && (
+      {latestSettleableInvoice && (
         <button className="copy-button" data-testid="invoice-copy-latest" onClick={copyLatestInvoice} disabled={busy}>
           <ReceiptText size={15} /> Copy latest invoice
         </button>
@@ -1076,7 +1082,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
       <h2>Node Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
         <div className="field-action-row">
-          <button type="button" className="field-action" onClick={generateOpenChannelIds}>
+          <button type="button" className="field-action" data-testid="channel-generate-ids" onClick={generateOpenChannelIds}>
             <RefreshCw size={12} /> Generate ids
           </button>
         </div>
@@ -1097,7 +1103,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
         <form onSubmit={submitSplice} className="form-grid">
           <ChannelSelect testId="channel-splice-select" label="Active channel" channels={activeChannels} value={spliceChannelId} onChange={setSpliceChannelId} />
           <div className="field-action-row">
-            <button type="button" className="field-action" onClick={useSelectedSpliceDefaults} disabled={!selectedSpliceChannel}>
+            <button type="button" className="field-action" data-testid="channel-splice-use-selected" onClick={useSelectedSpliceDefaults} disabled={!selectedSpliceChannel}>
               <RefreshCw size={12} /> Use selected
             </button>
           </div>
@@ -1112,7 +1118,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
         <form onSubmit={submitPublish} className="form-grid">
           <ChannelSelect testId="channel-publish-select" label="Publishable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
           <div className="field-action-row">
-            <button type="button" className="field-action" onClick={useSelectedPublishDefaults} disabled={!selectedPublishChannel}>
+            <button type="button" className="field-action" data-testid="channel-publish-use-selected" onClick={useSelectedPublishDefaults} disabled={!selectedPublishChannel}>
               <Activity size={12} /> Use selected
             </button>
           </div>
@@ -1223,7 +1229,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <label>
           <span className="field-label-row">
             Factory id
-            <button type="button" className="field-action" onClick={generateFactoryId}>
+            <button type="button" className="field-action" data-testid="factory-generate-id" onClick={generateFactoryId}>
               <RefreshCw size={12} /> Generate
             </button>
           </span>
@@ -1232,7 +1238,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <label>
           <span className="field-label-row">
             Participant pubkeys
-            <button type="button" className="field-action" onClick={addLocalParticipant} disabled={!state.pubkey}>
+            <button type="button" className="field-action" data-testid="factory-add-local-pubkey" onClick={addLocalParticipant} disabled={!state.pubkey}>
               <Plus size={12} /> Add local
             </button>
           </span>
@@ -1248,7 +1254,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <form onSubmit={submitAdvance} className="form-grid">
           <FactorySelect testId="factory-advance-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
           <div className="field-action-row">
-            <button type="button" className="field-action" onClick={useSelectedFactoryUpdate} disabled={!selectedFactory}>
+            <button type="button" className="field-action" data-testid="factory-advance-use-selected" onClick={useSelectedFactoryUpdate} disabled={!selectedFactory}>
               <Activity size={12} /> Use selected
             </button>
           </div>
@@ -1262,7 +1268,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
         <form onSubmit={submitMaterialise} className="form-grid">
           <FactorySelect testId="factory-materialise-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
           <div className="field-action-row">
-            <button type="button" className="field-action" onClick={generateChildIds}>
+            <button type="button" className="field-action" data-testid="factory-child-generate-ids" onClick={generateChildIds}>
               <RefreshCw size={12} /> Generate ids
             </button>
           </div>
@@ -1431,6 +1437,48 @@ function parsePubkeyDraft(value: string): Pubkey[] {
     .split(/[\s,]+/)
     .map(item => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
+  return [...invoices].sort((left, right) => {
+    const byCreatedAt = right.created_at_unix - left.created_at_unix;
+    return byCreatedAt || right.invoice_id.localeCompare(left.invoice_id);
+  });
+}
+
+function newestInvoice(invoices: InvoiceRecord[]): InvoiceRecord | undefined {
+  return sortInvoicesNewestFirst(invoices)[0];
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  let clipboardError: unknown;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (err) {
+      clipboardError = err;
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  try {
+    if (!document.execCommand('copy')) {
+      throw new Error('clipboard copy was rejected');
+    }
+  } catch (err) {
+    throw clipboardError instanceof Error ? clipboardError : err;
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function balanceTotal(balance?: Balance): bigint {
