@@ -191,6 +191,12 @@ default; add `--allow-state-restore` only when you intentionally need that
 operator recovery path. Rows shown in the console are labelled as local Hub
 state unless future chain evidence fields prove otherwise.
 
+The console keeps itself current while it is open. Loopback/no-token sessions
+use `/api/events` server-sent events; token-protected sessions use authenticated
+short polling so the bearer token is never placed in an event-stream URL. When
+the API requires a token, the UI accepts it at runtime and stores it only in the
+browser session.
+
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 
 ```sh

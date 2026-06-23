@@ -24,7 +24,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getState, getStateFile, postAction, replaceStateFile, connectPeer } from './api';
+import { getState, getStateFile, postAction, replaceStateFile, connectPeer, hasApiToken, openEventStream, setApiToken } from './api';
 import {
   Asset,
   Balance,
@@ -56,6 +56,9 @@ import {
 
 type ActionPanel = 'peer' | 'invoice' | 'channel' | 'factory' | 'state';
 type RunAction = (label: string, action: () => Promise<NodeState>) => Promise<void>;
+type LiveMode = 'starting' | 'sse' | 'sse-reconnecting' | 'polling' | 'polling-auth' | 'offline';
+
+const LIVE_POLL_INTERVAL_MS = 5_000;
 
 const actionItems: { key: ActionPanel; label: string; Icon: LucideIcon }[] = [
   { key: 'peer', label: 'Peers', Icon: Users },
@@ -96,23 +99,100 @@ export function App() {
   const [status, setStatus] = useState('Loading Morph Hub API');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [liveMode, setLiveMode] = useState<LiveMode>('starting');
+  const [authTokenPresent, setAuthTokenPresent] = useState(hasApiToken());
+  const [requiresToken, setRequiresToken] = useState(false);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const [initialStateLoaded, setInitialStateLoaded] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>('overview');
   const workspaceRef = useRef<HTMLElement | null>(null);
+  const latestEventIdRef = useRef(0);
+
+  const applyState = useCallback((next: NodeState) => {
+    latestEventIdRef.current = next.events[0]?.id ?? 0;
+    setState(next);
+  }, []);
 
   const refresh = useCallback(async () => {
     const next = await getState();
-    setState(next);
+    applyState(next);
     setError('');
+    setRequiresToken(false);
+    setInitialStateLoaded(true);
     setStatus('State refreshed from Morph Hub API');
     return next;
-  }, []);
+  }, [applyState]);
 
   useEffect(() => {
     refresh().catch(err => {
-      setError(String((err as Error).message));
+      const message = String((err as Error).message);
+      setRequiresToken(isAuthTokenError(message));
+      setInitialStateLoaded(false);
+      setError(message);
       setStatus('Morph Hub API is not reachable');
+      setLiveMode('offline');
     });
   }, [refresh]);
+
+  useEffect(() => {
+    let stopped = false;
+    if (!initialStateLoaded) {
+      return () => {
+        stopped = true;
+      };
+    }
+    const refreshFromLive = async (message: string) => {
+      const previousEventId = latestEventIdRef.current;
+      try {
+        const next = await getState();
+        if (stopped) return;
+        const nextEventId = next.events[0]?.id ?? 0;
+        applyState(next);
+        setError('');
+        if (nextEventId !== previousEventId) {
+          setStatus(message);
+        }
+      } catch (err) {
+        if (stopped) return;
+        const message = String((err as Error).message);
+        setLiveMode('offline');
+        setRequiresToken(isAuthTokenError(message));
+        setInitialStateLoaded(false);
+        setError(message);
+      }
+    };
+
+    const eventSource = openEventStream();
+    if (eventSource) {
+      setLiveMode('sse-reconnecting');
+      const onHubEvent = () => {
+        void refreshFromLive('Live event received from Morph Hub');
+      };
+      eventSource.onopen = () => {
+        if (!stopped) setLiveMode('sse');
+      };
+      eventSource.onerror = () => {
+        if (!stopped) setLiveMode('sse-reconnecting');
+      };
+      eventSource.addEventListener('morph-hub-event', onHubEvent);
+      return () => {
+        stopped = true;
+        eventSource.removeEventListener('morph-hub-event', onHubEvent);
+        eventSource.close();
+      };
+    }
+
+    setLiveMode(authTokenPresent ? 'polling-auth' : 'polling');
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') {
+        void refreshFromLive('State changed during live polling');
+      }
+    }, LIVE_POLL_INTERVAL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+    };
+  }, [applyState, authTokenPresent, initialStateLoaded]);
 
   // Track which section is in view for sidebar highlighting.
   useEffect(() => {
@@ -169,6 +249,7 @@ export function App() {
   const completedCount = state.completed_flows.length;
   const requiredCount = Math.max(state.required_flows.length, 1);
   const flowCoverage = Math.round((completedCount / requiredCount) * 100);
+  const authRequired = requiresToken || state.security.auth_required;
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -181,6 +262,23 @@ export function App() {
     setActiveAction(key);
     setError('');
     setStatus('State refreshed from Morph Hub API');
+  };
+
+  const submitApiToken = (event: FormEvent) => {
+    event.preventDefault();
+    setApiToken(tokenDraft);
+    setAuthTokenPresent(hasApiToken());
+    setRequiresToken(false);
+    setError('');
+    setStatus('API token stored for this browser session');
+    refresh().catch(err => {
+      const message = String((err as Error).message);
+      setRequiresToken(isAuthTokenError(message));
+      setInitialStateLoaded(false);
+      setError(message);
+      setStatus('API token rejected');
+      setLiveMode('offline');
+    });
   };
 
   return (
@@ -276,7 +374,8 @@ export function App() {
           </div>
           <div className="topbar-status">
             <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
-            <StatusPill tone={state.security.auth_required ? 'good' : 'warn'} icon={<ShieldCheck size={15} />} label={state.security.auth_required ? 'auth required' : 'loopback only'} />
+            <StatusPill tone={authRequired && !requiresToken ? 'good' : 'warn'} icon={<ShieldCheck size={15} />} label={authRequired ? 'auth required' : 'loopback only'} />
+            <StatusPill tone={liveTone(liveMode)} icon={<RadioTower size={15} />} label={liveLabel(liveMode)} />
             <StatusPill tone="neutral" icon={<Boxes size={15} />} label={state.rpc.tip_height == null ? 'tip unavailable' : `tip ${state.rpc.tip_height}`} />
             <button className={`icon-button ${busy ? 'spinning' : ''}`} title="Refresh from API" data-testid="hub-refresh" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
               <RefreshCw size={16} />
@@ -291,6 +390,22 @@ export function App() {
         </div>
 
         {error && <div className="error banner"><AlertTriangle size={15} />{error}</div>}
+        {requiresToken && (
+          <form className="auth-banner" onSubmit={submitApiToken}>
+            <ShieldCheck size={15} />
+            <label>
+              Morph Hub API token
+              <input
+                data-testid="api-token-input"
+                type="password"
+                value={tokenDraft}
+                onChange={event => setTokenDraft(event.target.value)}
+                autoComplete="off"
+              />
+            </label>
+            <button data-testid="api-token-submit" disabled={!tokenDraft.trim() || busy}>Unlock API</button>
+          </form>
+        )}
         <div className={`provenance-banner ${state.rpc.status === 'connected' ? 'connected' : 'local'}`} data-testid="provenance-banner">
           <ShieldCheck size={15} />
           <div>
@@ -1121,4 +1236,32 @@ function rpcLabel(state: NodeState): string {
   if (state.rpc.status === 'not_configured') return 'rpc not configured';
   if (state.rpc.status === 'connected') return state.rpc.chain ? `${state.rpc.chain} connected` : 'rpc connected';
   return state.rpc.status;
+}
+
+function liveTone(mode: LiveMode): 'good' | 'neutral' | 'warn' | 'bad' {
+  if (mode === 'sse' || mode === 'polling-auth') return 'good';
+  if (mode === 'polling') return 'neutral';
+  if (mode === 'sse-reconnecting' || mode === 'starting') return 'warn';
+  return 'bad';
+}
+
+function liveLabel(mode: LiveMode): string {
+  switch (mode) {
+    case 'sse':
+      return 'live sse';
+    case 'sse-reconnecting':
+      return 'live reconnecting';
+    case 'polling-auth':
+      return 'live polling auth';
+    case 'polling':
+      return 'live polling';
+    case 'offline':
+      return 'live offline';
+    case 'starting':
+      return 'live starting';
+  }
+}
+
+function isAuthTokenError(message: string): boolean {
+  return message.toLowerCase().includes('morph hub auth token');
 }

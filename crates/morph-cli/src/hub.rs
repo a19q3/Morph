@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use morph_core::*;
@@ -17,6 +17,8 @@ use crate::rpc::CkbRpcClient;
 const STATE_FILE_VERSION: u16 = 1;
 const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
 const MAX_EVENTS: usize = 128;
+const EVENT_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(1_000);
+const EVENT_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub struct HubServeOptions {
     pub listen: String,
@@ -764,6 +766,10 @@ impl HubRuntimeState {
 
 fn handle_connection(mut stream: TcpStream, server: &HubServer) -> Result<()> {
     let request = read_request(&mut stream)?;
+    if request.method == "GET" && request.path == "/api/events" {
+        server.stream_events(&request, &mut stream)?;
+        return Ok(());
+    }
     let response = server.route(request);
     write_response(&mut stream, response, server.cors_origin.as_deref())?;
     Ok(())
@@ -1005,6 +1011,59 @@ impl HubServer {
                 &json!({ "error": "unknown Morph hub endpoint" }),
             )),
         }
+    }
+
+    fn stream_events(&self, request: &HttpRequest, stream: &mut TcpStream) -> Result<()> {
+        if let Some(response) = self.auth_failure_response(request) {
+            write_response(stream, response, self.cors_origin.as_deref())?;
+            return Ok(());
+        }
+
+        let mut last_event_id =
+            parse_last_event_id(request)?.unwrap_or_else(|| self.latest_event_id());
+        write_sse_headers(stream, self.cors_origin.as_deref())?;
+
+        let mut last_heartbeat = Instant::now();
+        loop {
+            let events = self.events_after(last_event_id);
+            for event in events {
+                last_event_id = event.id;
+                if write_sse_event(stream, &event).is_err() {
+                    return Ok(());
+                }
+                last_heartbeat = Instant::now();
+            }
+
+            if last_heartbeat.elapsed() >= EVENT_STREAM_HEARTBEAT_INTERVAL {
+                if write!(stream, ": keepalive\n\n").is_err() {
+                    return Ok(());
+                }
+                if stream.flush().is_err() {
+                    return Ok(());
+                }
+                last_heartbeat = Instant::now();
+            }
+
+            thread::sleep(EVENT_STREAM_POLL_INTERVAL);
+        }
+    }
+
+    fn latest_event_id(&self) -> u64 {
+        let store = self.store.lock().unwrap();
+        store.state.events.first().map_or(0, |event| event.id)
+    }
+
+    fn events_after(&self, last_event_id: u64) -> Vec<HubEvent> {
+        let store = self.store.lock().unwrap();
+        let mut events = store
+            .state
+            .events
+            .iter()
+            .filter(|event| event.id > last_event_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        events.sort_by_key(|event| event.id);
+        events
     }
 
     fn route_invoice_action(&self, path: &str, body: &[u8]) -> Result<HttpResponse> {
@@ -1495,6 +1554,48 @@ fn write_response(
     Ok(())
 }
 
+fn write_sse_headers(stream: &mut TcpStream, cors_origin: Option<&str>) -> Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n"
+    )?;
+    if let Some(origin) = cors_origin {
+        write!(
+            stream,
+            "Access-Control-Allow-Origin: {origin}\r\nVary: Origin\r\nAccess-Control-Allow-Headers: content-type, authorization, x-morph-hub-token\r\n"
+        )?;
+    }
+    write!(stream, "\r\n")?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn write_sse_event(stream: &mut TcpStream, event: &HubEvent) -> Result<()> {
+    let data = serde_json::to_string(&event_view(event))
+        .context("failed to serialise Morph Hub SSE event")?;
+    write!(stream, "id: {}\nevent: morph-hub-event\n", event.id)?;
+    for line in data.lines() {
+        writeln!(stream, "data: {line}")?;
+    }
+    writeln!(stream)?;
+    stream.flush()?;
+    Ok(())
+}
+
+fn parse_last_event_id(request: &HttpRequest) -> Result<Option<u64>> {
+    let Some(value) = request.header("last-event-id") else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u64>()
+        .map(Some)
+        .context("Last-Event-ID must be an unsigned integer")
+}
+
 fn json_response<T: Serialize>(status: u16, reason: &'static str, value: &T) -> HttpResponse {
     HttpResponse {
         status,
@@ -1887,6 +1988,60 @@ mod tests {
     }
 
     #[test]
+    fn event_stream_uses_api_auth_and_cursor_ordering() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_pubkey = pubkey_from_scalar(2);
+        let server = test_server_with_options(&local_pubkey, Some("secret-token"), false, None);
+        let unauthorised = request_empty("GET", "/api/events", std::iter::empty::<(&str, &str)>());
+        assert!(server.auth_failure_response(&unauthorised).is_some());
+
+        let authorised = request_empty(
+            "GET",
+            "/api/events",
+            [("authorization", "Bearer secret-token")],
+        );
+        assert!(server.auth_failure_response(&authorised).is_none());
+        assert_eq!(parse_last_event_id(&authorised).unwrap(), None);
+
+        let response = route_json_with_headers(
+            &server,
+            "POST",
+            "/api/peers",
+            json!({
+                "pubkey": peer_pubkey,
+                "alias": "stream-peer"
+            }),
+            [("authorization", "Bearer secret-token")],
+        );
+        assert_eq!(response.status, 200);
+        let response = route_json_with_headers(
+            &server,
+            "POST",
+            "/api/invoices",
+            json!({
+                "amount": "100000000",
+                "description": "stream invoice",
+                "payment_preimage": bytes32_hex(41),
+                "expiry_secs": 3600,
+                "asset": { "kind": "ckb" }
+            }),
+            [("authorization", "Bearer secret-token")],
+        );
+        assert_eq!(response.status, 200);
+
+        let events = server.events_after(0);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].id, 1);
+        assert_eq!(events[0].event, "peer_connected");
+        assert_eq!(events[1].id, 2);
+        assert_eq!(events[1].event, "invoice_created");
+        assert_eq!(server.events_after(1).len(), 1);
+
+        let resumed = request_empty("GET", "/api/events", [("last-event-id", "1")]);
+        assert_eq!(parse_last_event_id(&resumed).unwrap(), Some(1));
+    }
+
+    #[test]
     fn invoice_api_flow_creates_receives_and_settles() {
         let local_pubkey = pubkey_from_scalar(1);
         let server = test_server(&local_pubkey);
@@ -2138,7 +2293,15 @@ mod tests {
         path: impl Into<String>,
         headers: impl IntoIterator<Item = (&'static str, &'static str)>,
     ) -> HttpResponse {
-        server.route(HttpRequest {
+        server.route(request_empty(method, path, headers))
+    }
+
+    fn request_empty(
+        method: impl Into<String>,
+        path: impl Into<String>,
+        headers: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> HttpRequest {
+        HttpRequest {
             method: method.into(),
             path: path.into(),
             headers: headers
@@ -2146,7 +2309,7 @@ mod tests {
                 .map(|(key, value)| (key.to_ascii_lowercase(), value.to_string()))
                 .collect(),
             body: Vec::new(),
-        })
+        }
     }
 
     fn hex_repeat(ch: char) -> String {

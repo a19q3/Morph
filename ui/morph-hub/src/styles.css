@@ -125,14 +125,14 @@ a {
   display: grid;
   place-items: center;
   font-weight: 800;
-  letter-spacing: -0.5px;
+  letter-spacing: 0;
   box-shadow: var(--shadow-sm);
 }
 
 .brand strong {
   display: block;
   font-size: 14px;
-  letter-spacing: -0.2px;
+  letter-spacing: 0;
 }
 
 .brand span {
@@ -140,7 +140,7 @@ a {
   color: var(--text-3);
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0;
 }
 
 /* sidebar nav */
@@ -154,7 +154,7 @@ a {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0;
   color: var(--text-3);
   padding: 6px 10px 4px;
 }
@@ -218,7 +218,7 @@ a {
   color: var(--text-3);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0;
 }
 
 .node-card strong {
@@ -307,7 +307,7 @@ a {
   margin: 0;
   font-size: 22px;
   line-height: 1.2;
-  letter-spacing: -0.3px;
+  letter-spacing: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -490,6 +490,36 @@ a {
   margin-top: 2px;
 }
 
+.auth-banner {
+  margin-bottom: 14px;
+  border-radius: var(--r-md);
+  padding: 11px 12px;
+  display: grid;
+  grid-template-columns: auto minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  border: 1px solid #c9d8ef;
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.auth-banner label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.auth-banner input {
+  min-width: 0;
+  height: 32px;
+}
+
+.auth-banner button {
+  height: 32px;
+  white-space: nowrap;
+}
+
 /* ============================================================
    KPI metric grid
    ============================================================ */
@@ -550,7 +580,7 @@ a {
 
 .metric strong.metric-value {
   font-size: 22px;
-  letter-spacing: -0.4px;
+  letter-spacing: 0;
   font-weight: 700;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
@@ -578,7 +608,7 @@ a {
 .section-head h2 {
   margin: 0;
   font-size: 14px;
-  letter-spacing: -0.1px;
+  letter-spacing: 0;
 }
 
 .section-head .badge {
@@ -714,7 +744,7 @@ thead th {
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
   position: sticky;
@@ -977,7 +1007,7 @@ td small {
 .drawer-section h2 {
   font-size: 15px;
   margin: 0 0 2px;
-  letter-spacing: -0.2px;
+  letter-spacing: 0;
 }
 
 /* forms */
@@ -1143,7 +1173,7 @@ button:disabled {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0;
   color: var(--text-3);
 }
 
@@ -1228,7 +1258,7 @@ button:disabled {
     color: var(--text-3);
     font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
+    letter-spacing: 0;
   }
 
   .mobile-node-strip strong {
@@ -1302,6 +1332,11 @@ button:disabled {
   }
 
   .topbar-status {
+    align-items: stretch;
+  }
+
+  .auth-banner {
+    grid-template-columns: 1fr;
     align-items: stretch;
   }
 
