@@ -480,6 +480,12 @@ impl HubStore {
             state.pubkey,
             requested_pubkey
         );
+        ensure!(
+            state.node.network == network,
+            "hub state network {} does not match --network {}",
+            network_label(state.node.network),
+            network_label(network)
+        );
         let next_event_id = state
             .events
             .iter()
@@ -499,6 +505,18 @@ impl HubStore {
     fn replace(&mut self, persisted: PersistedHubState) -> Result<()> {
         let mut candidate = self.clone();
         candidate.state = HubRuntimeState::from_persisted(persisted)?;
+        ensure!(
+            candidate.state.pubkey == self.state.pubkey,
+            "restored hub state pubkey {} does not match running pubkey {}",
+            candidate.state.pubkey,
+            self.state.pubkey
+        );
+        ensure!(
+            candidate.state.node.network == self.state.node.network,
+            "restored hub state network {} does not match running network {}",
+            network_label(candidate.state.node.network),
+            network_label(self.state.node.network)
+        );
         candidate.push_event(
             EventSeverity::Warning,
             "state_restored",
@@ -2113,6 +2131,74 @@ mod tests {
                 .unwrap()
                 .contains("--allow-state-restore")
         );
+    }
+
+    #[test]
+    fn existing_state_file_must_match_requested_network() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server(&local_pubkey);
+        let path = server.store.lock().unwrap().path.clone();
+
+        let err = match HubStore::load_or_create(path, &local_pubkey, MorphNetwork::Testnet) {
+            Ok(_) => panic!("network-mismatched hub state file was accepted"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("hub state network devnet"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn state_restore_rejects_pubkey_mismatch_without_commit() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let other_pubkey = pubkey_from_scalar(2);
+        let server = test_server_with_options(&local_pubkey, None, true, None);
+        let response = route_empty(&server, "GET", "/api/state-file");
+        assert_eq!(response.status, 200);
+        let mut persisted: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        persisted["pubkey"] = json!(other_pubkey);
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not match running pubkey")
+        );
+        let state = route_empty(&server, "GET", "/api/state");
+        let body: serde_json::Value = serde_json::from_slice(&state.body).unwrap();
+        assert_eq!(body["pubkey"].as_str(), Some(local_pubkey.as_str()));
+        assert_eq!(body["events"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn state_restore_rejects_network_mismatch_without_commit() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server_with_options(&local_pubkey, None, true, None);
+        let response = route_empty(&server, "GET", "/api/state-file");
+        assert_eq!(response.status, 200);
+        let mut persisted: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        persisted["network"] = serde_json::to_value(MorphNetwork::Testnet).unwrap();
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("does not match running network")
+        );
+        let state = route_empty(&server, "GET", "/api/state");
+        let body: serde_json::Value = serde_json::from_slice(&state.body).unwrap();
+        assert_eq!(body["network"].as_str(), Some("devnet"));
+        assert_eq!(body["events"].as_array().unwrap().len(), 0);
     }
 
     #[test]
