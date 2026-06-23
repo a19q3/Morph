@@ -179,7 +179,7 @@ export const emptyState: NodeState = {
   provenance: {
     source: 'hub_state_file',
     chain_status: 'not_chain_verified',
-    label: 'Local state',
+    label: 'Local only',
     message: 'API not loaded',
   },
   watchtower: {
@@ -191,7 +191,7 @@ export const emptyState: NodeState = {
     provenance: {
       source: 'hub_state_file',
       chain_status: 'not_chain_verified',
-      label: 'Local state',
+      label: 'Local only',
       message: 'API not loaded',
     },
   },

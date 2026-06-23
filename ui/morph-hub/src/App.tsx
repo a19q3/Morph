@@ -72,18 +72,18 @@ const actionItems: { key: ActionPanel; label: string; Icon: LucideIcon }[] = [
   { key: 'state', label: 'State file', Icon: FileJson },
 ];
 
-const flowLabels: Record<FlowKey, string> = {
-  peer: 'Peer',
-  'invoice-created': 'Invoice created',
-  'invoice-received': 'Invoice received',
-  'invoice-settled': 'Invoice settled',
-  'channel-opened': 'Channel opened',
-  'state-published': 'State published',
-  'channel-finalised': 'Channel finalised',
-  'channel-spliced': 'Channel spliced',
-  'factory-opened': 'Factory opened',
-  'factory-advanced': 'Factory advanced',
-  'factory-child': 'Factory child',
+const flowItems: Record<FlowKey, { label: string; detail: string; action: string; panel: ActionPanel; Icon: LucideIcon }> = {
+  peer: { label: 'Connect a peer', detail: 'Counterparty is known by the node', action: 'Open peers', panel: 'peer', Icon: Users },
+  'invoice-created': { label: 'Create an invoice', detail: 'Payment request exists in Hub state', action: 'Open invoices', panel: 'invoice', Icon: ReceiptText },
+  'invoice-received': { label: 'Receive an invoice', detail: 'Incoming invoice is decoded and stored', action: 'Open invoices', panel: 'invoice', Icon: ReceiptText },
+  'invoice-settled': { label: 'Settle an invoice', detail: 'Payment preimage has closed the invoice', action: 'Open invoices', panel: 'invoice', Icon: BadgeCheck },
+  'channel-opened': { label: 'Open a channel', detail: 'Active bilateral channel is tracked', action: 'Open channels', panel: 'channel', Icon: GitBranch },
+  'state-published': { label: 'Publish channel state', detail: 'Latest state moved into settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
+  'channel-finalised': { label: 'Finalise a channel', detail: 'Settling channel is closed', action: 'Open channels', panel: 'channel', Icon: BadgeCheck },
+  'channel-spliced': { label: 'Splice a channel', detail: 'Funding context advanced', action: 'Open channels', panel: 'channel', Icon: Split },
+  'factory-opened': { label: 'Open a factory', detail: 'Shared factory reserve is tracked', action: 'Open factories', panel: 'factory', Icon: Factory },
+  'factory-advanced': { label: 'Advance a factory', detail: 'Factory update number moved forward', action: 'Open factories', panel: 'factory', Icon: RefreshCw },
+  'factory-child': { label: 'Materialise child channel', detail: 'Factory reserve created a channel', action: 'Open factories', panel: 'factory', Icon: Network },
 };
 
 const sectionIds = {
@@ -251,6 +251,7 @@ export function App() {
     );
     return { vaultValue, sponsorBudget, settlingStates, factoryReserve };
   }, [state.channels, state.factories]);
+  const evidence = useMemo(() => evidenceSummary(state), [state]);
 
   const flowDataLoaded = state.required_flows.length > 0;
   const completedCount = state.completed_flows.length;
@@ -418,13 +419,13 @@ export function App() {
 
         <div className="coverage">
           <div className="coverage-top">
-            <span>Business flows</span>
+            <span>Runbook</span>
             <strong>{flowDataLoaded ? `${completedCount}/${state.required_flows.length}` : 'not loaded'}</strong>
           </div>
           <div className="meter">
             <span style={{ width: `${flowCoverage}%` }} />
           </div>
-          <small>{flowDataLoaded ? (state.missing_flows.length === 0 ? 'All required flows recorded' : `${state.missing_flows.length} flows remaining`) : 'Waiting for Hub API'}</small>
+          <small>{flowDataLoaded ? (state.missing_flows.length === 0 ? 'All actions recorded' : `${state.missing_flows.length} actions remaining`) : 'Waiting for Hub API'}</small>
         </div>
       </aside>
 
@@ -438,6 +439,7 @@ export function App() {
             <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
             <StatusPill tone={authRequired && !requiresToken ? 'good' : 'warn'} icon={<ShieldCheck size={15} />} label={authRequired ? 'auth required' : 'loopback only'} />
             <StatusPill tone={liveTone(liveMode)} icon={<RadioTower size={15} />} label={liveLabel(liveMode)} />
+            <StatusPill tone={evidence.localOnlyRecords > 0 ? 'warn' : evidence.watchtowerAlerts > 0 ? 'good' : 'neutral'} icon={<ShieldCheck size={15} />} label={evidenceStatusLabel(evidence)} />
             <StatusPill tone="neutral" icon={<Boxes size={15} />} label={state.rpc.tip_height == null ? 'tip unavailable' : `tip ${state.rpc.tip_height}`} />
             <button className={`icon-button ${busy ? 'spinning' : ''}`} title="Refresh from API" data-testid="hub-refresh" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
               <RefreshCw size={16} />
@@ -464,23 +466,17 @@ export function App() {
             <button data-testid="api-token-submit" disabled={!tokenDraft.trim() || busy}>Unlock API</button>
           </form>
         )}
-        <div className={`provenance-banner ${state.rpc.status === 'connected' ? 'connected' : 'local'}`} data-testid="provenance-banner">
+        <div className={`provenance-banner ${evidence.localOnlyRecords > 0 ? 'local' : evidence.watchtowerAlerts > 0 ? 'connected' : 'local'}`} data-testid="provenance-banner">
           <ShieldCheck size={15} />
           <div>
             <strong>
-              {state.watchtower.alerts.length > 0
-                ? 'Local Hub state with watchtower evidence'
-                : state.rpc.status === 'connected'
-                  ? 'CKB RPC connected, records still require evidence'
-                  : 'Local Hub state only'}
+              {evidence.localOnlyRecords > 0
+                ? 'State-file records are local only'
+                : evidence.watchtowerAlerts > 0
+                  ? 'Watchtower evidence loaded'
+                  : 'No record evidence loaded'}
             </strong>
-            <span>
-              {state.provenance.message}
-              {' '}
-              {state.watchtower.configured
-                ? `${state.watchtower.alerts.length} watchtower alerts loaded.`
-                : 'No watchtower evidence is configured.'}
-            </span>
+            <span>{evidenceBannerText(state, evidence)}</span>
           </div>
         </div>
 
@@ -491,7 +487,7 @@ export function App() {
           <Metric label="Factory reserve" value={formatAmount(totals.factoryReserve, { kind: 'ckb' })} icon={<Factory size={16} />} />
         </section>
 
-        <FlowPanel state={state} />
+        <FlowPanel state={state} onOpenAction={selectAction} busy={busy} />
 
         <OperationSearch
           query={recordQuery}
@@ -503,7 +499,13 @@ export function App() {
 
         <section className="content-grid">
           <div id={sectionIds.channels}>
-            <ChannelTable channels={filteredChannels} totalCount={orderedChannels.length} searchActive={searchActive} />
+            <ChannelTable
+              channels={filteredChannels}
+              totalCount={orderedChannels.length}
+              searchActive={searchActive}
+              runAction={runAction}
+              busy={busy}
+            />
           </div>
           <div id={sectionIds.invoices}>
             <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} />
@@ -605,7 +607,7 @@ function NodeInfoStrip({
       <NodeInfoPill Icon={Network} label="Pubkey" value={shortHex(state.pubkey) || 'not loaded'} title={state.pubkey} monospace />
       <NodeInfoPill Icon={Database} label="Node id" value={shortHex(state.node_id)} title={state.node_id} monospace />
       <span className="node-info-separator" />
-      <NodeInfoPill Icon={Activity} label="Flows" value={flowsValue} tone={flowDataLoaded && state.missing_flows.length === 0 ? 'good' : 'warn'} />
+      <NodeInfoPill Icon={Activity} label="Runbook" value={flowsValue} tone={flowDataLoaded && state.missing_flows.length === 0 ? 'good' : 'warn'} />
       <NodeInfoPill Icon={GitBranch} label="Channels" value={String(state.channels.length)} />
       <NodeInfoPill Icon={Users} label="Peers" value={String(state.peers.length)} />
       <NodeInfoPill Icon={ReceiptText} label="Invoices" value={String(state.invoices.length)} />
@@ -657,6 +659,46 @@ function ProvenanceBadge({ provenance }: { provenance: RecordProvenance }) {
   );
 }
 
+type EvidenceSummary = {
+  localOnlyRecords: number;
+  watchtowerAlerts: number;
+  totalRecords: number;
+};
+
+function evidenceSummary(state: NodeState): EvidenceSummary {
+  const provenances: RecordProvenance[] = [
+    ...state.peers.map(record => record.provenance),
+    ...state.channels.map(record => record.provenance),
+    ...state.invoices.map(record => record.provenance),
+    ...state.factories.map(record => record.provenance),
+    ...state.events.map(record => record.provenance),
+  ];
+  return {
+    localOnlyRecords: provenances.filter(provenance => provenance.chain_status === 'not_chain_verified').length,
+    watchtowerAlerts: state.watchtower.alerts.length,
+    totalRecords: provenances.length + state.watchtower.alerts.length,
+  };
+}
+
+function evidenceStatusLabel(evidence: EvidenceSummary): string {
+  if (evidence.localOnlyRecords > 0) return `${evidence.localOnlyRecords} local only`;
+  if (evidence.watchtowerAlerts > 0) return `${evidence.watchtowerAlerts} evidenced`;
+  return 'no records';
+}
+
+function evidenceBannerText(state: NodeState, evidence: EvidenceSummary): string {
+  const watchtowerText = state.watchtower.configured
+    ? `${evidence.watchtowerAlerts} watchtower alerts loaded.`
+    : 'No watchtower evidence is configured.';
+  if (evidence.localOnlyRecords > 0) {
+    return `${evidence.localOnlyRecords} records are persisted locally and are not CKB devnet confirmation. ${watchtowerText}`;
+  }
+  if (evidence.watchtowerAlerts > 0) {
+    return `All visible evidence comes from the configured watchtower alert file. ${watchtowerText}`;
+  }
+  return `${evidence.totalRecords} records loaded. ${watchtowerText}`;
+}
+
 function Metric({ label, value, icon, tone = 'base' }: { label: string; value: string; icon: React.ReactNode; tone?: 'base' | 'warn' }) {
   return (
     <article className={`metric ${tone}`}>
@@ -669,29 +711,47 @@ function Metric({ label, value, icon, tone = 'base' }: { label: string; value: s
   );
 }
 
-function FlowPanel({ state }: { state: NodeState }) {
+function FlowPanel({
+  state,
+  onOpenAction,
+  busy,
+}: {
+  state: NodeState;
+  onOpenAction: (panel: ActionPanel) => void;
+  busy: boolean;
+}) {
   const flowDataLoaded = state.required_flows.length > 0;
-  const flows = flowDataLoaded ? state.required_flows : (Object.keys(flowLabels) as FlowKey[]);
+  const flows = flowDataLoaded ? state.required_flows : (Object.keys(flowItems) as FlowKey[]);
   const complete = flowDataLoaded && state.missing_flows.length === 0;
+  const doneSet = new Set(state.completed_flows);
+  const orderedFlows = [...flows].sort((left, right) => {
+    const byDone = Number(doneSet.has(left)) - Number(doneSet.has(right));
+    return byDone || flowItems[left].label.localeCompare(flowItems[right].label);
+  });
   return (
     <section className="flow-panel">
       <div className="section-head">
-        <h2>Business Flow</h2>
+        <h2>Runbook</h2>
         <span className={`badge ${complete ? 'complete' : 'remaining'}`}>
           {!flowDataLoaded ? 'not loaded' : complete ? 'complete' : `${state.missing_flows.length} remaining`}
         </span>
       </div>
       <div className="flow-grid">
-        {flows.map(flow => {
+        {orderedFlows.map(flow => {
           const done = state.completed_flows.includes(flow);
+          const item = flowItems[flow];
+          const Icon = item.Icon;
           return (
-            <div className={`flow-step ${done ? 'done' : ''}`} key={flow}>
-              <span className="flow-dot">{done ? <BadgeCheck size={15} /> : <Activity size={13} />}</span>
-              <div>
-                <strong>{flowLabels[flow]}</strong>
-                <small>{done ? 'recorded' : 'pending'}</small>
+            <article className={`flow-step ${done ? 'done' : ''}`} key={flow}>
+              <span className="flow-dot">{done ? <BadgeCheck size={15} /> : <Icon size={14} />}</span>
+              <div className="flow-main">
+                <strong>{item.label}</strong>
+                <small>{done ? 'Recorded in local Hub state' : item.detail}</small>
               </div>
-            </div>
+              <button type="button" className="flow-action" onClick={() => onOpenAction(item.panel)} disabled={busy}>
+                {done ? 'Open' : item.action}
+              </button>
+            </article>
           );
         })}
       </div>
@@ -736,7 +796,19 @@ function OperationSearch({
   );
 }
 
-function ChannelTable({ channels, totalCount, searchActive }: { channels: ChannelRecord[]; totalCount: number; searchActive: boolean }) {
+function ChannelTable({
+  channels,
+  totalCount,
+  searchActive,
+  runAction,
+  busy,
+}: {
+  channels: ChannelRecord[];
+  totalCount: number;
+  searchActive: boolean;
+  runAction: RunAction;
+  busy: boolean;
+}) {
   return (
     <section className="panel table-panel">
       <div className="section-head">
@@ -753,11 +825,12 @@ function ChannelTable({ channels, totalCount, searchActive }: { channels: Channe
             <th>Value</th>
             <th>Sponsor</th>
             <th>Source</th>
+            <th>Next action</th>
           </tr>
         </thead>
         <tbody>
           {channels.length === 0 && (
-            <tr><td colSpan={7} className="empty">{searchActive ? 'No channels match this filter' : 'No channels in the hub state file'}</td></tr>
+            <tr><td colSpan={8} className="empty">{searchActive ? 'No channels match this filter' : 'No channels in the hub state file'}</td></tr>
           )}
           {channels.map(channel => (
             <tr key={channel.channel_id}>
@@ -768,11 +841,99 @@ function ChannelTable({ channels, totalCount, searchActive }: { channels: Channe
               <td className="mono">{formatBalance(channel.balances[0])}</td>
               <td className="mono">{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
               <td><ProvenanceBadge provenance={channel.provenance} /></td>
+              <td>
+                <ChannelRowActions channel={channel} runAction={runAction} busy={busy} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </section>
+  );
+}
+
+function ChannelRowActions({
+  channel,
+  runAction,
+  busy,
+}: {
+  channel: ChannelRecord;
+  runAction: RunAction;
+  busy: boolean;
+}) {
+  const canPublish = channel.phase === 'active' || channel.phase === 'settling';
+  const canSplice = channel.phase === 'active';
+  const canFinalise = channel.phase === 'settling';
+
+  const publish = () => {
+    void runAction('Publish channel state', () => postAction(`/api/channels/${channel.channel_id}/publish`, {
+      funding_context_id: channel.funding_context_id,
+      state_number: channel.state_number + 1,
+    }));
+  };
+
+  const splice = () => {
+    const nextFundingEpoch = channel.funding_epoch + 1;
+    const nextFundingContextId = randomHex32();
+    void runAction('Splice channel', () => postAction(`/api/channels/${channel.channel_id}/splice`, {
+      new_funding_epoch: nextFundingEpoch,
+      new_funding_context_id: nextFundingContextId,
+    }));
+  };
+
+  const finalise = () => {
+    void runAction('Finalise channel', () => postAction(`/api/channels/${channel.channel_id}/finalise`));
+  };
+
+  if (!canPublish && !canSplice && !canFinalise) {
+    return <span className="row-action-empty">No action</span>;
+  }
+
+  return (
+    <div className="row-actions" aria-label={`Actions for channel ${channel.channel_id}`}>
+      {canPublish && (
+        <button
+          type="button"
+          className="row-action"
+          data-testid="channel-row-publish"
+          data-channel-id={channel.channel_id}
+          onClick={publish}
+          disabled={busy}
+          title={`Publish state ${channel.state_number + 1} for ${shortHex(channel.channel_id)}`}
+        >
+          <RadioTower size={12} />
+          Publish
+        </button>
+      )}
+      {canSplice && (
+        <button
+          type="button"
+          className="row-action"
+          data-testid="channel-row-splice"
+          data-channel-id={channel.channel_id}
+          onClick={splice}
+          disabled={busy}
+          title={`Splice ${shortHex(channel.channel_id)} to epoch ${channel.funding_epoch + 1}`}
+        >
+          <Split size={12} />
+          Splice
+        </button>
+      )}
+      {canFinalise && (
+        <button
+          type="button"
+          className="row-action primary"
+          data-testid="channel-row-finalise"
+          data-channel-id={channel.channel_id}
+          onClick={finalise}
+          disabled={busy}
+          title={`Finalise ${shortHex(channel.channel_id)}`}
+        >
+          <BadgeCheck size={12} />
+          Finalise
+        </button>
+      )}
+    </div>
   );
 }
 

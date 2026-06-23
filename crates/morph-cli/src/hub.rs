@@ -392,8 +392,8 @@ fn local_state_provenance() -> RecordProvenanceView {
     RecordProvenanceView {
         source: "hub_state_file",
         chain_status: "not_chain_verified",
-        label: "Local state",
-        message: "Recorded in the Morph Hub state file; this is not CKB devnet confirmation.",
+        label: "Local only",
+        message: "Recorded in the Morph Hub state file only; this is not CKB devnet confirmation.",
     }
 }
 
@@ -2553,6 +2553,16 @@ mod tests {
         assert_eq!(
             body["invoices"][0]["provenance"]["chain_status"].as_str(),
             Some("not_chain_verified")
+        );
+        assert_eq!(
+            body["invoices"][0]["provenance"]["label"].as_str(),
+            Some("Local only")
+        );
+        assert!(
+            body["invoices"][0]["provenance"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not CKB devnet confirmation")
         );
 
         let response = route_empty(
