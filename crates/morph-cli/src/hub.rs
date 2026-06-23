@@ -2362,6 +2362,172 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hub_api_can_complete_all_required_business_flows() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_pubkey = pubkey_from_scalar(2);
+        let channel_peer_pubkey = pubkey_from_scalar(3);
+        let server = test_server(&local_pubkey);
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/peers",
+            json!({
+                "pubkey": peer_pubkey,
+                "alias": "all-flow-peer"
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let preimage = bytes32_hex(41);
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/invoices",
+            json!({
+                "amount": "100000000",
+                "description": "all-flow invoice",
+                "payment_preimage": preimage,
+                "expiry_secs": 3600,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let invoice_id = body["invoices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|invoice| invoice["description"].as_str() == Some("all-flow invoice"))
+            .and_then(|invoice| invoice["invoice_id"].as_str())
+            .unwrap()
+            .to_string();
+
+        let response = route_empty(
+            &server,
+            "POST",
+            format!("/api/invoices/{invoice_id}/receive"),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/invoices/{invoice_id}/settle"),
+            json!({ "payment_preimage": preimage }),
+        );
+        assert_eq!(response.status, 200);
+
+        let channel_id = bytes32_hex(51);
+        let funding_context_id = bytes32_hex(52);
+        let spliced_funding_context_id = bytes32_hex(53);
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/channels",
+            json!({
+                "channel_id": channel_id,
+                "counterparty_pubkey": channel_peer_pubkey,
+                "counterparty_alias": "all-flow-channel-peer",
+                "funding_context_id": funding_context_id,
+                "local": "100000000",
+                "remote": "200000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/splice"),
+            json!({
+                "new_funding_epoch": 1,
+                "new_funding_context_id": spliced_funding_context_id
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/publish"),
+            json!({
+                "funding_context_id": spliced_funding_context_id,
+                "state_number": 2
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_empty(
+            &server,
+            "POST",
+            format!("/api/channels/{channel_id}/finalise"),
+        );
+        assert_eq!(response.status, 200);
+
+        let factory_id = bytes32_hex(61);
+        let child_channel_id = bytes32_hex(62);
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/factories",
+            json!({
+                "factory_id": factory_id,
+                "participant_pubkeys": [local_pubkey.as_str(), peer_pubkey.as_str()],
+                "reserve": "500000000",
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/factories/{factory_id}/advance"),
+            json!({ "new_update_number": 1 }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            format!("/api/factories/{factory_id}/materialise-child"),
+            json!({
+                "child_channel_id": child_channel_id,
+                "counterparty_pubkey": peer_pubkey,
+                "counterparty_alias": "all-flow-factory-peer",
+                "funding_context_id": bytes32_hex(63),
+                "local": "100000000",
+                "remote": "100000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_empty(&server, "GET", "/api/state");
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let missing_flows = body["missing_flows"].as_array().unwrap();
+        assert!(
+            missing_flows.is_empty(),
+            "all required flows should complete, missing {missing_flows:?}"
+        );
+
+        let required_flows = body["required_flows"].as_array().unwrap();
+        let completed_flows = body["completed_flows"].as_array().unwrap();
+        assert_eq!(completed_flows.len(), required_flows.len());
+        for flow in required_flows {
+            assert!(
+                completed_flows.contains(flow),
+                "required flow {flow:?} was not completed"
+            );
+        }
+    }
+
     fn test_server(local_pubkey: &str) -> HubServer {
         test_server_with_options(local_pubkey, None, false, None)
     }
