@@ -109,7 +109,7 @@ export function App() {
   const latestEventIdRef = useRef(0);
 
   const applyState = useCallback((next: NodeState) => {
-    latestEventIdRef.current = next.events[0]?.id ?? 0;
+    latestEventIdRef.current = latestEventId(next.events);
     setState(next);
   }, []);
 
@@ -146,7 +146,7 @@ export function App() {
       try {
         const next = await getState();
         if (stopped) return;
-        const nextEventId = next.events[0]?.id ?? 0;
+        const nextEventId = latestEventId(next.events);
         applyState(next);
         setError('');
         if (nextEventId !== previousEventId) {
@@ -252,6 +252,10 @@ export function App() {
   const flowCoverage = flowDataLoaded ? Math.round((completedCount / requiredCount) * 100) : 0;
   const authRequired = requiresToken || state.security.auth_required;
   const activeActionLabel = actionItems.find(item => item.key === activeAction)?.label ?? 'Actions';
+  const orderedEvents = useMemo(() => sortEventsNewestFirst(state.events), [state.events]);
+  const orderedChannels = useMemo(() => sortChannelsForOperator(state.channels, state.events), [state.channels, state.events]);
+  const orderedPeers = useMemo(() => sortPeersForOperator(state.peers, state.events), [state.peers, state.events]);
+  const orderedFactories = useMemo(() => sortFactoriesForOperator(state.factories, state.events), [state.factories, state.events]);
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -423,19 +427,19 @@ export function App() {
 
         <section className="content-grid">
           <div id={sectionIds.channels}>
-            <ChannelTable channels={state.channels} />
+            <ChannelTable channels={orderedChannels} />
           </div>
           <div id={sectionIds.invoices}>
             <InvoicePanel invoices={state.invoices} />
           </div>
           <div id={sectionIds.peers}>
-            <PeerPanel peers={state.peers} />
+            <PeerPanel peers={orderedPeers} />
           </div>
           <div id={sectionIds.factories}>
-            <FactoryPanel factories={state.factories} />
+            <FactoryPanel factories={orderedFactories} />
           </div>
           <div id={sectionIds.events}>
-            <EventPanel events={state.events} />
+            <EventPanel events={orderedEvents} />
           </div>
         </section>
       </section>
@@ -840,7 +844,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
   const [settleInvoiceId, setSettleInvoiceId] = useState('');
   const [settlePreimage, setSettlePreimage] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
-  const activeChannels = state.channels.filter(channel => channel.phase === 'active');
+  const activeChannels = sortChannelsForOperator(state.channels, state.events).filter(channel => channel.phase === 'active');
   const latestActiveChannel = activeChannels[0];
   const latestOpenInvoice = newestInvoice(state.invoices.filter(invoice => invoice.status === 'open'));
   const latestSettleableInvoice = newestInvoice(
@@ -1008,9 +1012,10 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
   const [spliceContextId, setSpliceContextId] = useState('');
   const [publishContextId, setPublishContextId] = useState('');
   const [publishStateNumber, setPublishStateNumber] = useState('');
-  const activeChannels = state.channels.filter(channel => channel.phase === 'active');
-  const publishableChannels = state.channels.filter(channel => channel.phase === 'active' || channel.phase === 'settling');
-  const settlingChannels = state.channels.filter(channel => channel.phase === 'settling');
+  const orderedChannels = sortChannelsForOperator(state.channels, state.events);
+  const activeChannels = orderedChannels.filter(channel => channel.phase === 'active');
+  const publishableChannels = orderedChannels.filter(channel => channel.phase === 'active' || channel.phase === 'settling');
+  const settlingChannels = orderedChannels.filter(channel => channel.phase === 'settling');
   const selectedSpliceChannel = activeChannels.find(channel => channel.channel_id === spliceChannelId);
   const selectedPublishChannel = publishableChannels.find(channel => channel.channel_id === publishChannelId);
 
@@ -1155,7 +1160,8 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
   const [childPending, setChildPending] = useState('');
   const [childSponsorBudget, setChildSponsorBudget] = useState('');
   const [childAsset, setChildAsset] = useState<Asset>({ kind: 'ckb' });
-  const selectedFactory = state.factories.find(factory => factory.factory_id === selectedFactoryId);
+  const orderedFactories = sortFactoriesForOperator(state.factories, state.events);
+  const selectedFactory = orderedFactories.find(factory => factory.factory_id === selectedFactoryId);
 
   const submitOpen = (event: FormEvent) => {
     event.preventDefault();
@@ -1252,21 +1258,21 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
       <div className="form-section">
         <h3>Advance</h3>
         <form onSubmit={submitAdvance} className="form-grid">
-          <FactorySelect testId="factory-advance-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <FactorySelect testId="factory-advance-select" factories={orderedFactories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
           <div className="field-action-row">
             <button type="button" className="field-action" data-testid="factory-advance-use-selected" onClick={useSelectedFactoryUpdate} disabled={!selectedFactory}>
               <Activity size={12} /> Use selected
             </button>
           </div>
           <label>New update number<input className="mono" data-testid="factory-new-update-number" value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
-          <button data-testid="factory-advance" disabled={busy || state.factories.length === 0}><RefreshCw size={15} /> Advance</button>
+          <button data-testid="factory-advance" disabled={busy || orderedFactories.length === 0}><RefreshCw size={15} /> Advance</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Materialise child</h3>
         <form onSubmit={submitMaterialise} className="form-grid">
-          <FactorySelect testId="factory-materialise-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <FactorySelect testId="factory-materialise-select" factories={orderedFactories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
           <div className="field-action-row">
             <button type="button" className="field-action" data-testid="factory-child-generate-ids" onClick={generateChildIds}>
               <RefreshCw size={12} /> Generate ids
@@ -1281,7 +1287,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
           <label>Pending capacity<input className="mono" data-testid="factory-child-pending" value={childPending} onChange={event => setChildPending(event.target.value)} /></label>
           <label>Sponsor budget<input className="mono" data-testid="factory-child-sponsor-budget" value={childSponsorBudget} onChange={event => setChildSponsorBudget(event.target.value)} /></label>
           <AssetSelect value={childAsset} onChange={setChildAsset} />
-          <button data-testid="factory-materialise-child" disabled={busy || state.factories.length === 0}><Network size={15} /> Materialise child</button>
+          <button data-testid="factory-materialise-child" disabled={busy || orderedFactories.length === 0}><Network size={15} /> Materialise child</button>
         </form>
       </div>
     </div>
@@ -1448,6 +1454,69 @@ function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
 
 function newestInvoice(invoices: InvoiceRecord[]): InvoiceRecord | undefined {
   return sortInvoicesNewestFirst(invoices)[0];
+}
+
+function sortEventsNewestFirst(events: HubEvent[]): HubEvent[] {
+  return [...events].sort((left, right) => {
+    const byId = right.id - left.id;
+    return byId || right.created_at_unix - left.created_at_unix;
+  });
+}
+
+function latestEventId(events: HubEvent[]): number {
+  return events.reduce((max, event) => Math.max(max, event.id), 0);
+}
+
+function sortChannelsForOperator(channels: ChannelRecord[], events: HubEvent[]): ChannelRecord[] {
+  const eventRank = subjectEventRank(events);
+  return [...channels].sort((left, right) => {
+    const byEvent = subjectRank(right.channel_id, eventRank) - subjectRank(left.channel_id, eventRank);
+    const byPhase = phaseRank(right.phase) - phaseRank(left.phase);
+    const byState = right.state_number - left.state_number;
+    const byFunding = right.funding_epoch - left.funding_epoch;
+    return byEvent || byPhase || byState || byFunding || right.channel_id.localeCompare(left.channel_id);
+  });
+}
+
+function sortFactoriesForOperator(factories: FactoryRecord[], events: HubEvent[]): FactoryRecord[] {
+  const eventRank = subjectEventRank(events);
+  return [...factories].sort((left, right) => {
+    const byEvent = subjectRank(right.factory_id, eventRank) - subjectRank(left.factory_id, eventRank);
+    const byUpdate = right.update_number - left.update_number;
+    const byChildren = right.materialised_child_channels.length - left.materialised_child_channels.length;
+    return byEvent || byUpdate || byChildren || right.factory_id.localeCompare(left.factory_id);
+  });
+}
+
+function sortPeersForOperator(peers: PeerRecord[], events: HubEvent[]): PeerRecord[] {
+  const eventRank = subjectEventRank(events);
+  return [...peers].sort((left, right) => {
+    const byEvent = subjectRank(right.node_id, eventRank) - subjectRank(left.node_id, eventRank);
+    const byAlias = left.alias.localeCompare(right.alias);
+    return byEvent || byAlias || left.node_id.localeCompare(right.node_id);
+  });
+}
+
+function subjectEventRank(events: HubEvent[]): Map<string, number> {
+  const rank = new Map<string, number>();
+  events.forEach(event => {
+    if (!event.subject_id) return;
+    const subject = event.subject_id.toLowerCase();
+    rank.set(subject, Math.max(rank.get(subject) ?? 0, event.id));
+  });
+  return rank;
+}
+
+function subjectRank(subjectId: string, eventRank: Map<string, number>): number {
+  return eventRank.get(subjectId.toLowerCase()) ?? 0;
+}
+
+function phaseRank(phase: ChannelRecord['phase']): number {
+  if (phase === 'active') return 4;
+  if (phase === 'settling') return 3;
+  if (phase === 'funding') return 2;
+  if (phase === 'closed') return 1;
+  return 0;
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
