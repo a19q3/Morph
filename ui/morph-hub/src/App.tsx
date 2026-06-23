@@ -225,7 +225,7 @@ export function App() {
     setStatus(`${label} submitted`);
     try {
       const next = await action();
-      setState(next);
+      applyState(next);
       setStatus(`${label} accepted by Morph Hub API`);
     } catch (err) {
       setError(String((err as Error).message));
