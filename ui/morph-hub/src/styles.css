@@ -86,6 +86,84 @@ a {
 }
 
 /* ============================================================
+   Runtime failure fallback
+   ============================================================ */
+.runtime-failure {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(180deg, rgba(246, 247, 249, 0.96), rgba(241, 243, 245, 0.96)),
+    var(--bg);
+}
+
+.runtime-failure-panel {
+  width: min(100%, 560px);
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+}
+
+.runtime-failure-kicker {
+  margin: 0 0 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.runtime-failure h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.runtime-failure p {
+  max-width: 58ch;
+  margin: 10px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.runtime-failure pre {
+  max-width: 100%;
+  margin: 14px 0 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--bad);
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.runtime-failure button {
+  min-height: 38px;
+  margin-top: 14px;
+  border-radius: var(--r-sm);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 14px;
+}
+
+.runtime-failure button:hover {
+  background: var(--accent-strong);
+}
+
+/* ============================================================
    App shell — 3 columns
    ============================================================ */
 .app-shell {
