@@ -3589,7 +3589,7 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
 fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
 
@@ -3628,7 +3628,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );
@@ -3748,7 +3748,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
 fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
 
@@ -3794,7 +3794,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );
@@ -4037,7 +4037,7 @@ fn factory_reduced_xudt_exit_tx(
 ) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let xudt_owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
@@ -4120,7 +4120,7 @@ fn factory_reduced_xudt_exit_tx(
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );
@@ -4284,7 +4284,7 @@ fn factory_reduced_xudt_exit_tx(
 fn factory_type_and_vault_accept_local_exit_materialisation() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
 
@@ -4327,7 +4327,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );
@@ -4512,7 +4512,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
 fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
     let reserve_type = deploy_always_success_with_args(&mut context, Bytes::from(vec![77]));
@@ -4557,7 +4557,7 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );
@@ -4722,7 +4722,7 @@ fn factory_vault_rejects_local_exit_xudt_missing_typed_change() {
 fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
-    let reserve_lock_placeholder = deploy_always_success(&mut context);
+    let reserve_owner_lock = deploy_always_success(&mut context);
     let xudt_owner_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
@@ -4792,7 +4792,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     let fee_input_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
-            .lock(reserve_lock_placeholder)
+            .lock(reserve_owner_lock)
             .build(),
         Bytes::new(),
     );

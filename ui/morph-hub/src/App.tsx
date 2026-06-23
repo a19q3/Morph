@@ -198,12 +198,14 @@ export function App() {
           <NavButton
             Icon={LayoutDashboard}
             label="Overview"
+            testId="nav-overview"
             active={activeSection === 'overview'}
             onClick={() => scrollTo('overview')}
           />
           <NavButton
             Icon={GitBranch}
             label="Channels"
+            testId="nav-channels"
             count={state.channels.length}
             active={activeSection === 'channels'}
             onClick={() => scrollTo('channels')}
@@ -211,6 +213,7 @@ export function App() {
           <NavButton
             Icon={ReceiptText}
             label="Invoices"
+            testId="nav-invoices"
             count={state.invoices.length}
             active={activeSection === 'invoices'}
             onClick={() => scrollTo('invoices')}
@@ -218,6 +221,7 @@ export function App() {
           <NavButton
             Icon={Users}
             label="Peers"
+            testId="nav-peers"
             count={state.peers.length}
             active={activeSection === 'peers'}
             onClick={() => scrollTo('peers')}
@@ -225,6 +229,7 @@ export function App() {
           <NavButton
             Icon={Factory}
             label="Factories"
+            testId="nav-factories"
             count={state.factories.length}
             active={activeSection === 'factories'}
             onClick={() => scrollTo('factories')}
@@ -232,6 +237,7 @@ export function App() {
           <NavButton
             Icon={Bell}
             label="Events"
+            testId="nav-events"
             count={state.events.length}
             active={activeSection === 'events'}
             onClick={() => scrollTo('events')}
@@ -270,7 +276,7 @@ export function App() {
           <div className="topbar-status">
             <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
             <StatusPill tone="neutral" icon={<Boxes size={15} />} label={state.rpc.tip_height == null ? 'tip unavailable' : `tip ${state.rpc.tip_height}`} />
-            <button className={`icon-button ${busy ? 'spinning' : ''}`} title="Refresh from API" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
+            <button className={`icon-button ${busy ? 'spinning' : ''}`} title="Refresh from API" data-testid="hub-refresh" onClick={() => runAction('Refresh', refresh)} disabled={busy}>
               <RefreshCw size={16} />
             </button>
           </div>
@@ -321,6 +327,7 @@ export function App() {
               onClick={() => selectAction(key)}
               title={label}
               aria-label={label}
+              data-testid={`action-${key}`}
               disabled={busy}
             >
               <Icon size={15} />
@@ -340,18 +347,20 @@ export function App() {
 function NavButton({
   Icon,
   label,
+  testId,
   count,
   active,
   onClick,
 }: {
   Icon: LucideIcon;
   label: string;
+  testId: string;
   count?: number;
   active?: boolean;
   onClick: () => void;
 }) {
   return (
-    <button className={`nav-item ${active ? 'active' : ''}`} onClick={onClick}>
+    <button className={`nav-item ${active ? 'active' : ''}`} data-testid={testId} onClick={onClick}>
       <Icon size={16} />
       <span className="label">{label}</span>
       {count != null && count > 0 && <span className="count">{count}</span>}
@@ -558,9 +567,9 @@ function PeerActions({ state, runAction, busy }: { state: NodeState; runAction: 
     <div className="drawer-section">
       <h2>Peer Layer</h2>
       <form onSubmit={submit} className="form-grid">
-        <label>Peer pubkey<input className="mono" value={pubkey} onChange={event => setPubkey(event.target.value)} /></label>
-        <label>Alias<input value={alias} onChange={event => setAlias(event.target.value)} /></label>
-        <button disabled={busy}><Users size={15} /> Connect peer</button>
+        <label>Peer pubkey<input className="mono" data-testid="peer-pubkey" value={pubkey} onChange={event => setPubkey(event.target.value)} /></label>
+        <label>Alias<input data-testid="peer-alias" value={alias} onChange={event => setAlias(event.target.value)} /></label>
+        <button data-testid="peer-connect" disabled={busy}><Users size={15} /> Connect peer</button>
       </form>
 
       <div className="form-section">
@@ -608,7 +617,7 @@ function AssetSelect({ value, onChange }: { value: Asset; onChange: (asset: Asse
 function InvoiceActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
-  const [expirySecs, setExpirySecs] = useState('3600');
+  const [expirySecs, setExpirySecs] = useState('');
   const [paymentMode, setPaymentMode] = useState<'preimage' | 'hash'>('preimage');
   const [paymentSecret, setPaymentSecret] = useState('');
   const [channelId, setChannelId] = useState('');
@@ -673,48 +682,48 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
     <div className="drawer-section">
       <h2>Invoice Layer</h2>
       <form onSubmit={submitCreate} className="form-grid">
-        <label>Amount<input className="mono" value={amount} onChange={event => setAmount(event.target.value)} /></label>
-        <label>Description<input value={description} onChange={event => setDescription(event.target.value)} /></label>
-        <label>Expiry seconds<input className="mono" value={expirySecs} onChange={event => setExpirySecs(event.target.value)} /></label>
+        <label>Amount<input className="mono" data-testid="invoice-amount" value={amount} onChange={event => setAmount(event.target.value)} /></label>
+        <label>Description<input data-testid="invoice-description" value={description} onChange={event => setDescription(event.target.value)} /></label>
+        <label>Expiry seconds<input className="mono" data-testid="invoice-expiry-secs" value={expirySecs} onChange={event => setExpirySecs(event.target.value)} /></label>
         <label>Payment input
-          <select value={paymentMode} onChange={event => setPaymentMode(event.target.value as 'preimage' | 'hash')}>
+          <select data-testid="invoice-payment-mode" value={paymentMode} onChange={event => setPaymentMode(event.target.value as 'preimage' | 'hash')}>
             <option value="preimage">preimage</option>
             <option value="hash">hash</option>
           </select>
         </label>
-        <label>{paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}<input className="mono" value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} /></label>
-        <label>Channel id<input className="mono" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
+        <label>{paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}<input className="mono" data-testid="invoice-payment-secret" value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} /></label>
+        <label>Channel id<input className="mono" data-testid="invoice-channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
         <AssetSelect value={asset} onChange={setAsset} />
-        <button disabled={busy}><Plus size={15} /> Create invoice</button>
+        <button data-testid="invoice-create" disabled={busy}><Plus size={15} /> Create invoice</button>
       </form>
 
       <div className="form-section">
         <h3>Decode</h3>
         <form onSubmit={submitDecode} className="form-grid">
-          <label>Encoded invoice<textarea className="mono" value={decodeText} onChange={event => setDecodeText(event.target.value)} /></label>
-          <button disabled={busy}><ReceiptText size={15} /> Decode</button>
+          <label>Encoded invoice<textarea className="mono" data-testid="invoice-decode-text" value={decodeText} onChange={event => setDecodeText(event.target.value)} /></label>
+          <button data-testid="invoice-decode" disabled={busy}><ReceiptText size={15} /> Decode</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Receive</h3>
         <form onSubmit={submitReceive} className="form-grid">
-          <label>Invoice id<input className="mono" value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} /></label>
-          <button disabled={busy}><Database size={15} /> Mark received</button>
+          <label>Invoice id<input className="mono" data-testid="invoice-receive-id" value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} /></label>
+          <button data-testid="invoice-receive" disabled={busy}><Database size={15} /> Mark received</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Settle</h3>
         <form onSubmit={submitSettle} className="form-grid">
-          <label>Invoice id<input className="mono" value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} /></label>
-          <label>Payment preimage<input className="mono" value={settlePreimage} onChange={event => setSettlePreimage(event.target.value)} /></label>
-          <button disabled={busy}><BadgeCheck size={15} /> Settle</button>
+          <label>Invoice id<input className="mono" data-testid="invoice-settle-id" value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} /></label>
+          <label>Payment preimage<input className="mono" data-testid="invoice-settle-preimage" value={settlePreimage} onChange={event => setSettlePreimage(event.target.value)} /></label>
+          <button data-testid="invoice-settle" disabled={busy}><BadgeCheck size={15} /> Settle</button>
         </form>
       </div>
 
       {state.invoices[0] && (
-        <button className="copy-button" onClick={copyLatestInvoice} disabled={busy}>
+        <button className="copy-button" data-testid="invoice-copy-latest" onClick={copyLatestInvoice} disabled={busy}>
           <ReceiptText size={15} /> Copy latest invoice
         </button>
       )}
@@ -730,7 +739,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
   const [fundingContextId, setFundingContextId] = useState('');
   const [local, setLocal] = useState('');
   const [remote, setRemote] = useState('');
-  const [pending, setPending] = useState('0');
+  const [pending, setPending] = useState('');
   const [sponsorBudget, setSponsorBudget] = useState('');
   const [asset, setAsset] = useState<Asset>({ kind: 'ckb' });
   const [spliceChannelId, setSpliceChannelId] = useState('');
@@ -794,43 +803,43 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
     <div className="drawer-section">
       <h2>Node Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
-        <label>Channel id<input className="mono" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
-        <label>Counterparty pubkey<input className="mono" value={counterpartyPubkey} onChange={event => setCounterpartyPubkey(event.target.value)} /></label>
-        <label>Counterparty alias<input value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
-        <label>Funding context id<input className="mono" value={fundingContextId} onChange={event => setFundingContextId(event.target.value)} /></label>
-        <label>Local capacity<input className="mono" value={local} onChange={event => setLocal(event.target.value)} /></label>
-        <label>Remote capacity<input className="mono" value={remote} onChange={event => setRemote(event.target.value)} /></label>
-        <label>Pending capacity<input className="mono" value={pending} onChange={event => setPending(event.target.value)} /></label>
-        <label>Sponsor budget<input className="mono" value={sponsorBudget} onChange={event => setSponsorBudget(event.target.value)} /></label>
+        <label>Channel id<input className="mono" data-testid="channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
+        <label>Counterparty pubkey<input className="mono" data-testid="channel-counterparty-pubkey" value={counterpartyPubkey} onChange={event => setCounterpartyPubkey(event.target.value)} /></label>
+        <label>Counterparty alias<input data-testid="channel-counterparty-alias" value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
+        <label>Funding context id<input className="mono" data-testid="channel-funding-context-id" value={fundingContextId} onChange={event => setFundingContextId(event.target.value)} /></label>
+        <label>Local capacity<input className="mono" data-testid="channel-local" value={local} onChange={event => setLocal(event.target.value)} /></label>
+        <label>Remote capacity<input className="mono" data-testid="channel-remote" value={remote} onChange={event => setRemote(event.target.value)} /></label>
+        <label>Pending capacity<input className="mono" data-testid="channel-pending" value={pending} onChange={event => setPending(event.target.value)} /></label>
+        <label>Sponsor budget<input className="mono" data-testid="channel-sponsor-budget" value={sponsorBudget} onChange={event => setSponsorBudget(event.target.value)} /></label>
         <AssetSelect value={asset} onChange={setAsset} />
-        <button disabled={busy}><GitBranch size={15} /> Open channel</button>
+        <button data-testid="channel-open" disabled={busy}><GitBranch size={15} /> Open channel</button>
       </form>
 
       <div className="form-section">
         <h3>Splice</h3>
         <form onSubmit={submitSplice} className="form-grid">
-          <ChannelSelect label="Active channel" channels={activeChannels} value={spliceChannelId} onChange={setSpliceChannelId} />
-          <label>New funding epoch<input className="mono" value={spliceEpoch} onChange={event => setSpliceEpoch(event.target.value)} /></label>
-          <label>New funding context id<input className="mono" value={spliceContextId} onChange={event => setSpliceContextId(event.target.value)} /></label>
-          <button disabled={busy || activeChannels.length === 0}><Split size={15} /> Splice</button>
+          <ChannelSelect testId="channel-splice-select" label="Active channel" channels={activeChannels} value={spliceChannelId} onChange={setSpliceChannelId} />
+          <label>New funding epoch<input className="mono" data-testid="channel-splice-epoch" value={spliceEpoch} onChange={event => setSpliceEpoch(event.target.value)} /></label>
+          <label>New funding context id<input className="mono" data-testid="channel-splice-context-id" value={spliceContextId} onChange={event => setSpliceContextId(event.target.value)} /></label>
+          <button data-testid="channel-splice" disabled={busy || activeChannels.length === 0}><Split size={15} /> Splice</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Publish state</h3>
         <form onSubmit={submitPublish} className="form-grid">
-          <ChannelSelect label="Publishable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
-          <label>Funding context id<input className="mono" value={publishContextId} onChange={event => setPublishContextId(event.target.value)} /></label>
-          <label>State number<input className="mono" value={publishStateNumber} onChange={event => setPublishStateNumber(event.target.value)} /></label>
-          <button disabled={busy || publishableChannels.length === 0}><RadioTower size={15} /> Publish</button>
+          <ChannelSelect testId="channel-publish-select" label="Publishable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
+          <label>Funding context id<input className="mono" data-testid="channel-publish-context-id" value={publishContextId} onChange={event => setPublishContextId(event.target.value)} /></label>
+          <label>State number<input className="mono" data-testid="channel-publish-state-number" value={publishStateNumber} onChange={event => setPublishStateNumber(event.target.value)} /></label>
+          <button data-testid="channel-publish" disabled={busy || publishableChannels.length === 0}><RadioTower size={15} /> Publish</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Finalise</h3>
         <form onSubmit={submitFinalise} className="form-grid">
-          <ChannelSelect label="Settling channel" channels={settlingChannels} value={finaliseChannelId} onChange={setFinaliseChannelId} />
-          <button disabled={busy || settlingChannels.length === 0}><BadgeCheck size={15} /> Finalise channel</button>
+          <ChannelSelect testId="channel-finalise-select" label="Settling channel" channels={settlingChannels} value={finaliseChannelId} onChange={setFinaliseChannelId} />
+          <button data-testid="channel-finalise" disabled={busy || settlingChannels.length === 0}><BadgeCheck size={15} /> Finalise channel</button>
         </form>
       </div>
     </div>
@@ -850,7 +859,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
   const [childFundingContextId, setChildFundingContextId] = useState('');
   const [childLocal, setChildLocal] = useState('');
   const [childRemote, setChildRemote] = useState('');
-  const [childPending, setChildPending] = useState('0');
+  const [childPending, setChildPending] = useState('');
   const [childSponsorBudget, setChildSponsorBudget] = useState('');
   const [childAsset, setChildAsset] = useState<Asset>({ kind: 'ckb' });
 
@@ -902,36 +911,36 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
     <div className="drawer-section">
       <h2>Factory Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
-        <label>Factory id<input className="mono" value={factoryId} onChange={event => setFactoryId(event.target.value)} /></label>
-        <label>Participant pubkeys<textarea className="mono" value={participants} onChange={event => setParticipants(event.target.value)} /></label>
-        <label>Reserve<input className="mono" value={reserve} onChange={event => setReserve(event.target.value)} /></label>
+        <label>Factory id<input className="mono" data-testid="factory-id" value={factoryId} onChange={event => setFactoryId(event.target.value)} /></label>
+        <label>Participant pubkeys<textarea className="mono" data-testid="factory-participants" value={participants} onChange={event => setParticipants(event.target.value)} /></label>
+        <label>Reserve<input className="mono" data-testid="factory-reserve" value={reserve} onChange={event => setReserve(event.target.value)} /></label>
         <AssetSelect value={factoryAsset} onChange={setFactoryAsset} />
-        <button disabled={busy}><Factory size={15} /> Open factory</button>
+        <button data-testid="factory-open" disabled={busy}><Factory size={15} /> Open factory</button>
       </form>
 
       <div className="form-section">
         <h3>Advance</h3>
         <form onSubmit={submitAdvance} className="form-grid">
-          <FactorySelect factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
-          <label>New update number<input className="mono" value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
-          <button disabled={busy || state.factories.length === 0}><RefreshCw size={15} /> Advance</button>
+          <FactorySelect testId="factory-advance-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <label>New update number<input className="mono" data-testid="factory-new-update-number" value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
+          <button data-testid="factory-advance" disabled={busy || state.factories.length === 0}><RefreshCw size={15} /> Advance</button>
         </form>
       </div>
 
       <div className="form-section">
         <h3>Materialise child</h3>
         <form onSubmit={submitMaterialise} className="form-grid">
-          <FactorySelect factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
-          <label>Child channel id<input className="mono" value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
-          <label>Counterparty pubkey<input className="mono" value={childCounterpartyPubkey} onChange={event => setChildCounterpartyPubkey(event.target.value)} /></label>
-          <label>Counterparty alias<input value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
-          <label>Funding context id<input className="mono" value={childFundingContextId} onChange={event => setChildFundingContextId(event.target.value)} /></label>
-          <label>Local capacity<input className="mono" value={childLocal} onChange={event => setChildLocal(event.target.value)} /></label>
-          <label>Remote capacity<input className="mono" value={childRemote} onChange={event => setChildRemote(event.target.value)} /></label>
-          <label>Pending capacity<input className="mono" value={childPending} onChange={event => setChildPending(event.target.value)} /></label>
-          <label>Sponsor budget<input className="mono" value={childSponsorBudget} onChange={event => setChildSponsorBudget(event.target.value)} /></label>
+          <FactorySelect testId="factory-materialise-select" factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
+          <label>Child channel id<input className="mono" data-testid="factory-child-channel-id" value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
+          <label>Counterparty pubkey<input className="mono" data-testid="factory-child-counterparty-pubkey" value={childCounterpartyPubkey} onChange={event => setChildCounterpartyPubkey(event.target.value)} /></label>
+          <label>Counterparty alias<input data-testid="factory-child-counterparty-alias" value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
+          <label>Funding context id<input className="mono" data-testid="factory-child-funding-context-id" value={childFundingContextId} onChange={event => setChildFundingContextId(event.target.value)} /></label>
+          <label>Local capacity<input className="mono" data-testid="factory-child-local" value={childLocal} onChange={event => setChildLocal(event.target.value)} /></label>
+          <label>Remote capacity<input className="mono" data-testid="factory-child-remote" value={childRemote} onChange={event => setChildRemote(event.target.value)} /></label>
+          <label>Pending capacity<input className="mono" data-testid="factory-child-pending" value={childPending} onChange={event => setChildPending(event.target.value)} /></label>
+          <label>Sponsor budget<input className="mono" data-testid="factory-child-sponsor-budget" value={childSponsorBudget} onChange={event => setChildSponsorBudget(event.target.value)} /></label>
           <AssetSelect value={childAsset} onChange={setChildAsset} />
-          <button disabled={busy || state.factories.length === 0}><Network size={15} /> Materialise child</button>
+          <button data-testid="factory-materialise-child" disabled={busy || state.factories.length === 0}><Network size={15} /> Materialise child</button>
         </form>
       </div>
     </div>
@@ -969,10 +978,10 @@ function StateActions({ state, runAction, busy }: { state: NodeState; runAction:
         <strong>{state.state_path || 'not loaded'}</strong>
         <small>Backed by the Morph Hub API process</small>
       </div>
-      <button className="copy-button" onClick={exportState} disabled={busy || stateFileBusy}><FileJson size={15} /> Load state JSON</button>
+      <button className="copy-button" data-testid="state-load-json" onClick={exportState} disabled={busy || stateFileBusy}><FileJson size={15} /> Load state JSON</button>
       {stateFileStatus && <small className={stateFileStatus === 'loaded' ? 'inline-ok' : 'inline-error'}>{stateFileStatus}</small>}
-      <textarea className="mono" value={raw} onChange={event => setRaw(event.target.value)} />
-      <button className="danger-button" onClick={restoreState} disabled={busy || !raw.trim()}><Upload size={15} /> Restore state file</button>
+      <textarea className="mono" data-testid="state-json" value={raw} onChange={event => setRaw(event.target.value)} />
+      <button className="danger-button" data-testid="state-restore-json" onClick={restoreState} disabled={busy || !raw.trim()}><Upload size={15} /> Restore state file</button>
     </div>
   );
 }
@@ -982,15 +991,17 @@ function ChannelSelect({
   value,
   onChange,
   label = 'Channel id',
+  testId,
 }: {
   channels: ChannelRecord[];
   value: string;
   onChange: (value: string) => void;
   label?: string;
+  testId: string;
 }) {
   return (
     <label>{label}
-      <select value={value} onChange={event => onChange(event.target.value)}>
+      <select data-testid={testId} value={value} onChange={event => onChange(event.target.value)}>
         <option value="">select channel</option>
         {channels.map(channel => (
           <option key={channel.channel_id} value={channel.channel_id}>{shortHex(channel.channel_id)} · {channel.phase}</option>
@@ -1000,10 +1011,10 @@ function ChannelSelect({
   );
 }
 
-function FactorySelect({ factories, value, onChange }: { factories: FactoryRecord[]; value: string; onChange: (value: string) => void }) {
+function FactorySelect({ factories, value, onChange, testId }: { factories: FactoryRecord[]; value: string; onChange: (value: string) => void; testId: string }) {
   return (
     <label>Factory id
-      <select value={value} onChange={event => onChange(event.target.value)}>
+      <select data-testid={testId} value={value} onChange={event => onChange(event.target.value)}>
         <option value="">select factory</option>
         {factories.map(factory => (
           <option key={factory.factory_id} value={factory.factory_id}>{shortHex(factory.factory_id)} · update {factory.update_number}</option>
@@ -1032,7 +1043,7 @@ function channelBody(input: {
     funding_context_id: assertHex32(input.fundingContextId, 'Funding context id'),
     local: assertPositiveInteger(input.local, 'Local capacity'),
     remote: assertPositiveInteger(input.remote, 'Remote capacity'),
-    pending: assertNonNegativeInteger(input.pending, 'Pending capacity'),
+    pending: input.pending.trim() ? assertNonNegativeInteger(input.pending, 'Pending capacity') : undefined,
     sponsor_budget: Number(assertPositiveInteger(input.sponsorBudget, 'Sponsor budget')),
     asset: normaliseAsset(input.asset),
   };

@@ -33,12 +33,14 @@ struct HubServer {
     ckb_rpc_url: Option<String>,
 }
 
+#[derive(Clone)]
 struct HubStore {
     path: PathBuf,
     state: HubRuntimeState,
     next_event_id: u64,
 }
 
+#[derive(Clone)]
 struct HubRuntimeState {
     pubkey: String,
     peer_pubkeys: BTreeMap<Bytes32, String>,
@@ -374,14 +376,17 @@ impl HubStore {
     }
 
     fn replace(&mut self, persisted: PersistedHubState) -> Result<()> {
-        self.state = HubRuntimeState::from_persisted(persisted)?;
-        self.push_event(
+        let mut candidate = self.clone();
+        candidate.state = HubRuntimeState::from_persisted(persisted)?;
+        candidate.push_event(
             EventSeverity::Warning,
             "state_restored",
             None,
             "Hub state file was replaced through the API",
         )?;
-        self.persist()
+        candidate.persist()?;
+        *self = candidate;
+        Ok(())
     }
 
     fn view(&self, rpc: RpcView) -> Result<HubView> {
@@ -1030,9 +1035,11 @@ impl HubServer {
         F: FnOnce(&mut HubStore) -> Result<()>,
     {
         let mut store = self.store.lock().unwrap();
-        f(&mut store)?;
-        store.persist()?;
-        let view = store.view(self.rpc_view())?;
+        let mut candidate = store.clone();
+        f(&mut candidate)?;
+        let view = candidate.view(self.rpc_view())?;
+        candidate.persist()?;
+        *store = candidate;
         Ok(json_response(200, "OK", &view))
     }
 
@@ -1563,6 +1570,158 @@ fn phase_label(phase: Phase) -> &'static str {
         Phase::Active => "active",
         Phase::Settling => "settling",
         Phase::Closed => "closed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_mutation_does_not_commit_partial_peer_state() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_one_pubkey = pubkey_from_scalar(2);
+        let peer_two_pubkey = pubkey_from_scalar(3);
+        let server = test_server(&local_pubkey);
+
+        let factory_id = hex_repeat('5');
+        let child_id = hex_repeat('6');
+        let funding_context_id = hex_repeat('7');
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/factories",
+            json!({
+                "factory_id": factory_id,
+                "participant_pubkeys": [local_pubkey.as_str(), peer_one_pubkey.as_str()],
+                "reserve": "500000000",
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+
+        let response = route_json(
+            &server,
+            "POST",
+            &format!("/api/factories/{factory_id}/materialise-child"),
+            json!({
+                "child_channel_id": child_id,
+                "counterparty_pubkey": peer_two_pubkey.as_str(),
+                "counterparty_alias": "not-member",
+                "funding_context_id": funding_context_id,
+                "local": "100000000",
+                "remote": "100000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 400);
+
+        let state = route_empty(&server, "GET", "/api/state");
+        assert_eq!(state.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&state.body).unwrap();
+        let peers = body["peers"].as_array().unwrap();
+        assert!(
+            peers
+                .iter()
+                .all(|peer| peer["pubkey"].as_str() != Some(peer_two_pubkey.as_str())),
+            "failed materialise-child request leaked non-participant peer into hub state"
+        );
+
+        let response = route_json(
+            &server,
+            "POST",
+            &format!("/api/factories/{factory_id}/materialise-child"),
+            json!({
+                "child_channel_id": child_id,
+                "counterparty_pubkey": peer_one_pubkey.as_str(),
+                "counterparty_alias": "member",
+                "funding_context_id": funding_context_id,
+                "local": "100000000",
+                "remote": "100000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["peers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|peer| peer["pubkey"].as_str() == Some(peer_one_pubkey.as_str()))
+        );
+        assert!(
+            body["channels"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|channel| channel["channel_id"].as_str() == Some(child_id.as_str()))
+        );
+        assert!(
+            body["completed_flows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flow| flow.as_str() == Some("factory-child"))
+        );
+    }
+
+    fn test_server(local_pubkey: &str) -> HubServer {
+        let path = std::env::temp_dir().join(format!(
+            "morph-hub-test-{}-{}.json",
+            std::process::id(),
+            now_unix().unwrap()
+        ));
+        let _ = fs::remove_file(&path);
+        let store = HubStore::load_or_create(path, local_pubkey, MorphNetwork::Devnet).unwrap();
+        HubServer {
+            store: Arc::new(Mutex::new(store)),
+            ui_dir: PathBuf::from("ui/morph-hub/dist"),
+            ckb_rpc_url: None,
+        }
+    }
+
+    fn route_json(
+        server: &HubServer,
+        method: impl Into<String>,
+        path: impl Into<String>,
+        value: serde_json::Value,
+    ) -> HttpResponse {
+        server.route(HttpRequest {
+            method: method.into(),
+            path: path.into(),
+            body: serde_json::to_vec(&value).unwrap(),
+        })
+    }
+
+    fn route_empty(
+        server: &HubServer,
+        method: impl Into<String>,
+        path: impl Into<String>,
+    ) -> HttpResponse {
+        server.route(HttpRequest {
+            method: method.into(),
+            path: path.into(),
+            body: Vec::new(),
+        })
+    }
+
+    fn hex_repeat(ch: char) -> String {
+        format!("0x{}", ch.to_string().repeat(64))
+    }
+
+    fn pubkey_from_scalar(value: u8) -> String {
+        let mut bytes = [0u8; 32];
+        bytes[31] = value;
+        let signing_key = k256::ecdsa::SigningKey::from_bytes((&bytes).into()).unwrap();
+        hex::encode(
+            signing_key
+                .verifying_key()
+                .to_encoded_point(true)
+                .as_bytes(),
+        )
     }
 }
 

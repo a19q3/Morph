@@ -9960,10 +9960,10 @@ fn sign_single_secp_input(
     tx: ckb_types::core::TransactionView,
     privkey: &Privkey,
 ) -> Result<ckb_types::core::TransactionView> {
-    let placeholder = WitnessArgs::new_builder()
+    let unsigned_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
         .build();
-    let message = sighash_all_message(tx.hash(), &[placeholder.as_bytes()]);
+    let message = sighash_all_message(tx.hash(), &[unsigned_witness.as_bytes()]);
     let signature = privkey
         .sign_recoverable(&message)
         .context("failed to sign CKB transaction")?;
@@ -9978,17 +9978,14 @@ fn sign_factory_update_transaction(
     privkey: &Privkey,
     input_type: Bytes,
 ) -> Result<ckb_types::core::TransactionView> {
-    let placeholder_factory_witness = WitnessArgs::new_builder()
+    let unsigned_factory_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let placeholder_fee_witness = WitnessArgs::default();
+    let fee_witness = WitnessArgs::default();
     let message = sighash_all_message(
         tx.hash(),
-        &[
-            placeholder_factory_witness.as_bytes(),
-            placeholder_fee_witness.as_bytes(),
-        ],
+        &[unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()],
     );
     let signature = privkey
         .sign_recoverable(&message)
@@ -10000,7 +9997,7 @@ fn sign_factory_update_transaction(
     Ok(tx
         .as_advanced_builder()
         .witness(factory_witness.as_bytes())
-        .witness(placeholder_fee_witness.as_bytes())
+        .witness(fee_witness.as_bytes())
         .build())
 }
 
@@ -10009,20 +10006,17 @@ fn sign_factory_exit_transaction(
     privkey: &Privkey,
     input_type: Bytes,
 ) -> Result<ckb_types::core::TransactionView> {
-    let placeholder_factory_witness = WitnessArgs::new_builder()
+    let unsigned_factory_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
         .input_type(Some(input_type.clone()).pack())
         .build();
     let factory_vault_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let placeholder_fee_witness = WitnessArgs::default();
+    let fee_witness = WitnessArgs::default();
     let message = sighash_all_message(
         tx.hash(),
-        &[
-            placeholder_factory_witness.as_bytes(),
-            placeholder_fee_witness.as_bytes(),
-        ],
+        &[unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()],
     );
     let signature = privkey
         .sign_recoverable(&message)
@@ -10035,7 +10029,7 @@ fn sign_factory_exit_transaction(
         .as_advanced_builder()
         .witness(factory_witness.as_bytes())
         .witness(factory_vault_witness.as_bytes())
-        .witness(placeholder_fee_witness.as_bytes())
+        .witness(fee_witness.as_bytes())
         .build())
 }
 
@@ -10045,19 +10039,16 @@ fn sign_factory_splice_transaction(
     input_type: Bytes,
     extra_owner_inputs: usize,
 ) -> Result<ckb_types::core::TransactionView> {
-    let placeholder_factory_witness = WitnessArgs::new_builder()
+    let unsigned_factory_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
         .input_type(Some(input_type.clone()).pack())
         .build();
     let factory_vault_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let placeholder_fee_witness = WitnessArgs::default();
+    let fee_witness = WitnessArgs::default();
     let extra_owner_witness = WitnessArgs::default();
-    let mut owner_witnesses = vec![
-        placeholder_factory_witness.as_bytes(),
-        placeholder_fee_witness.as_bytes(),
-    ];
+    let mut owner_witnesses = vec![unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()];
     for _ in 0..extra_owner_inputs {
         owner_witnesses.push(extra_owner_witness.as_bytes());
     }
@@ -10073,7 +10064,7 @@ fn sign_factory_splice_transaction(
         .as_advanced_builder()
         .witness(factory_witness.as_bytes())
         .witness(factory_vault_witness.as_bytes())
-        .witness(placeholder_fee_witness.as_bytes());
+        .witness(fee_witness.as_bytes());
     for _ in 0..extra_owner_inputs {
         builder = builder.witness(extra_owner_witness.as_bytes());
     }
@@ -10090,11 +10081,11 @@ fn sign_splice_transaction(
         .input_type(Some(splice_witness).pack())
         .build();
     let vault_witness = WitnessArgs::default();
-    let placeholder_fee_witness = WitnessArgs::new_builder()
+    let unsigned_fee_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
         .build();
     let extra_owner_witness = WitnessArgs::default();
-    let mut owner_witnesses = vec![placeholder_fee_witness.as_bytes()];
+    let mut owner_witnesses = vec![unsigned_fee_witness.as_bytes()];
     for _ in 0..extra_owner_inputs {
         owner_witnesses.push(extra_owner_witness.as_bytes());
     }
