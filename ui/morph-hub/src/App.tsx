@@ -267,7 +267,8 @@ export function App() {
   const selectAction = (key: ActionPanel) => {
     setActiveAction(key);
     setError('');
-    setStatus('State refreshed from Morph Hub API');
+    const label = actionItems.find(item => item.key === key)?.label ?? 'Operator';
+    setStatus(`${label} controls selected`);
   };
 
   const submitApiToken = (event: FormEvent) => {
