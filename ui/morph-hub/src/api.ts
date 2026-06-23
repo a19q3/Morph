@@ -24,6 +24,10 @@ export async function postAction(path: string, body?: unknown): Promise<NodeStat
   });
 }
 
+export async function connectPeer(pubkey: string, alias: string): Promise<NodeState> {
+  return postAction('/api/peers', { pubkey, alias });
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) headers.set('content-type', 'application/json');

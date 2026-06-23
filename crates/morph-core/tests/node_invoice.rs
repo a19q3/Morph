@@ -110,6 +110,25 @@ fn node_channel_lifecycle_publishes_and_finalises_current_context() {
 }
 
 #[test]
+fn node_rejects_self_peer_and_self_channel() {
+    let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
+
+    assert_eq!(
+        node.connect_peer(MorphPeer {
+            node_id: bytes32(1),
+            alias: "self".to_string(),
+        })
+        .unwrap_err(),
+        NodeError::SelfPeer
+    );
+
+    assert_eq!(
+        node.open_channel(channel(2, 1, 30)).unwrap_err(),
+        NodeError::SelfPeer
+    );
+}
+
+#[test]
 fn splice_advances_funding_context_without_allowing_stale_publication() {
     let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
     node.connect_peer(MorphPeer {
@@ -125,6 +144,58 @@ fn splice_advances_funding_context_without_allowing_stale_publication() {
         NodeError::FundingContextMismatch
     );
     node.publish_state(&bytes32(2), bytes32(31), 2).unwrap();
+}
+
+#[test]
+fn factory_requires_local_participant_and_child_counterparty_membership() {
+    let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
+    node.connect_peer(MorphPeer {
+        node_id: bytes32(7),
+        alias: "bob".to_string(),
+    })
+    .unwrap();
+    node.connect_peer(MorphPeer {
+        node_id: bytes32(8),
+        alias: "carol".to_string(),
+    })
+    .unwrap();
+
+    assert_eq!(
+        node.open_factory(MorphFactoryRecord {
+            factory_id: bytes32(39),
+            participant_node_ids: BTreeSet::from([bytes32(7), bytes32(8)]),
+            update_number: 0,
+            reserve_balances: vec![MorphAssetBalance {
+                asset: MorphAsset::Ckb,
+                local: 100_000,
+                remote: 100_000,
+                pending: 0,
+            }],
+            materialised_child_channels: BTreeSet::new(),
+        })
+        .unwrap_err(),
+        NodeError::FactoryMissingLocalParticipant
+    );
+
+    node.open_factory(MorphFactoryRecord {
+        factory_id: bytes32(40),
+        participant_node_ids: BTreeSet::from([bytes32(1), bytes32(7)]),
+        update_number: 0,
+        reserve_balances: vec![MorphAssetBalance {
+            asset: MorphAsset::Ckb,
+            local: 100_000,
+            remote: 100_000,
+            pending: 0,
+        }],
+        materialised_child_channels: BTreeSet::new(),
+    })
+    .unwrap();
+
+    assert_eq!(
+        node.materialise_child_channel(&bytes32(40), channel(41, 8, 42))
+            .unwrap_err(),
+        NodeError::FactoryChildCounterpartyNotParticipant
+    );
 }
 
 #[test]

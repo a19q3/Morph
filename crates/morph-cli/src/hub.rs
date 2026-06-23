@@ -552,6 +552,10 @@ impl HubRuntimeState {
         for peer in persisted.peers {
             let pubkey = canonical_pubkey(&peer.pubkey)?;
             let node_id = node_id_from_pubkey(&pubkey)?;
+            ensure!(
+                node_id != node.node_id,
+                "peer pubkey must not be local pubkey"
+            );
             node.connect_peer(MorphPeer {
                 node_id,
                 alias: peer.alias,
@@ -561,6 +565,10 @@ impl HubRuntimeState {
         for persisted_channel in persisted.channels {
             let counterparty_pubkey = canonical_pubkey(&persisted_channel.counterparty_pubkey)?;
             let counterparty_node_id = node_id_from_pubkey(&counterparty_pubkey)?;
+            ensure!(
+                counterparty_node_id != node.node_id,
+                "channel counterparty pubkey must not be local pubkey"
+            );
             if !node.peers.contains_key(&counterparty_node_id) {
                 node.connect_peer(MorphPeer {
                     node_id: counterparty_node_id,
@@ -593,6 +601,14 @@ impl HubRuntimeState {
                 .iter()
                 .map(|participant_pubkey| node_id_from_pubkey(participant_pubkey))
                 .collect::<Result<BTreeSet<_>>>()?;
+            ensure!(
+                participant_node_ids.len() == participant_pubkeys.len(),
+                "factory participant pubkeys must be unique"
+            );
+            ensure!(
+                participant_node_ids.contains(&node.node_id),
+                "factory participant_pubkeys must include local pubkey"
+            );
             for participant_pubkey in participant_pubkeys {
                 let participant_node_id = node_id_from_pubkey(&participant_pubkey)?;
                 if participant_node_id != node.node_id {
@@ -671,6 +687,10 @@ impl HubServer {
                 let body: ConnectPeerRequest = parse_body(&request.body)?;
                 let pubkey = canonical_pubkey(&body.pubkey)?;
                 let node_id = node_id_from_pubkey(&pubkey)?;
+                ensure!(
+                    node_id != store.state.node.node_id,
+                    "peer pubkey must not be local pubkey"
+                );
                 ensure!(
                     !body.alias.trim().is_empty(),
                     "peer alias must not be empty"
@@ -809,6 +829,14 @@ impl HubServer {
                     .iter()
                     .map(|pubkey| node_id_from_pubkey(pubkey))
                     .collect::<Result<BTreeSet<_>>>()?;
+                ensure!(
+                    participant_node_ids.len() == participant_pubkeys.len(),
+                    "factory participant pubkeys must be unique"
+                );
+                ensure!(
+                    participant_node_ids.contains(&store.state.node.node_id),
+                    "factory participant_pubkeys must include local pubkey"
+                );
                 for pubkey in &participant_pubkeys {
                     let node_id = node_id_from_pubkey(pubkey)?;
                     if node_id != store.state.node.node_id {
@@ -1087,6 +1115,10 @@ fn ensure_peer(
     counterparty_node_id: Bytes32,
     alias: Option<&str>,
 ) -> Result<()> {
+    ensure!(
+        counterparty_node_id != state.node.node_id,
+        "counterparty pubkey must not be local pubkey"
+    );
     if state.node.peers.contains_key(&counterparty_node_id) {
         state
             .peer_pubkeys

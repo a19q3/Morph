@@ -48,6 +48,8 @@ pub enum NodeError {
     PeerNotFound,
     #[error("peer already exists")]
     PeerAlreadyExists,
+    #[error("peer must not be the local node")]
+    SelfPeer,
     #[error("channel already exists")]
     ChannelAlreadyExists,
     #[error("channel was not found")]
@@ -68,6 +70,10 @@ pub enum NodeError {
     FactoryAlreadyExists,
     #[error("factory was not found")]
     FactoryNotFound,
+    #[error("factory must include the local node")]
+    FactoryMissingLocalParticipant,
+    #[error("factory child counterparty is not a factory participant")]
+    FactoryChildCounterpartyNotParticipant,
     #[error("factory update number must advance")]
     FactoryUpdateNotAdvanced,
     #[error("factory child channel id is already in use")]
@@ -567,6 +573,9 @@ impl MorphNodeState {
 
     pub fn connect_peer(&mut self, peer: MorphPeer) -> NodeResult<()> {
         validate_bytes32_nonzero(&peer.node_id, NodeError::ZeroNodeId)?;
+        if peer.node_id == self.node_id {
+            return Err(NodeError::SelfPeer);
+        }
         if self.peers.contains_key(&peer.node_id) {
             return Err(NodeError::PeerAlreadyExists);
         }
@@ -610,6 +619,9 @@ impl MorphNodeState {
 
     pub fn open_channel(&mut self, channel: MorphChannelRecord) -> NodeResult<()> {
         validate_channel_record(&channel)?;
+        if channel.counterparty_node_id == self.node_id {
+            return Err(NodeError::SelfPeer);
+        }
         if !self.peers.contains_key(&channel.counterparty_node_id) {
             return Err(NodeError::PeerNotFound);
         }
@@ -699,6 +711,9 @@ impl MorphNodeState {
         {
             return Err(NodeError::ZeroNodeId);
         }
+        if !factory.participant_node_ids.contains(&self.node_id) {
+            return Err(NodeError::FactoryMissingLocalParticipant);
+        }
         if self.factories.contains_key(&factory.factory_id) {
             return Err(NodeError::FactoryAlreadyExists);
         }
@@ -742,6 +757,12 @@ impl MorphNodeState {
             .factories
             .get_mut(factory_id)
             .ok_or(NodeError::FactoryNotFound)?;
+        if !factory
+            .participant_node_ids
+            .contains(&child.counterparty_node_id)
+        {
+            return Err(NodeError::FactoryChildCounterpartyNotParticipant);
+        }
         if !factory.materialised_child_channels.insert(child.channel_id) {
             return Err(NodeError::FactoryChildAlreadyMaterialised);
         }

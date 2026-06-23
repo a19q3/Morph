@@ -147,6 +147,21 @@ export function shortHex(value?: string): string {
   return `${value.slice(0, 10)}...${value.slice(-6)}`;
 }
 
+export function formatTime(unix?: number): string {
+  if (!unix) return '—';
+  return new Date(unix * 1000).toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export function assetLabel(asset: Asset): string {
+  return asset.kind === 'ckb' ? 'CKB' : `xUDT ${shortHex(asset.type_hash)}`;
+}
+
 export function assertHex32(value: string, label: string): Hex32 {
   const trimmed = value.trim().toLowerCase();
   if (!/^0x[0-9a-f]{64}$/.test(trimmed)) {
@@ -170,6 +185,38 @@ export function assertPubkey(value: string, label: string): Pubkey {
     throw new Error(`${label} must be a compressed secp256k1 pubkey starting with 02 or 03.`);
   }
   return trimmed;
+}
+
+export function assertRemotePubkey(value: string, localPubkey: Pubkey, label: string): Pubkey {
+  const pubkey = assertPubkey(value, label);
+  if (localPubkey && pubkey === localPubkey) {
+    throw new Error(`${label} must not be the local pubkey.`);
+  }
+  return pubkey;
+}
+
+export function parsePubkeyList(value: string, label: string): Pubkey[] {
+  const parts = value
+    .split(/[\s,]+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) throw new Error(`${label} must include at least one pubkey.`);
+  const pubkeys = parts.map(part => assertPubkey(part, label));
+  if (new Set(pubkeys).size !== pubkeys.length) {
+    throw new Error(`${label} must not contain duplicate pubkeys.`);
+  }
+  return pubkeys;
+}
+
+export function assertIncludesPubkey(values: Pubkey[], required: Pubkey, label: string): void {
+  if (required && !values.includes(required)) {
+    throw new Error(`${label} must include the local pubkey.`);
+  }
+}
+
+export function normaliseAsset(asset: Asset): Asset {
+  if (asset.kind === 'ckb') return { kind: 'ckb' };
+  return { kind: 'xudt', type_hash: assertHex32(asset.type_hash ?? '', 'Asset type hash') };
 }
 
 export function assertPositiveInteger(value: string, label: string): string {
