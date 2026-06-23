@@ -3125,26 +3125,29 @@ mod tests {
             ),
         )
         .unwrap();
-        fs::write(
-            dir.join("splice.json"),
-            r#"{
-              "apply": {
+        let withdrawal_participant_pubkey_sec1 = compressed_pubkey_hex(41);
+        let withdrawal_lock_hash = bytes32_hex(73);
+        let splice_report = serde_json::json!({
+            "apply": {
                 "tx_hash": "0xsp1",
                 "status": "Committed",
                 "block_number": 11,
                 "withdrawal_payout_policy": "participant_signature_pubkey",
-                "withdrawal_participant_pubkey_sec1": "0x021111111111111111111111111111111111111111111111111111111111111111",
-                "withdrawal_lock_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                "withdrawal_participant_pubkey_sec1": withdrawal_participant_pubkey_sec1,
+                "withdrawal_lock_hash": withdrawal_lock_hash,
                 "withdrawal_out_point": {
-                  "tx_hash": "0xsp1",
-                  "index": 2
+                    "tx_hash": "0xsp1",
+                    "index": 2
                 },
                 "metrics": {
-                  "estimated_cycles": 11,
-                  "tx_size_bytes": 12
+                    "estimated_cycles": 11,
+                    "tx_size_bytes": 12
                 }
-              }
-            }"#,
+            }
+        });
+        fs::write(
+            dir.join("splice.json"),
+            serde_json::to_string_pretty(&splice_report).unwrap(),
         )
         .unwrap();
         fs::write(
@@ -3164,22 +3167,84 @@ mod tests {
             }"#,
         )
         .unwrap();
-        fs::write(
-            dir.join("watch-alerts.jsonl"),
-            concat!(
-                r#"{"schema":"morph.watchtower_alert","created_unix_ms":1,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"older_state_detected","message":"old state","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":null,"scanned_to_block":10,"next_from_block":11}"#,
-                "\n",
-                r#"{"schema":"morph.watchtower_alert","created_unix_ms":2,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"publication_submitted","message":"published","selected_state_number":2,"observed_state_number":0,"observed_out_point":"0xabc:0","publication_tx_hash":"0xdef","scanned_to_block":10,"next_from_block":11}"#,
-                "\n",
-                r#"{"schema":"morph.watchtower_alert","created_unix_ms":3,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_detected","message":"splice","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
-                "\n",
-                r#"{"schema":"morph.watchtower_alert","created_unix_ms":4,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"warning","event":"splice_package_stale","message":"stale","selected_state_number":1,"observed_state_number":0,"observed_out_point":"0xdef:0","publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
-                "\n",
-                r#"{"schema":"morph.watchtower_alert","created_unix_ms":5,"channel_id":"0x1111111111111111111111111111111111111111111111111111111111111111","severity":"info","event":"scan_idle","message":"idle","selected_state_number":1,"observed_state_number":null,"observed_out_point":null,"publication_tx_hash":null,"scanned_to_block":20,"next_from_block":21}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
+        let alert_channel_id = bytes32_hex(89);
+        let watch_alerts = [
+            serde_json::json!({
+                "schema": "morph.watchtower_alert",
+                "created_unix_ms": 1,
+                "channel_id": alert_channel_id.clone(),
+                "severity": "warning",
+                "event": "older_state_detected",
+                "message": "old state",
+                "selected_state_number": 2,
+                "observed_state_number": 0,
+                "observed_out_point": "0xabc:0",
+                "publication_tx_hash": null,
+                "scanned_to_block": 10,
+                "next_from_block": 11
+            }),
+            serde_json::json!({
+                "schema": "morph.watchtower_alert",
+                "created_unix_ms": 2,
+                "channel_id": alert_channel_id.clone(),
+                "severity": "warning",
+                "event": "publication_submitted",
+                "message": "published",
+                "selected_state_number": 2,
+                "observed_state_number": 0,
+                "observed_out_point": "0xabc:0",
+                "publication_tx_hash": "0xdef",
+                "scanned_to_block": 10,
+                "next_from_block": 11
+            }),
+            serde_json::json!({
+                "schema": "morph.watchtower_alert",
+                "created_unix_ms": 3,
+                "channel_id": alert_channel_id.clone(),
+                "severity": "warning",
+                "event": "splice_detected",
+                "message": "splice",
+                "selected_state_number": 1,
+                "observed_state_number": 0,
+                "observed_out_point": "0xdef:0",
+                "publication_tx_hash": null,
+                "scanned_to_block": 20,
+                "next_from_block": 21
+            }),
+            serde_json::json!({
+                "schema": "morph.watchtower_alert",
+                "created_unix_ms": 4,
+                "channel_id": alert_channel_id.clone(),
+                "severity": "warning",
+                "event": "splice_package_stale",
+                "message": "stale",
+                "selected_state_number": 1,
+                "observed_state_number": 0,
+                "observed_out_point": "0xdef:0",
+                "publication_tx_hash": null,
+                "scanned_to_block": 20,
+                "next_from_block": 21
+            }),
+            serde_json::json!({
+                "schema": "morph.watchtower_alert",
+                "created_unix_ms": 5,
+                "channel_id": alert_channel_id,
+                "severity": "info",
+                "event": "scan_idle",
+                "message": "idle",
+                "selected_state_number": 1,
+                "observed_state_number": null,
+                "observed_out_point": null,
+                "publication_tx_hash": null,
+                "scanned_to_block": 20,
+                "next_from_block": 21
+            }),
+        ]
+        .into_iter()
+        .map(|alert| alert.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+        fs::write(dir.join("watch-alerts.jsonl"), format!("{watch_alerts}\n")).unwrap();
         fs::write(
             dir.join("service.json"),
             r#"{
@@ -4087,28 +4152,28 @@ mod tests {
                 factory_reduced_splice(
                     "factory-reduced-xudt-splice-in-smoke",
                     "splice_in",
-                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    &xudt_asset_id(101),
                     20,
                     0,
                 ),
                 factory_reduced_splice(
                     "factory-reduced-xudt-splice-out-smoke",
                     "splice_out",
-                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    &xudt_asset_id(102),
                     0,
                     20,
                 ),
                 factory_splice(
                     "factory-xudt-splice-in-smoke",
                     "splice_in",
-                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    &xudt_asset_id(103),
                     20,
                     0,
                 ),
                 factory_splice(
                     "factory-xudt-splice-out-smoke",
                     "splice_out",
-                    "xudt:0x1111111111111111111111111111111111111111111111111111111111111111",
+                    &xudt_asset_id(104),
                     0,
                     20,
                 ),
@@ -4145,12 +4210,8 @@ mod tests {
             check: check.to_string(),
             path: "$.apply".to_string(),
             withdrawal_payout_policy: withdrawal_payout_policy.to_string(),
-            withdrawal_participant_pubkey_sec1: has_withdrawal.then(|| {
-                "0x021111111111111111111111111111111111111111111111111111111111111111".to_string()
-            }),
-            withdrawal_lock_hash: has_withdrawal.then(|| {
-                "0x1111111111111111111111111111111111111111111111111111111111111111".to_string()
-            }),
+            withdrawal_participant_pubkey_sec1: has_withdrawal.then(|| compressed_pubkey_hex(41)),
+            withdrawal_lock_hash: has_withdrawal.then(|| bytes32_hex(73)),
             withdrawal_out_point: has_withdrawal.then(|| "0xabc:2".to_string()),
         }
     }
@@ -4521,6 +4582,24 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn bytes32_hex(seed: u8) -> String {
+        let hex = (0..32)
+            .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
+            .collect::<String>();
+        format!("0x{hex}")
+    }
+
+    fn compressed_pubkey_hex(seed: u8) -> String {
+        let body = (0..32)
+            .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
+            .collect::<String>();
+        format!("0x02{body}")
+    }
+
+    fn xudt_asset_id(seed: u8) -> String {
+        format!("xudt:{}", bytes32_hex(seed))
     }
 
     fn temp_report_dir() -> PathBuf {

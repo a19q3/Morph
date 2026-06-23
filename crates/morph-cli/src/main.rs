@@ -7,8 +7,7 @@ use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand, ValueEnum};
 use devnet::{
     ApplyFactoryReducedSpliceOptions, ApplyFactorySpliceOptions, ApplySpliceOptions,
-    CompetingSpendSmokeOptions, DEFAULT_ALICE_PRIVATE_KEY, DEFAULT_BOB_PRIVATE_KEY,
-    DEFAULT_DEVNET_PRIVATE_KEY, DeployContractsOptions, DevnetSpliceAsset, DevnetSpliceKind,
+    CompetingSpendSmokeOptions, DeployContractsOptions, DevnetSpliceAsset, DevnetSpliceKind,
     FactoryExitAuthorisation, FactoryExitChannelOptions, FactoryExitChannelTamper,
     FactoryMerkleUpdateSmokeOptions, FactoryReducedExitSmokeOptions,
     FactoryReducedRightsSmokeOptions, FactoryReducedXudtExitSmokeOptions,
@@ -479,11 +478,7 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls a funded local-devnet cell.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Absolute fee to reserve for the deployment transaction, in shannons.
         #[arg(long, default_value_t = 100_000_000)]
@@ -501,17 +496,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls a funded local-devnet cell.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -556,17 +547,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls a funded local-devnet cell.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -602,17 +589,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the FactoryStateCell and fee input.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -653,10 +636,10 @@ enum DevnetCommand {
     /// Save a signed factory state package without broadcasting it.
     SaveFactoryStatePackage {
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -683,10 +666,10 @@ enum DevnetCommand {
     /// Save a reduced-rights factory update package without broadcasting it.
     SaveFactoryReducedRightsPackage {
         /// Devnet Alice factory signing key. Alice is the touched participant in the bounded reduced-rights proof body.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced update.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -707,10 +690,10 @@ enum DevnetCommand {
     /// Save a conservative factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
     SaveFactorySplicePackage {
         /// Devnet Alice factory signing key. Alice owns the touched reserve claim in the factory splice body.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -743,10 +726,10 @@ enum DevnetCommand {
     /// Save a reduced sparse-Merkle factory splice package from the live FactoryStateCell/FactoryVaultCell pair.
     SaveFactoryReducedSplicePackage {
         /// Devnet Alice factory signing key. Alice owns the touched reserve claim in the reduced-splice body.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced splice.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -782,11 +765,7 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -816,11 +795,7 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -847,10 +822,10 @@ enum DevnetCommand {
     /// Save a sparse Merkle factory update package without broadcasting it.
     SaveFactoryMerkleUpdatePackage {
         /// Devnet Alice factory signing key. Alice is the touched participant in the single-right proof.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full membership. Bob does not sign the Merkle update.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -898,17 +873,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -935,17 +906,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key. Alice signs the reduced update.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full membership.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -975,17 +942,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1030,17 +993,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1085,17 +1044,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1140,17 +1095,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1195,17 +1146,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1256,17 +1203,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1317,17 +1260,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1378,17 +1317,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1439,17 +1374,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory signing key. Alice signs the Merkle update.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory key used to prove full membership.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1479,17 +1410,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel key used to prove full membership.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1528,17 +1455,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel key used to prove full membership.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1586,17 +1509,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key. Alice signs the reduced exit.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel key used to prove full membership.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1641,17 +1560,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1699,17 +1614,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls funded local-devnet cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
@@ -1760,17 +1671,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the FactoryStateCell and fee input.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -1818,17 +1725,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the sponsor change lock.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -1855,10 +1758,10 @@ enum DevnetCommand {
     /// Save a signed splice package from the live StateCell/VaultCell pair.
     SaveSplicePackage {
         /// Devnet Alice channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current active StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -1903,11 +1806,7 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that pays splice external CKB and transaction fees.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Current active StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -1934,10 +1833,10 @@ enum DevnetCommand {
     /// Save a signed settling state package without broadcasting it.
     SaveStatePackage {
         /// Devnet Alice channel signing key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -1982,12 +1881,14 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key that controls the sponsor change lock.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
+        /// Devnet Alice channel key used by the saved package signatures.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
+        alice_private_key: String,
+        /// Devnet Bob channel key used by the saved package signatures.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
+        bob_private_key: String,
         /// Current StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         state_out_point: String,
@@ -2021,6 +1922,12 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
         private_key_file: Option<PathBuf>,
+        /// Devnet Alice channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
+        alice_private_key: String,
+        /// Devnet Bob channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
+        bob_private_key: String,
         /// SponsorCell out point, formatted as <tx-hash>:<index>.
         /// Required unless --auto-fund-sponsor is set.
         #[arg(long)]
@@ -2085,6 +1992,12 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
         private_key_file: Option<PathBuf>,
+        /// Devnet Alice channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
+        alice_private_key: String,
+        /// Devnet Bob channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
+        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2103,6 +2016,12 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
         private_key_file: Option<PathBuf>,
+        /// Devnet Alice channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
+        alice_private_key: String,
+        /// Devnet Bob channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
+        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2130,6 +2049,12 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE")]
         private_key_file: Option<PathBuf>,
+        /// Devnet Alice channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
+        alice_private_key: String,
+        /// Devnet Bob channel key used by saved package signatures.
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
+        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2164,11 +2089,7 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key funding the SponsorCell and receiving change.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// StateCell out point whose channel id should be sponsored.
         #[arg(long)]
@@ -2204,17 +2125,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key receiving the state-carrier refund.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice settlement key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob settlement key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Current settling StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
@@ -2247,17 +2164,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Initial capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -2296,17 +2209,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Initial capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 24_000_000_000)]
@@ -2345,17 +2254,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the xUDT vault lock, in shannons.
         #[arg(long, default_value_t = 40_000_000_000)]
@@ -2400,17 +2305,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the xUDT vault lock, in shannons.
         #[arg(long, default_value_t = 40_000_000_000)]
@@ -2455,17 +2356,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Initial capacity placed under both test vault locks, in shannons.
         #[arg(long, default_value_t = 40_000_000_000)]
@@ -2513,17 +2410,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -2556,17 +2449,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -2599,17 +2488,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the xUDT vault lock, in shannons.
         #[arg(long, default_value_t = 40_000_000_000)]
@@ -2648,17 +2533,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells and xUDT mint authority.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the xUDT vault lock, in shannons.
         #[arg(long, default_value_t = 40_000_000_000)]
@@ -2697,17 +2578,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -2740,17 +2617,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -2783,17 +2656,13 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
         /// Secp256k1 private key controlling devnet funding cells.
-        #[arg(
-            long,
-            env = "MORPH_DEVNET_PRIVATE_KEY",
-            default_value = DEFAULT_DEVNET_PRIVATE_KEY
-        )]
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY")]
         private_key: String,
         /// Devnet Alice channel key.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", default_value = DEFAULT_ALICE_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY")]
         alice_private_key: String,
         /// Devnet Bob channel key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", default_value = DEFAULT_BOB_PRIVATE_KEY)]
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY")]
         bob_private_key: String,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
@@ -3547,7 +3416,7 @@ fn main() -> Result<()> {
 }
 
 fn resolve_watchtower_private_key(
-    rpc_url: &str,
+    _rpc_url: &str,
     private_key: Option<String>,
     private_key_file: Option<PathBuf>,
 ) -> Result<String> {
@@ -3563,36 +3432,7 @@ fn resolve_watchtower_private_key(
             .with_context(|| format!("failed to read private key file {}", path.display()))?;
         return canonical_private_key(&value, &format!("private key file {}", path.display()));
     }
-    if !rpc_is_loopback_or_devnet(rpc_url) {
-        anyhow::bail!(
-            "refusing to fall back to the public devnet private key for non-loopback RPC {} \
-             (--private-key or --private-key-file is required for any non-local CKB network)",
-            rpc_url
-        );
-    }
-    eprintln!(
-        "warning: no --private-key / --private-key-file supplied; falling back to the public \
-         devnet private key. This is only safe on a local devnet RPC ({}) and must never be used \
-         on a public, testnet, or mainnet endpoint.",
-        rpc_url
-    );
-    canonical_private_key(
-        DEFAULT_DEVNET_PRIVATE_KEY,
-        "default local-devnet private key",
-    )
-}
-
-fn rpc_is_loopback_or_devnet(rpc_url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(rpc_url) else {
-        return false;
-    };
-    if parsed.scheme() != "http" {
-        return false;
-    }
-    matches!(
-        parsed.host_str(),
-        Some("127.0.0.1") | Some("localhost") | Some("::1")
-    )
+    anyhow::bail!("--private-key or --private-key-file is required")
 }
 
 fn canonical_private_key(value: &str, source: &str) -> Result<String> {
@@ -5854,6 +5694,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::PublishLatestPackage {
             contracts_dir,
             private_key,
+            alice_private_key,
+            bob_private_key,
             state_out_point,
             sponsor_out_point,
             store_dir,
@@ -5867,6 +5709,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 PublishLatestStatePackageOptions {
                     contracts_dir,
                     private_key,
+                    alice_private_key,
+                    bob_private_key,
                     state_out_point,
                     sponsor_out_point,
                     store_dir,
@@ -5898,6 +5742,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
+            alice_private_key,
+            bob_private_key,
             sponsor_out_point,
             store_dir,
             channel_id,
@@ -5925,6 +5771,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
+                    alice_private_key,
+                    bob_private_key,
                     sponsor_out_point,
                     store_dir,
                     channel_id,
@@ -6001,6 +5849,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
+            alice_private_key,
+            bob_private_key,
             config,
             json,
         } => {
@@ -6016,6 +5866,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
+                    alice_private_key,
+                    bob_private_key,
                 },
             )?;
             if json {
@@ -6040,6 +5892,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
+            alice_private_key,
+            bob_private_key,
             config,
             passes,
             sleep_ms,
@@ -6058,6 +5912,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
+                    alice_private_key,
+                    bob_private_key,
                 },
                 watch_config::WatchtowerConfigLoopOptions {
                     passes,
@@ -6092,6 +5948,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
+            alice_private_key,
+            bob_private_key,
             config,
             max_passes,
             sleep_ms,
@@ -6114,6 +5972,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
+                    alice_private_key,
+                    bob_private_key,
                 },
                 watch_config::WatchtowerConfigServiceOptions {
                     max_passes,
@@ -7644,24 +7504,26 @@ mod cli_secret_tests {
 
     #[test]
     fn resolves_private_key_from_file() {
+        let private_key = private_key_from_scalar(1);
         let path = std::env::temp_dir().join(format!(
             "morph-private-key-{}-{}.txt",
             std::process::id(),
             "file"
         ));
-        fs::write(&path, format!("{}\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        fs::write(&path, format!("{private_key}\n")).unwrap();
         let resolved =
             resolve_watchtower_private_key("http://127.0.0.1:18114", None, Some(path.clone()))
                 .unwrap();
         fs::remove_file(path).unwrap();
-        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
+        assert_eq!(resolved, private_key);
     }
 
     #[test]
     fn rejects_ambiguous_private_key_sources() {
+        let private_key = private_key_from_scalar(2);
         let err = resolve_watchtower_private_key(
             "http://127.0.0.1:18114",
-            Some(DEFAULT_DEVNET_PRIVATE_KEY.to_string()),
+            Some(private_key),
             Some(PathBuf::from("key.txt")),
         )
         .unwrap_err();
@@ -7673,12 +7535,13 @@ mod cli_secret_tests {
 
     #[test]
     fn rejects_multi_token_private_key_file() {
+        let private_key = private_key_from_scalar(3);
         let path = std::env::temp_dir().join(format!(
             "morph-private-key-{}-{}.txt",
             std::process::id(),
             "multi"
         ));
-        fs::write(&path, format!("{} extra\n", DEFAULT_DEVNET_PRIVATE_KEY)).unwrap();
+        fs::write(&path, format!("{private_key} extra\n")).unwrap();
         let err =
             resolve_watchtower_private_key("http://127.0.0.1:18114", None, Some(path.clone()))
                 .unwrap_err();
@@ -7687,16 +7550,14 @@ mod cli_secret_tests {
     }
 
     #[test]
-    fn falls_back_to_devnet_key_for_local_watchers() {
-        let resolved =
-            resolve_watchtower_private_key("http://127.0.0.1:18114", None, None).unwrap();
-        assert_eq!(resolved, DEFAULT_DEVNET_PRIVATE_KEY);
+    fn rejects_missing_watchtower_private_key() {
+        let err = resolve_watchtower_private_key("http://127.0.0.1:18114", None, None).unwrap_err();
+        assert!(err.to_string().contains("--private-key"), "got: {err}");
     }
 
-    #[test]
-    fn rejects_devnet_key_fallback_for_non_loopback_rpc() {
-        let err =
-            resolve_watchtower_private_key("https://mainnet.example.com", None, None).unwrap_err();
-        assert!(err.to_string().contains("non-loopback RPC"), "got: {err}");
+    fn private_key_from_scalar(value: u8) -> String {
+        let mut bytes = [0u8; 32];
+        bytes[31] = value;
+        format!("0x{}", hex::encode(bytes))
     }
 }

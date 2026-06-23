@@ -27,6 +27,10 @@ const DEFAULT_AUTO_SPONSOR_CAPACITY: u64 = 50_000_000_000;
 const MAX_LOOP_PASSES: u64 = 10_000;
 const MAX_SERVICE_PASSES: u64 = 1_000_000;
 
+fn bytes32_hex(seed: u8) -> String {
+    format!("0x{}", format!("{seed:02x}").repeat(32))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchtowerConfig {
     pub schema: String,
@@ -74,6 +78,8 @@ pub struct WatchtowerChannelConfig {
 pub struct WatchtowerRuntimeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -176,8 +182,7 @@ impl WatchtowerConfig {
                 auto_sponsor_capacity: Some(DEFAULT_AUTO_SPONSOR_CAPACITY),
             },
             channels: vec![WatchtowerChannelConfig {
-                channel_id: "0x1111111111111111111111111111111111111111111111111111111111111111"
-                    .to_string(),
+                channel_id: bytes32_hex(1),
                 from_block: 0,
                 sponsor_out_point: None,
                 store_dir: None,
@@ -516,6 +521,8 @@ fn channel_options(
     Ok(WatchLatestStatePackageOptions {
         contracts_dir: runtime.contracts_dir.clone(),
         private_key: runtime.private_key.clone(),
+        alice_private_key: runtime.alice_private_key.clone(),
+        bob_private_key: runtime.bob_private_key.clone(),
         sponsor_out_point: channel.sponsor_out_point.clone(),
         store_dir: resolve_path(
             base_dir,
@@ -727,10 +734,7 @@ mod tests {
         config.defaults.watch_policy = Some(PathBuf::from("policy.json"));
         config.defaults.alert_file = Some(PathBuf::from("alerts.jsonl"));
         config.channels[0].cursor_file = Some(PathBuf::from("cursor.json"));
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
         let options = channel_options(
             Path::new("/tmp/morph-watch"),
             &config.defaults,
@@ -759,10 +763,7 @@ mod tests {
     #[test]
     fn rejects_zero_loop_options() {
         let config = WatchtowerConfig::fixture();
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
         let err = run_watchtower_config_loop(
             &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
             Path::new("watch.json"),
@@ -795,10 +796,7 @@ mod tests {
     #[test]
     fn rejects_unbounded_loop_report_size() {
         let config = WatchtowerConfig::fixture();
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
         let err = run_watchtower_config_loop(
             &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
             Path::new("watch.json"),
@@ -824,10 +822,7 @@ mod tests {
         let health_file = dir.join("health.json");
         fs::write(&stop_file, b"stop").unwrap();
         let config = WatchtowerConfig::fixture();
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
 
         let report = run_watchtower_config_service(
             &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
@@ -864,10 +859,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let health_file = dir.join("health.json");
         let config = WatchtowerConfig::fixture();
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
 
         let report = run_watchtower_config_service(
             &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
@@ -910,10 +902,7 @@ mod tests {
     #[test]
     fn rejects_invalid_service_options() {
         let config = WatchtowerConfig::fixture();
-        let runtime = WatchtowerRuntimeOptions {
-            contracts_dir: PathBuf::from("contracts"),
-            private_key: "key".to_string(),
-        };
+        let runtime = test_runtime();
         let err = run_watchtower_config_service(
             &CkbRpcClient::new("http://127.0.0.1:1").unwrap(),
             Path::new("watch.json"),
@@ -931,5 +920,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("max_passes must be non-zero"));
+    }
+
+    fn test_runtime() -> WatchtowerRuntimeOptions {
+        WatchtowerRuntimeOptions {
+            contracts_dir: PathBuf::from("contracts"),
+            private_key: private_key_hex(1),
+            alice_private_key: private_key_hex(2),
+            bob_private_key: private_key_hex(3),
+        }
+    }
+
+    fn private_key_hex(seed: u8) -> String {
+        format!("0x{}", format!("{seed:02x}").repeat(32))
     }
 }

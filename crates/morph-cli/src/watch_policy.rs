@@ -181,11 +181,9 @@ pub fn read_watchtower_policy(path: &Path) -> Result<WatchtowerPolicy> {
 mod tests {
     use super::*;
 
-    const CHANNEL_ID: &str = "0x1111111111111111111111111111111111111111111111111111111111111111";
-
     fn valid_run() -> WatchPolicyRun<'static> {
         WatchPolicyRun {
-            channel_id: CHANNEL_ID,
+            channel_id: Box::leak(bytes32_hex(1).into_boxed_str()),
             detection_depth: 3,
             timeout_secs: 30,
             poll_ms: 1_000,
@@ -237,8 +235,7 @@ mod tests {
     #[test]
     fn rejects_wrong_channel_policy() {
         let mut policy = WatchtowerPolicy::fixture();
-        policy.channel_id =
-            Some("0x2222222222222222222222222222222222222222222222222222222222222222".to_string());
+        policy.channel_id = Some(bytes32_hex(2));
 
         let err = policy.validate_run(&valid_run()).unwrap_err();
         assert!(err.to_string().contains("not"));
@@ -254,5 +251,9 @@ mod tests {
 
         let err = policy.validate_run(&run).unwrap_err();
         assert!(err.to_string().contains("webhook alerts"));
+    }
+
+    fn bytes32_hex(seed: u8) -> String {
+        format!("0x{}", format!("{seed:02x}").repeat(32))
     }
 }

@@ -87,12 +87,6 @@ use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
-pub const DEFAULT_DEVNET_PRIVATE_KEY: &str =
-    "0xd00c06bfd800d27397002dca6fb0993d5ba6399b4238b2f29ee9deb97593d2bc";
-pub const DEFAULT_ALICE_PRIVATE_KEY: &str =
-    "0x1111111111111111111111111111111111111111111111111111111111111111";
-pub const DEFAULT_BOB_PRIVATE_KEY: &str =
-    "0x2222222222222222222222222222222222222222222222222222222222222222";
 const CONTRACTS: [(&str, &str); 7] = [
     ("morph-state-lock", "morph-state-lock"),
     ("morph-state-type", "morph-state-type"),
@@ -500,6 +494,8 @@ struct SettlementXudtUpdate {
 pub struct PublishLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
     pub state_out_point: String,
     pub sponsor_out_point: String,
     pub store_dir: PathBuf,
@@ -512,6 +508,8 @@ pub struct PublishLatestStatePackageOptions {
 pub struct WatchLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
     pub sponsor_out_point: Option<String>,
     pub store_dir: PathBuf,
     pub channel_id: String,
@@ -6717,8 +6715,8 @@ pub fn publish_latest_state_package(
         PublishStateOptions {
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
-            alice_private_key: DEFAULT_ALICE_PRIVATE_KEY.to_string(),
-            bob_private_key: DEFAULT_BOB_PRIVATE_KEY.to_string(),
+            alice_private_key: options.alice_private_key,
+            bob_private_key: options.bob_private_key,
             state_out_point: options.state_out_point,
             sponsor_out_point: options.sponsor_out_point,
             state_number: None,
@@ -6976,8 +6974,8 @@ pub fn watch_latest_state_package(
                                 PublishStateOptions {
                                     contracts_dir: options.contracts_dir.clone(),
                                     private_key: options.private_key.clone(),
-                                    alice_private_key: DEFAULT_ALICE_PRIVATE_KEY.to_string(),
-                                    bob_private_key: DEFAULT_BOB_PRIVATE_KEY.to_string(),
+                                    alice_private_key: options.alice_private_key.clone(),
+                                    bob_private_key: options.bob_private_key.clone(),
                                     state_out_point: observed.out_point.clone(),
                                     sponsor_out_point,
                                     state_number: None,
@@ -12588,7 +12586,8 @@ mod tests {
 
     #[test]
     fn participant_pubkey_lock_matches_private_key_lock() {
-        let key = parse_privkey(DEFAULT_ALICE_PRIVATE_KEY).unwrap();
+        let private_key = private_key_from_scalar(1);
+        let key = parse_privkey(&private_key).unwrap();
         let lock_from_key = secp256k1_lock(&key).unwrap();
         let pubkey = key.pubkey().unwrap().serialize();
         let lock_from_pubkey = secp256k1_lock_from_pubkey(&pubkey).unwrap();
@@ -12598,7 +12597,8 @@ mod tests {
 
     #[test]
     fn xudt_settlement_output_uses_plain_cell_for_zero_descriptor_amount() {
-        let key = parse_privkey(DEFAULT_ALICE_PRIVATE_KEY).unwrap();
+        let private_key = private_key_from_scalar(2);
+        let key = parse_privkey(&private_key).unwrap();
         let lock = secp256k1_lock(&key).unwrap();
         let xudt_type = data1_script(H256::from([0x42; BYTE32_LEN]), Bytes::new());
 
@@ -12827,5 +12827,11 @@ mod tests {
                 source_state_out_point: None,
             },
         }
+    }
+
+    fn private_key_from_scalar(value: u8) -> String {
+        let mut bytes = [0u8; BYTE32_LEN];
+        bytes[BYTE32_LEN - 1] = value;
+        format!("0x{}", hex::encode(bytes))
     }
 }

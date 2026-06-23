@@ -292,6 +292,13 @@ mod tests {
             })
     }
 
+    fn channel_id(seed: u8) -> String {
+        let hex = (0..32)
+            .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
+            .collect::<String>();
+        format!("0x{hex}")
+    }
+
     #[test]
     fn appends_jsonl_alerts() {
         let path =
@@ -299,7 +306,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let alert = WatchtowerAlert::new(
-            "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            channel_id(1),
             WatchAlertSeverity::Warning,
             WatchAlertEvent::OlderStateDetected,
             "older state detected".to_string(),
@@ -331,7 +338,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let alert = WatchtowerAlert::new(
-            "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            channel_id(2),
             WatchAlertSeverity::Info,
             WatchAlertEvent::ScanIdle,
             "scan idle".to_string(),
@@ -364,7 +371,7 @@ mod tests {
         });
 
         let alert = WatchtowerAlert::new(
-            "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            channel_id(3),
             WatchAlertSeverity::Warning,
             WatchAlertEvent::OlderStateDetected,
             "older state detected".to_string(),
@@ -384,7 +391,7 @@ mod tests {
     #[test]
     fn rejects_non_loopback_http_webhook() {
         let alert = WatchtowerAlert::new(
-            "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            channel_id(4),
             WatchAlertSeverity::Warning,
             WatchAlertEvent::OlderStateDetected,
             "older state detected".to_string(),
@@ -418,7 +425,7 @@ mod tests {
         });
 
         let alert = WatchtowerAlert::new(
-            "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            channel_id(5),
             WatchAlertSeverity::Warning,
             WatchAlertEvent::OlderStateDetected,
             "older state detected".to_string(),
