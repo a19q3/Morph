@@ -429,6 +429,9 @@ enum HubCommand {
         /// Optional CKB JSON-RPC URL for live chain health.
         #[arg(long)]
         ckb_rpc_url: Option<String>,
+        /// Watchtower alert JSONL file to expose as devnet evidence in Morph Hub.
+        #[arg(long)]
+        watch_alert_file: Option<PathBuf>,
         /// Bearer token required for Morph Hub API requests. Required for non-loopback listen addresses.
         #[arg(long, env = "MORPH_HUB_AUTH_TOKEN")]
         auth_token: Option<String>,
@@ -2746,6 +2749,7 @@ fn main() -> Result<()> {
                 pubkey,
                 network,
                 ckb_rpc_url,
+                watch_alert_file,
                 auth_token,
                 allow_state_restore,
                 cors_origin,
@@ -2756,6 +2760,7 @@ fn main() -> Result<()> {
                 pubkey,
                 network: morph_network(network),
                 ckb_rpc_url,
+                watch_alert_file,
                 ui_dir,
                 auth_token,
                 allow_state_restore,

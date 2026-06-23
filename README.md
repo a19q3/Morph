@@ -183,6 +183,11 @@ format. Morph derives its internal 32-byte node id from that pubkey. Then open
 `http://127.0.0.1:4617/`. During UI development, `npm run dev` proxies `/api`
 to that hub server.
 
+When you have a real watchtower JSONL output from a devnet run, add
+`--watch-alert-file "$MORPH_WATCH_ALERT_FILE"`. Without that file, Morph Hub
+keeps channel, invoice, peer, and factory rows clearly marked as local Hub state
+rather than chain evidence.
+
 Morph Hub is loopback-first. Binding to anything other than loopback requires
 `--auth-token` or `MORPH_HUB_AUTH_TOKEN`; direct cross-origin browser access is
 disabled unless `--cors-origin` is set to an explicit `http://` or `https://`

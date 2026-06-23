@@ -17,7 +17,6 @@ const CKB_RPC_TRANSPORT_MAX_ATTEMPTS: usize = 4;
 // Keep transport retries short because a request timeout is already expensive.
 // Fiber-backed local devnets can surface longer 502 windows while CKB remains live.
 const CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS: usize = 32;
-const CKB_RPC_MAX_ATTEMPTS: usize = CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS;
 const CKB_RPC_RETRY_BASE_DELAY_MS: u64 = 250;
 const CKB_RPC_RETRY_MAX_DELAY_MS: u64 = 2_000;
 
@@ -25,6 +24,9 @@ const CKB_RPC_RETRY_MAX_DELAY_MS: u64 = 2_000;
 pub struct CkbRpcClient {
     url: String,
     client: Client,
+    transport_max_attempts: usize,
+    retryable_status_max_attempts: usize,
+    max_attempts: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,13 +74,39 @@ pub struct DevnetStatus {
 
 impl CkbRpcClient {
     pub fn new(url: impl Into<String>) -> Result<Self> {
+        Self::with_options(
+            url,
+            Duration::from_secs(CKB_RPC_REQUEST_TIMEOUT_SECS),
+            Duration::from_secs(CKB_RPC_CONNECT_TIMEOUT_SECS),
+            CKB_RPC_TRANSPORT_MAX_ATTEMPTS,
+            CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS,
+        )
+    }
+
+    pub fn new_health_check(url: impl Into<String>) -> Result<Self> {
+        Self::with_options(url, Duration::from_secs(2), Duration::from_secs(1), 1, 1)
+    }
+
+    fn with_options(
+        url: impl Into<String>,
+        request_timeout: Duration,
+        connect_timeout: Duration,
+        transport_max_attempts: usize,
+        retryable_status_max_attempts: usize,
+    ) -> Result<Self> {
         let url = url.into();
         let client = Client::builder()
-            .timeout(Duration::from_secs(CKB_RPC_REQUEST_TIMEOUT_SECS))
-            .connect_timeout(Duration::from_secs(CKB_RPC_CONNECT_TIMEOUT_SECS))
+            .timeout(request_timeout)
+            .connect_timeout(connect_timeout)
             .build()
             .context("failed to build HTTP client")?;
-        Ok(Self { url, client })
+        Ok(Self {
+            url,
+            client,
+            transport_max_attempts,
+            retryable_status_max_attempts,
+            max_attempts: transport_max_attempts.max(retryable_status_max_attempts),
+        })
     }
 
     pub fn tip_header(&self) -> Result<HeaderView> {
@@ -163,12 +191,12 @@ impl CkbRpcClient {
             "params": params,
         });
 
-        for attempt in 1..=CKB_RPC_MAX_ATTEMPTS {
+        for attempt in 1..=self.max_attempts {
             let response = match self.client.post(&self.url).json(&request).send() {
                 Ok(response) => response,
                 Err(err) => {
                     if is_retryable_rpc_transport_error(&err)
-                        && attempt < CKB_RPC_TRANSPORT_MAX_ATTEMPTS
+                        && attempt < self.transport_max_attempts
                     {
                         sleep_before_rpc_retry(attempt);
                         continue;
@@ -182,9 +210,7 @@ impl CkbRpcClient {
                 .text()
                 .context("failed to read CKB RPC response body")?;
             if !status.is_success() {
-                if is_retryable_rpc_status(status)
-                    && attempt < CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS
-                {
+                if is_retryable_rpc_status(status) && attempt < self.retryable_status_max_attempts {
                     sleep_before_rpc_retry(attempt);
                     continue;
                 }
@@ -208,7 +234,7 @@ impl CkbRpcClient {
         anyhow::bail!(
             "CKB RPC retry loop exhausted for {method} after {attempts} attempts (this is a bug; \
              the loop should always return inside the iteration body)",
-            attempts = CKB_RPC_MAX_ATTEMPTS
+            attempts = self.max_attempts
         )
     }
 }

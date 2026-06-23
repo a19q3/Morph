@@ -40,6 +40,7 @@ import {
   PeerRecord,
   Pubkey,
   RecordProvenance,
+  WatchtowerAlertRecord,
   assertHex32,
   assertIncludesPubkey,
   assertNonNegativeInteger,
@@ -51,6 +52,7 @@ import {
   formatAmount,
   formatBalance,
   formatTime,
+  formatTimeMs,
   assetLabel,
   parsePubkeyList,
   shortHex,
@@ -90,6 +92,7 @@ const sectionIds = {
   invoices: 'section-invoices',
   peers: 'section-peers',
   factories: 'section-factories',
+  watchtower: 'section-watchtower',
   events: 'section-events',
 } as const;
 
@@ -201,7 +204,7 @@ export function App() {
   useEffect(() => {
     const root = workspaceRef.current;
     if (!root) return;
-    const sections: SectionKey[] = ['overview', 'channels', 'invoices', 'peers', 'factories', 'events'];
+    const sections: SectionKey[] = ['overview', 'channels', 'invoices', 'peers', 'factories', 'watchtower', 'events'];
     const observer = new IntersectionObserver(
       entries => {
         const visible = entries
@@ -259,6 +262,7 @@ export function App() {
   const orderedChannels = useMemo(() => sortChannelsForOperator(state.channels, state.events), [state.channels, state.events]);
   const orderedPeers = useMemo(() => sortPeersForOperator(state.peers, state.events), [state.peers, state.events]);
   const orderedFactories = useMemo(() => sortFactoriesForOperator(state.factories, state.events), [state.factories, state.events]);
+  const orderedWatchtowerAlerts = useMemo(() => sortWatchtowerAlertsNewestFirst(state.watchtower.alerts), [state.watchtower.alerts]);
   const recordSearchTokens = useMemo(() => queryTokens(recordQuery), [recordQuery]);
   const searchActive = recordSearchTokens.length > 0;
   const filteredChannels = useMemo(
@@ -277,14 +281,28 @@ export function App() {
     () => filterRecords(orderedFactories, recordSearchTokens, factorySearchText),
     [orderedFactories, recordSearchTokens]
   );
+  const filteredWatchtowerAlerts = useMemo(
+    () => filterRecords(orderedWatchtowerAlerts, recordSearchTokens, watchtowerAlertSearchText),
+    [orderedWatchtowerAlerts, recordSearchTokens]
+  );
   const filteredEvents = useMemo(
     () => filterRecords(orderedEvents, recordSearchTokens, eventSearchText),
     [orderedEvents, recordSearchTokens]
   );
   const totalRecordCount =
-    state.channels.length + state.invoices.length + state.peers.length + state.factories.length + state.events.length;
+    state.channels.length +
+    state.invoices.length +
+    state.peers.length +
+    state.factories.length +
+    orderedWatchtowerAlerts.length +
+    state.events.length;
   const matchedRecordCount =
-    filteredChannels.length + filteredInvoices.length + filteredPeers.length + filteredFactories.length + filteredEvents.length;
+    filteredChannels.length +
+    filteredInvoices.length +
+    filteredPeers.length +
+    filteredFactories.length +
+    filteredWatchtowerAlerts.length +
+    filteredEvents.length;
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -370,6 +388,14 @@ export function App() {
             onClick={() => scrollTo('factories')}
           />
           <NavButton
+            Icon={RadioTower}
+            label="Watchtower"
+            testId="nav-watchtower"
+            count={state.watchtower.alerts.length}
+            active={activeSection === 'watchtower'}
+            onClick={() => scrollTo('watchtower')}
+          />
+          <NavButton
             Icon={Bell}
             label="Events"
             testId="nav-events"
@@ -441,8 +467,20 @@ export function App() {
         <div className={`provenance-banner ${state.rpc.status === 'connected' ? 'connected' : 'local'}`} data-testid="provenance-banner">
           <ShieldCheck size={15} />
           <div>
-            <strong>{state.rpc.status === 'connected' ? 'CKB RPC connected, records still require evidence' : 'Local Hub state only'}</strong>
-            <span>{state.provenance.message}</span>
+            <strong>
+              {state.watchtower.alerts.length > 0
+                ? 'Local Hub state with watchtower evidence'
+                : state.rpc.status === 'connected'
+                  ? 'CKB RPC connected, records still require evidence'
+                  : 'Local Hub state only'}
+            </strong>
+            <span>
+              {state.provenance.message}
+              {' '}
+              {state.watchtower.configured
+                ? `${state.watchtower.alerts.length} watchtower alerts loaded.`
+                : 'No watchtower evidence is configured.'}
+            </span>
           </div>
         </div>
 
@@ -475,6 +513,9 @@ export function App() {
           </div>
           <div id={sectionIds.factories}>
             <FactoryPanel factories={filteredFactories} totalCount={orderedFactories.length} searchActive={searchActive} />
+          </div>
+          <div id={sectionIds.watchtower}>
+            <WatchtowerPanel watchtower={state.watchtower} alerts={filteredWatchtowerAlerts} totalCount={orderedWatchtowerAlerts.length} searchActive={searchActive} />
           </div>
           <div id={sectionIds.events}>
             <EventPanel events={filteredEvents} totalCount={orderedEvents.length} searchActive={searchActive} />
@@ -569,6 +610,13 @@ function NodeInfoStrip({
       <NodeInfoPill Icon={Users} label="Peers" value={String(state.peers.length)} />
       <NodeInfoPill Icon={ReceiptText} label="Invoices" value={String(state.invoices.length)} />
       <NodeInfoPill Icon={Factory} label="Factories" value={String(state.factories.length)} />
+      <NodeInfoPill
+        Icon={RadioTower}
+        label="Watch"
+        value={state.watchtower.configured ? String(state.watchtower.alerts.length) : 'off'}
+        title={state.watchtower.alert_file || 'watchtower alert file not configured'}
+        tone={state.watchtower.last_error ? 'bad' : state.watchtower.alerts.length > 0 ? 'warn' : 'neutral'}
+      />
       <span className="node-info-separator" />
       <NodeInfoPill Icon={ShieldCheck} label="RPC" value={rpcLabel(state)} tone={rpcTone(state.rpc.status)} />
       <NodeInfoPill Icon={RadioTower} label="Live" value={liveLabel(liveMode).replace('live ', '')} tone={liveTone(liveMode)} />
@@ -803,6 +851,69 @@ function FactoryPanel({ factories, totalCount, searchActive }: { factories: Fact
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+function WatchtowerPanel({
+  watchtower,
+  alerts,
+  totalCount,
+  searchActive,
+}: {
+  watchtower: NodeState['watchtower'];
+  alerts: WatchtowerAlertRecord[];
+  totalCount: number;
+  searchActive: boolean;
+}) {
+  const badge = !watchtower.configured
+    ? 'not configured'
+    : searchActive
+      ? `${alerts.length}/${totalCount} alerts`
+      : `${totalCount} alerts`;
+  return (
+    <section className="panel watchtower-panel">
+      <div className="section-head">
+        <h2>Watchtower</h2>
+        <span className={`badge ${watchtower.last_error ? 'remaining' : alerts.length ? 'remaining' : ''}`}>{badge}</span>
+      </div>
+      {watchtower.alert_file && (
+        <div className="watchtower-source">
+          <RadioTower size={14} />
+          <span className="mono">{watchtower.alert_file}</span>
+          <ProvenanceBadge provenance={watchtower.provenance} />
+        </div>
+      )}
+      {watchtower.last_error && <small className="inline-error watchtower-error">{watchtower.last_error}</small>}
+      {!watchtower.configured && <div className="empty">No watchtower alert file configured</div>}
+      {watchtower.configured && !watchtower.file_exists && <div className="empty">Watchtower alert file has not been written yet</div>}
+      {watchtower.configured && watchtower.file_exists && alerts.length === 0 && (
+        <div className="empty">{searchActive ? 'No watchtower alerts match this filter' : 'No watchtower alerts recorded'}</div>
+      )}
+      {alerts.length > 0 && (
+        <div className="event-log watchtower-log">
+          {alerts.slice(0, 10).map(alert => (
+            <div className={`event-entry ${alert.severity}`} key={`${alert.created_unix_ms}-${alert.channel_id}-${alert.event}`}>
+              <EventMark severity={alert.severity === 'warning' ? 'warning' : 'info'} />
+              <div className="event-main">
+                <div className="event-line">
+                  <strong>{alert.event}</strong>
+                  <time dateTime={new Date(alert.created_unix_ms).toISOString()}>{formatTimeMs(alert.created_unix_ms)}</time>
+                </div>
+                <small>{alert.message}</small>
+                <div className="event-meta">
+                  <span className="mono">{shortHex(alert.channel_id)}</span>
+                  <span className="mono">selected #{alert.selected_state_number}</span>
+                  {alert.observed_state_number != null && <span className="mono">observed #{alert.observed_state_number}</span>}
+                  <span className="mono">scan {alert.scanned_to_block}</span>
+                  {alert.publication_tx_hash && <span className="mono">tx {shortHex(alert.publication_tx_hash)}</span>}
+                  <ProvenanceBadge provenance={alert.provenance} />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -1593,6 +1704,28 @@ function factorySearchText(factory: FactoryRecord): string[] {
   ];
 }
 
+function watchtowerAlertSearchText(alert: WatchtowerAlertRecord): string[] {
+  return [
+    alert.schema,
+    alert.channel_id,
+    alert.severity,
+    alert.event,
+    alert.message,
+    String(alert.selected_state_number),
+    String(alert.observed_state_number ?? ''),
+    alert.observed_out_point ?? '',
+    alert.publication_tx_hash ?? '',
+    alert.selected_funding_anchor ?? '',
+    alert.observed_funding_anchor ?? '',
+    alert.selected_funding_context_id ?? '',
+    alert.observed_funding_context_id ?? '',
+    String(alert.scanned_to_block),
+    String(alert.next_from_block),
+    alert.provenance.label,
+    alert.provenance.message,
+  ];
+}
+
 function eventSearchText(event: HubEvent): string[] {
   return [
     String(event.id),
@@ -1621,6 +1754,13 @@ function sortEventsNewestFirst(events: HubEvent[]): HubEvent[] {
   return [...events].sort((left, right) => {
     const byId = right.id - left.id;
     return byId || right.created_at_unix - left.created_at_unix;
+  });
+}
+
+function sortWatchtowerAlertsNewestFirst(alerts: WatchtowerAlertRecord[]): WatchtowerAlertRecord[] {
+  return [...alerts].sort((left, right) => {
+    const byCreatedAt = right.created_unix_ms - left.created_unix_ms;
+    return byCreatedAt || right.scanned_to_block - left.scanned_to_block || right.channel_id.localeCompare(left.channel_id);
   });
 }
 

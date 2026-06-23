@@ -5,8 +5,16 @@ export type Phase = 'funding' | 'active' | 'settling' | 'closed';
 export type InvoiceStatus = 'open' | 'received' | 'paid' | 'cancelled' | 'expired';
 export type EventSeverity = 'info' | 'warning' | 'critical';
 export type RpcStatus = 'connected' | 'degraded' | 'offline' | 'not_configured';
-export type ProvenanceSource = 'hub_state_file';
-export type ChainStatus = 'not_chain_verified';
+export type ProvenanceSource = 'hub_state_file' | 'watchtower_alert_file';
+export type ChainStatus = 'not_chain_verified' | 'watchtower_alert';
+export type WatchAlertSeverity = 'info' | 'warning';
+export type WatchAlertEvent =
+  | 'older_state_detected'
+  | 'publication_submitted'
+  | 'splice_detected'
+  | 'splice_package_stale'
+  | 'splice_publication_submitted'
+  | 'scan_idle';
 export type FlowKey =
   | 'peer'
   | 'invoice-created'
@@ -113,6 +121,35 @@ export interface RpcHealth {
   message?: string | null;
 }
 
+export interface WatchtowerAlertRecord {
+  schema: string;
+  created_unix_ms: number;
+  channel_id: Hex32;
+  severity: WatchAlertSeverity;
+  event: WatchAlertEvent;
+  message: string;
+  selected_state_number: number;
+  observed_state_number?: number | null;
+  observed_out_point?: string | null;
+  publication_tx_hash?: Hex32 | null;
+  selected_funding_anchor?: Hex32 | null;
+  observed_funding_anchor?: Hex32 | null;
+  selected_funding_context_id?: Hex32 | null;
+  observed_funding_context_id?: Hex32 | null;
+  scanned_to_block: number;
+  next_from_block: number;
+  provenance: RecordProvenance;
+}
+
+export interface WatchtowerState {
+  configured: boolean;
+  alert_file?: string | null;
+  file_exists: boolean;
+  alerts: WatchtowerAlertRecord[];
+  last_error?: string | null;
+  provenance: RecordProvenance;
+}
+
 export interface NodeState {
   pubkey: Pubkey;
   node_id: Hex32;
@@ -121,6 +158,7 @@ export interface NodeState {
   rpc: RpcHealth;
   security: HubSecurity;
   provenance: RecordProvenance;
+  watchtower: WatchtowerState;
   peers: PeerRecord[];
   channels: ChannelRecord[];
   invoices: InvoiceRecord[];
@@ -143,6 +181,19 @@ export const emptyState: NodeState = {
     chain_status: 'not_chain_verified',
     label: 'Local state',
     message: 'API not loaded',
+  },
+  watchtower: {
+    configured: false,
+    alert_file: null,
+    file_exists: false,
+    alerts: [],
+    last_error: null,
+    provenance: {
+      source: 'hub_state_file',
+      chain_status: 'not_chain_verified',
+      label: 'Local state',
+      message: 'API not loaded',
+    },
   },
   peers: [],
   channels: [],
@@ -185,6 +236,11 @@ export function formatTime(unix?: number): string {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+export function formatTimeMs(unixMs?: number): string {
+  if (!unixMs) return '—';
+  return formatTime(Math.floor(unixMs / 1000));
 }
 
 export function assetLabel(asset: Asset): string {

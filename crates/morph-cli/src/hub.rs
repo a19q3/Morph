@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::rpc::CkbRpcClient;
+use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
 const STATE_FILE_VERSION: u16 = 1;
 const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
@@ -23,6 +24,8 @@ const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_EVENTS: usize = 128;
+const MAX_WATCHTOWER_ALERTS: usize = 32;
+const WATCHTOWER_ALERT_SCHEMA: &str = "morph.watchtower_alert";
 const EVENT_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(1_000);
 const EVENT_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -32,6 +35,7 @@ pub struct HubServeOptions {
     pub pubkey: String,
     pub network: MorphNetwork,
     pub ckb_rpc_url: Option<String>,
+    pub watch_alert_file: Option<PathBuf>,
     pub ui_dir: PathBuf,
     pub auth_token: Option<String>,
     pub allow_state_restore: bool,
@@ -42,6 +46,7 @@ struct HubServer {
     store: Arc<Mutex<HubStore>>,
     ui_dir: PathBuf,
     ckb_rpc_url: Option<String>,
+    watch_alert_file: Option<PathBuf>,
     auth_token: Option<String>,
     allow_state_restore: bool,
     cors_origin: Option<String>,
@@ -237,6 +242,7 @@ struct HubView {
     rpc: RpcView,
     security: HubSecurityView,
     provenance: RecordProvenanceView,
+    watchtower: WatchtowerView,
     peers: Vec<PeerView>,
     channels: Vec<ChannelView>,
     invoices: Vec<InvoiceView>,
@@ -260,6 +266,37 @@ struct RecordProvenanceView {
     chain_status: &'static str,
     label: &'static str,
     message: &'static str,
+}
+
+#[derive(Serialize)]
+struct WatchtowerView {
+    configured: bool,
+    alert_file: Option<String>,
+    file_exists: bool,
+    alerts: Vec<WatchtowerAlertView>,
+    last_error: Option<String>,
+    provenance: RecordProvenanceView,
+}
+
+#[derive(Serialize)]
+struct WatchtowerAlertView {
+    schema: String,
+    created_unix_ms: u64,
+    channel_id: String,
+    severity: WatchAlertSeverity,
+    event: WatchAlertEvent,
+    message: String,
+    selected_state_number: u64,
+    observed_state_number: Option<u64>,
+    observed_out_point: Option<String>,
+    publication_tx_hash: Option<String>,
+    selected_funding_anchor: Option<String>,
+    observed_funding_anchor: Option<String>,
+    selected_funding_context_id: Option<String>,
+    observed_funding_context_id: Option<String>,
+    scanned_to_block: u64,
+    next_from_block: u64,
+    provenance: RecordProvenanceView,
 }
 
 #[derive(Serialize)]
@@ -360,6 +397,15 @@ fn local_state_provenance() -> RecordProvenanceView {
     }
 }
 
+fn watchtower_alert_provenance() -> RecordProvenanceView {
+    RecordProvenanceView {
+        source: "watchtower_alert_file",
+        chain_status: "watchtower_alert",
+        label: "Watchtower alert",
+        message: "Parsed from the Morph watchtower alert JSONL file emitted by the watchtower service.",
+    }
+}
+
 fn normalise_optional_secret(value: Option<String>) -> Option<String> {
     value
         .map(|raw| raw.trim().to_string())
@@ -413,6 +459,7 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
         store: Arc::new(Mutex::new(store)),
         ui_dir: options.ui_dir,
         ckb_rpc_url: options.ckb_rpc_url,
+        watch_alert_file: options.watch_alert_file,
         auth_token,
         allow_state_restore: options.allow_state_restore,
         cors_origin,
@@ -424,6 +471,9 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
         server.store.lock().unwrap().path.display()
     );
     println!("morph_hub_ui={}", server.ui_dir.display());
+    if let Some(path) = &server.watch_alert_file {
+        println!("morph_hub_watch_alert_file={}", path.display());
+    }
     println!(
         "morph_hub_auth={}",
         if server.auth_token.is_some() {
@@ -528,7 +578,12 @@ impl HubStore {
         Ok(())
     }
 
-    fn view(&self, rpc: RpcView, security: HubSecurityView) -> Result<HubView> {
+    fn view(
+        &self,
+        rpc: RpcView,
+        security: HubSecurityView,
+        watchtower: WatchtowerView,
+    ) -> Result<HubView> {
         Ok(HubView {
             pubkey: self.state.pubkey.clone(),
             node_id: hex_prefixed(&self.state.node.node_id),
@@ -537,6 +592,7 @@ impl HubStore {
             rpc,
             security,
             provenance: local_state_provenance(),
+            watchtower,
             peers: self
                 .state
                 .node
@@ -833,9 +889,12 @@ impl HubServer {
                     ));
                 }
                 let persisted: PersistedHubState = parse_body(&request.body)?;
+                let rpc = self.rpc_view();
+                let security = self.security_view();
+                let watchtower = self.watchtower_view();
                 let mut store = self.store.lock().unwrap();
                 store.replace(persisted)?;
-                let view = store.view(self.rpc_view(), self.security_view())?;
+                let view = store.view(rpc, security, watchtower)?;
                 Ok(json_response(200, "OK", &view))
             }
             ("POST", "/api/peers") => self.mutate(|store| {
@@ -1237,18 +1296,24 @@ impl HubServer {
     where
         F: FnOnce(&mut HubStore) -> Result<()>,
     {
+        let rpc = self.rpc_view();
+        let security = self.security_view();
+        let watchtower = self.watchtower_view();
         let mut store = self.store.lock().unwrap();
         let mut candidate = store.clone();
         f(&mut candidate)?;
-        let view = candidate.view(self.rpc_view(), self.security_view())?;
+        let view = candidate.view(rpc, security, watchtower)?;
         candidate.persist()?;
         *store = candidate;
         Ok(json_response(200, "OK", &view))
     }
 
     fn state_response(&self) -> Result<HttpResponse> {
+        let rpc = self.rpc_view();
+        let security = self.security_view();
+        let watchtower = self.watchtower_view();
         let store = self.store.lock().unwrap();
-        let view = store.view(self.rpc_view(), self.security_view())?;
+        let view = store.view(rpc, security, watchtower)?;
         Ok(json_response(200, "OK", &view))
     }
 
@@ -1288,7 +1353,7 @@ impl HubServer {
                 message: Some("start with --ckb-rpc-url to enable live chain health".to_string()),
             };
         };
-        match CkbRpcClient::new(url.clone()).and_then(|client| client.status()) {
+        match CkbRpcClient::new_health_check(url.clone()).and_then(|client| client.status()) {
             Ok(status) => RpcView {
                 status: if status.node.active {
                     "connected"
@@ -1307,6 +1372,29 @@ impl HubServer {
                 chain: None,
                 message: Some(err.to_string()),
             },
+        }
+    }
+
+    fn watchtower_view(&self) -> WatchtowerView {
+        let Some(path) = self.watch_alert_file.as_ref() else {
+            return WatchtowerView {
+                configured: false,
+                alert_file: None,
+                file_exists: false,
+                alerts: Vec::new(),
+                last_error: None,
+                provenance: local_state_provenance(),
+            };
+        };
+
+        let (file_exists, alerts, last_error) = load_watchtower_alerts(path);
+        WatchtowerView {
+            configured: true,
+            alert_file: Some(path.display().to_string()),
+            file_exists,
+            alerts,
+            last_error,
+            provenance: watchtower_alert_provenance(),
         }
     }
 
@@ -1939,6 +2027,98 @@ fn event_view(event: &HubEvent) -> EventView {
     }
 }
 
+fn load_watchtower_alerts(path: &Path) -> (bool, Vec<WatchtowerAlertView>, Option<String>) {
+    if !path.exists() {
+        return (false, Vec::new(), None);
+    }
+
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) => {
+            return (
+                true,
+                Vec::new(),
+                Some(format!(
+                    "failed to open watchtower alert file {}: {err}",
+                    path.display()
+                )),
+            );
+        }
+    };
+    let reader = BufReader::new(file);
+    let mut alerts = Vec::new();
+    let mut last_error = None;
+
+    for (index, line) in reader.lines().enumerate() {
+        let line_number = index + 1;
+        let line = match line {
+            Ok(line) => line,
+            Err(err) => {
+                last_error.get_or_insert_with(|| {
+                    format!(
+                        "failed to read watchtower alert file {} line {line_number}: {err}",
+                        path.display()
+                    )
+                });
+                break;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<WatchtowerAlert>(&line) {
+            Ok(alert) if alert.schema == WATCHTOWER_ALERT_SCHEMA => {
+                alerts.push(watchtower_alert_view(alert));
+            }
+            Ok(alert) => {
+                last_error.get_or_insert_with(|| {
+                    format!(
+                        "watchtower alert file {} line {line_number} has unsupported schema {}",
+                        path.display(),
+                        alert.schema
+                    )
+                });
+            }
+            Err(err) => {
+                last_error.get_or_insert_with(|| {
+                    format!(
+                        "watchtower alert file {} line {line_number} is not valid JSON: {err}",
+                        path.display()
+                    )
+                });
+            }
+        }
+    }
+
+    if alerts.len() > MAX_WATCHTOWER_ALERTS {
+        alerts = alerts.split_off(alerts.len() - MAX_WATCHTOWER_ALERTS);
+    }
+    alerts.reverse();
+    (true, alerts, last_error)
+}
+
+fn watchtower_alert_view(alert: WatchtowerAlert) -> WatchtowerAlertView {
+    WatchtowerAlertView {
+        schema: alert.schema,
+        created_unix_ms: alert.created_unix_ms,
+        channel_id: alert.channel_id,
+        severity: alert.severity,
+        event: alert.event,
+        message: alert.message,
+        selected_state_number: alert.selected_state_number,
+        observed_state_number: alert.observed_state_number,
+        observed_out_point: alert.observed_out_point,
+        publication_tx_hash: alert.publication_tx_hash,
+        selected_funding_anchor: alert.selected_funding_anchor,
+        observed_funding_anchor: alert.observed_funding_anchor,
+        selected_funding_context_id: alert.selected_funding_context_id,
+        observed_funding_context_id: alert.observed_funding_context_id,
+        scanned_to_block: alert.scanned_to_block,
+        next_from_block: alert.next_from_block,
+        provenance: watchtower_alert_provenance(),
+    }
+}
+
 fn asset_view(asset: &MorphAsset) -> AssetView {
     match asset {
         MorphAsset::Ckb => AssetView::Ckb,
@@ -1968,6 +2148,7 @@ fn phase_label(phase: Phase) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::watch_alert::append_watchtower_alert;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2272,6 +2453,80 @@ mod tests {
 
         let resumed = request_empty("GET", "/api/events", [("last-event-id", "1")]);
         assert_eq!(parse_last_event_id(&resumed).unwrap(), Some(1));
+    }
+
+    #[test]
+    fn state_exposes_watchtower_alert_file_evidence() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let alert_path = temp_file_path("watch-alerts", "jsonl");
+        let channel_id = bytes32_hex(71);
+        let publication_tx_hash = bytes32_hex(72);
+        let alert = WatchtowerAlert::new(
+            channel_id.clone(),
+            WatchAlertSeverity::Warning,
+            WatchAlertEvent::PublicationSubmitted,
+            "published saved state 2 against older StateCell 0".to_string(),
+            2,
+            884,
+            885,
+        )
+        .unwrap()
+        .with_observed(0, format!("{}:0", bytes32_hex(73)))
+        .with_publication(publication_tx_hash.clone())
+        .with_funding_anchors(bytes32_hex(74), bytes32_hex(74))
+        .with_optional_funding_contexts(Some(bytes32_hex(75)), Some(bytes32_hex(75)));
+        append_watchtower_alert(&alert_path, &alert).unwrap();
+        let server = test_server_with_watch_alert_file(&local_pubkey, alert_path.clone());
+
+        let response = route_empty(&server, "GET", "/api/state");
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["watchtower"]["configured"].as_bool(), Some(true));
+        assert_eq!(body["watchtower"]["file_exists"].as_bool(), Some(true));
+        let expected_alert_file = alert_path.display().to_string();
+        assert_eq!(
+            body["watchtower"]["alert_file"].as_str(),
+            Some(expected_alert_file.as_str())
+        );
+        assert_eq!(body["watchtower"]["last_error"].as_str(), None);
+        let alert = &body["watchtower"]["alerts"][0];
+        assert_eq!(alert["channel_id"].as_str(), Some(channel_id.as_str()));
+        assert_eq!(alert["event"].as_str(), Some("publication_submitted"));
+        assert_eq!(
+            alert["publication_tx_hash"].as_str(),
+            Some(publication_tx_hash.as_str())
+        );
+        assert_eq!(
+            alert["provenance"]["source"].as_str(),
+            Some("watchtower_alert_file")
+        );
+        assert_eq!(
+            alert["provenance"]["chain_status"].as_str(),
+            Some("watchtower_alert")
+        );
+    }
+
+    #[test]
+    fn malformed_watchtower_alert_file_does_not_break_state_response() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let alert_path = temp_file_path("bad-watch-alerts", "jsonl");
+        fs::write(&alert_path, b"{not-json}\n").unwrap();
+        let server = test_server_with_watch_alert_file(&local_pubkey, alert_path);
+
+        let response = route_empty(&server, "GET", "/api/state");
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["watchtower"]["configured"].as_bool(), Some(true));
+        assert_eq!(body["watchtower"]["file_exists"].as_bool(), Some(true));
+        assert_eq!(body["watchtower"]["alerts"].as_array().unwrap().len(), 0);
+        assert!(
+            body["watchtower"]["last_error"]
+                .as_str()
+                .unwrap()
+                .contains("line 1")
+        );
     }
 
     #[test]
@@ -2618,6 +2873,15 @@ mod tests {
         test_server_with_options(local_pubkey, None, false, None)
     }
 
+    fn test_server_with_watch_alert_file(
+        local_pubkey: &str,
+        watch_alert_file: PathBuf,
+    ) -> HubServer {
+        let mut server = test_server(local_pubkey);
+        server.watch_alert_file = Some(watch_alert_file);
+        server
+    }
+
     fn test_server_with_options(
         local_pubkey: &str,
         auth_token: Option<&str>,
@@ -2639,6 +2903,7 @@ mod tests {
             store: Arc::new(Mutex::new(store)),
             ui_dir: PathBuf::from("ui/morph-hub/dist"),
             ckb_rpc_url: None,
+            watch_alert_file: None,
             auth_token: auth_token.map(str::to_string),
             allow_state_restore,
             cors_origin: cors_origin.map(str::to_string),
@@ -2725,6 +2990,19 @@ mod tests {
             .map(|offset| format!("{:02x}", seed.wrapping_add(offset)))
             .collect::<String>();
         format!("0x{hex}")
+    }
+
+    fn temp_file_path(label: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "morph-hub-test-{label}-{}-{}-{}.{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            TEST_STATE_COUNTER.fetch_add(1, Ordering::Relaxed),
+            extension
+        ))
     }
 
     fn pubkey_from_scalar(value: u8) -> String {
