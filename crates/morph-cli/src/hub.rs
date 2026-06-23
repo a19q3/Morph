@@ -934,7 +934,7 @@ fn ensure_peer(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| hex_prefixed(&counterparty_node_id))
+            .unwrap_or_else(|| hex_prefixed(&counterparty_node_id)),
     })?;
     Ok(())
 }

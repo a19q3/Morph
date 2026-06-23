@@ -7432,6 +7432,10 @@ fn morph_network(network: InvoiceNetworkArg) -> MorphNetwork {
 
 fn parse_cli_bytes32(label: &str, value: &str) -> Result<[u8; 32]> {
     let value = value.trim();
+    ensure!(
+        !value.is_empty(),
+        "{label} must not be empty; pass a 32-byte 0x-prefixed hex value"
+    );
     let hex = value
         .strip_prefix("0x")
         .ok_or_else(|| anyhow::anyhow!("{label} must be 0x-prefixed"))?;

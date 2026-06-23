@@ -172,7 +172,7 @@ npm run build
 cd ../..
 cargo run -p morph-cli -- hub serve \
   --listen 127.0.0.1:4617 \
-  --node-id "$MORPH_NODE_ID" \
+  --node-id "${MORPH_NODE_ID:?set MORPH_NODE_ID to the local 32-byte Morph node id}" \
   --state-path target/morph-hub/node-state.json
 ```
 
