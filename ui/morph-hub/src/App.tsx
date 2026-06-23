@@ -38,6 +38,7 @@ import {
   assertHex32,
   assertNonNegativeInteger,
   assertPositiveInteger,
+  assertPubkey,
   emptyState,
   formatAmount,
   formatBalance,
@@ -132,8 +133,8 @@ export function App() {
           </div>
         </div>
         <div className="node-card">
-          <span>Node</span>
-          <strong>{shortHex(state.node_id)}</strong>
+          <span>Pubkey</span>
+          <strong>{shortHex(state.pubkey)}</strong>
           <small>{state.network}</small>
         </div>
         <div className="node-card">
@@ -167,6 +168,12 @@ export function App() {
             </button>
           </div>
         </header>
+
+        <div className="mobile-node-strip">
+          <span>Pubkey</span>
+          <strong>{shortHex(state.pubkey)}</strong>
+          <small>{state.network}</small>
+        </div>
 
         {error && <div className="error banner">{error}</div>}
 
@@ -280,7 +287,7 @@ function ChannelTable({ channels }: { channels: ChannelRecord[] }) {
           )}
           {channels.map(channel => (
             <tr key={channel.channel_id}>
-              <td><strong>{shortHex(channel.channel_id)}</strong><small>{shortHex(channel.counterparty_node_id)}</small></td>
+              <td><strong>{shortHex(channel.channel_id)}</strong><small>{shortHex(channel.counterparty_pubkey)}</small></td>
               <td><span className={`phase ${channel.phase}`}>{channel.phase}</span></td>
               <td>{channel.state_number}</td>
               <td><strong>{channel.funding_epoch}</strong><small>{shortHex(channel.funding_context_id)}</small></td>
@@ -330,7 +337,7 @@ function PeerPanel({ peers }: { peers: PeerRecord[] }) {
           <div className="list-row" key={peer.node_id}>
             <div>
               <strong>{peer.alias}</strong>
-              <small>{shortHex(peer.node_id)}</small>
+              <small>{shortHex(peer.pubkey)}</small>
             </div>
           </div>
         ))}
@@ -480,7 +487,7 @@ function InvoiceActions({ state, runAction, busy }: { state: NodeState; runActio
 
 function ChannelActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
   const [channelId, setChannelId] = useState('');
-  const [counterpartyNodeId, setCounterpartyNodeId] = useState('');
+  const [counterpartyPubkey, setCounterpartyPubkey] = useState('');
   const [counterpartyAlias, setCounterpartyAlias] = useState('');
   const [fundingContextId, setFundingContextId] = useState('');
   const [local, setLocal] = useState('');
@@ -497,7 +504,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
     event.preventDefault();
     void runAction('Open channel', () => postAction('/api/channels', channelBody({
       channelId,
-      counterpartyNodeId,
+      counterpartyPubkey,
       counterpartyAlias,
       fundingContextId,
       local,
@@ -542,7 +549,7 @@ function ChannelActions({ state, runAction, busy }: { state: NodeState; runActio
       <h2>Node Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
         <label>Channel id<input value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
-        <label>Counterparty node id<input value={counterpartyNodeId} onChange={event => setCounterpartyNodeId(event.target.value)} /></label>
+        <label>Counterparty pubkey<input value={counterpartyPubkey} onChange={event => setCounterpartyPubkey(event.target.value)} /></label>
         <label>Counterparty alias<input value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
         <label>Funding context id<input value={fundingContextId} onChange={event => setFundingContextId(event.target.value)} /></label>
         <label>Local capacity<input value={local} onChange={event => setLocal(event.target.value)} /></label>
@@ -581,7 +588,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
   const [selectedFactoryId, setSelectedFactoryId] = useState('');
   const [newUpdateNumber, setNewUpdateNumber] = useState('');
   const [childChannelId, setChildChannelId] = useState('');
-  const [childCounterpartyNodeId, setChildCounterpartyNodeId] = useState('');
+  const [childCounterpartyPubkey, setChildCounterpartyPubkey] = useState('');
   const [childCounterpartyAlias, setChildCounterpartyAlias] = useState('');
   const [childFundingContextId, setChildFundingContextId] = useState('');
   const [childLocal, setChildLocal] = useState('');
@@ -592,10 +599,10 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
   const submitOpen = (event: FormEvent) => {
     event.preventDefault();
     void runAction('Open factory', () => {
-      const participant_node_ids = participants.split(',').map(value => assertHex32(value, 'Participant node id'));
+      const participant_pubkeys = participants.split(',').map(value => assertPubkey(value, 'Participant pubkey'));
       return postAction('/api/factories', {
         factory_id: assertHex32(factoryId, 'Factory id'),
-        participant_node_ids,
+        participant_pubkeys,
         reserve: assertPositiveInteger(reserve, 'Reserve'),
         asset: { kind: 'ckb' },
       });
@@ -618,7 +625,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
       const id = assertHex32(selectedFactoryId, 'Factory id');
       return postAction(`/api/factories/${id}/materialise-child`, channelBody({
         channelId: childChannelId,
-        counterpartyNodeId: childCounterpartyNodeId,
+        counterpartyPubkey: childCounterpartyPubkey,
         counterpartyAlias: childCounterpartyAlias,
         fundingContextId: childFundingContextId,
         local: childLocal,
@@ -635,7 +642,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
       <h2>Factory Layer</h2>
       <form onSubmit={submitOpen} className="form-grid">
         <label>Factory id<input value={factoryId} onChange={event => setFactoryId(event.target.value)} /></label>
-        <label>Participant node ids<textarea value={participants} onChange={event => setParticipants(event.target.value)} /></label>
+        <label>Participant pubkeys<textarea value={participants} onChange={event => setParticipants(event.target.value)} /></label>
         <label>Reserve<input value={reserve} onChange={event => setReserve(event.target.value)} /></label>
         <button disabled={busy}><Factory size={15} /> Open factory</button>
       </form>
@@ -649,7 +656,7 @@ function FactoryActions({ state, runAction, busy }: { state: NodeState; runActio
       <form onSubmit={submitMaterialise} className="form-grid form-section">
         <FactorySelect factories={state.factories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
         <label>Child channel id<input value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
-        <label>Counterparty node id<input value={childCounterpartyNodeId} onChange={event => setChildCounterpartyNodeId(event.target.value)} /></label>
+        <label>Counterparty pubkey<input value={childCounterpartyPubkey} onChange={event => setChildCounterpartyPubkey(event.target.value)} /></label>
         <label>Counterparty alias<input value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
         <label>Funding context id<input value={childFundingContextId} onChange={event => setChildFundingContextId(event.target.value)} /></label>
         <label>Local capacity<input value={childLocal} onChange={event => setChildLocal(event.target.value)} /></label>
@@ -716,7 +723,7 @@ function FactorySelect({ factories, value, onChange }: { factories: FactoryRecor
 
 function channelBody(input: {
   channelId: string;
-  counterpartyNodeId: string;
+  counterpartyPubkey: string;
   counterpartyAlias: string;
   fundingContextId: string;
   local: string;
@@ -726,7 +733,7 @@ function channelBody(input: {
   child?: boolean;
 }) {
   const base = {
-    counterparty_node_id: assertHex32(input.counterpartyNodeId, 'Counterparty node id'),
+    counterparty_pubkey: assertPubkey(input.counterpartyPubkey, 'Counterparty pubkey'),
     counterparty_alias: input.counterpartyAlias.trim() || undefined,
     funding_context_id: assertHex32(input.fundingContextId, 'Funding context id'),
     local: assertPositiveInteger(input.local, 'Local capacity'),

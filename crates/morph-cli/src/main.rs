@@ -421,9 +421,9 @@ enum HubCommand {
         /// Durable hub state file.
         #[arg(long, default_value = "target/morph-hub/node-state.json")]
         state_path: PathBuf,
-        /// Local Morph node id as a 32-byte 0x-prefixed hex value.
+        /// Local Morph node identity as a 33-byte compressed secp256k1 pubkey, hex without 0x.
         #[arg(long)]
-        node_id: String,
+        pubkey: String,
         /// Morph network.
         #[arg(long, value_enum, default_value = "devnet")]
         network: InvoiceNetworkArg,
@@ -2865,14 +2865,14 @@ fn main() -> Result<()> {
             HubCommand::Serve {
                 listen,
                 state_path,
-                node_id,
+                pubkey,
                 network,
                 ckb_rpc_url,
                 ui_dir,
             } => hub::serve(hub::HubServeOptions {
                 listen,
                 state_path,
-                node_id: parse_cli_bytes32("node_id", &node_id)?,
+                pubkey,
                 network: morph_network(network),
                 ckb_rpc_url,
                 ui_dir,

@@ -172,11 +172,13 @@ npm run build
 cd ../..
 cargo run -p morph-cli -- hub serve \
   --listen 127.0.0.1:4617 \
-  --node-id "${MORPH_NODE_ID:?set MORPH_NODE_ID to the local 32-byte Morph node id}" \
+  --pubkey "${MORPH_PUBKEY:?set MORPH_PUBKEY to the local compressed secp256k1 pubkey}" \
   --state-path target/morph-hub/node-state.json
 ```
 
-Set `MORPH_NODE_ID` to the local 32-byte Morph node id, then open
+Set `MORPH_PUBKEY` to the local 33-byte compressed secp256k1 public key as
+66 hex characters without `0x`, matching Fiber's RPC-facing node identity
+format. Morph derives its internal 32-byte node id from that pubkey. Then open
 `http://127.0.0.1:4617/`. During UI development, `npm run dev` proxies `/api`
 to that hub server.
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -21,7 +21,7 @@ const MAX_EVENTS: usize = 128;
 pub struct HubServeOptions {
     pub listen: String,
     pub state_path: PathBuf,
-    pub node_id: Bytes32,
+    pub pubkey: String,
     pub network: MorphNetwork,
     pub ckb_rpc_url: Option<String>,
     pub ui_dir: PathBuf,
@@ -40,6 +40,8 @@ struct HubStore {
 }
 
 struct HubRuntimeState {
+    pubkey: String,
+    peer_pubkeys: BTreeMap<Bytes32, String>,
     node: MorphNodeState,
     events: Vec<HubEvent>,
 }
@@ -47,14 +49,41 @@ struct HubRuntimeState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedHubState {
     version: u16,
-    node_id: Bytes32,
+    pubkey: String,
     network: MorphNetwork,
-    peers: Vec<MorphPeer>,
-    channels: Vec<MorphChannelRecord>,
-    factories: Vec<MorphFactoryRecord>,
+    peers: Vec<PersistedPeer>,
+    channels: Vec<PersistedChannel>,
+    factories: Vec<PersistedFactory>,
     invoices: Vec<StoredMorphInvoice>,
     completed_flows: Vec<MorphBusinessFlow>,
     events: Vec<HubEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedPeer {
+    pubkey: String,
+    alias: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedChannel {
+    channel_id: String,
+    counterparty_pubkey: String,
+    funding_epoch: u64,
+    funding_context_id: String,
+    state_number: u64,
+    phase: Phase,
+    balances: Vec<MorphAssetBalance>,
+    sponsor_budget: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedFactory {
+    factory_id: String,
+    participant_pubkeys: Vec<String>,
+    update_number: u64,
+    reserve_balances: Vec<MorphAssetBalance>,
+    materialised_child_channels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,14 +141,14 @@ struct SettleInvoiceRequest {
 
 #[derive(Debug, Deserialize)]
 struct ConnectPeerRequest {
-    node_id: String,
+    pubkey: String,
     alias: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenChannelRequest {
     channel_id: String,
-    counterparty_node_id: String,
+    counterparty_pubkey: String,
     counterparty_alias: Option<String>,
     funding_context_id: String,
     local: String,
@@ -144,7 +173,7 @@ struct PublishStateRequest {
 #[derive(Debug, Deserialize)]
 struct OpenFactoryRequest {
     factory_id: String,
-    participant_node_ids: Vec<String>,
+    participant_pubkeys: Vec<String>,
     reserve: String,
     asset: Option<AssetRequest>,
 }
@@ -157,7 +186,7 @@ struct AdvanceFactoryRequest {
 #[derive(Debug, Deserialize)]
 struct MaterialiseChildRequest {
     child_channel_id: String,
-    counterparty_node_id: String,
+    counterparty_pubkey: String,
     counterparty_alias: Option<String>,
     funding_context_id: String,
     local: String,
@@ -176,6 +205,7 @@ enum AssetRequest {
 
 #[derive(Serialize)]
 struct HubView {
+    pubkey: String,
     node_id: String,
     network: &'static str,
     state_path: String,
@@ -201,6 +231,7 @@ struct RpcView {
 
 #[derive(Serialize)]
 struct PeerView {
+    pubkey: String,
     node_id: String,
     alias: String,
 }
@@ -208,6 +239,7 @@ struct PeerView {
 #[derive(Serialize)]
 struct ChannelView {
     channel_id: String,
+    counterparty_pubkey: String,
     counterparty_node_id: String,
     funding_epoch: u64,
     funding_context_id: String,
@@ -231,6 +263,7 @@ struct InvoiceView {
     encoded_invoice: String,
     status: &'static str,
     network: &'static str,
+    payee_pubkey: Option<String>,
     payee_node_id: String,
     channel_id: Option<String>,
     asset: AssetView,
@@ -247,6 +280,7 @@ struct InvoiceView {
 #[derive(Serialize)]
 struct FactoryView {
     factory_id: String,
+    participant_pubkeys: Vec<String>,
     participant_node_ids: Vec<String>,
     update_number: u64,
     reserve_balances: Vec<BalanceView>,
@@ -273,7 +307,7 @@ enum AssetView {
 pub fn serve(options: HubServeOptions) -> Result<()> {
     let listener = TcpListener::bind(&options.listen)
         .with_context(|| format!("failed to bind Morph hub to {}", options.listen))?;
-    let store = HubStore::load_or_create(options.state_path, options.node_id, options.network)?;
+    let store = HubStore::load_or_create(options.state_path, &options.pubkey, options.network)?;
     let server = Arc::new(HubServer {
         store: Arc::new(Mutex::new(store)),
         ui_dir: options.ui_dir,
@@ -300,7 +334,8 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
 }
 
 impl HubStore {
-    fn load_or_create(path: PathBuf, node_id: Bytes32, network: MorphNetwork) -> Result<Self> {
+    fn load_or_create(path: PathBuf, pubkey: &str, network: MorphNetwork) -> Result<Self> {
+        let requested_pubkey = canonical_pubkey(pubkey)?;
         let state = if path.exists() {
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read hub state {}", path.display()))?;
@@ -308,11 +343,20 @@ impl HubStore {
                 .with_context(|| format!("failed to parse hub state {}", path.display()))?;
             HubRuntimeState::from_persisted(persisted)?
         } else {
+            let node_id = node_id_from_pubkey(&requested_pubkey)?;
             HubRuntimeState {
+                pubkey: requested_pubkey.clone(),
+                peer_pubkeys: BTreeMap::new(),
                 node: MorphNodeState::new(node_id, network)?,
                 events: Vec::new(),
             }
         };
+        ensure!(
+            state.pubkey == requested_pubkey,
+            "hub state pubkey {} does not match --pubkey {}",
+            state.pubkey,
+            requested_pubkey
+        );
         let next_event_id = state
             .events
             .iter()
@@ -340,34 +384,48 @@ impl HubStore {
         self.persist()
     }
 
-    fn view(&self, rpc: RpcView) -> HubView {
-        HubView {
+    fn view(&self, rpc: RpcView) -> Result<HubView> {
+        Ok(HubView {
+            pubkey: self.state.pubkey.clone(),
             node_id: hex_prefixed(&self.state.node.node_id),
             network: network_label(self.state.node.network),
             state_path: self.path.display().to_string(),
             rpc,
-            peers: self.state.node.peers.values().map(peer_view).collect(),
+            peers: self
+                .state
+                .node
+                .peers
+                .values()
+                .map(|peer| peer_view(peer, &self.state.peer_pubkeys))
+                .collect::<Result<Vec<_>>>()?,
             channels: self
                 .state
                 .node
                 .channels
                 .values()
-                .map(channel_view)
-                .collect(),
+                .map(|channel| channel_view(channel, &self.state.peer_pubkeys))
+                .collect::<Result<Vec<_>>>()?,
             invoices: self
                 .state
                 .node
                 .invoices
                 .records()
-                .map(invoice_view)
+                .map(|invoice| invoice_view(invoice, self.state.node.node_id, &self.state.pubkey))
                 .collect(),
             factories: self
                 .state
                 .node
                 .factories
                 .values()
-                .map(factory_view)
-                .collect(),
+                .map(|factory| {
+                    factory_view(
+                        factory,
+                        self.state.node.node_id,
+                        &self.state.pubkey,
+                        &self.state.peer_pubkeys,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
             events: self.state.events.iter().map(event_view).collect(),
             required_flows: MorphNodeState::required_business_flows()
                 .iter()
@@ -390,21 +448,46 @@ impl HubStore {
                 .copied()
                 .map(flow_label)
                 .collect(),
-        }
+        })
     }
 
-    fn persisted(&self) -> PersistedHubState {
-        PersistedHubState {
+    fn persisted(&self) -> Result<PersistedHubState> {
+        Ok(PersistedHubState {
             version: STATE_FILE_VERSION,
-            node_id: self.state.node.node_id,
+            pubkey: self.state.pubkey.clone(),
             network: self.state.node.network,
-            peers: self.state.node.peers.values().cloned().collect(),
-            channels: self.state.node.channels.values().cloned().collect(),
-            factories: self.state.node.factories.values().cloned().collect(),
+            peers: self
+                .state
+                .node
+                .peers
+                .values()
+                .map(|peer| persisted_peer(peer, &self.state.peer_pubkeys))
+                .collect::<Result<Vec<_>>>()?,
+            channels: self
+                .state
+                .node
+                .channels
+                .values()
+                .map(|channel| persisted_channel(channel, &self.state.peer_pubkeys))
+                .collect::<Result<Vec<_>>>()?,
+            factories: self
+                .state
+                .node
+                .factories
+                .values()
+                .map(|factory| {
+                    persisted_factory(
+                        factory,
+                        self.state.node.node_id,
+                        &self.state.pubkey,
+                        &self.state.peer_pubkeys,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
             invoices: self.state.node.invoices.records().cloned().collect(),
             completed_flows: self.state.node.completed_flows.iter().copied().collect(),
             events: self.state.events.clone(),
-        }
+        })
     }
 
     fn persist(&self) -> Result<()> {
@@ -412,7 +495,8 @@ impl HubStore {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        let data = serde_json::to_vec_pretty(&self.persisted())?;
+        let persisted = self.persisted()?;
+        let data = serde_json::to_vec_pretty(&persisted)?;
         let file_name = self
             .path
             .file_name()
@@ -462,14 +546,71 @@ impl HubRuntimeState {
             "unsupported hub state version {}",
             persisted.version
         );
-        let mut node = MorphNodeState::new(persisted.node_id, persisted.network)?;
+        let pubkey = canonical_pubkey(&persisted.pubkey)?;
+        let mut peer_pubkeys = BTreeMap::new();
+        let mut node = MorphNodeState::new(node_id_from_pubkey(&pubkey)?, persisted.network)?;
         for peer in persisted.peers {
-            node.connect_peer(peer)?;
+            let pubkey = canonical_pubkey(&peer.pubkey)?;
+            let node_id = node_id_from_pubkey(&pubkey)?;
+            node.connect_peer(MorphPeer {
+                node_id,
+                alias: peer.alias,
+            })?;
+            peer_pubkeys.insert(node_id, pubkey);
         }
-        for channel in persisted.channels {
+        for persisted_channel in persisted.channels {
+            let counterparty_pubkey = canonical_pubkey(&persisted_channel.counterparty_pubkey)?;
+            let counterparty_node_id = node_id_from_pubkey(&counterparty_pubkey)?;
+            if !node.peers.contains_key(&counterparty_node_id) {
+                node.connect_peer(MorphPeer {
+                    node_id: counterparty_node_id,
+                    alias: counterparty_pubkey.clone(),
+                })?;
+            }
+            peer_pubkeys.insert(counterparty_node_id, counterparty_pubkey);
+            let channel = MorphChannelRecord {
+                channel_id: parse_bytes32("channel_id", &persisted_channel.channel_id)?,
+                counterparty_node_id,
+                funding_epoch: persisted_channel.funding_epoch,
+                funding_context_id: parse_bytes32(
+                    "funding_context_id",
+                    &persisted_channel.funding_context_id,
+                )?,
+                state_number: persisted_channel.state_number,
+                phase: persisted_channel.phase,
+                balances: persisted_channel.balances,
+                sponsor_budget: persisted_channel.sponsor_budget,
+            };
             node.open_channel(channel)?;
         }
-        for factory in persisted.factories {
+        for persisted_factory in persisted.factories {
+            let participant_pubkeys = persisted_factory
+                .participant_pubkeys
+                .iter()
+                .map(|value| canonical_pubkey(value))
+                .collect::<Result<Vec<_>>>()?;
+            let participant_node_ids = participant_pubkeys
+                .iter()
+                .map(|participant_pubkey| node_id_from_pubkey(participant_pubkey))
+                .collect::<Result<BTreeSet<_>>>()?;
+            for participant_pubkey in participant_pubkeys {
+                let participant_node_id = node_id_from_pubkey(&participant_pubkey)?;
+                if participant_node_id != node.node_id {
+                    peer_pubkeys.insert(participant_node_id, participant_pubkey);
+                }
+            }
+            let materialised_child_channels = persisted_factory
+                .materialised_child_channels
+                .iter()
+                .map(|value| parse_bytes32("materialised_child_channel", value))
+                .collect::<Result<BTreeSet<_>>>()?;
+            let factory = MorphFactoryRecord {
+                factory_id: parse_bytes32("factory_id", &persisted_factory.factory_id)?,
+                participant_node_ids,
+                update_number: persisted_factory.update_number,
+                reserve_balances: persisted_factory.reserve_balances,
+                materialised_child_channels,
+            };
             node.open_factory(factory)?;
         }
         for invoice in persisted.invoices {
@@ -477,6 +618,8 @@ impl HubRuntimeState {
         }
         node.completed_flows = persisted.completed_flows.into_iter().collect();
         Ok(Self {
+            pubkey,
+            peer_pubkeys,
             node,
             events: persisted.events,
         })
@@ -514,17 +657,20 @@ impl HubServer {
             ("GET", "/api/health") | ("GET", "/api/state") => self.state_response(),
             ("GET", "/api/state-file") => {
                 let store = self.store.lock().unwrap();
-                Ok(json_response(200, "OK", &store.persisted()))
+                let persisted = store.persisted()?;
+                Ok(json_response(200, "OK", &persisted))
             }
             ("PUT", "/api/state-file") => {
                 let persisted: PersistedHubState = parse_body(&request.body)?;
                 let mut store = self.store.lock().unwrap();
                 store.replace(persisted)?;
-                Ok(json_response(200, "OK", &store.view(self.rpc_view())))
+                let view = store.view(self.rpc_view())?;
+                Ok(json_response(200, "OK", &view))
             }
             ("POST", "/api/peers") => self.mutate(|store| {
                 let body: ConnectPeerRequest = parse_body(&request.body)?;
-                let node_id = parse_bytes32("node_id", &body.node_id)?;
+                let pubkey = canonical_pubkey(&body.pubkey)?;
+                let node_id = node_id_from_pubkey(&pubkey)?;
                 ensure!(
                     !body.alias.trim().is_empty(),
                     "peer alias must not be empty"
@@ -533,6 +679,7 @@ impl HubServer {
                     node_id,
                     alias: body.alias.trim().to_string(),
                 })?;
+                store.state.peer_pubkeys.insert(node_id, pubkey);
                 store.push_event(
                     EventSeverity::Info,
                     "peer_connected",
@@ -615,10 +762,11 @@ impl HubServer {
             }
             ("POST", "/api/channels") => self.mutate(|store| {
                 let body: OpenChannelRequest = parse_body(&request.body)?;
-                let counterparty_node_id =
-                    parse_bytes32("counterparty_node_id", &body.counterparty_node_id)?;
+                let counterparty_pubkey = canonical_pubkey(&body.counterparty_pubkey)?;
+                let counterparty_node_id = node_id_from_pubkey(&counterparty_pubkey)?;
                 ensure_peer(
-                    &mut store.state.node,
+                    &mut store.state,
+                    &counterparty_pubkey,
                     counterparty_node_id,
                     body.counterparty_alias.as_deref(),
                 )?;
@@ -649,14 +797,24 @@ impl HubServer {
                 let body: OpenFactoryRequest = parse_body(&request.body)?;
                 let factory_id = parse_bytes32("factory_id", &body.factory_id)?;
                 ensure!(
-                    !body.participant_node_ids.is_empty(),
+                    !body.participant_pubkeys.is_empty(),
                     "factory requires at least one participant"
                 );
-                let participant_node_ids = body
-                    .participant_node_ids
+                let participant_pubkeys = body
+                    .participant_pubkeys
                     .iter()
-                    .map(|value| parse_bytes32("participant_node_id", value))
+                    .map(|value| canonical_pubkey(value))
+                    .collect::<Result<Vec<_>>>()?;
+                let participant_node_ids = participant_pubkeys
+                    .iter()
+                    .map(|pubkey| node_id_from_pubkey(pubkey))
                     .collect::<Result<BTreeSet<_>>>()?;
+                for pubkey in &participant_pubkeys {
+                    let node_id = node_id_from_pubkey(pubkey)?;
+                    if node_id != store.state.node.node_id {
+                        store.state.peer_pubkeys.insert(node_id, pubkey.clone());
+                    }
+                }
                 let factory = MorphFactoryRecord {
                     factory_id,
                     participant_node_ids,
@@ -800,10 +958,11 @@ impl HubServer {
             }),
             "materialise-child" => self.mutate(|store| {
                 let body: MaterialiseChildRequest = parse_body(body)?;
-                let counterparty_node_id =
-                    parse_bytes32("counterparty_node_id", &body.counterparty_node_id)?;
+                let counterparty_pubkey = canonical_pubkey(&body.counterparty_pubkey)?;
+                let counterparty_node_id = node_id_from_pubkey(&counterparty_pubkey)?;
                 ensure_peer(
-                    &mut store.state.node,
+                    &mut store.state,
+                    &counterparty_pubkey,
                     counterparty_node_id,
                     body.counterparty_alias.as_deref(),
                 )?;
@@ -845,12 +1004,14 @@ impl HubServer {
         let mut store = self.store.lock().unwrap();
         f(&mut store)?;
         store.persist()?;
-        Ok(json_response(200, "OK", &store.view(self.rpc_view())))
+        let view = store.view(self.rpc_view())?;
+        Ok(json_response(200, "OK", &view))
     }
 
     fn state_response(&self) -> Result<HttpResponse> {
         let store = self.store.lock().unwrap();
-        Ok(json_response(200, "OK", &store.view(self.rpc_view())))
+        let view = store.view(self.rpc_view())?;
+        Ok(json_response(200, "OK", &view))
     }
 
     fn rpc_view(&self) -> RpcView {
@@ -921,21 +1082,29 @@ impl HubServer {
 }
 
 fn ensure_peer(
-    node: &mut MorphNodeState,
+    state: &mut HubRuntimeState,
+    pubkey: &str,
     counterparty_node_id: Bytes32,
     alias: Option<&str>,
 ) -> Result<()> {
-    if node.peers.contains_key(&counterparty_node_id) {
+    if state.node.peers.contains_key(&counterparty_node_id) {
+        state
+            .peer_pubkeys
+            .entry(counterparty_node_id)
+            .or_insert_with(|| pubkey.to_string());
         return Ok(());
     }
-    node.connect_peer(MorphPeer {
+    state.node.connect_peer(MorphPeer {
         node_id: counterparty_node_id,
         alias: alias
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .unwrap_or_else(|| hex_prefixed(&counterparty_node_id)),
+            .unwrap_or_else(|| pubkey.to_string()),
     })?;
+    state
+        .peer_pubkeys
+        .insert(counterparty_node_id, pubkey.to_string());
     Ok(())
 }
 
@@ -1002,6 +1171,41 @@ fn parse_amount(label: &str, value: &str) -> Result<u128> {
         "{label} must be greater than zero"
     );
     Ok(amount)
+}
+
+fn canonical_pubkey(value: &str) -> Result<String> {
+    Ok(hex::encode(parse_pubkey_bytes(value)?))
+}
+
+fn node_id_from_pubkey(pubkey: &str) -> Result<Bytes32> {
+    let bytes = parse_pubkey_bytes(pubkey)?;
+    Ok(blake2b256(&bytes))
+}
+
+fn parse_pubkey_bytes(value: &str) -> Result<[u8; 33]> {
+    let value = value.trim().to_lowercase();
+    ensure!(
+        !value.is_empty(),
+        "pubkey must not be empty; pass a 33-byte compressed secp256k1 pubkey as 66 hex characters without 0x"
+    );
+    ensure!(
+        !value.starts_with("0x"),
+        "pubkey must be hex without 0x, matching Fiber RPC convention"
+    );
+    ensure!(
+        value.len() == 66,
+        "pubkey must be a 33-byte compressed secp256k1 pubkey encoded as 66 hex characters"
+    );
+    let raw = hex::decode(&value).context("pubkey is not valid hex")?;
+    let mut out = [0u8; 33];
+    out.copy_from_slice(&raw);
+    ensure!(
+        matches!(out[0], 0x02 | 0x03),
+        "pubkey must be a compressed secp256k1 public key starting with 02 or 03"
+    );
+    k256::PublicKey::from_sec1_bytes(&out)
+        .map_err(|_| anyhow!("pubkey is not a valid secp256k1 public key"))?;
+    Ok(out)
 }
 
 fn parse_bytes32(label: &str, value: &str) -> Result<Bytes32> {
@@ -1124,16 +1328,73 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-fn peer_view(peer: &MorphPeer) -> PeerView {
-    PeerView {
-        node_id: hex_prefixed(&peer.node_id),
+fn persisted_peer(
+    peer: &MorphPeer,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<PersistedPeer> {
+    Ok(PersistedPeer {
+        pubkey: pubkey_for_node_id(&peer.node_id, peer_pubkeys)?.to_string(),
         alias: peer.alias.clone(),
-    }
+    })
 }
 
-fn channel_view(channel: &MorphChannelRecord) -> ChannelView {
-    ChannelView {
+fn persisted_channel(
+    channel: &MorphChannelRecord,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<PersistedChannel> {
+    Ok(PersistedChannel {
         channel_id: hex_prefixed(&channel.channel_id),
+        counterparty_pubkey: pubkey_for_node_id(&channel.counterparty_node_id, peer_pubkeys)?
+            .to_string(),
+        funding_epoch: channel.funding_epoch,
+        funding_context_id: hex_prefixed(&channel.funding_context_id),
+        state_number: channel.state_number,
+        phase: channel.phase,
+        balances: channel.balances.clone(),
+        sponsor_budget: channel.sponsor_budget,
+    })
+}
+
+fn persisted_factory(
+    factory: &MorphFactoryRecord,
+    local_node_id: Bytes32,
+    local_pubkey: &str,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<PersistedFactory> {
+    Ok(PersistedFactory {
+        factory_id: hex_prefixed(&factory.factory_id),
+        participant_pubkeys: participant_pubkeys(
+            &factory.participant_node_ids,
+            local_node_id,
+            local_pubkey,
+            peer_pubkeys,
+        )?,
+        update_number: factory.update_number,
+        reserve_balances: factory.reserve_balances.clone(),
+        materialised_child_channels: factory
+            .materialised_child_channels
+            .iter()
+            .map(|id| hex_prefixed(id))
+            .collect(),
+    })
+}
+
+fn peer_view(peer: &MorphPeer, peer_pubkeys: &BTreeMap<Bytes32, String>) -> Result<PeerView> {
+    Ok(PeerView {
+        pubkey: pubkey_for_node_id(&peer.node_id, peer_pubkeys)?.to_string(),
+        node_id: hex_prefixed(&peer.node_id),
+        alias: peer.alias.clone(),
+    })
+}
+
+fn channel_view(
+    channel: &MorphChannelRecord,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<ChannelView> {
+    Ok(ChannelView {
+        channel_id: hex_prefixed(&channel.channel_id),
+        counterparty_pubkey: pubkey_for_node_id(&channel.counterparty_node_id, peer_pubkeys)?
+            .to_string(),
         counterparty_node_id: hex_prefixed(&channel.counterparty_node_id),
         funding_epoch: channel.funding_epoch,
         funding_context_id: hex_prefixed(&channel.funding_context_id),
@@ -1141,15 +1402,21 @@ fn channel_view(channel: &MorphChannelRecord) -> ChannelView {
         phase: phase_label(channel.phase),
         balances: channel.balances.iter().map(balance_view).collect(),
         sponsor_budget: channel.sponsor_budget,
-    }
+    })
 }
 
-fn invoice_view(stored: &StoredMorphInvoice) -> InvoiceView {
+fn invoice_view(
+    stored: &StoredMorphInvoice,
+    local_node_id: Bytes32,
+    local_pubkey: &str,
+) -> InvoiceView {
     InvoiceView {
         invoice_id: hex_prefixed(&stored.invoice.invoice_id),
         encoded_invoice: stored.encoded_invoice.clone(),
         status: invoice_status_label(stored.status),
         network: network_label(stored.invoice.network),
+        payee_pubkey: (stored.invoice.payee_node_id == local_node_id)
+            .then(|| local_pubkey.to_string()),
         payee_node_id: hex_prefixed(&stored.invoice.payee_node_id),
         channel_id: stored.invoice.channel_id.map(|id| hex_prefixed(&id)),
         asset: asset_view(&stored.invoice.asset),
@@ -1164,9 +1431,20 @@ fn invoice_view(stored: &StoredMorphInvoice) -> InvoiceView {
     }
 }
 
-fn factory_view(factory: &MorphFactoryRecord) -> FactoryView {
-    FactoryView {
+fn factory_view(
+    factory: &MorphFactoryRecord,
+    local_node_id: Bytes32,
+    local_pubkey: &str,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<FactoryView> {
+    Ok(FactoryView {
         factory_id: hex_prefixed(&factory.factory_id),
+        participant_pubkeys: participant_pubkeys(
+            &factory.participant_node_ids,
+            local_node_id,
+            local_pubkey,
+            peer_pubkeys,
+        )?,
         participant_node_ids: factory
             .participant_node_ids
             .iter()
@@ -1179,7 +1457,35 @@ fn factory_view(factory: &MorphFactoryRecord) -> FactoryView {
             .iter()
             .map(|id| hex_prefixed(id))
             .collect(),
-    }
+    })
+}
+
+fn participant_pubkeys(
+    participant_node_ids: &BTreeSet<Bytes32>,
+    local_node_id: Bytes32,
+    local_pubkey: &str,
+    peer_pubkeys: &BTreeMap<Bytes32, String>,
+) -> Result<Vec<String>> {
+    participant_node_ids
+        .iter()
+        .map(|id| {
+            if *id == local_node_id {
+                Ok(local_pubkey.to_string())
+            } else {
+                Ok(pubkey_for_node_id(id, peer_pubkeys)?.to_string())
+            }
+        })
+        .collect()
+}
+
+fn pubkey_for_node_id<'a>(
+    node_id: &Bytes32,
+    peer_pubkeys: &'a BTreeMap<Bytes32, String>,
+) -> Result<&'a str> {
+    peer_pubkeys
+        .get(node_id)
+        .map(String::as_str)
+        .ok_or_else(|| anyhow!("missing pubkey for node id {}", hex_prefixed(node_id)))
 }
 
 fn balance_view(balance: &MorphAssetBalance) -> BalanceView {

@@ -93,6 +93,10 @@ small,
   text-overflow: ellipsis;
 }
 
+.mobile-node-strip {
+  display: none;
+}
+
 .coverage {
   margin-top: auto;
   border: 1px solid #dbe3df;
@@ -547,6 +551,28 @@ textarea.snapshot {
 
   .coverage {
     display: none;
+  }
+
+  .mobile-node-strip {
+    display: grid;
+    gap: 4px;
+    border: 1px solid #dbe3df;
+    border-radius: 6px;
+    background: #ffffff;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    min-width: 0;
+  }
+
+  .mobile-node-strip span {
+    color: #6b7874;
+    font-size: 12px;
+  }
+
+  .mobile-node-strip strong,
+  .mobile-node-strip small {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .action-drawer {

@@ -1,4 +1,5 @@
 export type Hex32 = `0x${string}`;
+export type Pubkey = string;
 export type Network = 'devnet' | 'testnet' | 'mainnet';
 export type Phase = 'funding' | 'active' | 'settling' | 'closed';
 export type InvoiceStatus = 'open' | 'received' | 'paid' | 'cancelled' | 'expired';
@@ -30,12 +31,14 @@ export interface Balance {
 }
 
 export interface PeerRecord {
+  pubkey: Pubkey;
   node_id: Hex32;
   alias: string;
 }
 
 export interface ChannelRecord {
   channel_id: Hex32;
+  counterparty_pubkey: Pubkey;
   counterparty_node_id: Hex32;
   funding_epoch: number;
   funding_context_id: Hex32;
@@ -50,6 +53,7 @@ export interface InvoiceRecord {
   encoded_invoice: string;
   status: InvoiceStatus;
   network: Network;
+  payee_pubkey?: Pubkey;
   payee_node_id: Hex32;
   channel_id?: Hex32;
   asset: Asset;
@@ -65,6 +69,7 @@ export interface InvoiceRecord {
 
 export interface FactoryRecord {
   factory_id: Hex32;
+  participant_pubkeys: Pubkey[];
   participant_node_ids: Hex32[];
   update_number: number;
   reserve_balances: Balance[];
@@ -89,6 +94,7 @@ export interface RpcHealth {
 }
 
 export interface NodeState {
+  pubkey: Pubkey;
   node_id: Hex32;
   network: Network;
   state_path: string;
@@ -104,6 +110,7 @@ export interface NodeState {
 }
 
 export const emptyState: NodeState = {
+  pubkey: '',
   node_id: '0x0000000000000000000000000000000000000000000000000000000000000000',
   network: 'devnet',
   state_path: '',
@@ -149,6 +156,20 @@ export function assertHex32(value: string, label: string): Hex32 {
     throw new Error(`${label} must not be zero.`);
   }
   return trimmed as Hex32;
+}
+
+export function assertPubkey(value: string, label: string): Pubkey {
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed.startsWith('0x')) {
+    throw new Error(`${label} must be 66 hex characters without 0x, matching Fiber RPC convention.`);
+  }
+  if (!/^[0-9a-f]{66}$/.test(trimmed)) {
+    throw new Error(`${label} must be a 33-byte compressed secp256k1 pubkey encoded as 66 hex characters.`);
+  }
+  if (!/^(02|03)/.test(trimmed)) {
+    throw new Error(`${label} must be a compressed secp256k1 pubkey starting with 02 or 03.`);
+  }
+  return trimmed;
 }
 
 export function assertPositiveInteger(value: string, label: string): string {
