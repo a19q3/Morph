@@ -11,6 +11,8 @@ SMOKE_DIR="$OUT_DIR/smoke"
 SMOKE_LATEST_LINK="$OUT_DIR/smoke-latest"
 MINE_BLOCKS="${MINE_BLOCKS:-4}"
 REUSE_SMOKE_DIR="${MORPH_DEVNET_STATEFUL_REUSE_SMOKE_DIR:-}"
+AUDIT_PROFILE="${MORPH_DEVNET_AUDIT_PROFILE:-docs/devnet-audit-profile.example.json}"
+BUDGET_PROFILE="${MORPH_DEVNET_STATEFUL_BUDGET_PROFILE:-docs/devnet-stateful-budget.example.json}"
 
 mkdir -p "$OUT_DIR"
 
@@ -178,7 +180,11 @@ cargo run -q -p morph-cli -- devnet-stateful-report --dir "$OUT_DIR" >"$OUT_DIR/
 log "summary-json -> $OUT_DIR/summary.json"
 cargo run -q -p morph-cli -- devnet-stateful-report --dir "$OUT_DIR" --json >"$OUT_DIR/summary.json"
 log "summary-check -> $OUT_DIR/summary-check.json"
-cargo run -q -p morph-cli -- devnet-stateful-assert --dir "$OUT_DIR" --budget-profile docs/devnet-stateful-budget.example.json --json >"$OUT_DIR/summary-check.json"
+cargo run -q -p morph-cli -- devnet-stateful-assert \
+  --dir "$OUT_DIR" \
+  --audit-profile "$AUDIT_PROFILE" \
+  --budget-profile "$BUDGET_PROFILE" \
+  --json >"$OUT_DIR/summary-check.json"
 
 if [ ! -e "$LATEST_LINK" ] || [ -L "$LATEST_LINK" ]; then
   OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"

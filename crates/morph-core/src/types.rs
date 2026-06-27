@@ -60,6 +60,8 @@ pub struct StateHeader {
 
 impl StateHeader {
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
+        // payload_commitment is profile-specific: in the bilateral plain
+        // profile it tracks vault materialisation and may change at splice.
         self.protocol_version == next.protocol_version
             && self.chain_id == next.chain_id
             && self.signature_scheme_id == next.signature_scheme_id
@@ -500,6 +502,7 @@ pub struct SpliceHeader {
     pub asset_delta_commitment: Bytes32,
     pub participants_commitment: Bytes32,
     pub payload_commitment: Bytes32,
+    pub new_payload_commitment: Bytes32,
     pub challenge_policy_commitment: Bytes32,
 }
 

@@ -96,58 +96,64 @@ splice-time `payload_commitment` signing rule.
 `/Users/arthur/RustroverProjects/morph-channel`:
 
 1. `contracts/morph-script-common/src/lib.rs`:
-   - `SPLICE_HEADER_LEN` extended from 325 to 357, adding a new
-     `payload_commitment` field at offset 293 and shifting
-     `challenge_policy_commitment` to 325.
+   - `SPLICE_HEADER_LEN` extended to 389, carrying the current
+     `payload_commitment` at offset 293, a signed
+     `new_payload_commitment` at offset 325, and
+     `challenge_policy_commitment` at offset 357.
    - `SpliceHeader::matches_current_state` now also checks
      `splice.payload_commitment == current.payload_commitment`.
    - `state_context_matches_splice_next` intentionally does not compare
      `current.payload_commitment` and `next.payload_commitment` directly under
      the bilateral plain profile, because that field tracks the vault Cell
      commitment and therefore changes across splice-in/out. The old payload is
-     signed by the splice header; the new payload is bound by the vault lock's
-     `new_header.payload_commitment == new_vault_commitment` check.
+     signed by `splice_header.payload_commitment`; the successor payload is
+     signed by `splice_header.new_payload_commitment`, with the vault lock also
+     enforcing that the successor payload equals the actual post-splice vault
+     Cell commitment.
 
 2. `crates/morph-core/src/types.rs`:
-   - `SpliceHeader` struct gains `payload_commitment: Bytes32`.
+   - `SpliceHeader` struct carries both `payload_commitment: Bytes32` and
+     `new_payload_commitment: Bytes32`.
 
 3. `crates/morph-core/src/hash.rs`:
-   - `SpliceHeader::encode_signing_bytes` now also includes
-     `payload_commitment` so the on-chain signing digest matches.
+   - `SpliceHeader::encode_signing_bytes` includes both payload commitments
+     so the on-chain signing digest matches.
 
 4. `crates/morph-cli/src/splice_packages.rs` and `devnet.rs`:
-   - `StoredSplicePackage` gains `payload_commitment: String`;
-     `splice_header_wire_bytes` writes it at the new offset; the devnet
-     splice builder fills it from `current_state.header.payload_commitment`
-     (the vault commitment under the bilateral plain profile).
+   - `StoredSplicePackage` gains `payload_commitment: String` and
+     `new_payload_commitment: String`; `splice_header_wire_bytes` writes both
+     at the fixed offsets; the devnet splice builder fills the successor value
+     from the materialised post-splice vault Cell commitment.
 
-**Implementation evidence.** Four new negative tests in
+**Implementation evidence.** Negative tests in
 `contracts/morph-script-common/src/lib.rs` directly cover the audit's
-attack vectors:
+attack vectors and preserved context fields:
 
+- `rejects_splice_state_transition_with_changed_current_payload_commitment`
 - `rejects_splice_state_transition_with_changed_participants_commitment`
 - `rejects_splice_state_transition_with_changed_settlement_descriptor`
 - `rejects_splice_state_transition_with_changed_mode`
 - `rejects_splice_state_transition_with_changed_asset_registry`
+- `rejects_splice_state_transition_with_changed_preserved_context_fields`
 
-A fifth test for changed `payload_commitment` is documented as `#[ignore]`
-with a detailed comment explaining that the bilateral plain profile
-overloads `payload_commitment` as the vault Cell commitment, so the
-attack is closed transitively by `vault_set_commitment` plus the vault
-lock's `new_header.payload_commitment == new_vault_commitment` check. The
-test stays in the file with the `#[ignore]` annotation as a guard rail
-against future profiles where `payload_commitment` decouples from
-`vault_set_commitment`.
+The bundle layer binds the current state's `payload_commitment` to the
+signed splice header and binds the successor state's `payload_commitment`
+to the signed `new_payload_commitment`. The vault lock repeats the same
+successor-vault materialisation check against the actual post-splice vault Cell
+before accepting it.
 
 **Disagreement with the verdict's framing.** The verdict reads as if the
 implementation has C-01. The implementation-side check at
 `state_context_matches_splice_next` already binds
 `participants_commitment`, `settlement_descriptor_commitment`,
 `asset_registry_commitment`, `mode`, `challenge_policy_commitment`,
-`descriptor_version`, and `state_layout_version`. The only field from
-the audit's list that the implementation did not bind at the splice bundle
-layer was `payload_commitment`, and that field is closed at the vault
-lock layer under the bilateral plain profile. The audit's
+`descriptor_version`, `payload_commitment`, and `state_layout_version`.
+The implementation deliberately does not require
+`current.payload_commitment == next.payload_commitment`, because the current
+profile uses the field as the vault materialisation commitment and that value
+changes across splice. Instead, the current payload is bound to the signed
+splice header and the successor payload is bound to the signed
+`new_payload_commitment`. The audit's
 "implementation as written is unsafe" claim is too strong for the current
 implementation; it is correct for any implementation that derives only
 from the paper's pre-patch pseudocode.
@@ -592,13 +598,13 @@ equivalent to safety is unsafe.
 
 ## Implementation evidence
 
-- 248 workspace tests pass (1 ignored as documented above).
-- SpliceHeader fixed layout extended to 357 bytes; corresponding
+- Workspace, package, and CKB-VM contract tests pass with the payload-binding
+  checks enabled.
+- SpliceHeader fixed layout extended to 389 bytes; corresponding
   signing digest, fixture helpers, devnet builder, and store JSON
   format updated.
-- Four new C-01 negative tests added at the splice bundle layer.
-- Fifth C-01 test documented with `#[ignore]` and an explanatory
-  comment for the payload_commitment / vault commitment overload.
+- C-01 negative tests cover current payload binding, successor payload binding,
+  and the preserved splice context field set.
 
 ## Deployment readiness statement
 

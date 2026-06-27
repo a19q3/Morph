@@ -40,7 +40,7 @@ convention.
 | Watchtower service has bounded operational control | `service_stops_before_rpc_when_stop_file_exists`, `service_stops_after_bounded_errors_and_writes_health`, `rejects_invalid_service_options`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Smoke evidence contains watchtower detection, publication, service, and health records | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
-| Smoke comparison can be used as a regression gate | `comparison_limits_reject_metric_regressions`, `comparison_limits_reject_set_and_status_changes` |
+| Smoke comparison can be used as a regression gate | `crates/morph-cli/src/smoke_report.rs::comparison_limits_reject_metric_regressions`, `crates/morph-cli/src/smoke_report.rs::comparison_limits_reject_set_and_status_changes` |
 | Generated host-side fixtures are CI-validated | `make fixture-checks` |
 | Factory local update does not disturb unrelated rights | `factory_non_interference_accepts_authorised_local_right_change`, `factory_non_interference_rejects_untouched_balance_change`, `factory_non_interference_rejects_untouched_exit_right_removal`, `factory_non_interference_rejects_untouched_sponsor_right_creation` |
 | Factory touched set is authorised and unambiguous | `factory_non_interference_requires_touched_participant_authorisation`, `factory_non_interference_rejects_duplicate_right_ids` |

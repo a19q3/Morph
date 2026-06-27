@@ -417,6 +417,26 @@ fn signed_splice_out_bundle_with_payload(
     new_capacity: u64,
     payload_commitment: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
+    signed_splice_out_bundle_with_payloads(
+        old_anchor,
+        new_anchor,
+        state_number,
+        old_capacity,
+        new_capacity,
+        payload_commitment,
+        [8u8; BYTE32_LEN],
+    )
+}
+
+fn signed_splice_out_bundle_with_payloads(
+    old_anchor: [u8; BYTE32_LEN],
+    new_anchor: [u8; BYTE32_LEN],
+    state_number: u64,
+    old_capacity: u64,
+    new_capacity: u64,
+    payload_commitment: [u8; BYTE32_LEN],
+    new_payload_commitment: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
     signed_splice_ckb_bundle(
         SPLICE_KIND_OUT,
         (old_anchor, new_anchor),
@@ -424,16 +444,18 @@ fn signed_splice_out_bundle_with_payload(
         (old_capacity, new_capacity),
         None,
         payload_commitment,
+        new_payload_commitment,
     )
 }
 
-fn signed_splice_in_bundle_with_payload(
+fn signed_splice_in_bundle_with_payloads(
     old_anchor: [u8; BYTE32_LEN],
     new_anchor: [u8; BYTE32_LEN],
     state_number: u64,
     old_capacity: u64,
     new_capacity: u64,
     payload_commitment: [u8; BYTE32_LEN],
+    new_payload_commitment: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     signed_splice_ckb_bundle(
         SPLICE_KIND_IN,
@@ -442,6 +464,7 @@ fn signed_splice_in_bundle_with_payload(
         (old_capacity, new_capacity),
         None,
         payload_commitment,
+        new_payload_commitment,
     )
 }
 
@@ -461,6 +484,7 @@ fn signed_splice_out_bundle_with_channel_and_payload(
         (old_capacity, new_capacity),
         Some(header_channel_id),
         payload_commitment,
+        [8u8; BYTE32_LEN],
     )
 }
 
@@ -471,6 +495,7 @@ fn signed_splice_ckb_bundle(
     capacities: (u64, u64),
     header_channel_id: Option<[u8; BYTE32_LEN]>,
     payload_commitment: [u8; BYTE32_LEN],
+    new_payload_commitment: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let (old_anchor, new_anchor) = anchors;
     let (old_capacity, new_capacity) = capacities;
@@ -523,6 +548,7 @@ fn signed_splice_ckb_bundle(
             &old_vault.commitment().unwrap(),
             &new_vault.commitment().unwrap(),
             &deltas.commitment().unwrap(),
+            &new_payload_commitment,
         ),
         &payload_commitment,
     );
@@ -548,6 +574,7 @@ fn signed_splice_ckb_bundle(
     put_u64(&mut new_state, 68, 1);
     new_state[108..140].copy_from_slice(&new_vault.commitment().unwrap());
     new_state[150..182].copy_from_slice(&participants);
+    new_state[248..280].copy_from_slice(&new_payload_commitment);
 
     (
         old_state.to_vec().into(),
@@ -580,7 +607,12 @@ fn splice_header_bytes(
     new_anchor: [u8; BYTE32_LEN],
     base_state_number: u64,
     participants: &[u8; BYTE32_LEN],
-    commitments: (&[u8; BYTE32_LEN], &[u8; BYTE32_LEN], &[u8; BYTE32_LEN]),
+    commitments: (
+        &[u8; BYTE32_LEN],
+        &[u8; BYTE32_LEN],
+        &[u8; BYTE32_LEN],
+        &[u8; BYTE32_LEN],
+    ),
     payload_commitment: &[u8; BYTE32_LEN],
 ) -> [u8; SPLICE_HEADER_LEN] {
     let mut raw = [0u8; SPLICE_HEADER_LEN];
@@ -600,7 +632,8 @@ fn splice_header_bytes(
     raw[229..261].copy_from_slice(commitments.2);
     raw[261..293].copy_from_slice(participants);
     raw[293..325].copy_from_slice(payload_commitment);
-    raw[325..357].fill(9);
+    raw[325..357].copy_from_slice(commitments.3);
+    raw[357..389].fill(9);
     raw
 }
 
@@ -6026,13 +6059,15 @@ fn state_and_vault_accept_splice_out_bridge() {
     );
 
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, ALICE_CAPACITY, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         ALICE_CAPACITY,
         old_payload_commitment,
+        new_payload_commitment,
     );
     let (old_state_data, new_state_data) = bind_splice_state_payloads(
         old_state_data,
@@ -6144,13 +6179,15 @@ fn state_and_vault_accept_splice_in_bridge() {
 
     let new_vault_capacity = CELL_CAPACITY + BOB_CAPACITY;
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_in_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, new_vault_capacity, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_in_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         new_vault_capacity,
         old_payload_commitment,
+        new_payload_commitment,
     );
     let (old_state_data, new_state_data) = bind_splice_state_payloads(
         old_state_data,
@@ -6272,13 +6309,15 @@ fn state_type_rejects_splice_new_state_lock_drift() {
     );
 
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_in_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, new_vault_capacity, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_in_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         new_vault_capacity,
         old_payload_commitment,
+        new_payload_commitment,
     );
     let (old_state_data, new_state_data) = bind_splice_state_payloads(
         old_state_data,
@@ -6502,13 +6541,15 @@ fn vault_lock_rejects_splice_new_vault_capacity_mismatch() {
     );
 
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, ALICE_CAPACITY, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         ALICE_CAPACITY,
         old_payload_commitment,
+        new_payload_commitment,
     );
 
     let state_out_point = context.create_cell(
@@ -6609,13 +6650,15 @@ fn vault_lock_rejects_splice_new_state_payload_mismatch() {
     );
 
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, ALICE_CAPACITY, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         ALICE_CAPACITY,
         old_payload_commitment,
+        new_payload_commitment,
     );
     let (old_state_data, new_state_data) = bind_splice_state_payloads(
         old_state_data,
@@ -6726,13 +6769,15 @@ fn vault_lock_rejects_splice_split_new_vault_outputs() {
     );
 
     let old_payload_commitment = vault_commitment(&old_vault_lock, CELL_CAPACITY, None, &[]);
-    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payload(
+    let new_payload_commitment = vault_commitment(&new_vault_lock, ALICE_CAPACITY, None, &[]);
+    let (old_state_data, new_state_data, splice_witness) = signed_splice_out_bundle_with_payloads(
         FUNDING_ANCHOR,
         NEW_FUNDING_ANCHOR,
         7,
         CELL_CAPACITY,
         ALICE_CAPACITY,
         old_payload_commitment,
+        new_payload_commitment,
     );
     let (old_state_data, new_state_data) = bind_splice_state_payloads(
         old_state_data,

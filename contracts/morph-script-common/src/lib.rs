@@ -10,7 +10,7 @@ pub const WITNESS_ENVELOPE_MAGIC: &[u8; 8] = b"MORPHW!!";
 pub const WITNESS_ENVELOPE_LEN: usize = 8 + 2 + 2 + 2 + 4 + BYTE32_LEN;
 pub const FACTORY_STATE_HEADER_LEN: usize = 238;
 pub const SPONSOR_POLICY_LEN: usize = 144;
-pub const SPLICE_HEADER_LEN: usize = 357;
+pub const SPLICE_HEADER_LEN: usize = 389;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
@@ -345,6 +345,8 @@ impl<'a> StateHeader<'a> {
     }
 
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
+        // payload_commitment is profile-specific: in the bilateral plain
+        // profile it tracks vault materialisation and may change at splice.
         self.protocol_version() == next.protocol_version()
             && self.chain_id() == next.chain_id()
             && self.signature_scheme_id() == next.signature_scheme_id()
@@ -623,8 +625,12 @@ impl<'a> SpliceHeader<'a> {
         field(self.raw, 293, BYTE32_LEN)
     }
 
-    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
+    pub fn new_payload_commitment(&self) -> &'a [u8] {
         field(self.raw, 325, BYTE32_LEN)
+    }
+
+    pub fn challenge_policy_commitment(&self) -> &'a [u8] {
+        field(self.raw, 357, BYTE32_LEN)
     }
 
     pub fn signing_digest(&self) -> [u8; 32] {
@@ -945,6 +951,7 @@ fn state_context_matches_splice_next(
         && next_state.funding_anchor() == splice_header.new_funding_anchor()
         && current_state.vault_set_commitment() == splice_header.old_vault_commitment()
         && next_state.vault_set_commitment() == splice_header.new_vault_commitment()
+        && next_state.payload_commitment() == splice_header.new_payload_commitment()
         && current_state.state_number() == next_state.state_number()
         && current_state.mode() == next_state.mode()
         && current_state.participants_commitment() == next_state.participants_commitment()
@@ -4707,7 +4714,8 @@ mod tests {
         raw[229..261].copy_from_slice(asset_delta_commitment);
         raw[261..293].copy_from_slice(participants_commitment);
         raw[293..325].copy_from_slice(payload_commitment);
-        raw[325..357].fill(9);
+        raw[325..357].copy_from_slice(new_vault_commitment);
+        raw[357..389].fill(9);
         raw
     }
 
@@ -5335,6 +5343,8 @@ mod tests {
         assert_eq!(header.new_vault_commitment(), &[12u8; BYTE32_LEN]);
         assert_eq!(header.asset_delta_commitment(), &[13u8; BYTE32_LEN]);
         assert_eq!(header.participants_commitment(), participants.as_slice());
+        assert_eq!(header.payload_commitment(), &[8u8; BYTE32_LEN]);
+        assert_eq!(header.new_payload_commitment(), &[12u8; BYTE32_LEN]);
         assert_eq!(header.challenge_policy_commitment(), &[9u8; BYTE32_LEN]);
 
         let mut state_raw = header_bytes(7, PHASE_ACTIVE, 0);
@@ -5447,6 +5457,7 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         let next = StateHeader::parse(&next_raw).unwrap();
 
         verify_splice_state_transition(
@@ -5467,7 +5478,7 @@ mod tests {
             &new_vault_raw,
             &deltas_raw,
         );
-        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1049);
+        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1081);
         let bundle = SpliceStateTransitionWitness::parse(&bundle_raw).unwrap();
         assert_eq!(bundle.version(), SPLICE_STATE_TRANSITION_WITNESS_VERSION);
         assert_eq!(bundle.raw().len(), SPLICE_STATE_TRANSITION_WITNESS_LEN);
@@ -5545,6 +5556,7 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         let next = StateHeader::parse(&next_raw).unwrap();
 
         verify_splice_state_transition(
@@ -5619,6 +5631,7 @@ mod tests {
         next_raw[76..108].fill(11);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(
@@ -5678,6 +5691,7 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(
@@ -5695,25 +5709,11 @@ mod tests {
         );
     }
 
-    /// C-01 attack vector: a malicious transaction builder substitutes the
-    /// successor State Header's payload_commitment while keeping all
-    /// otherwise-checked fields identical. The signed splice event bound to
-    /// the genuine current state's payload_commitment must not authorise a
-    /// transition into a successor with a different payload_commitment.
-    ///
-    /// In the bilateral plain profile of this implementation,
-    /// `payload_commitment` is overloaded as the vault Cell commitment: the
-    /// vault lock calls `validate_current_vault_commitment(
-    /// header.payload_commitment())`, and the post-splice vault lock calls
-    /// `new_header.payload_commitment() == new_vault_commitment`. This means
-    /// `payload_commitment` is transitively bound by `vault_set_commitment`,
-    /// which is in turn bound by `splice_header.old_vault_commitment` and
-    /// `splice_header.new_vault_commitment`. The substitution attack is
-    /// therefore closed by the existing `vault_set_commitment` and vault lock
-    /// checks; the bundle-level test below would not add coverage.
+    /// The signed splice event binds the current state's payload commitment.
+    /// The successor payload is signed separately because it binds the actual
+    /// post-splice vault Cell materialisation, not the vault descriptor root.
     #[test]
-    #[ignore = "payload_commitment is bound transitively via vault_set_commitment in this profile; see vault lock validate_current_vault_commitment and new_header.payload_commitment == new_vault_commitment. The audit's general-case attack vector is closed at the vault lock layer for the bilateral plain profile."]
-    fn rejects_splice_state_transition_with_changed_payload_commitment() {
+    fn rejects_splice_state_transition_with_changed_current_payload_commitment() {
         let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
         let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
         let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
@@ -5750,18 +5750,15 @@ mod tests {
         let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
         current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
         current_raw[150..182].copy_from_slice(&participants);
-        // In the bilateral plain profile, payload_commitment IS the vault
-        // commitment, so we mirror that here.
-        current_raw[248..280].copy_from_slice(&old_vault.commitment().unwrap());
+        // Attacker flips the current payload_commitment away from the signed
+        // splice header payload.
+        current_raw[248..280].fill(0xAA);
         let current = StateHeader::parse(&current_raw).unwrap();
         let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
         next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
-        // Attacker flips the successor's payload_commitment to a different
-        // value than the splice event was signed for.
-        next_raw[248..280].fill(0xAA);
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(
@@ -5824,6 +5821,7 @@ mod tests {
         let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         // Attacker flips the successor's participants_commitment to a
         // different value than the splice event was signed for.
         next_raw[150..182].fill(0xBB);
@@ -5890,9 +5888,10 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         // Attacker flips the successor's settlement_descriptor_commitment to
         // a different value than the splice event was signed for.
-        next_raw[182..214].fill(0xCC);
+        next_raw[214..246].fill(0xCC);
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(
@@ -5958,6 +5957,7 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         // Attacker flips the successor's mode byte.
         next_raw[148] = 2;
         let next = StateHeader::parse(&next_raw).unwrap();
@@ -6022,9 +6022,10 @@ mod tests {
         next_raw[76..108].fill(10);
         next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
         next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         // Attacker flips the successor's asset_registry_commitment to a
         // different value than the splice event was signed for.
-        next_raw[214..246].fill(0xDD);
+        next_raw[182..214].fill(0xDD);
         let next = StateHeader::parse(&next_raw).unwrap();
 
         assert_eq!(
@@ -6040,6 +6041,104 @@ mod tests {
             .unwrap_err(),
             ScriptError::SpliceProofMismatch
         );
+    }
+
+    fn assert_splice_rejects_changed_next_context_field(
+        field_name: &str,
+        mutate_next: fn(&mut [u8; STATE_HEADER_LEN]),
+    ) {
+        let key0 = SigningKey::from_slice(&[1u8; 32]).unwrap();
+        let key1 = SigningKey::from_slice(&[2u8; 32]).unwrap();
+        let mut pubkeys = [pubkey(&key0), pubkey(&key1)];
+        pubkeys.sort();
+        let participant_refs = [pubkeys[0].as_slice(), pubkeys[1].as_slice()];
+        let participants = participants_commitment(2, &participant_refs);
+
+        let old_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000);
+        let old_vault_raw =
+            splice_vault_descriptor_bytes([4u8; BYTE32_LEN], 1, &old_ckb, &[0u8; 49]);
+        let old_vault = SpliceVaultDescriptor::parse(&old_vault_raw).unwrap();
+        let new_ckb = splice_vault_asset_bytes(VAULT_ASSET_KIND_CKB, 0, 14_900);
+        let new_vault_raw =
+            splice_vault_descriptor_bytes([10u8; BYTE32_LEN], 1, &new_ckb, &[0u8; 49]);
+        let new_vault = SpliceVaultDescriptor::parse(&new_vault_raw).unwrap();
+        let delta =
+            splice_asset_delta_bytes(VAULT_ASSET_KIND_CKB, 0, 10_000, 14_900, 5_000, 0, 100);
+        let deltas_raw = splice_asset_deltas_bytes(1, &delta, &[0u8; SPLICE_ASSET_DELTA_LEN]);
+        let deltas = SpliceAssetDeltas::parse(&deltas_raw).unwrap();
+
+        let splice_header_raw = splice_header_bytes(
+            SPLICE_KIND_IN,
+            7,
+            &participants,
+            &old_vault.commitment().unwrap(),
+            &new_vault.commitment().unwrap(),
+            &deltas.commitment().unwrap(),
+            &[8u8; BYTE32_LEN],
+        );
+        let splice_header = SpliceHeader::parse(&splice_header_raw).unwrap();
+        let witness_raw = signed_bilateral_witness(&key0, &key1, &splice_header.signing_digest());
+        let witness = SpliceSignatureWitness::parse(&witness_raw).unwrap();
+
+        let mut current_raw = header_bytes(7, PHASE_ACTIVE, 0);
+        current_raw[108..140].copy_from_slice(&old_vault.commitment().unwrap());
+        current_raw[150..182].copy_from_slice(&participants);
+        let current = StateHeader::parse(&current_raw).unwrap();
+
+        let mut next_raw = header_bytes(7, PHASE_ACTIVE, 1);
+        next_raw[76..108].fill(10);
+        next_raw[108..140].copy_from_slice(&new_vault.commitment().unwrap());
+        next_raw[150..182].copy_from_slice(&participants);
+        next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
+        mutate_next(&mut next_raw);
+        let next = StateHeader::parse(&next_raw).unwrap();
+
+        assert_eq!(
+            verify_splice_state_transition(
+                &current,
+                &next,
+                &splice_header,
+                &witness,
+                &old_vault,
+                &new_vault,
+                &deltas,
+            )
+            .unwrap_err(),
+            ScriptError::SpliceProofMismatch,
+            "{field_name}"
+        );
+    }
+
+    type StateHeaderMutation = fn(&mut [u8; STATE_HEADER_LEN]);
+
+    #[test]
+    fn rejects_splice_state_transition_with_changed_preserved_context_fields() {
+        let cases: [(&str, StateHeaderMutation); 16] = [
+            ("protocol_version", |raw| put_u16(raw, 0, 2)),
+            ("chain_id", |raw| raw[2..34].fill(0xA1)),
+            ("signature_scheme_id", |raw| put_u16(raw, 34, 2)),
+            ("channel_id", |raw| raw[36..68].fill(0xA2)),
+            ("funding_epoch", |raw| put_u64(raw, 68, 2)),
+            ("funding_anchor", |raw| raw[76..108].fill(0xA3)),
+            ("vault_set_commitment", |raw| raw[108..140].fill(0xA4)),
+            ("state_number", |raw| put_u64(raw, 140, 8)),
+            ("mode", |raw| raw[148] = 2),
+            ("participants_commitment", |raw| raw[150..182].fill(0xA5)),
+            ("asset_registry_commitment", |raw| raw[182..214].fill(0xA6)),
+            ("settlement_descriptor_commitment", |raw| {
+                raw[214..246].fill(0xA7)
+            }),
+            ("descriptor_version", |raw| put_u16(raw, 246, 2)),
+            ("payload_commitment", |raw| raw[248..280].fill(0xA9)),
+            ("challenge_policy_commitment", |raw| {
+                raw[280..312].fill(0xA8)
+            }),
+            ("state_layout_version", |raw| put_u16(raw, 312, 3)),
+        ];
+
+        for (field_name, mutate_next) in cases {
+            assert_splice_rejects_changed_next_context_field(field_name, mutate_next);
+        }
     }
 
     #[test]
@@ -6151,34 +6250,88 @@ mod tests {
     #[test]
     fn molecule_schema_names_all_active_fixed_width_objects() {
         let schema = include_str!("../../../schemas/morph.mol");
+        fn declared_schema_size(schema: &str, name: &str) -> Option<usize> {
+            for line in schema.lines() {
+                let Some(rest) = line.trim().strip_prefix("// - ") else {
+                    continue;
+                };
+                let Some(rest) = rest.strip_prefix(name) else {
+                    continue;
+                };
+                let Some(rest) = rest.strip_prefix(": ") else {
+                    continue;
+                };
+                let Some(digits) = rest.strip_suffix(" bytes") else {
+                    continue;
+                };
+                return digits.parse().ok();
+            }
+            None
+        }
+
+        for (name, len) in [
+            ("StateHeader", STATE_HEADER_LEN),
+            ("SpliceHeader", SPLICE_HEADER_LEN),
+            ("SpliceSignatureWitness", SPLICE_SIGNATURE_WITNESS_LEN),
+            ("SpliceVaultAssetAmount", SPLICE_VAULT_ASSET_AMOUNT_LEN),
+            ("SpliceVaultDescriptor", SPLICE_VAULT_DESCRIPTOR_LEN),
+            ("SpliceAssetDelta", SPLICE_ASSET_DELTA_LEN),
+            ("SpliceAssetDeltas", SPLICE_ASSET_DELTAS_LEN),
+            (
+                "SpliceStateTransitionWitness",
+                SPLICE_STATE_TRANSITION_WITNESS_LEN,
+            ),
+            ("BilateralSignatureWitness", BILATERAL_SIGNATURE_WITNESS_LEN),
+            (
+                "BilateralCkbSettlementDescriptor",
+                BILATERAL_CKB_DESCRIPTOR_LEN,
+            ),
+            (
+                "BilateralCkbXudtSettlementDescriptor",
+                BILATERAL_CKB_XUDT_DESCRIPTOR_LEN,
+            ),
+            ("SponsorPolicy", SPONSOR_POLICY_LEN),
+            ("FactoryStateHeader", FACTORY_STATE_HEADER_LEN),
+            ("FactorySignatureWitness", FACTORY_SIGNATURE_WITNESS_LEN),
+            ("FactoryRight", FACTORY_RIGHT_LEN),
+            (
+                "FactoryReducedRightsWitness",
+                FACTORY_REDUCED_RIGHTS_WITNESS_LEN,
+            ),
+            (
+                "FactoryMerkleUpdateWitness",
+                FACTORY_MERKLE_UPDATE_WITNESS_LEN,
+            ),
+            (
+                "FactoryReducedExitWitness",
+                FACTORY_REDUCED_EXIT_WITNESS_LEN,
+            ),
+            (
+                "FactoryReducedExitXudtWitness",
+                FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN,
+            ),
+            ("FactoryLocalExitWitness", FACTORY_LOCAL_EXIT_WITNESS_LEN),
+            (
+                "FactoryLocalExitXudtWitness",
+                FACTORY_LOCAL_EXIT_XUDT_WITNESS_LEN,
+            ),
+            ("FactorySpliceHeader", FACTORY_SPLICE_HEADER_LEN),
+            ("FactoryVaultDescriptor", FACTORY_VAULT_DESCRIPTOR_LEN),
+            ("FactoryVaultDelta", FACTORY_VAULT_DELTA_LEN),
+            ("FactoryVaultDeltas", FACTORY_VAULT_DELTAS_LEN),
+            ("FactorySpliceWitness", FACTORY_SPLICE_WITNESS_LEN),
+            (
+                "FactoryReducedSpliceWitness",
+                FACTORY_REDUCED_SPLICE_WITNESS_LEN,
+            ),
+        ] {
+            assert!(
+                declared_schema_size(schema, name) == Some(len),
+                "schema size mismatch for {name}"
+            );
+        }
+
         for expected in [
-            "StateHeader: 314 bytes",
-            "SpliceHeader: 357 bytes",
-            "SpliceSignatureWitness: 198 bytes",
-            "SpliceVaultAssetAmount: 49 bytes",
-            "SpliceVaultDescriptor: 132 bytes",
-            "SpliceAssetDelta: 113 bytes",
-            "SpliceAssetDeltas: 228 bytes",
-            "SpliceStateTransitionWitness: 1049 bytes",
-            "BilateralSignatureWitness: 198 bytes",
-            "BilateralCkbSettlementDescriptor: 84 bytes",
-            "BilateralCkbXudtSettlementDescriptor: 148 bytes",
-            "SponsorPolicy: 144 bytes",
-            "FactoryStateHeader: 238 bytes",
-            "FactorySignatureWitness: 262 bytes",
-            "FactoryRight: 114 bytes",
-            "FactoryReducedRightsWitness: 2580 bytes",
-            "FactoryMerkleUpdateWitness: 8720 bytes",
-            "FactoryReducedExitWitness: 3058 bytes",
-            "FactoryReducedExitXudtWitness: 3122 bytes",
-            "FactoryLocalExitWitness: 726 bytes",
-            "FactoryLocalExitXudtWitness: 790 bytes",
-            "FactorySpliceHeader: 275 bytes",
-            "FactoryVaultDescriptor: 132 bytes",
-            "FactoryVaultDelta: 97 bytes",
-            "FactoryVaultDeltas: 196 bytes",
-            "FactorySpliceWitness: 999 bytes",
-            "FactoryReducedSpliceWitness: 9457 bytes",
             "struct StateHeader",
             "struct SpliceHeader",
             "struct SpliceSignatureWitness",

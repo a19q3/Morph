@@ -4,6 +4,13 @@ Status: devnet stateful acceptance is the required current release-evidence
 gate. A closeout is current only when its artifact manifest records the current
 clean `HEAD`, `git_dirty=false`, and `status=passed`.
 
+Current status for this document: historical evidence only. The artifact
+recorded below was produced from the 2026-05-20 implementation line, not from
+the current repository HEAD. Use the command contract in this document and the
+Fiber/Morph acceptance runbook for the current gate; do not cite the hashes or
+counts below as current release evidence until the suite is rerun on a clean
+current HEAD.
+
 This is not a mainnet-ready or production real-assets-ready claim. The suite is
 the devnet acceptance layer for production-shaped stateful lifecycles and
 extreme cases. Mainnet fee-market evidence, reorg assumptions, external xUDT

@@ -12,29 +12,29 @@
 // part of the audited transaction shape:
 //
 // - StateHeader: 314 bytes
-// - SpliceHeader: 357 bytes
+// - SpliceHeader: 389 bytes
 // - SpliceSignatureWitness: 198 bytes
 // - SpliceVaultAssetAmount: 49 bytes
 // - SpliceVaultDescriptor: 132 bytes
 // - SpliceAssetDelta: 113 bytes
 // - SpliceAssetDeltas: 228 bytes
-// - SpliceStateTransitionWitness: 1049 bytes
+// - SpliceStateTransitionWitness: 1081 bytes
 // - FactoryStateHeader: 238 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness: 262 bytes
 // - FactoryRight: 114 bytes
 // - FactoryReducedRightsWitness: 2580 bytes
 // - FactoryMerkleUpdateWitness: 8720 bytes
-// - FactoryReducedExitWitness: 3058 bytes
-// - FactoryReducedExitXudtWitness: 3122 bytes
-// - FactoryLocalExitWitness: 726 bytes
-// - FactoryLocalExitXudtWitness: 790 bytes
-// - FactorySpliceHeader: 275 bytes
+// - FactoryReducedExitWitness: 3554 bytes
+// - FactoryReducedExitXudtWitness: 3618 bytes
+// - FactoryLocalExitWitness: 766 bytes
+// - FactoryLocalExitXudtWitness: 830 bytes
+// - FactorySpliceHeader: 309 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
 // - FactoryVaultDeltas: 196 bytes
-// - FactorySpliceWitness: 999 bytes
-// - FactoryReducedSpliceWitness: 9457 bytes
+// - FactorySpliceWitness: 1033 bytes
+// - FactoryReducedSpliceWitness: 9491 bytes
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
@@ -113,6 +113,7 @@ struct SpliceHeader {
     asset_delta_commitment: Byte32,
     participants_commitment: Byte32,
     payload_commitment: Byte32,
+    new_payload_commitment: Byte32,
     challenge_policy_commitment: Byte32,
 }
 
@@ -291,6 +292,8 @@ struct FactoryReducedExitWitness {
     before_7: FactoryRight,
     before_8: FactoryRight,
     before_9: FactoryRight,
+    before_10: FactoryRight,
+    before_11: FactoryRight,
     after_0: FactoryRight,
     after_1: FactoryRight,
     after_2: FactoryRight,
@@ -301,6 +304,8 @@ struct FactoryReducedExitWitness {
     after_7: FactoryRight,
     after_8: FactoryRight,
     after_9: FactoryRight,
+    after_10: FactoryRight,
+    after_11: FactoryRight,
 }
 
 struct FactoryReducedExitXudtWitness {
@@ -331,6 +336,8 @@ struct FactoryReducedExitXudtWitness {
     before_7: FactoryRight,
     before_8: FactoryRight,
     before_9: FactoryRight,
+    before_10: FactoryRight,
+    before_11: FactoryRight,
     after_0: FactoryRight,
     after_1: FactoryRight,
     after_2: FactoryRight,
@@ -341,6 +348,8 @@ struct FactoryReducedExitXudtWitness {
     after_7: FactoryRight,
     after_8: FactoryRight,
     after_9: FactoryRight,
+    after_10: FactoryRight,
+    after_11: FactoryRight,
 }
 
 struct FactoryLocalExitWitness {
@@ -369,6 +378,8 @@ struct FactoryLocalExitXudtWitness {
 
 struct FactorySpliceHeader {
     protocol_version: uint16,
+    chain_id: Byte32,
+    signature_scheme_id: uint16,
     factory_id: Byte32,
     old_update_number: uint64,
     new_update_number: uint64,

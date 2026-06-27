@@ -123,6 +123,7 @@ pub struct StoredSplicePackage {
     pub asset_delta_commitment: String,
     pub participants_commitment: String,
     pub payload_commitment: String,
+    pub new_payload_commitment: String,
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
@@ -215,6 +216,7 @@ impl StoredSplicePackage {
             asset_delta_commitment: hex_prefixed(&transition.header.asset_delta_commitment),
             participants_commitment: hex_prefixed(&transition.header.participants_commitment),
             payload_commitment: hex_prefixed(&transition.header.payload_commitment),
+            new_payload_commitment: hex_prefixed(&transition.header.new_payload_commitment),
             challenge_policy_commitment: hex_prefixed(
                 &transition.header.challenge_policy_commitment,
             ),
@@ -302,6 +304,14 @@ impl StoredSplicePackage {
         ensure!(
             self.participants_commitment == canonical_hex32(&self.participants_commitment)?,
             "participants_commitment must be canonical"
+        );
+        ensure!(
+            self.payload_commitment == canonical_hex32(&self.payload_commitment)?,
+            "payload_commitment must be canonical"
+        );
+        ensure!(
+            self.new_payload_commitment == canonical_hex32(&self.new_payload_commitment)?,
+            "new_payload_commitment must be canonical"
         );
         ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
@@ -477,6 +487,7 @@ impl StoredSplicePackage {
             asset_delta_commitment: hex32_bytes(&self.asset_delta_commitment)?,
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
             payload_commitment: hex32_bytes(&self.payload_commitment)?,
+            new_payload_commitment: hex32_bytes(&self.new_payload_commitment)?,
             challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
         };
         Ok(SpliceTransition {
@@ -819,6 +830,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment,
         payload_commitment: current_state.header.payload_commitment,
+        new_payload_commitment: vault_descriptor_commitment(&new_vault),
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let digest = header.signing_digest();
@@ -855,6 +867,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         asset_delta_commitment: hex_prefixed(&header.asset_delta_commitment),
         participants_commitment: hex_prefixed(&header.participants_commitment),
         payload_commitment: hex_prefixed(&header.payload_commitment),
+        new_payload_commitment: hex_prefixed(&header.new_payload_commitment),
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
@@ -1191,6 +1204,7 @@ fn next_state_header_for_splice(transition: &SpliceTransition) -> StateHeader {
     header.funding_epoch = transition.header.new_funding_epoch;
     header.funding_anchor = transition.header.new_funding_anchor;
     header.vault_set_commitment = transition.header.new_vault_commitment;
+    header.payload_commitment = transition.header.new_payload_commitment;
     header.phase = Phase::Active;
     header
 }
@@ -1285,7 +1299,8 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
     raw[229..261].copy_from_slice(&header.asset_delta_commitment);
     raw[261..293].copy_from_slice(&header.participants_commitment);
     raw[293..325].copy_from_slice(&header.payload_commitment);
-    raw[325..357].copy_from_slice(&header.challenge_policy_commitment);
+    raw[325..357].copy_from_slice(&header.new_payload_commitment);
+    raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
     raw
 }
 

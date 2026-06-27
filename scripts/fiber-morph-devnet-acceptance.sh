@@ -616,6 +616,8 @@ run_morph_stateful_on_fiber_ckb() {
     CKB_SOURCE_DIR="$CKB_SOURCE_DIR" \
     OUT_DIR="$scenario_dir" \
     LATEST_LINK="$OUT_DIR/morph-stateful/latest" \
+    MORPH_DEVNET_AUDIT_PROFILE="docs/devnet-audit-profile.example.json" \
+    MORPH_DEVNET_STATEFUL_BUDGET_PROFILE="docs/devnet-stateful-budget.example.json" \
     MORPH_DEVNET_SMOKE_SKIP_LOCAL_CHECKS=1 \
       scripts/devnet-stateful-scenarios.sh
   ) >"$LOG_DIR/morph-stateful-on-fiber-ckb.log" 2>&1

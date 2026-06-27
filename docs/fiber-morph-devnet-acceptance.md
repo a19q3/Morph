@@ -95,7 +95,11 @@ The production coexistence gate:
 2. starts Fiber's three-node devnet with `e2e/external-funding-open`;
 3. builds Morph RISC-V contracts;
 4. runs `scripts/devnet-stateful-scenarios.sh` with
-   `MORPH_CKB_RPC=http://127.0.0.1:8114`, so Morph uses Fiber's CKB devnet;
+   `MORPH_CKB_RPC=http://127.0.0.1:8114`,
+   `MORPH_DEVNET_AUDIT_PROFILE=docs/devnet-audit-profile.example.json`, and
+   `MORPH_DEVNET_STATEFUL_BUDGET_PROFILE=docs/devnet-stateful-budget.example.json`,
+   so Morph uses Fiber's CKB devnet while preserving the same audit and budget
+   gates as `make devnet-stateful-e2e`;
 5. runs Fiber's `e2e/external-funding-open` Bruno suite;
 6. runs Fiber's external-funding restart regression unless disabled.
 

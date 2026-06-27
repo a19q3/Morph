@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
+use proptest::prelude::*;
 
 fn header(n: u64, phase: Phase) -> StateHeader {
     StateHeader {
@@ -46,6 +47,14 @@ fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 2,
     }
+}
+
+fn assert_state_header_digest_changes(mut mutate: impl FnMut(&mut StateHeader)) {
+    let base = header_with_epoch(1, Phase::Settling, 3);
+    let mut changed = base.clone();
+    mutate(&mut changed);
+
+    assert_ne!(base.signing_digest(), changed.signing_digest());
 }
 
 fn signing_key(byte: u8) -> SigningKey {
@@ -314,6 +323,7 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment: current_state.header.participants_commitment,
         payload_commitment: current_state.header.payload_commitment,
+        new_payload_commitment: vault_descriptor_commitment(&new_vault),
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
@@ -361,6 +371,7 @@ fn xudt_splice_out_transition() -> SpliceTransition {
         vault_descriptor_commitment(&splice.old_vault);
     splice.header.old_vault_commitment = vault_descriptor_commitment(&splice.old_vault);
     splice.header.new_vault_commitment = vault_descriptor_commitment(&splice.new_vault);
+    splice.header.new_payload_commitment = splice.header.new_vault_commitment;
     splice.header.asset_delta_commitment = splice_asset_delta_commitment(&splice.deltas);
     splice.witness = splice_witness_for(&mut splice.header);
     splice
@@ -588,18 +599,31 @@ fn signing_digest_is_domain_separated_and_state_sensitive() {
 #[test]
 fn state_header_digest_binds_epoch_and_vault_set() {
     let h1 = header_with_epoch(1, Phase::Settling, 3);
-    let mut h2 = h1.clone();
-    h2.funding_epoch = 4;
+    assert_eq!(h1.signing_digest(), h1.signing_digest());
 
-    let mut h3 = h1.clone();
-    h3.vault_set_commitment = bytes32(34);
+    assert_state_header_digest_changes(|header| header.funding_epoch = 4);
+    assert_state_header_digest_changes(|header| header.vault_set_commitment = bytes32(34));
+}
 
-    assert_ne!(h1.signing_digest(), h2.signing_digest());
-    assert_ne!(h1.signing_digest(), h3.signing_digest());
-    assert_ne!(
-        h1.signing_digest(),
-        header(1, Phase::Settling).signing_digest()
-    );
+#[test]
+fn state_header_digest_binds_signed_context_fields() {
+    assert_state_header_digest_changes(|header| header.protocol_version = 2);
+    assert_state_header_digest_changes(|header| header.chain_id = bytes32(10));
+    assert_state_header_digest_changes(|header| header.signature_scheme_id = 2);
+    assert_state_header_digest_changes(|header| header.channel_id = bytes32(11));
+    assert_state_header_digest_changes(|header| header.funding_anchor = bytes32(12));
+    assert_state_header_digest_changes(|header| header.state_number = 2);
+    assert_state_header_digest_changes(|header| header.mode = Mode::FactoryProof);
+    assert_state_header_digest_changes(|header| header.phase = Phase::Closed);
+    assert_state_header_digest_changes(|header| header.participants_commitment = bytes32(13));
+    assert_state_header_digest_changes(|header| header.asset_registry_commitment = bytes32(14));
+    assert_state_header_digest_changes(|header| {
+        header.settlement_descriptor_commitment = bytes32(15);
+    });
+    assert_state_header_digest_changes(|header| header.descriptor_version = 2);
+    assert_state_header_digest_changes(|header| header.payload_commitment = bytes32(16));
+    assert_state_header_digest_changes(|header| header.challenge_policy_commitment = bytes32(17));
+    assert_state_header_digest_changes(|header| header.state_layout_version = 3);
 }
 
 #[test]
@@ -609,20 +633,100 @@ fn mode_signing_codes_match_wire_profile() {
 }
 
 #[test]
-fn state_header_context_rejects_epoch_and_vault_set_changes() {
+fn state_header_context_rejects_preserved_field_changes() {
+    let old = header_with_epoch(1, Phase::Active, 3);
+    let mut changed_epoch = header_with_epoch(9, Phase::Settling, 3);
+    changed_epoch.funding_epoch = 4;
+    assert!(!old.same_context_except_progress(&changed_epoch));
+
+    let mut changed_vault_set = header_with_epoch(9, Phase::Settling, 3);
+    changed_vault_set.vault_set_commitment = bytes32(34);
+    assert!(!old.same_context_except_progress(&changed_vault_set));
+}
+
+#[test]
+fn state_header_context_allows_progress_payload_and_descriptor_changes() {
     let old = header_with_epoch(1, Phase::Active, 3);
     let mut new = header_with_epoch(9, Phase::Settling, 3);
     new.payload_commitment = bytes32(9);
     new.settlement_descriptor_commitment = bytes32(10);
 
     assert!(old.same_context_except_progress(&new));
+}
 
-    new.funding_epoch = 4;
-    assert!(!old.same_context_except_progress(&new));
+proptest! {
+    #[test]
+    fn prop_state_header_context_rejects_preserved_field_changes(
+        field in 0usize..12,
+        marker in 64u8..=240,
+    ) {
+        let old = header_with_epoch(1, Phase::Active, 3);
+        let mut new = old.clone();
+        new.state_number = 9;
+        new.phase = Phase::Settling;
 
-    let mut changed_vault_set = header_with_epoch(9, Phase::Settling, 3);
-    changed_vault_set.vault_set_commitment = bytes32(34);
-    assert!(!old.same_context_except_progress(&changed_vault_set));
+        match field {
+            0 => new.protocol_version = old.protocol_version + 1,
+            1 => new.chain_id = bytes32(marker),
+            2 => new.signature_scheme_id = old.signature_scheme_id + 1,
+            3 => new.channel_id = bytes32(marker),
+            4 => new.funding_epoch = old.funding_epoch + 1,
+            5 => new.funding_anchor = bytes32(marker),
+            6 => new.vault_set_commitment = bytes32(marker),
+            7 => new.mode = Mode::FactoryProof,
+            8 => new.participants_commitment = bytes32(marker),
+            9 => new.asset_registry_commitment = bytes32(marker),
+            10 => new.challenge_policy_commitment = bytes32(marker),
+            11 => new.state_layout_version = old.state_layout_version + 1,
+            _ => unreachable!(),
+        }
+
+        prop_assert!(!old.same_context_except_progress(&new), "field index {}", field);
+    }
+
+    #[test]
+    fn prop_state_header_context_allows_profile_payload_changes(marker in 64u8..=240) {
+        let old = header_with_epoch(1, Phase::Active, 3);
+        let mut new = old.clone();
+        new.state_number = 9;
+        new.phase = Phase::Settling;
+        new.payload_commitment = bytes32(marker);
+        new.settlement_descriptor_commitment = bytes32(marker);
+
+        prop_assert!(old.same_context_except_progress(&new));
+    }
+
+    #[test]
+    fn prop_state_header_digest_changes_for_single_signed_field(
+        field in 0usize..17,
+        marker in 64u8..=240,
+    ) {
+        let old = header_with_epoch(1, Phase::Active, 3);
+        let mut new = old.clone();
+
+        match field {
+            0 => new.protocol_version = old.protocol_version + 1,
+            1 => new.chain_id = bytes32(marker),
+            2 => new.signature_scheme_id = old.signature_scheme_id + 1,
+            3 => new.channel_id = bytes32(marker),
+            4 => new.funding_epoch = old.funding_epoch + 1,
+            5 => new.funding_anchor = bytes32(marker),
+            6 => new.vault_set_commitment = bytes32(marker),
+            7 => new.state_number = old.state_number + 1,
+            8 => new.mode = Mode::FactoryProof,
+            9 => new.phase = Phase::Settling,
+            10 => new.participants_commitment = bytes32(marker),
+            11 => new.asset_registry_commitment = bytes32(marker),
+            12 => new.settlement_descriptor_commitment = bytes32(marker),
+            13 => new.descriptor_version = old.descriptor_version + 1,
+            14 => new.payload_commitment = bytes32(marker),
+            15 => new.challenge_policy_commitment = bytes32(marker),
+            16 => new.state_layout_version = old.state_layout_version + 1,
+            _ => unreachable!(),
+        }
+
+        prop_assert_ne!(old.signing_digest(), new.signing_digest(), "field index {}", field);
+    }
 }
 
 #[test]
@@ -676,6 +780,15 @@ fn splice_rejects_wrong_channel_header() {
     splice.header.channel_id = bytes32(99);
     let witness = splice_witness_for(&mut splice.header);
     splice.witness = witness;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceHeaderContextMismatch);
+}
+
+#[test]
+fn splice_rejects_current_payload_mismatch() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.current_state.header.payload_commitment = bytes32(99);
 
     let err = validate_splice_transition(&splice).unwrap_err();
     assert_eq!(err, MorphError::SpliceHeaderContextMismatch);
@@ -1013,6 +1126,15 @@ fn accepts_signed_settlement_descriptor_update() {
     ctx.authorization = authorization_for(&mut new.header);
 
     validate_state_transition(&old, &new, &ctx).unwrap();
+}
+
+#[test]
+fn rejects_unsigned_settlement_descriptor_update() {
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.header.settlement_descriptor_commitment = bytes32(77);
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::InvalidStateSignatures);
 }
 
 #[test]

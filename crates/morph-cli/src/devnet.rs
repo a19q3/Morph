@@ -6611,6 +6611,45 @@ pub fn save_splice_package(
     };
     let remaining_settlement = new_vault.assets.clone();
 
+    let old_state_type = state_cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("StateCell does not carry a type script"))?;
+    let old_state_args = old_state_type.args().raw_data();
+    ensure!(
+        old_state_args.len() >= BYTE32_LEN
+            && old_state_args.as_ref()[..BYTE32_LEN] == current_state.header.funding_anchor,
+        "StateCell type args do not match splice old funding anchor"
+    );
+    let old_vault_lock = vault_cell.output.lock();
+    let old_vault_args = old_vault_lock.args().raw_data();
+    ensure!(
+        old_vault_args.len() >= BYTE32_LEN
+            && old_vault_args.as_ref()[..BYTE32_LEN] == current_state.header.funding_anchor,
+        "VaultCell lock args do not match splice old funding anchor"
+    );
+    let mut new_vault_args = new_funding_anchor.to_vec();
+    new_vault_args.extend_from_slice(&old_vault_args.as_ref()[BYTE32_LEN..]);
+    let new_vault_lock = Script::new_builder()
+        .code_hash(old_vault_lock.code_hash())
+        .hash_type(old_vault_lock.hash_type())
+        .args(Bytes::from(new_vault_args).pack())
+        .build();
+    let mut new_vault_builder = CellOutput::new_builder()
+        .capacity(new_vault_capacity)
+        .lock(new_vault_lock);
+    let new_vault_data = if let Some(live_xudt) = &live_xudt {
+        new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
+        xudt_amount_bytes(new_xudt_amount.expect("live xUDT amount present"))
+    } else {
+        Bytes::new()
+    };
+    let new_vault_output = new_vault_builder.build();
+    ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
+    let new_payload_commitment =
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref());
+
     let mut header = SpliceHeader {
         protocol_version: current_state.header.protocol_version,
         chain_id: current_state.header.chain_id,
@@ -6628,6 +6667,7 @@ pub fn save_splice_package(
         asset_delta_commitment: [0u8; BYTE32_LEN],
         participants_commitment: current_state.header.participants_commitment,
         payload_commitment: current_state.header.payload_commitment,
+        new_payload_commitment,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     header.old_vault_commitment = vault_descriptor_commitment(&old_vault);

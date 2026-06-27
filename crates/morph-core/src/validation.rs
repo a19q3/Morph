@@ -227,6 +227,7 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
         || splice.header.old_funding_anchor != current.funding_anchor
         || splice.header.old_vault_commitment != current.vault_set_commitment
         || splice.header.participants_commitment != current.participants_commitment
+        || splice.header.payload_commitment != current.payload_commitment
         || splice.header.challenge_policy_commitment != current.challenge_policy_commitment
     {
         return Err(MorphError::SpliceHeaderContextMismatch);

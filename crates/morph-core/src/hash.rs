@@ -119,13 +119,14 @@ impl SigningBytes for SpliceHeader {
         out.extend_from_slice(&self.asset_delta_commitment);
         out.extend_from_slice(&self.participants_commitment);
         out.extend_from_slice(&self.payload_commitment);
+        out.extend_from_slice(&self.new_payload_commitment);
         out.extend_from_slice(&self.challenge_policy_commitment);
     }
 }
 
 impl SpliceHeader {
     pub fn signing_digest(&self) -> [u8; 32] {
-        let mut bytes = Vec::with_capacity(320);
+        let mut bytes = Vec::with_capacity(384);
         self.encode_signing_bytes(&mut bytes);
         blake2b256(&bytes)
     }
