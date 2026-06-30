@@ -174,7 +174,8 @@ cargo run -p morph-cli -- hub serve \
   --listen 127.0.0.1:4617 \
   --pubkey "${MORPH_PUBKEY:?set MORPH_PUBKEY to the local compressed secp256k1 pubkey}" \
   --state-path target/morph-hub/node-state.json \
-  --ckb-rpc-url "${MORPH_CKB_RPC:-http://127.0.0.1:18114}"
+  --ckb-rpc-url "${MORPH_CKB_RPC:-http://127.0.0.1:18114}" \
+  --rotate-auth-token-on-restart
 ```
 
 Set `MORPH_PUBKEY` to the local 33-byte compressed secp256k1 public key as
@@ -188,24 +189,27 @@ When you have a real watchtower JSONL output from a devnet run, add
 keeps channel, invoice, peer, and factory rows clearly marked as local Hub state
 rather than chain evidence.
 
-Morph Hub is loopback-first. Binding to anything other than loopback requires
-`--auth-token`, `--auth-token-file`, `--auth-token-stdin`,
-`--rotate-auth-token-on-restart`, or `MORPH_HUB_AUTH_TOKEN`; prefer the file,
-stdin, or rotate-on-restart modes so the shared secret is not left in shell
-history or environment dumps. Rotation is restart-based: start the hub with
-`--rotate-auth-token-on-restart`, copy the printed `morph_hub_auth_token=...`
-value into the browser unlock prompt, and stop using the old token. Direct
-cross-origin browser access is disabled unless `--cors-origin` is set to an
-explicit `http://` or `https://` origin. Replacing the durable state file through
-the UI/API is disabled by default; add `--allow-state-restore` only when you
-intentionally need that operator recovery path. Rows shown in the console are
-labelled as local Hub state unless future chain evidence fields prove otherwise.
+Morph Hub is token-first. Start with `--auth-token`, `--auth-token-file`,
+`--auth-token-stdin`, `--rotate-auth-token-on-restart`, or
+`MORPH_HUB_AUTH_TOKEN`; prefer the file, stdin, or rotate-on-restart modes so
+the shared secret is not left in shell history or environment dumps. Rotation is
+restart-based: start the hub with `--rotate-auth-token-on-restart`, copy the
+printed `morph_hub_auth_token=...` value into the browser unlock prompt, and
+stop using the old token. Scoped tokens are supported with
+`read,write,restore,sign:<secret>`; omit the prefix only for an all-scope token.
+For local development only, `--allow-unauthenticated-loopback` explicitly
+restores no-token loopback mode. Direct cross-origin browser access is disabled
+unless `--cors-origin` is set to an explicit `http://` or `https://` origin.
+Replacing the durable state file through the UI/API is disabled by default; add
+`--allow-state-restore` only when you intentionally need that operator recovery
+path. Rows shown in the console are labelled as local Hub state unless future
+chain evidence fields prove otherwise.
 
-The console keeps itself current while it is open. Loopback/no-token sessions
-use `/api/events` server-sent events; token-protected sessions use authenticated
-short polling so the bearer token is never placed in an event-stream URL. When
-the API requires a token, the UI accepts it at runtime and stores it only in the
-browser session.
+The console keeps itself current while it is open. Explicit
+`--allow-unauthenticated-loopback` sessions use `/api/events` server-sent
+events; token-protected sessions use authenticated short polling so the bearer
+token is never placed in an event-stream URL. When the API requires a token, the
+UI accepts it at runtime and stores it only in the browser session.
 
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 

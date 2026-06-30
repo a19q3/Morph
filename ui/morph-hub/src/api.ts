@@ -1,5 +1,24 @@
 import type { NodeState } from './domain';
 
+export interface RestorePreview {
+  confirmation_hash: string;
+  allowed: boolean;
+  current: RestoreStateSummary;
+  candidate: RestoreStateSummary;
+  ignored_completed_flows: string[];
+  warnings: string[];
+}
+
+export interface RestoreStateSummary {
+  peers: number;
+  channels: number;
+  factories: number;
+  invoices: number;
+  completed_flows: number;
+  events: number;
+  settling_channels: number;
+}
+
 const apiBase = import.meta.env.VITE_MORPH_HUB_API_URL ?? '';
 const bundledApiToken = import.meta.env.VITE_MORPH_HUB_AUTH_TOKEN ?? '';
 const tokenStorageKey = 'morph-hub-api-token';
@@ -28,10 +47,17 @@ export async function getStateFile(): Promise<unknown> {
   return request<unknown>('/api/state-file');
 }
 
-export async function replaceStateFile(state: unknown): Promise<NodeState> {
+export async function previewStateFile(state: unknown): Promise<RestorePreview> {
+  return request<RestorePreview>('/api/state-file/preview', {
+    method: 'POST',
+    body: JSON.stringify(state),
+  });
+}
+
+export async function replaceStateFile(state: unknown, confirmationHash: string): Promise<NodeState> {
   return request<NodeState>('/api/state-file', {
     method: 'PUT',
-    body: JSON.stringify(state),
+    body: JSON.stringify({ state, confirmation_hash: confirmationHash }),
   });
 }
 

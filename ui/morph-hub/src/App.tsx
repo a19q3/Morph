@@ -29,7 +29,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getState, getStateFile, postAction, replaceStateFile, connectPeer, hasApiToken, openEventStream, setApiToken } from './api';
+import { getState, hasApiToken, openEventStream, setApiToken } from './api';
 import {
   Asset,
   Balance,

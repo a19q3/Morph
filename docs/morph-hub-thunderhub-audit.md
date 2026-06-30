@@ -1,6 +1,8 @@
 # Morph Hub vs ThunderHub Audit
 
 Date: 2026-06-23
+Status: Historical comparison. Current auth, CORS, restore, and backend
+hardening status is tracked in `docs/hub-backend-ux-safety-remediation.md`.
 
 Scope:
 

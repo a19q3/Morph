@@ -452,7 +452,7 @@ enum HubCommand {
         /// Watchtower alert JSONL file to expose as devnet evidence in Morph Hub.
         #[arg(long)]
         watch_alert_file: Option<PathBuf>,
-        /// Bearer token required for Morph Hub API requests. Required for non-loopback listen addresses.
+        /// Bearer token required for Morph Hub API requests. Prefix with read,write,restore,sign: to scope a token.
         #[arg(long, env = "MORPH_HUB_AUTH_TOKEN", hide_env_values = true)]
         auth_token: Option<String>,
         /// Read the Morph Hub auth token from this file.
@@ -464,6 +464,9 @@ enum HubCommand {
         /// Generate a fresh random Morph Hub auth token at startup and print it once.
         #[arg(long)]
         rotate_auth_token_on_restart: bool,
+        /// Explicitly allow unauthenticated API access on loopback for local development only.
+        #[arg(long)]
+        allow_unauthenticated_loopback: bool,
         /// Allow replacing the durable Hub state file through PUT /api/state-file.
         #[arg(long)]
         allow_state_restore: bool,
@@ -2793,6 +2796,7 @@ fn main() -> Result<()> {
                 auth_token_file,
                 auth_token_stdin,
                 rotate_auth_token_on_restart,
+                allow_unauthenticated_loopback,
                 allow_state_restore,
                 cors_origin,
                 ui_dir,
@@ -2811,6 +2815,7 @@ fn main() -> Result<()> {
                     auth_token_stdin,
                     rotate_auth_token_on_restart,
                 )?,
+                allow_unauthenticated_loopback,
                 allow_state_restore,
                 cors_origin,
             }),

@@ -27,4 +27,4 @@ remain historical evidence; this file records current closure state.
 | P2 evidence inspectors | Fixed | invoice rows now expose lifecycle/payee/channel/payment-hash evidence, factory rows expose the local factory proof surface, and Watchtower rows expose CKB out-point/tx evidence. |
 | ThunderHub P0 read/write safety | Fixed | Hub auth, CORS, restore opt-in, restore narrowing, SSE fallback under auth, and state restore tests are implemented. |
 | ThunderHub P0 business-flow API tests | Fixed | Hub API tests cover invoice, channel, factory, and complete required-flow paths. |
-| ThunderHub P1 live updates | Fixed for current auth mode | the UI uses SSE when unauthenticated and authenticated polling when bearer auth is active. |
+| ThunderHub P1 live updates | Fixed for current auth mode | the UI uses SSE only for explicit unauthenticated loopback mode and authenticated polling when bearer auth is active. |

@@ -2,7 +2,7 @@ import { Activity, BadgeCheck, Factory, FileJson, GitBranch, Network, Plus, Radi
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
 import { FormEvent, useEffect, useState } from 'react';
-import { connectPeer, getStateFile, postAction, replaceStateFile } from './api';
+import { connectPeer, getStateFile, postAction, previewStateFile, replaceStateFile, type RestorePreview } from './api';
 import {
   Asset,
   ChannelRecord,
@@ -177,6 +177,7 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
   const latestSettleableInvoice = newestInvoice(
     settleableInvoices
   );
+  const maxInvoiceExpirySecs = state.security.max_invoice_expiry_secs || 604800;
 
   useEffect(() => {
     if (!channelId && latestActiveChannel) {
@@ -199,10 +200,14 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
     void runAction('Create invoice', async () => {
+      const expiry = Number(assertPositiveInteger(expirySecs, 'Expiry seconds'));
+      if (expiry > maxInvoiceExpirySecs) {
+        throw new Error(`Expiry seconds must be at most ${maxInvoiceExpirySecs}.`);
+      }
       const body = {
         amount: assertInvoiceAmount(amount, asset),
         description: requiredText(description, 'Description'),
-        expiry_secs: Number(assertPositiveInteger(expirySecs, 'Expiry seconds')),
+        expiry_secs: expiry,
         channel_id: channelId.trim() ? assertHex32(channelId, 'Channel id') : undefined,
         payment_preimage: paymentMode === 'preimage' ? assertHex32(paymentSecret, 'Payment preimage') : undefined,
         payment_hash: paymentMode === 'hash' ? assertHex32(paymentSecret, 'Payment hash') : undefined,
@@ -270,7 +275,10 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
           testId="invoice-expiry-secs"
           value={expirySecs}
           onChange={setExpirySecs}
-          validate={value => { assertPositiveInteger(value, 'Expiry seconds'); }}
+          validate={value => {
+            const expiry = Number(assertPositiveInteger(value, 'Expiry seconds'));
+            if (expiry > maxInvoiceExpirySecs) throw new Error(`Expiry seconds must be at most ${maxInvoiceExpirySecs}.`);
+          }}
         />
         <label>Payment input
           <select data-testid="invoice-payment-mode" value={paymentMode} onChange={event => setPaymentMode(event.target.value as 'preimage' | 'hash')}>
@@ -913,7 +921,7 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
   const [stateFileStatus, setStateFileStatus] = useState('');
   const [stateFileBusy, setStateFileBusy] = useState(false);
   const [restoreAcknowledged, setRestoreAcknowledged] = useState(false);
-  const [restoreCandidate, setRestoreCandidate] = useState<{ payload: unknown } | null>(null);
+  const [restoreCandidate, setRestoreCandidate] = useState<{ payload: unknown; preview: RestorePreview } | null>(null);
 
   const exportState = async () => {
     setStateFileBusy(true);
@@ -929,19 +937,29 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
     }
   };
 
-  const requestRestore = () => {
+  const requestRestore = async () => {
     setStateFileStatus('');
+    setRestoreCandidate(null);
+    setStateFileBusy(true);
     try {
-      setRestoreCandidate({ payload: JSON.parse(requiredText(raw, 'State file JSON')) });
+      const payload = JSON.parse(requiredText(raw, 'State file JSON'));
+      const preview = await previewStateFile(payload);
+      if (!preview.allowed) {
+        setStateFileStatus(`Restore blocked: ${preview.warnings.join('; ')}`);
+        return;
+      }
+      setRestoreCandidate({ payload, preview });
     } catch (err) {
       setStateFileStatus(String((err as Error).message));
+    } finally {
+      setStateFileBusy(false);
     }
   };
 
   const restoreState = () => {
     const candidate = restoreCandidate;
     if (candidate == null) return;
-    void runAction('Restore state file', () => replaceStateFile(candidate.payload)).then(() => {
+    void runAction('Restore state file', () => replaceStateFile(candidate.payload, candidate.preview.confirmation_hash)).then(() => {
       setRestoreCandidate(null);
       setRestoreAcknowledged(false);
     });
@@ -969,8 +987,8 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
       <button
         className="danger-button"
         data-testid="state-restore-json"
-        onClick={requestRestore}
-        disabled={busy || !raw.trim() || !state.security.state_restore_enabled || !restoreAcknowledged}
+        onClick={() => { void requestRestore(); }}
+        disabled={busy || stateFileBusy || !raw.trim() || !state.security.state_restore_enabled || !restoreAcknowledged}
       >
         <Upload size={15} /> Restore state file
       </button>
@@ -980,7 +998,7 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
       {restoreCandidate != null && (
         <ConfirmActionDialog
           title="Restore local Hub state file?"
-          detail={`This replaces ${state.state_path || 'the current Hub state file'} with the JSON in the editor. The API writes a private backup of the previous file before the replacement is committed.`}
+          detail={`This replaces ${state.state_path || 'the current Hub state file'} with the JSON in the editor. The API writes a private backup before commit. Confirmation hash ${restoreCandidate.preview.confirmation_hash}. Current ${formatRestoreSummary(restoreCandidate.preview.current)}. Candidate ${formatRestoreSummary(restoreCandidate.preview.candidate)}.`}
           confirmLabel="Restore"
           confirmTestId="confirm-state-restore"
           busy={busy}
@@ -990,6 +1008,10 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
       )}
     </div>
   );
+}
+
+function formatRestoreSummary(summary: RestorePreview['current']): string {
+  return `${summary.peers} peers, ${summary.channels} channels, ${summary.factories} factories, ${summary.invoices} invoices, ${summary.completed_flows} flows, ${summary.events} events`;
 }
 
 function ChannelSelect({

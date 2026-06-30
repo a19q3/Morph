@@ -51,9 +51,16 @@ export interface RecordProvenance {
 
 export interface HubSecurity {
   auth_required: boolean;
+  auth_mode: 'scoped_bearer' | 'explicit_unauthenticated_loopback';
+  auth_scopes: Array<'read' | 'write' | 'restore' | 'sign'>;
   state_restore_enabled: boolean;
   invoice_signing_enabled: boolean;
   cors_origin?: string | null;
+  max_concurrent_connections: number;
+  max_concurrent_mutations: number;
+  max_concurrent_event_streams: number;
+  mutation_rate_limit_per_minute: number;
+  max_invoice_expiry_secs: number;
 }
 
 export interface PeerRecord {
@@ -178,7 +185,19 @@ export const emptyState: NodeState = {
   network: 'devnet',
   state_path: '',
   rpc: { status: 'offline', message: 'API not loaded' },
-  security: { auth_required: false, state_restore_enabled: false, invoice_signing_enabled: false, cors_origin: null },
+  security: {
+    auth_required: false,
+    auth_mode: 'explicit_unauthenticated_loopback',
+    auth_scopes: [],
+    state_restore_enabled: false,
+    invoice_signing_enabled: false,
+    cors_origin: null,
+    max_concurrent_connections: 0,
+    max_concurrent_mutations: 0,
+    max_concurrent_event_streams: 0,
+    mutation_rate_limit_per_minute: 0,
+    max_invoice_expiry_secs: 604800,
+  },
   provenance: {
     source: 'hub_state_file',
     chain_status: 'not_chain_verified',

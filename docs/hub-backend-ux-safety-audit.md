@@ -1,6 +1,9 @@
 # Morph Hub 后端 — UX 与交互安全审计
 
 Date: 2026-06-30
+Status: Historical audit snapshot. The production-hardening pass in
+`docs/hub-backend-ux-safety-remediation.md` supersedes the open status of H1,
+H2, H3, H6, M3, M7, L2, and L5 as of 2026-06-30.
 Scope: `crates/morph-cli/src/hub.rs` (3463 lines), `crates/morph-cli/src/main.rs`
 (HubCommand + resolve_hub_auth_token), `crates/morph-core/src/node.rs` and
 `validation.rs` (the host-side state machine the Hub calls), and

@@ -70,7 +70,7 @@ they should remain visible:
 | --- | --- |
 | Hub state restore is still not chain-anchored | Acceptable only because restore is narrowed to empty bootstrap state. A future non-empty restore must be chain-anchored and reviewed separately. |
 | Hub invoice private key can still be supplied as a CLI argument or environment variable | `hide_env_values` reduces accidental disclosure, but `--invoice-private-key-file` / stdin parity with auth tokens would be cleaner. Track this under the newer Hub backend audit, not W6. |
-| Loopback Hub without auth is still a single-tenant trust assumption | Later Hub audits discuss per-action scopes, rate limits, and stronger defaults. W6 only established that the original arbitrary restore and token-comparison findings were remediated. |
+| Loopback Hub without auth | No longer the default. The Hub now requires a token unless the operator explicitly passes `--allow-unauthenticated-loopback` for local development. Per-action scopes and rate limits are tracked in `docs/hub-backend-ux-safety-remediation.md`. |
 | W6 docs before this file are historical | `W6-rigor`, `W6-safety`, `W6-reasonable`, and the old synthesis should be read with this status document and `docs/swarm-audit-W6-remediation.md`. |
 
 ## 6. Updated conclusion
