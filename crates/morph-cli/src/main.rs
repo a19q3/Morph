@@ -452,7 +452,7 @@ enum HubCommand {
         /// Watchtower alert JSONL file to expose as devnet evidence in Morph Hub.
         #[arg(long)]
         watch_alert_file: Option<PathBuf>,
-        /// Bearer token required for Morph Hub API requests. Prefix with read,write,restore,sign: to scope a token.
+        /// Bearer token required for Morph Hub API requests. Visible in process listings; prefer file, stdin, or rotation. Prefix with read,write,restore,sign: to scope a token.
         #[arg(long, env = "MORPH_HUB_AUTH_TOKEN", hide_env_values = true)]
         auth_token: Option<String>,
         /// Read the Morph Hub auth token from this file.

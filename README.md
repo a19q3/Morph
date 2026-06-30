@@ -192,10 +192,11 @@ rather than chain evidence.
 Morph Hub is token-first. Start with `--auth-token`, `--auth-token-file`,
 `--auth-token-stdin`, `--rotate-auth-token-on-restart`, or
 `MORPH_HUB_AUTH_TOKEN`; prefer the file, stdin, or rotate-on-restart modes so
-the shared secret is not left in shell history or environment dumps. Rotation is
-restart-based: start the hub with `--rotate-auth-token-on-restart`, copy the
-printed `morph_hub_auth_token=...` value into the browser unlock prompt, and
-stop using the old token. Scoped tokens are supported with
+the shared secret is not left in shell history, process listings, or environment
+dumps. Rotation is restart-based: start the hub with
+`--rotate-auth-token-on-restart`, copy the printed `morph_hub_auth_token=...`
+value into the browser unlock prompt, and stop using the old token. Scoped
+tokens are supported with
 `read,write,restore,sign:<secret>`; omit the prefix only for an all-scope token.
 For local development only, `--allow-unauthenticated-loopback` explicitly
 restores no-token loopback mode. Direct cross-origin browser access is disabled

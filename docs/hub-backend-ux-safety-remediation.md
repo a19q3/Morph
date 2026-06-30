@@ -39,13 +39,20 @@ for the current canonical state and the candidate canonical state. The final
 | H2 unbounded request pressure | Fixed for current deployment | Concurrent TCP connections, mutating requests, SSE streams, and mutating request rate are capped. The full-state JSON persist remains synchronous by design for crash durability. |
 | H3 state-file replace primitive | Fixed | Restore now has server-side preview, confirmation hash, empty-bootstrap gating, backup before commit, critical event, and UI confirmation tied to the server hash. |
 | H4 synchronous persist UX | Bounded | The synchronous temp+rename+fsync path is retained so a 200 response means durable state. Connection and mutation caps prevent runaway write storms. |
-| H5 error handling | Partially fixed | API errors now use structured JSON with `code` and `request_id`. Operator-facing validation details remain in the response for this single-tenant console. |
+| H5 error handling | Fixed for current deployment | API errors use structured JSON with `code` and `request_id`, every HTTP response carries `X-Morph-Hub-Request-Id`, and filesystem/lock internals are logged server-side instead of returned to the caller. Operator-facing validation details remain visible. |
 | H6 corrupt state recovery | Fixed | Startup parse failures now include the newest adjacent `.bak.*` candidate when present. Automatic rollback is intentionally not performed. |
-| M3 static asset path handling | Fixed | Existing static targets are canonicalised and must remain under the UI root, including the SPA fallback. |
-| M4 SSE fan-out | Fixed | Concurrent event streams are capped. Authenticated browser sessions continue to use polling because `EventSource` cannot send bearer headers. |
-| M5 invoice expiry bound | Fixed | Backend rejects invoice expiries above seven days; the UI validates against the server-reported limit. |
+| M1 HTTP parser ambiguity | Fixed | Duplicate `Content-Length`, unsupported `Transfer-Encoding`, and HTTP versions other than 1.0/1.1 are rejected. |
+| M2 static asset path handling | Fixed | Existing static targets are canonicalised and must remain under the UI root; raw NUL and percent-decoded parent traversal are rejected. |
+| M3 SSE fan-out | Fixed | Concurrent event streams are capped and SSE responses include the request-id header. Authenticated browser sessions continue to use polling because `EventSource` cannot send bearer headers. |
+| M4 invoice expiry bound | Fixed | Backend rejects invoice expiries above seven days; the UI validates against the server-reported limit. |
+| M5 CKB amount bounds | Fixed for CKB | CKB invoice, channel, and factory reserve quantities must fit in `u64`; xUDT quantities remain `u128`. |
+| M6 static cache headers | Fixed | Built assets receive long-lived immutable caching; `index.html` receives `no-cache, must-revalidate`. |
 | M7 watchtower alert re-read cost | Fixed | Alert-file reads are cached by path, modified time, and file length. |
+| M8 single-operator ambiguity | Documented in API | `HubView.security.single_operator` is now always true for this Hub model. |
+| L1 constant-time comparison | Left as is | The local helper remains non-early-return and is adequate for fixed-token comparisons. |
 | L2 startup rewrite | Fixed | Existing valid state files are no longer rewritten on every Hub start. |
+| L3 direct `--auth-token` process visibility | Fixed in help/docs | CLI help and README steer operators to file, stdin, or restart rotation because direct `--auth-token` is visible in process listings. |
+| L4 request correlation | Fixed | HTTP responses carry `X-Morph-Hub-Request-Id`; error JSON includes the same `request_id`. |
 | L5 CORS origin shape | Fixed | `--cors-origin` must be a concrete HTTP(S) origin without path, query, fragment, wildcard, or user info. |
 
 ## Verification
@@ -53,12 +60,16 @@ for the current canonical state and the candidate canonical state. The final
 The hardening pass added regression coverage for:
 
 - duplicate `Content-Length` rejection;
+- unsupported `Transfer-Encoding` and HTTP version rejection;
 - static symlink escape rejection;
+- percent-decoded static parent traversal rejection;
+- static response cache-control headers;
 - auth required without the explicit loopback escape hatch;
 - scoped-token denial for write and restore routes;
 - global mutation rate limiting;
 - concurrent mutation limiting;
 - invoice expiry ceiling;
+- CKB channel amount overflow rejection;
 - state-restore confirmation-hash mismatch;
 - existing restore backup and corruption-safety behaviours.
 

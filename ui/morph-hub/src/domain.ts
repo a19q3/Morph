@@ -53,6 +53,7 @@ export interface HubSecurity {
   auth_required: boolean;
   auth_mode: 'scoped_bearer' | 'explicit_unauthenticated_loopback';
   auth_scopes: Array<'read' | 'write' | 'restore' | 'sign'>;
+  single_operator: boolean;
   state_restore_enabled: boolean;
   invoice_signing_enabled: boolean;
   cors_origin?: string | null;
@@ -189,6 +190,7 @@ export const emptyState: NodeState = {
     auth_required: false,
     auth_mode: 'explicit_unauthenticated_loopback',
     auth_scopes: [],
+    single_operator: true,
     state_restore_enabled: false,
     invoice_signing_enabled: false,
     cors_origin: null,
