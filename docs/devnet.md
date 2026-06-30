@@ -89,12 +89,12 @@ reuse it for any production or real-assets environment.
 With the node running in another shell:
 
 ```sh
-cargo run -p morph-cli -- devnet check
-cargo run -p morph-cli -- devnet mine --blocks 1
-cargo run -p morph-cli -- devnet wait-tip 1 --timeout-secs 30
-cargo run -p morph-cli -- devnet deploy-contracts --json
-cargo run -p morph-cli -- devnet open-channel --json
-cargo run -p morph-cli -- devnet supersede-smoke --json
+cargo run -p morph-cli --features devnet -- devnet --devnet-only check
+cargo run -p morph-cli --features devnet -- devnet --devnet-only mine --blocks 1
+cargo run -p morph-cli --features devnet -- devnet --devnet-only wait-tip 1 --timeout-secs 30
+cargo run -p morph-cli --features devnet -- devnet --devnet-only deploy-contracts --json
+cargo run -p morph-cli --features devnet -- devnet --devnet-only open-channel --json
+cargo run -p morph-cli --features devnet -- devnet --devnet-only supersede-smoke --json
 ```
 
 The manual sequence proves that the CLI can talk to the node, mine blocks,
@@ -323,7 +323,7 @@ cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
 cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
 cargo run -p morph-cli -- print-watch-config-fixture > target/watch-config.json
 cargo run -p morph-cli -- validate-watch-config target/watch-config.json
-cargo run -p morph-cli -- devnet watch-config-once \
+cargo run -p morph-cli --features devnet -- devnet --devnet-only watch-config-once \
   --config target/watch-config.json \
   --private-key-file target/watchtower-owner.key \
   --json
@@ -332,7 +332,7 @@ cargo run -p morph-cli -- devnet watch-config-once \
 Run a bounded foreground service:
 
 ```sh
-cargo run -p morph-cli -- devnet watch-config-service \
+cargo run -p morph-cli --features devnet -- devnet --devnet-only watch-config-service \
   --config target/watch-config.json \
   --private-key-file target/watchtower-owner.key \
   --health-file target/watchtower-health.json \

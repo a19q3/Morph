@@ -3,7 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,6 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use k256::ecdsa::SigningKey;
 use morph_core::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -28,12 +29,14 @@ const MAX_WATCHTOWER_ALERTS: usize = 32;
 const WATCHTOWER_ALERT_SCHEMA: &str = "morph.watchtower_alert";
 const EVENT_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(1_000);
 const EVENT_STREAM_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const RPC_HEALTH_CACHE_TTL: Duration = Duration::from_secs(5);
 
 pub struct HubServeOptions {
     pub listen: String,
     pub state_path: PathBuf,
     pub pubkey: String,
     pub network: MorphNetwork,
+    pub invoice_private_key: Option<String>,
     pub ckb_rpc_url: Option<String>,
     pub watch_alert_file: Option<PathBuf>,
     pub ui_dir: PathBuf,
@@ -44,9 +47,11 @@ pub struct HubServeOptions {
 
 struct HubServer {
     store: Arc<Mutex<HubStore>>,
+    rpc_cache: Arc<Mutex<RpcHealthCache>>,
     ui_dir: PathBuf,
     ckb_rpc_url: Option<String>,
     watch_alert_file: Option<PathBuf>,
+    invoice_signing_key: Option<SigningKey>,
     auth_token: Option<String>,
     allow_state_restore: bool,
     cors_origin: Option<String>,
@@ -65,6 +70,18 @@ struct HubRuntimeState {
     peer_pubkeys: BTreeMap<Bytes32, String>,
     node: MorphNodeState,
     events: Vec<HubEvent>,
+}
+
+#[derive(Default)]
+struct RpcHealthCache {
+    value: Option<CachedRpcView>,
+    refresh_in_flight: bool,
+}
+
+struct CachedRpcView {
+    url: String,
+    checked_at: Instant,
+    view: RpcView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,6 +274,7 @@ struct HubView {
 struct HubSecurityView {
     auth_required: bool,
     state_restore_enabled: bool,
+    invoice_signing_enabled: bool,
     cors_origin: Option<String>,
 }
 
@@ -299,7 +317,7 @@ struct WatchtowerAlertView {
     provenance: RecordProvenanceView,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct RpcView {
     status: &'static str,
     url: Option<String>,
@@ -448,18 +466,33 @@ fn listen_host(listen: &str) -> Option<String> {
 pub fn serve(options: HubServeOptions) -> Result<()> {
     let auth_token = normalise_optional_secret(options.auth_token);
     let cors_origin = normalise_cors_origin(options.cors_origin)?;
+    let invoice_signing_key = options
+        .invoice_private_key
+        .as_deref()
+        .map(|value| parse_signing_key(value, "--invoice-private-key"))
+        .transpose()?;
+    if let Some(signing_key) = &invoice_signing_key {
+        let signing_pubkey = hex::encode(signing_key_pubkey_sec1(signing_key));
+        let configured_pubkey = canonical_pubkey(&options.pubkey)?;
+        ensure!(
+            signing_pubkey == configured_pubkey,
+            "--invoice-private-key must derive the same compressed public key as --pubkey"
+        );
+    }
     ensure!(
         listen_is_loopback(&options.listen) || auth_token.is_some(),
-        "serving Morph Hub on a non-loopback address requires --auth-token or MORPH_HUB_AUTH_TOKEN"
+        "serving Morph Hub on a non-loopback address requires --auth-token, --auth-token-file, --auth-token-stdin, --rotate-auth-token-on-restart, or MORPH_HUB_AUTH_TOKEN"
     );
     let listener = TcpListener::bind(&options.listen)
         .with_context(|| format!("failed to bind Morph hub to {}", options.listen))?;
     let store = HubStore::load_or_create(options.state_path, &options.pubkey, options.network)?;
     let server = Arc::new(HubServer {
         store: Arc::new(Mutex::new(store)),
+        rpc_cache: Arc::new(Mutex::new(RpcHealthCache::default())),
         ui_dir: options.ui_dir,
         ckb_rpc_url: options.ckb_rpc_url,
         watch_alert_file: options.watch_alert_file,
+        invoice_signing_key,
         auth_token,
         allow_state_restore: options.allow_state_restore,
         cors_origin,
@@ -490,9 +523,18 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
             "disabled"
         }
     );
+    println!(
+        "morph_hub_invoice_signing={}",
+        if server.invoice_signing_key.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
     if let Some(origin) = &server.cors_origin {
         println!("morph_hub_cors_origin={origin}");
     }
+    server.refresh_rpc_cache();
 
     for stream in listener.incoming() {
         let stream = stream.context("failed to accept Morph hub connection")?;
@@ -567,12 +609,51 @@ impl HubStore {
             network_label(candidate.state.node.network),
             network_label(self.state.node.network)
         );
-        candidate.push_event(
-            EventSeverity::Warning,
-            "state_restored",
-            None,
-            "Hub state file was replaced through the API",
-        )?;
+        ensure!(
+            !hub_state_has_operational_records(&self.state)
+                && !hub_state_has_operational_records(&candidate.state),
+            "state restore is limited to empty bootstrap state until chain-anchored restore is implemented"
+        );
+        ensure!(
+            candidate
+                .state
+                .node
+                .channels
+                .values()
+                .all(|channel| channel.phase != Phase::Settling),
+            "state restore refuses settling channels because restored state cannot be chain-anchored"
+        );
+        let attempted_completed_flows = candidate.state.node.completed_flows.clone();
+        candidate.state.node.completed_flows = candidate
+            .state
+            .node
+            .completed_flows
+            .intersection(&self.state.node.completed_flows)
+            .copied()
+            .collect();
+        let ignored_flows = attempted_completed_flows
+            .difference(&candidate.state.node.completed_flows)
+            .copied()
+            .map(flow_label)
+            .collect::<Vec<_>>();
+        let backup_path = backup_existing_state_file(&self.path)?;
+        let mut message = backup_path.map_or_else(
+            || {
+                "Hub state file was replaced through the API; no previous file existed to back up"
+                    .to_string()
+            },
+            |path| {
+                format!(
+                    "Hub state file was replaced through the API; previous state was backed up to {}",
+                    path.display()
+                )
+            },
+        );
+        if !ignored_flows.is_empty() {
+            message.push_str("; ignored restored completed_flows not present in live state: ");
+            message.push_str(&ignored_flows.join(", "));
+        }
+        candidate.push_event(EventSeverity::Critical, "state_restored", None, message)?;
         candidate.persist()?;
         *self = candidate;
         Ok(())
@@ -874,7 +955,7 @@ impl HubServer {
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/api/health") | ("GET", "/api/state") => self.state_response(),
             ("GET", "/api/state-file") => {
-                let store = self.store.lock().unwrap();
+                let store = self.store_lock()?;
                 let persisted = store.persisted()?;
                 Ok(json_response(200, "OK", &persisted))
             }
@@ -892,7 +973,7 @@ impl HubServer {
                 let rpc = self.rpc_view();
                 let security = self.security_view();
                 let watchtower = self.watchtower_view();
-                let mut store = self.store.lock().unwrap();
+                let mut store = self.store_lock()?;
                 store.replace(persisted)?;
                 let view = store.view(rpc, security, watchtower)?;
                 Ok(json_response(200, "OK", &view))
@@ -923,6 +1004,11 @@ impl HubServer {
                 Ok(())
             }),
             ("POST", "/api/invoices") => self.mutate(|store| {
+                let payee_signing_key = self.invoice_signing_key.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "invoice signing is disabled; restart Morph Hub with --invoice-private-key to create signed invoices"
+                    )
+                })?;
                 let body: CreateInvoiceRequest = parse_body(&request.body)?;
                 ensure!(
                     body.expiry_secs > 0,
@@ -962,7 +1048,7 @@ impl HubServer {
                     payment_preimage,
                     payment_hash,
                     description: body.description.trim().to_string(),
-                })?;
+                }, payee_signing_key)?;
                 store.push_event(
                     EventSeverity::Info,
                     "invoice_created",
@@ -976,18 +1062,12 @@ impl HubServer {
                 let stored = store
                     .state
                     .node
-                    .invoices
-                    .insert_decoded(body.encoded_invoice.trim())?;
-                store
-                    .state
-                    .node
-                    .completed_flows
-                    .insert(MorphBusinessFlow::InvoiceReceived);
+                    .receive_decoded_invoice(body.encoded_invoice.trim(), now_unix()?)?;
                 store.push_event(
                     EventSeverity::Info,
-                    "invoice_decoded",
+                    "invoice_received",
                     Some(stored.invoice.invoice_id),
-                    "Invoice decoded and stored",
+                    "Invoice decoded and marked as received",
                 )?;
                 Ok(())
             }),
@@ -1125,12 +1205,18 @@ impl HubServer {
     }
 
     fn latest_event_id(&self) -> u64 {
-        let store = self.store.lock().unwrap();
+        let Ok(store) = self.store.lock() else {
+            eprintln!("morph hub event stream failed: hub state lock is poisoned");
+            return 0;
+        };
         store.state.events.first().map_or(0, |event| event.id)
     }
 
     fn events_after(&self, last_event_id: u64) -> Vec<HubEvent> {
-        let store = self.store.lock().unwrap();
+        let Ok(store) = self.store.lock() else {
+            eprintln!("morph hub event stream failed: hub state lock is poisoned");
+            return Vec::new();
+        };
         let mut events = store
             .state
             .events
@@ -1299,7 +1385,7 @@ impl HubServer {
         let rpc = self.rpc_view();
         let security = self.security_view();
         let watchtower = self.watchtower_view();
-        let mut store = self.store.lock().unwrap();
+        let mut store = self.store_lock()?;
         let mut candidate = store.clone();
         f(&mut candidate)?;
         let view = candidate.view(rpc, security, watchtower)?;
@@ -1312,20 +1398,26 @@ impl HubServer {
         let rpc = self.rpc_view();
         let security = self.security_view();
         let watchtower = self.watchtower_view();
-        let store = self.store.lock().unwrap();
+        let store = self.store_lock()?;
         let view = store.view(rpc, security, watchtower)?;
         Ok(json_response(200, "OK", &view))
     }
 
+    fn store_lock(&self) -> Result<MutexGuard<'_, HubStore>> {
+        self.store
+            .lock()
+            .map_err(|_| anyhow!("hub state lock is poisoned"))
+    }
+
     fn auth_failure_response(&self, request: &HttpRequest) -> Option<HttpResponse> {
         let token = self.auth_token.as_ref()?;
-        let bearer = format!("Bearer {token}");
         let authorised = request
             .header("authorization")
-            .is_some_and(|value| value == bearer)
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()))
             || request
                 .header("x-morph-hub-token")
-                .is_some_and(|value| value == token);
+                .is_some_and(|value| constant_time_eq(value.as_bytes(), token.as_bytes()));
         (!authorised).then(|| {
             json_response(
                 401,
@@ -1339,6 +1431,7 @@ impl HubServer {
         HubSecurityView {
             auth_required: self.auth_token.is_some(),
             state_restore_enabled: self.allow_state_restore,
+            invoice_signing_enabled: self.invoice_signing_key.is_some(),
             cors_origin: self.cors_origin.clone(),
         }
     }
@@ -1353,26 +1446,72 @@ impl HubServer {
                 message: Some("start with --ckb-rpc-url to enable live chain health".to_string()),
             };
         };
-        match CkbRpcClient::new_health_check(url.clone()).and_then(|client| client.status()) {
-            Ok(status) => RpcView {
-                status: if status.node.active {
-                    "connected"
-                } else {
-                    "degraded"
-                },
-                url: Some(url),
-                tip_height: status.tip.number_value().ok(),
-                chain: Some(status.chain.chain),
-                message: None,
-            },
-            Err(err) => RpcView {
-                status: "offline",
-                url: Some(url),
+        let (view, should_refresh) = {
+            let Ok(mut cache) = self.rpc_cache.lock() else {
+                return RpcView {
+                    status: "offline",
+                    url: Some(url),
+                    tip_height: None,
+                    chain: None,
+                    message: Some("RPC health cache is unavailable".to_string()),
+                };
+            };
+            let (cached_view, stale) = match cache.value.as_ref().filter(|cached| cached.url == url)
+            {
+                Some(cached) => (
+                    Some(cached.view.clone()),
+                    cached.checked_at.elapsed() >= RPC_HEALTH_CACHE_TTL,
+                ),
+                None => (None, true),
+            };
+            let should_refresh = stale && !cache.refresh_in_flight;
+            if should_refresh {
+                cache.refresh_in_flight = true;
+            }
+            let view = cached_view.unwrap_or_else(|| RpcView {
+                status: "degraded",
+                url: Some(url.clone()),
                 tip_height: None,
                 chain: None,
-                message: Some(err.to_string()),
-            },
+                message: Some("CKB RPC health check is pending".to_string()),
+            });
+            (view, should_refresh)
+        };
+        if should_refresh {
+            self.spawn_rpc_refresh(url);
         }
+        view
+    }
+
+    fn refresh_rpc_cache(&self) {
+        let Some(url) = self.ckb_rpc_url.clone() else {
+            return;
+        };
+        let Ok(mut cache) = self.rpc_cache.lock() else {
+            return;
+        };
+        if cache.refresh_in_flight {
+            return;
+        }
+        cache.refresh_in_flight = true;
+        drop(cache);
+        self.spawn_rpc_refresh(url);
+    }
+
+    fn spawn_rpc_refresh(&self, url: String) {
+        let cache = Arc::clone(&self.rpc_cache);
+        thread::spawn(move || {
+            let view = probe_rpc_view(url.clone());
+            let Ok(mut cache) = cache.lock() else {
+                return;
+            };
+            cache.value = Some(CachedRpcView {
+                url,
+                checked_at: Instant::now(),
+                view,
+            });
+            cache.refresh_in_flight = false;
+        });
     }
 
     fn watchtower_view(&self) -> WatchtowerView {
@@ -1464,6 +1603,7 @@ fn ensure_peer(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn channel_from_request(
     channel_id: &str,
     counterparty_node_id: Bytes32,
@@ -1491,6 +1631,25 @@ fn channel_from_request(
     })
 }
 
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+    diff == 0
+}
+
+fn hub_state_has_operational_records(state: &HubRuntimeState) -> bool {
+    !state.node.peers.is_empty()
+        || !state.node.channels.is_empty()
+        || !state.node.factories.is_empty()
+        || state.node.invoices.records().next().is_some()
+        || !state.node.completed_flows.is_empty()
+}
+
 fn split_action_path<'a>(path: &'a str, prefix: &str) -> Result<(Bytes32, &'a str)> {
     let suffix = path
         .strip_prefix(prefix)
@@ -1499,6 +1658,56 @@ fn split_action_path<'a>(path: &'a str, prefix: &str) -> Result<(Bytes32, &'a st
         .split_once('/')
         .ok_or_else(|| anyhow!("action path must include an id and action"))?;
     Ok((parse_bytes32("id", id)?, action))
+}
+
+fn probe_rpc_view(url: String) -> RpcView {
+    match CkbRpcClient::new_health_check(url.clone()).and_then(|client| client.status()) {
+        Ok(status) => RpcView {
+            status: if status.node.active {
+                "connected"
+            } else {
+                "degraded"
+            },
+            url: Some(url),
+            tip_height: status.tip.number_value().ok(),
+            chain: Some(status.chain.chain),
+            message: None,
+        },
+        Err(err) => RpcView {
+            status: "offline",
+            url: Some(url),
+            tip_height: None,
+            chain: None,
+            message: Some(err.to_string()),
+        },
+    }
+}
+
+fn backup_existing_state_file(path: &Path) -> Result<Option<PathBuf>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("hub state path must include a file name"))?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time is before Unix epoch")?
+        .as_nanos();
+    let backup_path = path.with_file_name(format!(
+        "{file_name}.bak.{timestamp}.{}",
+        std::process::id()
+    ));
+    let data = fs::read(path)
+        .with_context(|| format!("failed to read current hub state {}", path.display()))?;
+    let mut file = create_private_new_file(&backup_path)?;
+    file.write_all(&data)
+        .with_context(|| format!("failed to write state backup {}", backup_path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("failed to sync state backup {}", backup_path.display()))?;
+    sync_parent_dir(&backup_path)?;
+    Ok(Some(backup_path))
 }
 
 fn write_private_file_atomic(path: &Path, data: &[u8]) -> Result<()> {
@@ -1608,6 +1817,23 @@ fn parse_pubkey_bytes(value: &str) -> Result<[u8; 33]> {
     k256::PublicKey::from_sec1_bytes(&out)
         .map_err(|_| anyhow!("pubkey is not a valid secp256k1 public key"))?;
     Ok(out)
+}
+
+fn parse_signing_key(value: &str, label: &str) -> Result<SigningKey> {
+    let value = value.trim();
+    ensure!(!value.is_empty(), "{label} must not be empty");
+    let raw = hex::decode(value.strip_prefix("0x").unwrap_or(value))
+        .with_context(|| format!("{label} must be hex encoded"))?;
+    ensure!(raw.len() == 32, "{label} must be 32 bytes");
+    SigningKey::from_slice(&raw)
+        .map_err(|err| anyhow!("{label} is not a valid secp256k1 private key: {err:?}"))
+}
+
+fn signing_key_pubkey_sec1(signing_key: &SigningKey) -> [u8; 33] {
+    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let mut out = [0u8; 33];
+    out.copy_from_slice(encoded.as_bytes());
+    out
 }
 
 fn parse_bytes32(label: &str, value: &str) -> Result<Bytes32> {
@@ -1923,16 +2149,15 @@ fn channel_view(
 
 fn invoice_view(
     stored: &StoredMorphInvoice,
-    local_node_id: Bytes32,
-    local_pubkey: &str,
+    _local_node_id: Bytes32,
+    _local_pubkey: &str,
 ) -> InvoiceView {
     InvoiceView {
         invoice_id: hex_prefixed(&stored.invoice.invoice_id),
         encoded_invoice: stored.encoded_invoice.clone(),
         status: invoice_status_label(stored.status),
         network: network_label(stored.invoice.network),
-        payee_pubkey: (stored.invoice.payee_node_id == local_node_id)
-            .then(|| local_pubkey.to_string()),
+        payee_pubkey: Some(hex::encode(&stored.invoice.payee_pubkey_sec1)),
         payee_node_id: hex_prefixed(&stored.invoice.payee_node_id),
         channel_id: stored.invoice.channel_id.map(|id| hex_prefixed(&id)),
         asset: asset_view(&stored.invoice.asset),
@@ -2145,6 +2370,43 @@ fn phase_label(phase: Phase) -> &'static str {
     }
 }
 
+fn invoice_status_label(status: MorphInvoiceStatus) -> &'static str {
+    match status {
+        MorphInvoiceStatus::Open => "open",
+        MorphInvoiceStatus::Received => "received",
+        MorphInvoiceStatus::Paid => "paid",
+        MorphInvoiceStatus::Cancelled => "cancelled",
+        MorphInvoiceStatus::Expired => "expired",
+    }
+}
+
+fn flow_label(flow: MorphBusinessFlow) -> &'static str {
+    match flow {
+        MorphBusinessFlow::PeerConnected => "peer",
+        MorphBusinessFlow::InvoiceCreated => "invoice-created",
+        MorphBusinessFlow::InvoiceReceived => "invoice-received",
+        MorphBusinessFlow::InvoiceSettled => "invoice-settled",
+        MorphBusinessFlow::ChannelOpened => "channel-opened",
+        MorphBusinessFlow::StatePublished => "state-published",
+        MorphBusinessFlow::ChannelFinalised => "channel-finalised",
+        MorphBusinessFlow::ChannelSpliced => "channel-spliced",
+        MorphBusinessFlow::FactoryOpened => "factory-opened",
+        MorphBusinessFlow::FactoryAdvanced => "factory-advanced",
+        MorphBusinessFlow::FactoryChildMaterialised => "factory-child",
+    }
+}
+
+fn hex_prefixed(bytes: &[u8]) -> String {
+    format!("0x{}", hex::encode(bytes))
+}
+
+fn now_unix() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time is before Unix epoch")?
+        .as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2179,7 +2441,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn hub_state_file_is_owner_only_after_sensitive_invoice_persist() {
+    fn hub_state_file_is_owner_only_and_redacts_invoice_preimage() {
         let local_pubkey = pubkey_from_scalar(1);
         let server = test_server(&local_pubkey);
         let path = server.store.lock().unwrap().path.clone();
@@ -2201,7 +2463,13 @@ mod tests {
         assert_eq!(state_file_mode(&path), 0o600);
 
         let persisted = fs::read_to_string(&path).unwrap();
-        assert!(persisted.contains("payment_preimage"));
+        assert!(!persisted.contains("payment_preimage"));
+        assert!(!persisted.contains(&bytes32_hex(51)));
+
+        let state_file = route_empty(&server, "GET", "/api/state-file");
+        let exported = String::from_utf8(state_file.body).unwrap();
+        assert!(!exported.contains("payment_preimage"));
+        assert!(!exported.contains(&bytes32_hex(51)));
     }
 
     #[test]
@@ -2230,7 +2498,7 @@ mod tests {
         let response = route_json(
             &server,
             "POST",
-            &format!("/api/factories/{factory_id}/materialise-child"),
+            format!("/api/factories/{factory_id}/materialise-child"),
             json!({
                 "child_channel_id": child_id,
                 "counterparty_pubkey": peer_two_pubkey.as_str(),
@@ -2258,7 +2526,7 @@ mod tests {
         let response = route_json(
             &server,
             "POST",
-            &format!("/api/factories/{factory_id}/materialise-child"),
+            format!("/api/factories/{factory_id}/materialise-child"),
             json!({
                 "child_channel_id": child_id,
                 "counterparty_pubkey": peer_one_pubkey.as_str(),
@@ -2311,6 +2579,89 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("--allow-state-restore")
+        );
+    }
+
+    #[test]
+    fn state_restore_creates_private_backup_before_commit() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server_with_options(&local_pubkey, None, true, None);
+        let path = server.store.lock().unwrap().path.clone();
+        let original = fs::read(&path).unwrap();
+        let state_file = route_empty(&server, "GET", "/api/state-file");
+        let persisted: serde_json::Value = serde_json::from_slice(&state_file.body).unwrap();
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 200);
+        let backup_paths = state_backup_paths(&path);
+        assert_eq!(backup_paths.len(), 1, "expected one backup for {path:?}");
+        assert_eq!(fs::read(&backup_paths[0]).unwrap(), original);
+        #[cfg(unix)]
+        assert_eq!(state_file_mode(&backup_paths[0]), 0o600);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let event = &body["events"].as_array().unwrap()[0];
+        assert_eq!(event["event"].as_str(), Some("state_restored"));
+        assert_eq!(event["severity"].as_str(), Some("critical"));
+        assert!(
+            event["message"]
+                .as_str()
+                .unwrap()
+                .contains("previous state was backed up")
+        );
+    }
+
+    #[test]
+    fn state_restore_cannot_inject_completed_flows() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server_with_options(&local_pubkey, None, true, None);
+        let state_file = route_empty(&server, "GET", "/api/state-file");
+        let mut persisted: serde_json::Value = serde_json::from_slice(&state_file.body).unwrap();
+        persisted["completed_flows"] =
+            json!([serde_json::to_value(MorphBusinessFlow::PeerConnected).unwrap()]);
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("empty bootstrap state")
+        );
+
+        let state_file = route_empty(&server, "GET", "/api/state-file");
+        let persisted: serde_json::Value = serde_json::from_slice(&state_file.body).unwrap();
+        assert_eq!(persisted["completed_flows"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn state_restore_rejects_replacing_operational_state() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let peer_pubkey = pubkey_from_scalar(2);
+        let server = test_server_with_options(&local_pubkey, None, true, None);
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/peers",
+            json!({ "pubkey": peer_pubkey, "alias": "peer" }),
+        );
+        assert_eq!(response.status, 200);
+        let state_file = route_empty(&server, "GET", "/api/state-file");
+        let mut persisted: serde_json::Value = serde_json::from_slice(&state_file.body).unwrap();
+        persisted["peers"] = json!([]);
+        persisted["completed_flows"] = json!([]);
+
+        let response = route_json(&server, "PUT", "/api/state-file", persisted);
+
+        assert_eq!(response.status, 400);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("empty bootstrap state")
         );
     }
 
@@ -2587,6 +2938,58 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|flow| flow.as_str() == Some("invoice-settled"))
+        );
+    }
+
+    #[test]
+    fn decode_invoice_marks_status_received() {
+        let local_pubkey = pubkey_from_scalar(1);
+        let server = test_server(&local_pubkey);
+        let created_at_unix = now_unix().unwrap();
+        let payee_key = signing_key_from_scalar(9);
+        let invoice = MorphInvoice::new_signed(
+            NewMorphInvoice {
+                network: MorphNetwork::Devnet,
+                payee_node_id: blake2b256(
+                    payee_key.verifying_key().to_encoded_point(true).as_bytes(),
+                ),
+                channel_id: None,
+                asset: MorphAsset::Ckb,
+                amount: 100_000_000,
+                created_at_unix,
+                expires_at_unix: created_at_unix + 3600,
+                payment_preimage: Some([11u8; 32]),
+                payment_hash: None,
+                description: "decoded invoice".to_string(),
+            },
+            &payee_key,
+        )
+        .unwrap();
+
+        let response = route_json(
+            &server,
+            "POST",
+            "/api/invoices/decode",
+            json!({ "encoded_invoice": invoice.encode() }),
+        );
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        let invoice_id = hex_prefixed(&invoice.invoice_id);
+        let decoded = body["invoices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["invoice_id"].as_str() == Some(invoice_id.as_str()))
+            .expect("decoded invoice should be returned");
+        assert_eq!(decoded["status"].as_str(), Some("received"));
+        assert!(decoded["received_at_unix"].as_u64().is_some());
+        assert!(
+            body["completed_flows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|flow| flow.as_str() == Some("invoice-received"))
         );
     }
 
@@ -2911,9 +3314,11 @@ mod tests {
         let store = HubStore::load_or_create(path, local_pubkey, MorphNetwork::Devnet).unwrap();
         HubServer {
             store: Arc::new(Mutex::new(store)),
+            rpc_cache: Arc::new(Mutex::new(RpcHealthCache::default())),
             ui_dir: PathBuf::from("ui/morph-hub/dist"),
             ckb_rpc_url: None,
             watch_alert_file: None,
+            invoice_signing_key: test_signing_key_for_pubkey(local_pubkey),
             auth_token: auth_token.map(str::to_string),
             allow_state_restore,
             cors_origin: cors_origin.map(str::to_string),
@@ -3015,6 +3420,23 @@ mod tests {
         ))
     }
 
+    fn state_backup_paths(path: &Path) -> Vec<PathBuf> {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let prefix = format!("{}.bak.", path.file_name().unwrap().to_string_lossy());
+        let mut backups = fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(&prefix))
+            })
+            .collect::<Vec<_>>();
+        backups.sort();
+        backups
+    }
+
     fn pubkey_from_scalar(value: u8) -> String {
         let mut bytes = [0u8; 32];
         bytes[31] = value;
@@ -3026,41 +3448,16 @@ mod tests {
                 .as_bytes(),
         )
     }
-}
 
-fn invoice_status_label(status: MorphInvoiceStatus) -> &'static str {
-    match status {
-        MorphInvoiceStatus::Open => "open",
-        MorphInvoiceStatus::Received => "received",
-        MorphInvoiceStatus::Paid => "paid",
-        MorphInvoiceStatus::Cancelled => "cancelled",
-        MorphInvoiceStatus::Expired => "expired",
+    fn signing_key_from_scalar(value: u8) -> k256::ecdsa::SigningKey {
+        let mut bytes = [0u8; 32];
+        bytes[31] = value;
+        k256::ecdsa::SigningKey::from_bytes((&bytes).into()).unwrap()
     }
-}
 
-fn flow_label(flow: MorphBusinessFlow) -> &'static str {
-    match flow {
-        MorphBusinessFlow::PeerConnected => "peer",
-        MorphBusinessFlow::InvoiceCreated => "invoice-created",
-        MorphBusinessFlow::InvoiceReceived => "invoice-received",
-        MorphBusinessFlow::InvoiceSettled => "invoice-settled",
-        MorphBusinessFlow::ChannelOpened => "channel-opened",
-        MorphBusinessFlow::StatePublished => "state-published",
-        MorphBusinessFlow::ChannelFinalised => "channel-finalised",
-        MorphBusinessFlow::ChannelSpliced => "channel-spliced",
-        MorphBusinessFlow::FactoryOpened => "factory-opened",
-        MorphBusinessFlow::FactoryAdvanced => "factory-advanced",
-        MorphBusinessFlow::FactoryChildMaterialised => "factory-child",
+    fn test_signing_key_for_pubkey(pubkey: &str) -> Option<k256::ecdsa::SigningKey> {
+        (1..=u8::MAX)
+            .find(|value| pubkey_from_scalar(*value) == pubkey)
+            .map(signing_key_from_scalar)
     }
-}
-
-fn hex_prefixed(bytes: &[u8]) -> String {
-    format!("0x{}", hex::encode(bytes))
-}
-
-fn now_unix() -> Result<u64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system time is before Unix epoch")?
-        .as_secs())
 }

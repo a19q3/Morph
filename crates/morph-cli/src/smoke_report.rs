@@ -34,6 +34,7 @@ pub struct DevnetSmokeSummary {
     pub factory_local_exits: Vec<FactoryLocalExitEvidenceSummary>,
     pub factory_splices: Vec<FactorySpliceEvidenceSummary>,
     pub splice_payouts: Vec<SplicePayoutEvidenceSummary>,
+    pub sponsor_policies: Vec<SponsorPolicySummary>,
     pub totals: MetricTotals,
 }
 
@@ -235,6 +236,19 @@ pub struct SplicePayoutEvidenceSummary {
     pub withdrawal_out_point: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SponsorPolicySummary {
+    pub check: String,
+    pub path: String,
+    pub min_state_number: u64,
+    pub max_state_number: u64,
+    pub state_number_span: u64,
+    pub max_fee_per_tx: u64,
+    pub max_total_fee: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legacy_expiry: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MetricTotals {
     pub transaction_count: usize,
@@ -403,6 +417,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
     let mut factory_local_exits = Vec::new();
     let mut factory_splices = Vec::new();
     let mut splice_payouts = Vec::new();
+    let mut sponsor_policies = Vec::new();
     {
         let mut collections = SmokeCollections {
             transactions: &mut transactions,
@@ -415,6 +430,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
             factory_local_exits: &mut factory_local_exits,
             factory_splices: &mut factory_splices,
             splice_payouts: &mut splice_payouts,
+            sponsor_policies: &mut sponsor_policies,
         };
         for path in &json_paths {
             let relative = path
@@ -460,6 +476,7 @@ pub fn summarize_devnet_smoke(dir: &Path) -> Result<DevnetSmokeSummary> {
         factory_local_exits,
         factory_splices,
         splice_payouts,
+        sponsor_policies,
         totals,
     })
 }
@@ -1884,6 +1901,29 @@ pub fn render_markdown(summary: &DevnetSmokeSummary) -> String {
     }
     out.push('\n');
 
+    out.push_str("## Sponsor Policies\n\n");
+    if summary.sponsor_policies.is_empty() {
+        out.push_str("No sponsor policy evidence was recorded.\n");
+    } else {
+        out.push_str(
+            "| Check | Path | Min state | Max state | Span | Max fee/tx | Max total fee |\n",
+        );
+        out.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: |\n");
+        for policy in &summary.sponsor_policies {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                table_cell(&policy.check),
+                table_cell(&policy.path),
+                policy.min_state_number,
+                policy.max_state_number,
+                policy.state_number_span,
+                policy.max_fee_per_tx,
+                policy.max_total_fee
+            ));
+        }
+    }
+    out.push('\n');
+
     out.push_str("## Script Failures\n\n");
     if summary.script_failures.is_empty() {
         out.push_str("No expected script failures were recorded.\n");
@@ -2486,6 +2526,7 @@ struct SmokeCollections<'a> {
     factory_local_exits: &'a mut Vec<FactoryLocalExitEvidenceSummary>,
     factory_splices: &'a mut Vec<FactorySpliceEvidenceSummary>,
     splice_payouts: &'a mut Vec<SplicePayoutEvidenceSummary>,
+    sponsor_policies: &'a mut Vec<SponsorPolicySummary>,
 }
 
 fn collect_from_value(
@@ -2504,6 +2545,10 @@ fn collect_from_value(
 
     if let Some(payout) = splice_payout_from_object(check, path, object) {
         collections.splice_payouts.push(payout);
+    }
+
+    if let Some(policy) = sponsor_policy_from_object(check, path, object) {
+        collections.sponsor_policies.push(policy);
     }
 
     if let Some(Value::Object(failure)) = object.get("script_failure") {
@@ -2791,6 +2836,25 @@ fn splice_payout_from_object(
     })
 }
 
+fn sponsor_policy_from_object(
+    check: &str,
+    path: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Option<SponsorPolicySummary> {
+    let min_state_number = object.get("min_state_number")?.as_u64()?;
+    let max_state_number = object.get("max_state_number")?.as_u64()?;
+    Some(SponsorPolicySummary {
+        check: check.to_string(),
+        path: path.to_string(),
+        min_state_number,
+        max_state_number,
+        state_number_span: max_state_number.saturating_sub(min_state_number),
+        max_fee_per_tx: object.get("max_fee_per_tx")?.as_u64()?,
+        max_total_fee: object.get("max_total_fee")?.as_u64()?,
+        legacy_expiry: object.get("expiry").and_then(|value| value.as_u64()),
+    })
+}
+
 fn out_point_string_from_value(value: &Value) -> Option<String> {
     let object = value.as_object()?;
     let tx_hash = string_field(object, "tx_hash")?;
@@ -3034,6 +3098,13 @@ mod tests {
               "tx_hash": "0xabc",
               "status": "Committed",
               "block_number": 7,
+              "sponsor_policy": {
+                "min_state_number": 1,
+                "max_state_number": 1048576,
+                "max_fee_per_tx": 100,
+                "max_total_fee": 200,
+                "expiry": 18446744073709551615
+              },
               "metrics": {
                 "estimated_cycles": 11,
                 "tx_size_bytes": 22
@@ -3294,6 +3365,9 @@ mod tests {
         assert!(summary.json_checks.contains(&"open".to_string()));
         assert_eq!(summary.transactions.len(), 5);
         assert_eq!(summary.script_failures.len(), 1);
+        assert_eq!(summary.sponsor_policies.len(), 1);
+        assert_eq!(summary.sponsor_policies[0].path, "$.sponsor_policy");
+        assert_eq!(summary.sponsor_policies[0].state_number_span, 1_048_575);
         assert_eq!(summary.deployed_scripts.len(), 1);
         assert_eq!(summary.deployed_scripts[0].name, "morph-state-lock");
         assert_eq!(summary.factory_local_exits.len(), 1);
@@ -3365,6 +3439,7 @@ mod tests {
         assert!(markdown.contains("0xabc"));
         assert!(markdown.contains("Deployed Scripts"));
         assert!(markdown.contains("Splice Payouts"));
+        assert!(markdown.contains("Sponsor Policies"));
         assert!(markdown.contains("Watchtower Alerts"));
         assert!(markdown.contains("Watchtower Service"));
         assert!(markdown.contains("Factory Reduced-Rights Updates"));
@@ -3785,6 +3860,7 @@ mod tests {
             factory_local_exits: Vec::new(),
             factory_splices: Vec::new(),
             splice_payouts: Vec::new(),
+            sponsor_policies: Vec::new(),
             totals: MetricTotals::default(),
         };
         let mut candidate = baseline.clone();
@@ -4188,6 +4264,7 @@ mod tests {
                     true,
                 ),
             ],
+            sponsor_policies: Vec::new(),
             deployed_scripts: deployed_scripts(),
             totals: MetricTotals {
                 transaction_count: 70,

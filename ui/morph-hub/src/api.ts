@@ -69,9 +69,9 @@ async function readError(response: Response): Promise<string> {
   if (!text) return `${response.status} ${response.statusText}`;
   try {
     const parsed = JSON.parse(text) as { error?: string };
-    return parsed.error ?? text;
+    return parsed.error ? `${response.status} ${response.statusText}: ${parsed.error}` : `${response.status} ${response.statusText}: ${text}`;
   } catch {
-    return text;
+    return `${response.status} ${response.statusText}: ${text}`;
   }
 }
 

@@ -33,6 +33,8 @@ export interface Asset {
   type_hash?: Hex32;
 }
 
+export const MAX_CKB_INVOICE_AMOUNT = '18446744073709551615';
+
 export interface Balance {
   asset: Asset;
   local: string;
@@ -50,6 +52,7 @@ export interface RecordProvenance {
 export interface HubSecurity {
   auth_required: boolean;
   state_restore_enabled: boolean;
+  invoice_signing_enabled: boolean;
   cors_origin?: string | null;
 }
 
@@ -175,7 +178,7 @@ export const emptyState: NodeState = {
   network: 'devnet',
   state_path: '',
   rpc: { status: 'offline', message: 'API not loaded' },
-  security: { auth_required: false, state_restore_enabled: false, cors_origin: null },
+  security: { auth_required: false, state_restore_enabled: false, invoice_signing_enabled: false, cors_origin: null },
   provenance: {
     source: 'hub_state_file',
     chain_status: 'not_chain_verified',
@@ -309,6 +312,14 @@ export function assertPositiveInteger(value: string, label: string): string {
   if (!/^[0-9]+$/.test(trimmed)) throw new Error(`${label} must be an unsigned integer.`);
   if (BigInt(trimmed) === 0n) throw new Error(`${label} must be greater than zero.`);
   return trimmed;
+}
+
+export function assertInvoiceAmount(value: string, asset: Asset): string {
+  const amount = assertPositiveInteger(value, 'Amount');
+  if (asset.kind === 'ckb' && BigInt(amount) > BigInt(MAX_CKB_INVOICE_AMOUNT)) {
+    throw new Error(`Amount must be at most ${MAX_CKB_INVOICE_AMOUNT} shannons for CKB invoices.`);
+  }
+  return amount;
 }
 
 export function assertNonNegativeInteger(value: string, label: string): string {

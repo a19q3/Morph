@@ -24,7 +24,7 @@ kind/body/digest envelope.
 | Vault or monitor accepts bytes that decode as `StateHeader` | Value and monitoring authority comes from an authentic Morph StateCell identity | `state_authority_authenticity` |
 | Raw `u64` since comparison weakens challenge maturity | Finalisation maturity is a canonical relative CKB since condition | `canonical_relative_maturity` |
 | StateCell can be retired while value remains locked | State-track retirement cannot orphan channel or child-channel value | `state_retirement_non_orphaning` |
-| Descriptor changes can drift away from signed state | Descriptor evolution is signed and finalise uses the current authentic commitment | `signed_descriptor_evolution` |
+| Descriptor changes can drift away from the current state context | Descriptor commitments are signed, preserved across supersession, and finalise uses the current authentic commitment | `signed_descriptor_evolution` |
 | Merkle locality proof is treated as minting authority | Non-interference proves locality only, not value creation | `non_interference_not_authorisation` |
 | Reserve claim delta and child-vault release are not equal | Factory value-bearing rights, FactoryVault, and child vault deltas are bound | `factory_value_delta_binding` |
 | FactoryVault splice checks signed token delta but not the full materialised Cell shape | Signed FactoryVault descriptors bind actual lock, capacity, type, and amount on-chain | `factory_value_delta_binding`, `typed_asset_binding` |

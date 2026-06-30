@@ -35,7 +35,7 @@ This separation is the core idea from the paper:
 
 - the vault protects user value;
 - the state cell says which state can settle that value;
-- sponsor funds pay for publication and fee bumping;
+- sponsor funds pay bounded fees for state publication and supersede;
 - factory state tracks shared reserve rights without exposing every unrelated
   participant detail on every local action.
 
@@ -189,12 +189,17 @@ keeps channel, invoice, peer, and factory rows clearly marked as local Hub state
 rather than chain evidence.
 
 Morph Hub is loopback-first. Binding to anything other than loopback requires
-`--auth-token` or `MORPH_HUB_AUTH_TOKEN`; direct cross-origin browser access is
-disabled unless `--cors-origin` is set to an explicit `http://` or `https://`
-origin. Replacing the durable state file through the UI/API is disabled by
-default; add `--allow-state-restore` only when you intentionally need that
-operator recovery path. Rows shown in the console are labelled as local Hub
-state unless future chain evidence fields prove otherwise.
+`--auth-token`, `--auth-token-file`, `--auth-token-stdin`,
+`--rotate-auth-token-on-restart`, or `MORPH_HUB_AUTH_TOKEN`; prefer the file,
+stdin, or rotate-on-restart modes so the shared secret is not left in shell
+history or environment dumps. Rotation is restart-based: start the hub with
+`--rotate-auth-token-on-restart`, copy the printed `morph_hub_auth_token=...`
+value into the browser unlock prompt, and stop using the old token. Direct
+cross-origin browser access is disabled unless `--cors-origin` is set to an
+explicit `http://` or `https://` origin. Replacing the durable state file through
+the UI/API is disabled by default; add `--allow-state-restore` only when you
+intentionally need that operator recovery path. Rows shown in the console are
+labelled as local Hub state unless future chain evidence fields prove otherwise.
 
 The console keeps itself current while it is open. Loopback/no-token sessions
 use `/api/events` server-sent events; token-protected sessions use authenticated
@@ -205,15 +210,15 @@ browser session.
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 
 ```sh
-cargo run -p morph-cli -- devnet check
-cargo run -p morph-cli -- devnet mine --blocks 1
-cargo run -p morph-cli -- devnet deploy-contracts
-cargo run -p morph-cli -- devnet open-channel
-cargo run -p morph-cli -- devnet supersede-smoke
-cargo run -p morph-cli -- devnet xudt-smoke
-cargo run -p morph-cli -- devnet factory-reduced-rights-smoke
-cargo run -p morph-cli -- devnet factory-merkle-update-smoke
-cargo run -p morph-cli -- devnet factory-reduced-exit-smoke
+cargo run -p morph-cli --features devnet -- devnet --devnet-only check
+cargo run -p morph-cli --features devnet -- devnet --devnet-only mine --blocks 1
+cargo run -p morph-cli --features devnet -- devnet --devnet-only deploy-contracts
+cargo run -p morph-cli --features devnet -- devnet --devnet-only open-channel
+cargo run -p morph-cli --features devnet -- devnet --devnet-only supersede-smoke
+cargo run -p morph-cli --features devnet -- devnet --devnet-only xudt-smoke
+cargo run -p morph-cli --features devnet -- devnet --devnet-only factory-reduced-rights-smoke
+cargo run -p morph-cli --features devnet -- devnet --devnet-only factory-merkle-update-smoke
+cargo run -p morph-cli --features devnet -- devnet --devnet-only factory-reduced-exit-smoke
 make devnet-smoke
 make devnet-e2e
 make devnet-stateful-e2e
@@ -271,7 +276,7 @@ cargo run -p morph-cli -- print-watch-policy-fixture > target/watch-policy.json
 cargo run -p morph-cli -- validate-watch-policy target/watch-policy.json
 cargo run -p morph-cli -- print-watch-config-fixture > target/watch-config.json
 cargo run -p morph-cli -- validate-watch-config target/watch-config.json
-cargo run -p morph-cli -- devnet watch-config-once \
+cargo run -p morph-cli --features devnet -- devnet --devnet-only watch-config-once \
   --config target/watch-config.json \
   --private-key-file target/watchtower-owner.key \
   --json

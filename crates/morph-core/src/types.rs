@@ -14,9 +14,13 @@ pub enum Mode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Phase {
+    /// Host-side pre-State-Cell lifecycle label; not accepted by current on-chain State headers.
     Funding,
+    /// Current on-chain active State phase.
     Active,
+    /// Current on-chain settling State phase.
     Settling,
+    /// Host-side terminal lifecycle label after local finalisation; not emitted as a State type phase.
     Closed,
 }
 
@@ -26,13 +30,12 @@ pub enum ChannelOperation {
     Publish,
     Supersede,
     Finalise,
-    CooperativeClose,
     Splice,
     Materialise,
 }
 
 impl ChannelOperation {
-    pub const fn is_publication_or_challenge(self) -> bool {
+    pub const fn is_publication_or_supersede(self) -> bool {
         matches!(self, Self::Publish | Self::Supersede)
     }
 }
@@ -53,15 +56,16 @@ pub struct StateHeader {
     pub asset_registry_commitment: Bytes32,
     pub settlement_descriptor_commitment: Bytes32,
     pub descriptor_version: u16,
-    pub payload_commitment: Bytes32,
+    #[serde(alias = "payload_commitment")]
+    pub vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
     pub state_layout_version: u16,
 }
 
 impl StateHeader {
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
-        // payload_commitment is profile-specific: in the bilateral plain
-        // profile it tracks vault materialisation and may change at splice.
+        // In the bilateral plain profile this is the root of the materialised
+        // vault state and may change at splice.
         self.protocol_version == next.protocol_version
             && self.chain_id == next.chain_id
             && self.signature_scheme_id == next.signature_scheme_id
@@ -72,6 +76,8 @@ impl StateHeader {
             && self.mode == next.mode
             && self.participants_commitment == next.participants_commitment
             && self.asset_registry_commitment == next.asset_registry_commitment
+            && self.settlement_descriptor_commitment == next.settlement_descriptor_commitment
+            && self.descriptor_version == next.descriptor_version
             && self.challenge_policy_commitment == next.challenge_policy_commitment
             && self.state_layout_version == next.state_layout_version
     }
@@ -128,7 +134,6 @@ pub struct SponsorPolicy {
     pub max_fee_per_tx: Capacity,
     pub max_total_fee: Capacity,
     pub already_spent: Capacity,
-    pub expiry: u64,
     pub publication_state_type_hash: Bytes32,
     pub change_lock: Bytes32,
 }
@@ -501,8 +506,10 @@ pub struct SpliceHeader {
     pub new_vault_commitment: Bytes32,
     pub asset_delta_commitment: Bytes32,
     pub participants_commitment: Bytes32,
-    pub payload_commitment: Bytes32,
-    pub new_payload_commitment: Bytes32,
+    #[serde(alias = "payload_commitment")]
+    pub vault_materialisation_root: Bytes32,
+    #[serde(alias = "new_payload_commitment")]
+    pub new_vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
 }
 
@@ -515,6 +522,7 @@ pub struct SpliceWitness {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpliceTransition {
     pub current_state: StateCell,
+    pub next_state: StateCell,
     pub header: SpliceHeader,
     pub witness: SpliceWitness,
     pub old_vault: VaultDescriptor,

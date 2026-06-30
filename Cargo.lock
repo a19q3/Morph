@@ -1675,6 +1675,7 @@ dependencies = [
  "ckb-jsonrpc-types",
  "ckb-types",
  "clap",
+ "getrandom 0.3.4",
  "hex",
  "k256",
  "morph-core",

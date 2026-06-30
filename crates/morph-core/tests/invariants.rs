@@ -21,7 +21,7 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         asset_registry_commitment: bytes32(5),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
-        payload_commitment: bytes32(7),
+        vault_materialisation_root: bytes32(7),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 1,
     }
@@ -43,7 +43,7 @@ fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
         asset_registry_commitment: bytes32(5),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
-        payload_commitment: bytes32(7),
+        vault_materialisation_root: bytes32(7),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 2,
     }
@@ -322,14 +322,20 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         new_vault_commitment: vault_descriptor_commitment(&new_vault),
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment: current_state.header.participants_commitment,
-        payload_commitment: current_state.header.payload_commitment,
-        new_payload_commitment: vault_descriptor_commitment(&new_vault),
+        vault_materialisation_root: current_state.header.vault_materialisation_root,
+        new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
     current_state.header.participants_commitment = header.participants_commitment;
+    let mut next_state = current_state.clone();
+    next_state.header.funding_epoch = header.new_funding_epoch;
+    next_state.header.funding_anchor = header.new_funding_anchor;
+    next_state.header.vault_set_commitment = header.new_vault_commitment;
+    next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
     SpliceTransition {
         current_state,
+        next_state,
         header,
         witness,
         old_vault,
@@ -371,7 +377,10 @@ fn xudt_splice_out_transition() -> SpliceTransition {
         vault_descriptor_commitment(&splice.old_vault);
     splice.header.old_vault_commitment = vault_descriptor_commitment(&splice.old_vault);
     splice.header.new_vault_commitment = vault_descriptor_commitment(&splice.new_vault);
-    splice.header.new_payload_commitment = splice.header.new_vault_commitment;
+    splice.header.new_vault_materialisation_root = splice.header.new_vault_commitment;
+    splice.next_state.header.vault_set_commitment = splice.header.new_vault_commitment;
+    splice.next_state.header.vault_materialisation_root =
+        splice.header.new_vault_materialisation_root;
     splice.header.asset_delta_commitment = splice_asset_delta_commitment(&splice.deltas);
     splice.witness = splice_witness_for(&mut splice.header);
     splice
@@ -621,7 +630,7 @@ fn state_header_digest_binds_signed_context_fields() {
         header.settlement_descriptor_commitment = bytes32(15);
     });
     assert_state_header_digest_changes(|header| header.descriptor_version = 2);
-    assert_state_header_digest_changes(|header| header.payload_commitment = bytes32(16));
+    assert_state_header_digest_changes(|header| header.vault_materialisation_root = bytes32(16));
     assert_state_header_digest_changes(|header| header.challenge_policy_commitment = bytes32(17));
     assert_state_header_digest_changes(|header| header.state_layout_version = 3);
 }
@@ -645,11 +654,10 @@ fn state_header_context_rejects_preserved_field_changes() {
 }
 
 #[test]
-fn state_header_context_allows_progress_payload_and_descriptor_changes() {
+fn state_header_context_allows_progress_payload_changes() {
     let old = header_with_epoch(1, Phase::Active, 3);
     let mut new = header_with_epoch(9, Phase::Settling, 3);
-    new.payload_commitment = bytes32(9);
-    new.settlement_descriptor_commitment = bytes32(10);
+    new.vault_materialisation_root = bytes32(9);
 
     assert!(old.same_context_except_progress(&new));
 }
@@ -657,7 +665,7 @@ fn state_header_context_allows_progress_payload_and_descriptor_changes() {
 proptest! {
     #[test]
     fn prop_state_header_context_rejects_preserved_field_changes(
-        field in 0usize..12,
+        field in 0usize..14,
         marker in 64u8..=240,
     ) {
         let old = header_with_epoch(1, Phase::Active, 3);
@@ -676,8 +684,10 @@ proptest! {
             7 => new.mode = Mode::FactoryProof,
             8 => new.participants_commitment = bytes32(marker),
             9 => new.asset_registry_commitment = bytes32(marker),
-            10 => new.challenge_policy_commitment = bytes32(marker),
-            11 => new.state_layout_version = old.state_layout_version + 1,
+            10 => new.settlement_descriptor_commitment = bytes32(marker),
+            11 => new.descriptor_version = old.descriptor_version + 1,
+            12 => new.challenge_policy_commitment = bytes32(marker),
+            13 => new.state_layout_version = old.state_layout_version + 1,
             _ => unreachable!(),
         }
 
@@ -690,8 +700,7 @@ proptest! {
         let mut new = old.clone();
         new.state_number = 9;
         new.phase = Phase::Settling;
-        new.payload_commitment = bytes32(marker);
-        new.settlement_descriptor_commitment = bytes32(marker);
+        new.vault_materialisation_root = bytes32(marker);
 
         prop_assert!(old.same_context_except_progress(&new));
     }
@@ -719,7 +728,7 @@ proptest! {
             11 => new.asset_registry_commitment = bytes32(marker),
             12 => new.settlement_descriptor_commitment = bytes32(marker),
             13 => new.descriptor_version = old.descriptor_version + 1,
-            14 => new.payload_commitment = bytes32(marker),
+            14 => new.vault_materialisation_root = bytes32(marker),
             15 => new.challenge_policy_commitment = bytes32(marker),
             16 => new.state_layout_version = old.state_layout_version + 1,
             _ => unreachable!(),
@@ -788,10 +797,28 @@ fn splice_rejects_wrong_channel_header() {
 #[test]
 fn splice_rejects_current_payload_mismatch() {
     let mut splice = splice_transition(SpliceKind::In);
-    splice.current_state.header.payload_commitment = bytes32(99);
+    splice.current_state.header.vault_materialisation_root = bytes32(99);
 
     let err = validate_splice_transition(&splice).unwrap_err();
     assert_eq!(err, MorphError::SpliceHeaderContextMismatch);
+}
+
+#[test]
+fn splice_rejects_next_payload_mismatch() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.next_state.header.vault_materialisation_root = bytes32(99);
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceNextStateMismatch);
+}
+
+#[test]
+fn splice_rejects_next_settlement_descriptor_mismatch() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.next_state.header.settlement_descriptor_commitment = bytes32(99);
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceNextStateMismatch);
 }
 
 #[test]
@@ -1119,22 +1146,23 @@ fn accepts_valid_state_supersession() {
 }
 
 #[test]
-fn accepts_signed_settlement_descriptor_update() {
+fn rejects_signed_settlement_descriptor_update_as_context_change() {
     let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);
     new.header.descriptor_version = 2;
     ctx.authorization = authorization_for(&mut new.header);
 
-    validate_state_transition(&old, &new, &ctx).unwrap();
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::HeaderContextChanged);
 }
 
 #[test]
-fn rejects_unsigned_settlement_descriptor_update() {
+fn rejects_unsigned_settlement_descriptor_update_as_context_change() {
     let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
-    assert_eq!(err, MorphError::InvalidStateSignatures);
+    assert_eq!(err, MorphError::HeaderContextChanged);
 }
 
 #[test]
@@ -1373,6 +1401,43 @@ fn reduced_factory_exit_rejects_release_amount_mismatch() {
 }
 
 #[test]
+fn reduced_factory_exit_rejects_non_reserve_claim_right_kinds() {
+    let update = factory_update();
+
+    for kind in [
+        FactoryRightKind::Balance,
+        FactoryRightKind::Membership,
+        FactoryRightKind::ExitPath,
+        FactoryRightKind::SponsorBudgetClaim,
+    ] {
+        let reserve_claim = update
+            .before
+            .iter()
+            .find(|right| right.id.participant == bytes32(1) && right.id.kind == kind)
+            .expect("fixture non-reserve right")
+            .id
+            .clone();
+        let exit = FactoryReducedExit {
+            participant: bytes32(1),
+            reserve_claim,
+            release_quantity: 1,
+        };
+
+        let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+        assert_eq!(err, MorphError::FactoryReducedExitInvalid);
+    }
+}
+
+#[test]
+fn reduced_factory_exit_rejects_zero_release_quantity() {
+    let update = factory_update();
+    let exit = factory_reduced_exit(&update, 0);
+
+    let err = validate_reduced_factory_exit(&update, &exit).unwrap_err();
+    assert_eq!(err, MorphError::FactoryReducedExitInvalid);
+}
+
+#[test]
 fn reduced_factory_exit_rejects_other_touched_right_changes() {
     let mut update = factory_update();
     update.after[0].quantity = 90;
@@ -1414,7 +1479,6 @@ fn sponsor_policy_accepts_bounded_publication_fee() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 100,
-        expiry: u64::MAX,
         publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };
@@ -1439,7 +1503,6 @@ fn sponsor_policy_rejects_drain_attempt() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 950,
-        expiry: u64::MAX,
         publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };
@@ -1457,32 +1520,6 @@ fn sponsor_policy_rejects_drain_attempt() {
 }
 
 #[test]
-fn sponsor_policy_rejects_script_unsupported_expiry() {
-    let policy = SponsorPolicy {
-        channel_id: bytes32(2),
-        min_state_number: 1,
-        max_state_number: 10,
-        max_fee_per_tx: 200,
-        max_total_fee: 1_000,
-        already_spent: 100,
-        expiry: 1_000,
-        publication_state_type_hash: bytes32(10),
-        change_lock: bytes32(11),
-    };
-    let spend = SponsorSpend {
-        channel_id: bytes32(2),
-        state_number: 2,
-        fee: 100,
-        publication_state_type_hash: bytes32(10),
-        change_lock: bytes32(11),
-        operation: ChannelOperation::Publish,
-    };
-
-    let err = validate_sponsor_policy(&policy, &spend).unwrap_err();
-    assert_eq!(err, MorphError::SponsorPolicyUnsupported);
-}
-
-#[test]
 fn sponsor_policy_rejects_wrong_publication_state_type() {
     let policy = SponsorPolicy {
         channel_id: bytes32(2),
@@ -1491,7 +1528,6 @@ fn sponsor_policy_rejects_wrong_publication_state_type() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 100,
-        expiry: u64::MAX,
         publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };
@@ -1517,7 +1553,6 @@ fn sponsor_policy_rejects_fund_operation() {
         max_fee_per_tx: 200,
         max_total_fee: 1_000,
         already_spent: 100,
-        expiry: u64::MAX,
         publication_state_type_hash: bytes32(10),
         change_lock: bytes32(11),
     };

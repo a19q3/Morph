@@ -24,6 +24,9 @@ use morph_script_common::{
 };
 
 #[cfg(target_arch = "riscv64")]
+const MAX_WITNESS_INPUTS_PER_TX: usize = 64;
+
+#[cfg(target_arch = "riscv64")]
 entry!(program_entry);
 #[cfg(target_arch = "riscv64")]
 default_alloc!();
@@ -152,7 +155,7 @@ fn validate_splice_retire(
     old_header: &StateHeader,
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
-    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
+    find_unique_input_by_vault_commitment(old_header.vault_materialisation_root())?;
     let witness_raw = find_splice_witness_raw(expected_funding_anchor, true)?;
     let witness = SpliceStateTransitionWitness::parse(&witness_raw)
         .map_err(|_| ScriptError::SpliceProofEncoding)?;
@@ -184,6 +187,19 @@ fn validate_anchor_derivation(expected_funding_anchor: &[u8]) -> Result<()> {
     let derived = blake2b256(&[input.as_slice(), &index]);
     if derived.as_slice() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
+    }
+    let mut input_index = 1;
+    loop {
+        match load_input(input_index, Source::Input) {
+            Ok(input) => {
+                if blake2b256(&[input.as_slice(), &index]).as_slice() == expected_funding_anchor {
+                    return Err(ScriptError::FundingAnchorMismatch);
+                }
+                input_index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
     }
     Ok(())
 }
@@ -284,7 +300,7 @@ fn validate_finalise(old_header: &StateHeader, finalise_since: Option<u64>) -> R
     let input = load_input(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
     validate_relative_block_since(since, required_since)?;
-    find_unique_input_by_vault_commitment(old_header.payload_commitment())?;
+    find_unique_input_by_vault_commitment(old_header.vault_materialisation_root())?;
 
     Ok(())
 }
@@ -294,6 +310,9 @@ fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
     let mut found = None;
     let mut index = 0;
     loop {
+        if index >= MAX_WITNESS_INPUTS_PER_TX {
+            return Err(ScriptError::Encoding);
+        }
         match load_cell_capacity(index, Source::Input) {
             Ok(capacity) => {
                 let lock_hash =
@@ -331,6 +350,9 @@ fn find_splice_witness_raw(
     let mut found: Option<alloc::vec::Vec<u8>> = None;
     let mut index = 0;
     loop {
+        if index >= MAX_WITNESS_INPUTS_PER_TX {
+            return Err(ScriptError::SpliceProofEncoding);
+        }
         match load_witness_args(index, Source::Input) {
             Ok(witness_args) => {
                 if let Some(input_type) = witness_args.input_type().to_opt() {

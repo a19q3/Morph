@@ -58,7 +58,8 @@ pub struct StoredSpliceStateRef {
     pub asset_registry_commitment: String,
     pub settlement_descriptor_commitment: String,
     pub descriptor_version: u16,
-    pub payload_commitment: String,
+    #[serde(alias = "payload_commitment")]
+    pub vault_materialisation_root: String,
     pub challenge_policy_commitment: String,
     pub state_layout_version: u16,
     pub capacity: u64,
@@ -122,8 +123,10 @@ pub struct StoredSplicePackage {
     pub new_vault_commitment: String,
     pub asset_delta_commitment: String,
     pub participants_commitment: String,
-    pub payload_commitment: String,
-    pub new_payload_commitment: String,
+    #[serde(alias = "payload_commitment")]
+    pub vault_materialisation_root: String,
+    #[serde(alias = "new_payload_commitment")]
+    pub new_vault_materialisation_root: String,
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
@@ -215,8 +218,10 @@ impl StoredSplicePackage {
             new_vault_commitment: hex_prefixed(&transition.header.new_vault_commitment),
             asset_delta_commitment: hex_prefixed(&transition.header.asset_delta_commitment),
             participants_commitment: hex_prefixed(&transition.header.participants_commitment),
-            payload_commitment: hex_prefixed(&transition.header.payload_commitment),
-            new_payload_commitment: hex_prefixed(&transition.header.new_payload_commitment),
+            vault_materialisation_root: hex_prefixed(&transition.header.vault_materialisation_root),
+            new_vault_materialisation_root: hex_prefixed(
+                &transition.header.new_vault_materialisation_root,
+            ),
             challenge_policy_commitment: hex_prefixed(
                 &transition.header.challenge_policy_commitment,
             ),
@@ -306,12 +311,13 @@ impl StoredSplicePackage {
             "participants_commitment must be canonical"
         );
         ensure!(
-            self.payload_commitment == canonical_hex32(&self.payload_commitment)?,
-            "payload_commitment must be canonical"
+            self.vault_materialisation_root == canonical_hex32(&self.vault_materialisation_root)?,
+            "vault_materialisation_root must be canonical"
         );
         ensure!(
-            self.new_payload_commitment == canonical_hex32(&self.new_payload_commitment)?,
-            "new_payload_commitment must be canonical"
+            self.new_vault_materialisation_root
+                == canonical_hex32(&self.new_vault_materialisation_root)?,
+            "new_vault_materialisation_root must be canonical"
         );
         ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
@@ -470,6 +476,7 @@ impl StoredSplicePackage {
             .iter()
             .map(StoredVaultAssetAmount::to_amount)
             .collect::<Result<Vec<_>>>()?;
+        let current_state = self.current_state.to_state_cell()?;
         let header = SpliceHeader {
             protocol_version: self.current_state.protocol_version,
             chain_id: hex32_bytes(&self.current_state.chain_id)?,
@@ -486,12 +493,18 @@ impl StoredSplicePackage {
             new_vault_commitment: hex32_bytes(&self.new_vault_commitment)?,
             asset_delta_commitment: hex32_bytes(&self.asset_delta_commitment)?,
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
-            payload_commitment: hex32_bytes(&self.payload_commitment)?,
-            new_payload_commitment: hex32_bytes(&self.new_payload_commitment)?,
+            vault_materialisation_root: hex32_bytes(&self.vault_materialisation_root)?,
+            new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
             challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
         };
+        let mut next_state = current_state.clone();
+        next_state.header.funding_epoch = header.new_funding_epoch;
+        next_state.header.funding_anchor = header.new_funding_anchor;
+        next_state.header.vault_set_commitment = header.new_vault_commitment;
+        next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
         Ok(SpliceTransition {
-            current_state: self.current_state.to_state_cell()?,
+            current_state,
+            next_state,
             header,
             witness: SpliceWitness {
                 threshold: self.signature_threshold,
@@ -531,7 +544,7 @@ impl StoredSpliceStateRef {
                 &state.header.settlement_descriptor_commitment,
             ),
             descriptor_version: state.header.descriptor_version,
-            payload_commitment: hex_prefixed(&state.header.payload_commitment),
+            vault_materialisation_root: hex_prefixed(&state.header.vault_materialisation_root),
             challenge_policy_commitment: hex_prefixed(&state.header.challenge_policy_commitment),
             state_layout_version: state.header.state_layout_version,
             capacity: state.capacity,
@@ -586,8 +599,8 @@ impl StoredSpliceStateRef {
             "current_state.settlement_descriptor_commitment must be canonical"
         );
         ensure!(
-            self.payload_commitment == canonical_hex32(&self.payload_commitment)?,
-            "current_state.payload_commitment must be canonical"
+            self.vault_materialisation_root == canonical_hex32(&self.vault_materialisation_root)?,
+            "current_state.vault_materialisation_root must be canonical"
         );
         ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
@@ -611,7 +624,7 @@ impl StoredSpliceStateRef {
                     &self.settlement_descriptor_commitment,
                 )?,
                 descriptor_version: self.descriptor_version,
-                payload_commitment: hex32_bytes(&self.payload_commitment)?,
+                vault_materialisation_root: hex32_bytes(&self.vault_materialisation_root)?,
                 challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
                 state_layout_version: self.state_layout_version,
             },
@@ -803,7 +816,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
             asset_registry_commitment: bytes32(4),
             settlement_descriptor_commitment: bytes32(5),
             descriptor_version: 1,
-            payload_commitment: bytes32(6),
+            vault_materialisation_root: bytes32(6),
             challenge_policy_commitment: bytes32(8),
             state_layout_version: 1,
         },
@@ -829,8 +842,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_commitment: vault_descriptor_commitment(&new_vault),
         asset_delta_commitment: splice_asset_delta_commitment(&deltas),
         participants_commitment,
-        payload_commitment: current_state.header.payload_commitment,
-        new_payload_commitment: vault_descriptor_commitment(&new_vault),
+        vault_materialisation_root: current_state.header.vault_materialisation_root,
+        new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let digest = header.signing_digest();
@@ -866,8 +879,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_commitment: hex_prefixed(&header.new_vault_commitment),
         asset_delta_commitment: hex_prefixed(&header.asset_delta_commitment),
         participants_commitment: hex_prefixed(&header.participants_commitment),
-        payload_commitment: hex_prefixed(&header.payload_commitment),
-        new_payload_commitment: hex_prefixed(&header.new_payload_commitment),
+        vault_materialisation_root: hex_prefixed(&header.vault_materialisation_root),
+        new_vault_materialisation_root: hex_prefixed(&header.new_vault_materialisation_root),
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
@@ -1204,7 +1217,7 @@ fn next_state_header_for_splice(transition: &SpliceTransition) -> StateHeader {
     header.funding_epoch = transition.header.new_funding_epoch;
     header.funding_anchor = transition.header.new_funding_anchor;
     header.vault_set_commitment = transition.header.new_vault_commitment;
-    header.payload_commitment = transition.header.new_payload_commitment;
+    header.vault_materialisation_root = transition.header.new_vault_materialisation_root;
     header.phase = Phase::Active;
     header
 }
@@ -1235,7 +1248,7 @@ fn state_header_wire_bytes(header: &StateHeader) -> Result<[u8; STATE_HEADER_LEN
         asset_registry_commitment: header.asset_registry_commitment,
         settlement_descriptor_commitment: header.settlement_descriptor_commitment,
         descriptor_version: header.descriptor_version,
-        payload_commitment: header.payload_commitment,
+        vault_materialisation_root: header.vault_materialisation_root,
         challenge_policy_commitment: header.challenge_policy_commitment,
         state_layout_version: 2,
     }))
@@ -1298,8 +1311,8 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
     raw[197..229].copy_from_slice(&header.new_vault_commitment);
     raw[229..261].copy_from_slice(&header.asset_delta_commitment);
     raw[261..293].copy_from_slice(&header.participants_commitment);
-    raw[293..325].copy_from_slice(&header.payload_commitment);
-    raw[325..357].copy_from_slice(&header.new_payload_commitment);
+    raw[293..325].copy_from_slice(&header.vault_materialisation_root);
+    raw[325..357].copy_from_slice(&header.new_vault_materialisation_root);
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
     raw
 }

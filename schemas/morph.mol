@@ -38,7 +38,7 @@
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
-// - SponsorPolicy: 144 bytes
+// - SponsorPolicy: 136 bytes
 
 array Byte32 [byte; 32];
 array WitnessEnvelopeMagic [byte; 8];
@@ -91,7 +91,7 @@ struct StateHeader {
     asset_registry_commitment: Byte32,
     settlement_descriptor_commitment: Byte32,
     descriptor_version: uint16,
-    payload_commitment: Byte32,
+    vault_materialisation_root: Byte32,
     challenge_policy_commitment: Byte32,
     state_layout_version: uint16,
 }
@@ -112,8 +112,8 @@ struct SpliceHeader {
     new_vault_commitment: Byte32,
     asset_delta_commitment: Byte32,
     participants_commitment: Byte32,
-    payload_commitment: Byte32,
-    new_payload_commitment: Byte32,
+    vault_materialisation_root: Byte32,
+    new_vault_materialisation_root: Byte32,
     challenge_policy_commitment: Byte32,
 }
 
@@ -474,7 +474,6 @@ struct SponsorPolicy {
     max_fee_per_tx: uint64,
     max_total_fee: uint64,
     already_spent: uint64,
-    expiry: uint64,
     publication_state_type_hash: Byte32,
     change_lock_hash: Byte32,
 }

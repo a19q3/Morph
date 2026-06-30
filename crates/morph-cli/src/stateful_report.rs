@@ -11,6 +11,8 @@ use crate::smoke_report::{
     DevnetSmokeSummary, DevnetSmokeTransactionBudgetLimit,
 };
 
+const MAX_SPONSOR_STATE_NUMBER_SPAN: u64 = crate::devnet::DEFAULT_SPONSOR_MAX_STATE_NUMBER
+    - crate::devnet::DEFAULT_SPONSOR_MIN_STATE_NUMBER;
 const DEVNET_STATEFUL_BUDGET_SCHEMA: &str = "morph.devnet_stateful_budget";
 const DEVNET_STATEFUL_SCENARIO_SCHEMA: &str = "morph.devnet_stateful_scenario";
 const DEVNET_AUDIT_PROFILE_SCHEMA: &str = "morph.devnet_audit_profile";
@@ -90,6 +92,7 @@ pub struct DevnetStatefulSummary {
     pub scenarios: Vec<StatefulScenarioSummary>,
     pub audit_families: Vec<AuditFamilySummary>,
     pub unknown_coverage_tags: Vec<String>,
+    pub wide_sponsor_policies: Vec<StatefulSponsorPolicyWindow>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smoke: Option<DevnetSmokeSummary>,
 }
@@ -118,8 +121,19 @@ pub struct DevnetStatefulAssertionReport {
     pub referenced_artifacts: usize,
     pub required_committed_checks: usize,
     pub expected_failures: usize,
+    pub sponsor_policy_windows: usize,
+    pub wide_sponsor_policy_windows: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub smoke: Option<DevnetSmokeAssertionReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StatefulSponsorPolicyWindow {
+    pub check: String,
+    pub path: String,
+    pub min_state_number: u64,
+    pub max_state_number: u64,
+    pub state_number_span: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -246,12 +260,17 @@ pub fn summarize_devnet_stateful_with_audit(
         .is_dir()
         .then(|| smoke_report::summarize_devnet_smoke(&smoke_dir))
         .transpose()?;
+    let wide_sponsor_policies = smoke
+        .as_ref()
+        .map(wide_sponsor_policy_windows)
+        .unwrap_or_default();
     let mut summary = DevnetStatefulSummary {
         directory: dir.display().to_string(),
         manifest,
         scenarios,
         audit_families: Vec::new(),
         unknown_coverage_tags: Vec::new(),
+        wide_sponsor_policies,
         smoke,
     };
     if let Some(profile) = audit_profile {
@@ -356,6 +375,11 @@ pub fn assert_default_devnet_stateful(
         .iter()
         .map(|scenario| scenario.expected_failures.len())
         .sum();
+    let sponsor_policy_windows = summary
+        .smoke
+        .as_ref()
+        .map(|smoke| smoke.sponsor_policies.len())
+        .unwrap_or_default();
     Ok(DevnetStatefulAssertionReport {
         directory: summary.directory,
         git_commit: summary.manifest.get("git_commit").cloned(),
@@ -372,6 +396,8 @@ pub fn assert_default_devnet_stateful(
         referenced_artifacts,
         required_committed_checks,
         expected_failures,
+        sponsor_policy_windows,
+        wide_sponsor_policy_windows: summary.wide_sponsor_policies.len(),
         smoke: smoke_report,
     })
 }
@@ -503,18 +529,36 @@ pub fn render_markdown(summary: &DevnetStatefulSummary) -> String {
     }
     if let Some(smoke) = &summary.smoke {
         out.push_str("## Underlying Smoke Totals\n\n");
-        out.push_str("| Transactions | Committed | Pending | Script failures | Watchtower alerts | Factory exits | Factory splices |\n");
-        out.push_str("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+        out.push_str("| Transactions | Committed | Pending | Script failures | Watchtower alerts | Factory exits | Factory splices | Sponsor policies | Wide sponsor policies |\n");
+        out.push_str("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} |\n\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n\n",
             smoke.totals.transaction_count,
             smoke.totals.committed_count,
             smoke.totals.pending_count,
             smoke.script_failures.len(),
             smoke.watchtower_alerts.len(),
             smoke.factory_reduced_exits.len(),
-            smoke.factory_splices.len()
+            smoke.factory_splices.len(),
+            smoke.sponsor_policies.len(),
+            summary.wide_sponsor_policies.len()
         ));
+    }
+    if !summary.wide_sponsor_policies.is_empty() {
+        out.push_str("## Wide Sponsor Policies\n\n");
+        out.push_str("| Check | Path | Min state | Max state | Span |\n");
+        out.push_str("| --- | --- | ---: | ---: | ---: |\n");
+        for policy in &summary.wide_sponsor_policies {
+            out.push_str(&format!(
+                "| {} | {} | {} | {} | {} |\n",
+                table_cell(&policy.check),
+                table_cell(&policy.path),
+                policy.min_state_number,
+                policy.max_state_number,
+                policy.state_number_span
+            ));
+        }
+        out.push('\n');
     }
     out
 }
@@ -608,6 +652,13 @@ fn assert_stateful_summary(summary: &DevnetStatefulSummary) -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow!("stateful directory is missing underlying smoke summary"))?;
     smoke_report::assert_devnet_smoke_summary(smoke)?;
+    let wide_sponsor_policies = wide_sponsor_policy_windows(smoke);
+    ensure!(
+        wide_sponsor_policies.is_empty(),
+        "stateful sponsor policy window exceeds {} states: {}",
+        MAX_SPONSOR_STATE_NUMBER_SPAN,
+        wide_sponsor_policy_message(&wide_sponsor_policies)
+    );
     for scenario in &summary.scenarios {
         for check in &scenario.required_committed_checks {
             let found = smoke
@@ -949,6 +1000,38 @@ fn has_exact_failure(summary: &DevnetStatefulSummary, expected: &StatefulExpecte
     })
 }
 
+fn wide_sponsor_policy_windows(smoke: &DevnetSmokeSummary) -> Vec<StatefulSponsorPolicyWindow> {
+    smoke
+        .sponsor_policies
+        .iter()
+        .filter(|policy| policy.state_number_span > MAX_SPONSOR_STATE_NUMBER_SPAN)
+        .map(|policy| StatefulSponsorPolicyWindow {
+            check: policy.check.clone(),
+            path: policy.path.clone(),
+            min_state_number: policy.min_state_number,
+            max_state_number: policy.max_state_number,
+            state_number_span: policy.state_number_span,
+        })
+        .collect()
+}
+
+fn wide_sponsor_policy_message(policies: &[StatefulSponsorPolicyWindow]) -> String {
+    policies
+        .iter()
+        .map(|policy| {
+            format!(
+                "{} {} {}..{} span {}",
+                policy.check,
+                policy.path,
+                policy.min_state_number,
+                policy.max_state_number,
+                policy.state_number_span
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn read_scenario_files(dir: &Path) -> Result<Vec<StatefulScenarioFile>> {
     let mut paths = fs::read_dir(dir)
         .with_context(|| format!("failed to list stateful directory {}", dir.display()))?
@@ -1034,8 +1117,8 @@ mod tests {
         DeployedScriptSummary, FactoryLocalExitEvidenceSummary, FactoryMerkleUpdateEvidenceSummary,
         FactoryProofProfileSummary, FactoryReducedExitEvidenceSummary,
         FactoryReducedRightsEvidenceSummary, FactorySpliceEvidenceSummary, MetricTotals,
-        SplicePayoutEvidenceSummary, TransactionSummary, WatchtowerAlertSummary,
-        WatchtowerServiceSummary,
+        SplicePayoutEvidenceSummary, SponsorPolicySummary, TransactionSummary,
+        WatchtowerAlertSummary, WatchtowerServiceSummary,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1151,6 +1234,22 @@ mod tests {
         let audit = audit_family_summaries(&summary, &profile);
         assert!(audit.unknown_coverage_tags.is_empty());
         assert!(audit.families[0].passed);
+    }
+
+    #[test]
+    fn sponsor_policy_window_metric_flags_above_default_span() {
+        let mut smoke = smoke_summary(vec![], vec![]);
+        smoke.sponsor_policies = vec![
+            sponsor_policy("default-window", 1, 1 + MAX_SPONSOR_STATE_NUMBER_SPAN),
+            sponsor_policy("wide-window", 1, 2 + MAX_SPONSOR_STATE_NUMBER_SPAN),
+        ];
+
+        let wide = wide_sponsor_policy_windows(&smoke);
+
+        assert_eq!(wide.len(), 1);
+        assert_eq!(wide[0].check, "wide-window");
+        assert_eq!(wide[0].state_number_span, MAX_SPONSOR_STATE_NUMBER_SPAN + 1);
+        assert!(wide_sponsor_policy_message(&wide).contains("wide-window $.sponsor_policy"));
     }
 
     #[test]
@@ -1379,6 +1478,7 @@ mod tests {
             scenarios,
             audit_families: vec![],
             unknown_coverage_tags: vec![],
+            wide_sponsor_policies: vec![],
             smoke: Some(smoke_summary(vec![], vec![])),
         }
     }
@@ -1438,6 +1538,7 @@ mod tests {
             factory_local_exits: Vec::<FactoryLocalExitEvidenceSummary>::new(),
             factory_splices: Vec::<FactorySpliceEvidenceSummary>::new(),
             splice_payouts: Vec::<SplicePayoutEvidenceSummary>::new(),
+            sponsor_policies: Vec::new(),
             totals: MetricTotals::default(),
         }
     }
@@ -1465,6 +1566,23 @@ mod tests {
             source: Some("stderr".to_string()),
             error_code: Some(error_code),
             morph_error: Some(morph_error.to_string()),
+        }
+    }
+
+    fn sponsor_policy(
+        check: &str,
+        min_state_number: u64,
+        max_state_number: u64,
+    ) -> SponsorPolicySummary {
+        SponsorPolicySummary {
+            check: check.to_string(),
+            path: "$.sponsor_policy".to_string(),
+            min_state_number,
+            max_state_number,
+            state_number_span: max_state_number.saturating_sub(min_state_number),
+            max_fee_per_tx: 100,
+            max_total_fee: 200,
+            legacy_expiry: None,
         }
     }
 }

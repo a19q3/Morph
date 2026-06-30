@@ -7,6 +7,10 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+devnet = []
+
 [dependencies]
 anyhow.workspace = true
 ckb-crypto.workspace = true
@@ -14,6 +18,7 @@ ckb-hash.workspace = true
 ckb-jsonrpc-types.workspace = true
 ckb-types.workspace = true
 clap.workspace = true
+getrandom.workspace = true
 hex.workspace = true
 k256.workspace = true
 morph-core = { path = "../morph-core" }

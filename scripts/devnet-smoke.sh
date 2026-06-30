@@ -41,7 +41,21 @@ run_json() {
   shift
   local path="$OUT_DIR/$name.json"
   log "$name -> $path"
-  cargo run -q -p morph-cli -- "$@" --json >"$path"
+  if [ "${1:-}" = "devnet" ]; then
+    shift
+    cargo run -q -p morph-cli --features devnet -- devnet --devnet-only "$@" --json >"$path"
+  else
+    cargo run -q -p morph-cli -- "$@" --json >"$path"
+  fi
+}
+
+run_cli_without_devnet_key_env() {
+  if [ "${1:-}" = "devnet" ]; then
+    shift
+    env -u MORPH_DEVNET_PRIVATE_KEY cargo run -q -p morph-cli --features devnet -- devnet --devnet-only "$@"
+  else
+    env -u MORPH_DEVNET_PRIVATE_KEY cargo run -q -p morph-cli -- "$@"
+  fi
 }
 
 cat >"$OUT_DIR/manifest.txt" <<EOF
@@ -81,7 +95,7 @@ run_json competing-spend-smoke devnet --rpc-url "$RPC_URL" competing-spend-smoke
 MANUAL_CHANNEL_DIR="$OUT_DIR/manual-channel"
 mkdir -p "$MANUAL_CHANNEL_DIR"
 log "manual-channel-open -> $MANUAL_CHANNEL_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel \
   --vault-capacity 30000000000 \
   --alice-capacity 18000000000 \
   --bob-capacity 12000000000 \
@@ -97,23 +111,23 @@ MANUAL_SPONSOR_OUT_POINT="$(jq -r '.cells[] | select(.role == "sponsor") | .out_
 MANUAL_CHANNEL_ID="$(jq -r '.channel_id' "$MANUAL_CHANNEL_DIR/open.json")"
 
 log "manual-channel-save-package -> $MANUAL_CHANNEL_DIR/package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$MANUAL_STATE_OUT_POINT" \
   --state-number 3 \
   --store-dir "$MANUAL_CHANNEL_DIR/packages" \
   --json >"$MANUAL_CHANNEL_DIR/package.json"
 log "manual-channel-list-packages -> $MANUAL_CHANNEL_DIR/list-packages.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" list-state-packages \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" list-state-packages \
   --channel-id "$MANUAL_CHANNEL_ID" \
   --store-dir "$MANUAL_CHANNEL_DIR/packages" \
   --json >"$MANUAL_CHANNEL_DIR/list-packages.json"
 log "manual-channel-latest-package -> $MANUAL_CHANNEL_DIR/latest-package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" latest-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" latest-state-package \
   --channel-id "$MANUAL_CHANNEL_ID" \
   --store-dir "$MANUAL_CHANNEL_DIR/packages" \
   --json >"$MANUAL_CHANNEL_DIR/latest-package.json"
 log "manual-channel-publish-latest -> $MANUAL_CHANNEL_DIR/publish-latest.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" publish-latest-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" publish-latest-package \
   --state-out-point "$MANUAL_STATE_OUT_POINT" \
   --sponsor-out-point "$MANUAL_SPONSOR_OUT_POINT" \
   --channel-id "$MANUAL_CHANNEL_ID" \
@@ -121,7 +135,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" publish-latest-package 
   --json >"$MANUAL_CHANNEL_DIR/publish-latest.json"
 MANUAL_PUBLISHED_STATE_OUT_POINT="$(jq -r '.publication.state_out_point.tx_hash + ":" + (.publication.state_out_point.index | tostring)' "$MANUAL_CHANNEL_DIR/publish-latest.json")"
 log "manual-channel-finalise -> $MANUAL_CHANNEL_DIR/finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$MANUAL_PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$MANUAL_VAULT_OUT_POINT" \
   --alice-capacity 18000000000 \
@@ -131,7 +145,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
 MANUAL_SPONSOR_DIR="$OUT_DIR/manual-sponsor"
 mkdir -p "$MANUAL_SPONSOR_DIR"
 log "manual-sponsor-open -> $MANUAL_SPONSOR_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel \
   --vault-capacity 22000000000 \
   --alice-capacity 11000000000 \
   --bob-capacity 11000000000 \
@@ -141,7 +155,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel \
 SPONSOR_STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$MANUAL_SPONSOR_DIR/open.json")"
 SPONSOR_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$MANUAL_SPONSOR_DIR/open.json")"
 log "manual-sponsor-fund -> $MANUAL_SPONSOR_DIR/fund.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" fund-sponsor \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" fund-sponsor \
   --state-out-point "$SPONSOR_STATE_OUT_POINT" \
   --sponsor-capacity 60000000000 \
   --sponsor-min-state-number 5 \
@@ -151,14 +165,14 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" fund-sponsor \
   --json >"$MANUAL_SPONSOR_DIR/fund.json"
 SPONSOR_NEW_OUT_POINT="$(jq -r '.sponsor_out_point.tx_hash + ":" + (.sponsor_out_point.index | tostring)' "$MANUAL_SPONSOR_DIR/fund.json")"
 log "manual-sponsor-publish -> $MANUAL_SPONSOR_DIR/publish.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" publish-state \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" publish-state \
   --state-out-point "$SPONSOR_STATE_OUT_POINT" \
   --sponsor-out-point "$SPONSOR_NEW_OUT_POINT" \
   --state-number 5 \
   --json >"$MANUAL_SPONSOR_DIR/publish.json"
 SPONSOR_PUBLISHED_STATE_OUT_POINT="$(jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' "$MANUAL_SPONSOR_DIR/publish.json")"
 log "manual-sponsor-finalise -> $MANUAL_SPONSOR_DIR/finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$SPONSOR_PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$SPONSOR_VAULT_OUT_POINT" \
   --alice-capacity 11000000000 \
@@ -296,38 +310,38 @@ run_json factory-xudt-splice-out-one-sided-smoke devnet --rpc-url "$RPC_URL" fac
 FACTORY_DIR="$OUT_DIR/factory"
 mkdir -p "$FACTORY_DIR"
 log "factory-open -> $FACTORY_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-factory --json >"$FACTORY_DIR/open.json"
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-factory --json >"$FACTORY_DIR/open.json"
 FACTORY_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
 FACTORY_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "factory-vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$FACTORY_DIR/open.json")"
 FACTORY_ID="$(jq -r '.factory_id' "$FACTORY_DIR/open.json")"
 
 log "factory-save-package -> $FACTORY_DIR/package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-factory-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-factory-state-package \
   --factory-out-point "$FACTORY_OUT_POINT" \
   --store-dir "$FACTORY_DIR/packages" \
   --json >"$FACTORY_DIR/package.json"
 FACTORY_PACKAGE_PATH="$(jq -r '.path' "$FACTORY_DIR/package.json")"
 
 log "factory-latest-package -> $FACTORY_DIR/latest-package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" latest-factory-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" latest-factory-state-package \
   --factory-id "$FACTORY_ID" \
   --store-dir "$FACTORY_DIR/packages" \
   --json >"$FACTORY_DIR/latest-package.json"
 log "factory-list-packages -> $FACTORY_DIR/list-packages.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" list-factory-state-packages \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" list-factory-state-packages \
   --factory-id "$FACTORY_ID" \
   --store-dir "$FACTORY_DIR/packages" \
   --json >"$FACTORY_DIR/list-packages.json"
 
 log "factory-update -> $FACTORY_DIR/update.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" update-factory \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" update-factory \
   --factory-out-point "$FACTORY_OUT_POINT" \
   --factory-state-package "$FACTORY_PACKAGE_PATH" \
   --json >"$FACTORY_DIR/update.json"
 FACTORY_OUT_POINT_AFTER_UPDATE="$(jq -r '.factory_out_point.tx_hash + ":" + (.factory_out_point.index | tostring)' "$FACTORY_DIR/update.json")"
 
 log "factory-exit-channel -> $FACTORY_DIR/exit-channel.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-exit-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" factory-exit-channel \
   --factory-out-point "$FACTORY_OUT_POINT_AFTER_UPDATE" \
   --factory-vault-out-point "$FACTORY_VAULT_OUT_POINT" \
   --json >"$FACTORY_DIR/exit-channel.json"
@@ -342,14 +356,14 @@ FACTORY_CHILD_VAULT_OUT_POINT="$(jq -r '.vault_out_point.tx_hash + ":" + (.vault
 FACTORY_CHILD_SPONSOR_OUT_POINT="$(jq -r '.sponsor_out_point.tx_hash + ":" + (.sponsor_out_point.index | tostring)' "$FACTORY_DIR/exit-channel.json")"
 
 log "factory-child-publish -> $FACTORY_DIR/child-publish.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" publish-state \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" publish-state \
   --state-out-point "$FACTORY_CHILD_STATE_OUT_POINT" \
   --sponsor-out-point "$FACTORY_CHILD_SPONSOR_OUT_POINT" \
   --json >"$FACTORY_DIR/child-publish.json"
 FACTORY_CHILD_PUBLISHED_STATE_OUT_POINT="$(jq -r '.state_out_point.tx_hash + ":" + (.state_out_point.index | tostring)' "$FACTORY_DIR/child-publish.json")"
 
 log "factory-child-finalise -> $FACTORY_DIR/child-finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$FACTORY_CHILD_PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$FACTORY_CHILD_VAULT_OUT_POINT" \
   --json >"$FACTORY_DIR/child-finalise.json"
@@ -357,7 +371,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
 FACTORY_XUDT_DIR="$OUT_DIR/factory-xudt"
 mkdir -p "$FACTORY_XUDT_DIR"
 log "factory-xudt-smoke -> $FACTORY_XUDT_DIR/smoke.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-smoke \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" factory-xudt-smoke \
   --store-dir "$FACTORY_XUDT_DIR/packages" \
   --json >"$FACTORY_XUDT_DIR/smoke.json"
 log "factory-xudt-local-exit-package -> $FACTORY_XUDT_DIR/local-exit-package.json"
@@ -370,7 +384,7 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 FACTORY_XUDT_ONE_SIDED_DIR="$OUT_DIR/factory-xudt-one-sided"
 mkdir -p "$FACTORY_XUDT_ONE_SIDED_DIR"
 log "factory-xudt-one-sided-smoke -> $FACTORY_XUDT_ONE_SIDED_DIR/smoke.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-smoke \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" factory-xudt-smoke \
   --alice-xudt-amount 0 \
   --bob-xudt-amount 1000000 \
   --store-dir "$FACTORY_XUDT_ONE_SIDED_DIR/packages" \
@@ -385,7 +399,7 @@ cargo run -q -p morph-cli -- validate-factory-local-exit-package \
 FACTORY_XUDT_NEGATIVE_DIR="$OUT_DIR/factory-xudt-negative"
 mkdir -p "$FACTORY_XUDT_NEGATIVE_DIR"
 log "factory-xudt-negative-smoke -> $FACTORY_XUDT_NEGATIVE_DIR/smoke.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" factory-xudt-negative-smoke \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" factory-xudt-negative-smoke \
   --store-dir "$FACTORY_XUDT_NEGATIVE_DIR/packages" \
   --json >"$FACTORY_XUDT_NEGATIVE_DIR/smoke.json"
 log "factory-xudt-negative-local-exit-package -> $FACTORY_XUDT_NEGATIVE_DIR/local-exit-package.json"
@@ -403,14 +417,14 @@ trap 'rm -f "$WATCH_KEY_FILE"' EXIT
 printf '%s\n' "${MORPH_DEVNET_PRIVATE_KEY:-0xd00c06bfd800d27397002dca6fb0993d5ba6399b4238b2f29ee9deb97593d2bc}" >"$WATCH_KEY_FILE"
 chmod 600 "$WATCH_KEY_FILE" 2>/dev/null || true
 log "watch-auto-sponsor-open -> $WATCH_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel --json >"$WATCH_DIR/open.json"
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel --json >"$WATCH_DIR/open.json"
 STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
 VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
 CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_DIR/open.json")"
 OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_DIR/open.json")"
 
 log "watch-auto-sponsor-package -> $WATCH_DIR/package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$STATE_OUT_POINT" \
   --state-number 2 \
   --store-dir "$WATCH_DIR/packages" \
@@ -453,7 +467,7 @@ cargo run -q -p morph-cli -- validate-watch-config \
 
 touch "$WATCH_DIR/service.stop"
 log "watch-auto-sponsor-service-stop -> $WATCH_DIR/service.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-service \
+run_cli_without_devnet_key_env devnet --rpc-url "$RPC_URL" watch-config-service \
   --config "$WATCH_DIR/watch-config.json" \
   --private-key-file "$WATCH_KEY_FILE" \
   --stop-file "$WATCH_DIR/service.stop" \
@@ -461,19 +475,19 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-service \
   --json >"$WATCH_DIR/service.json"
 
 log "watch-auto-sponsor-depth -> $WATCH_DIR/depth.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" mine \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" mine \
   --blocks 5 \
   --json >"$WATCH_DIR/depth.json"
 
 log "watch-auto-sponsor-publish -> $WATCH_DIR/watch.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-once \
+run_cli_without_devnet_key_env devnet --rpc-url "$RPC_URL" watch-config-once \
   --config "$WATCH_DIR/watch-config.json" \
   --private-key-file "$WATCH_KEY_FILE" \
   --json >"$WATCH_DIR/watch.json"
 
 PUBLISHED_STATE_OUT_POINT="$(jq -r '.channels[0].report.publication.state_out_point.tx_hash + ":" + (.channels[0].report.publication.state_out_point.index | tostring)' "$WATCH_DIR/watch.json")"
 log "watch-auto-sponsor-finalise -> $WATCH_DIR/finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$VAULT_OUT_POINT" \
   --json >"$WATCH_DIR/finalise.json"
@@ -481,7 +495,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
 WATCH_DIRECT_DIR="$OUT_DIR/watch-direct-sponsor"
 mkdir -p "$WATCH_DIRECT_DIR"
 log "watch-direct-sponsor-open -> $WATCH_DIRECT_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel \
   --sponsor-min-state-number 4 \
   --sponsor-max-state-number 4 \
   --sponsor-max-fee-per-tx 200000000 \
@@ -493,13 +507,13 @@ WATCH_DIRECT_SPONSOR_OUT_POINT="$(jq -r '.cells[] | select(.role == "sponsor") |
 WATCH_DIRECT_CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_DIRECT_DIR/open.json")"
 WATCH_DIRECT_OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_DIRECT_DIR/open.json")"
 log "watch-direct-sponsor-package -> $WATCH_DIRECT_DIR/package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$WATCH_DIRECT_STATE_OUT_POINT" \
   --state-number 4 \
   --store-dir "$WATCH_DIRECT_DIR/packages" \
   --json >"$WATCH_DIRECT_DIR/package.json"
 log "watch-direct-sponsor-watch -> $WATCH_DIRECT_DIR/watch.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
+run_cli_without_devnet_key_env devnet --rpc-url "$RPC_URL" watch-latest-package \
   --channel-id "$WATCH_DIRECT_CHANNEL_ID" \
   --from-block "$WATCH_DIRECT_OPEN_BLOCK" \
   --store-dir "$WATCH_DIRECT_DIR/packages" \
@@ -513,7 +527,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
   --json >"$WATCH_DIRECT_DIR/watch.json"
 WATCH_DIRECT_PUBLISHED_STATE_OUT_POINT="$(jq -r '.publication.state_out_point.tx_hash + ":" + (.publication.state_out_point.index | tostring)' "$WATCH_DIRECT_DIR/watch.json")"
 log "watch-direct-sponsor-finalise -> $WATCH_DIRECT_DIR/finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$WATCH_DIRECT_PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$WATCH_DIRECT_VAULT_OUT_POINT" \
   --json >"$WATCH_DIRECT_DIR/finalise.json"
@@ -522,13 +536,13 @@ WATCH_LOOP_DIR="$OUT_DIR/watch-config-loop"
 mkdir -p "$WATCH_LOOP_DIR"
 WATCH_LOOP_DIR_ABS="$(cd "$WATCH_LOOP_DIR" && pwd)"
 log "watch-config-loop-open -> $WATCH_LOOP_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel --json >"$WATCH_LOOP_DIR/open.json"
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel --json >"$WATCH_LOOP_DIR/open.json"
 WATCH_LOOP_STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_LOOP_DIR/open.json")"
 WATCH_LOOP_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_LOOP_DIR/open.json")"
 WATCH_LOOP_CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_LOOP_DIR/open.json")"
 WATCH_LOOP_OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_LOOP_DIR/open.json")"
 log "watch-config-loop-package -> $WATCH_LOOP_DIR/package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$WATCH_LOOP_STATE_OUT_POINT" \
   --state-number 2 \
   --store-dir "$WATCH_LOOP_DIR/packages" \
@@ -558,7 +572,7 @@ jq -n \
     }]
   }' >"$WATCH_LOOP_DIR/watch-config.json"
 log "watch-config-loop-run -> $WATCH_LOOP_DIR/loop.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-loop \
+run_cli_without_devnet_key_env devnet --rpc-url "$RPC_URL" watch-config-loop \
   --config "$WATCH_LOOP_DIR/watch-config.json" \
   --private-key-file "$WATCH_KEY_FILE" \
   --passes 2 \
@@ -567,7 +581,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-config-loop \
   --json >"$WATCH_LOOP_DIR/loop.json"
 WATCH_LOOP_PUBLISHED_STATE_OUT_POINT="$(jq -r '.passes[0].report.channels[0].report.publication.state_out_point.tx_hash + ":" + (.passes[0].report.channels[0].report.publication.state_out_point.index | tostring)' "$WATCH_LOOP_DIR/loop.json")"
 log "watch-config-loop-finalise -> $WATCH_LOOP_DIR/finalise.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" finalise-channel \
   --state-out-point "$WATCH_LOOP_PUBLISHED_STATE_OUT_POINT" \
   --vault-out-point "$WATCH_LOOP_VAULT_OUT_POINT" \
   --json >"$WATCH_LOOP_DIR/finalise.json"
@@ -575,14 +589,14 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" finalise-channel \
 WATCH_SPLICE_DIR="$OUT_DIR/watch-splice-stale"
 mkdir -p "$WATCH_SPLICE_DIR"
 log "watch-splice-stale-open -> $WATCH_SPLICE_DIR/open.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" open-channel --json >"$WATCH_SPLICE_DIR/open.json"
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" open-channel --json >"$WATCH_SPLICE_DIR/open.json"
 WATCH_SPLICE_STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_SPLICE_DIR/open.json")"
 WATCH_SPLICE_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_SPLICE_DIR/open.json")"
 WATCH_SPLICE_CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_SPLICE_DIR/open.json")"
 WATCH_SPLICE_OLD_FUNDING_ANCHOR="$(jq -r '.funding_anchor' "$WATCH_SPLICE_DIR/open.json")"
 
 log "watch-splice-stale-package -> $WATCH_SPLICE_DIR/state-package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$WATCH_SPLICE_STATE_OUT_POINT" \
   --state-number 1 \
   --store-dir "$WATCH_SPLICE_DIR/state-packages" \
@@ -590,7 +604,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-state-package \
 WATCH_SPLICE_OLD_FUNDING_CONTEXT_ID="$(jq -r '.package.funding_context_id' "$WATCH_SPLICE_DIR/state-package.json")"
 
 log "watch-splice-stale-splice-package -> $WATCH_SPLICE_DIR/splice-package.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-splice-package \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-splice-package \
   --state-out-point "$WATCH_SPLICE_STATE_OUT_POINT" \
   --vault-out-point "$WATCH_SPLICE_VAULT_OUT_POINT" \
   --kind splice-in \
@@ -600,7 +614,7 @@ cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" save-splice-package \
 WATCH_SPLICE_PACKAGE_PATH="$(jq -r '.path' "$WATCH_SPLICE_DIR/splice-package.json")"
 
 log "watch-splice-stale-apply -> $WATCH_SPLICE_DIR/apply.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" apply-splice \
+cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" apply-splice \
   --state-out-point "$WATCH_SPLICE_STATE_OUT_POINT" \
   --vault-out-point "$WATCH_SPLICE_VAULT_OUT_POINT" \
   --splice-package "$WATCH_SPLICE_PACKAGE_PATH" \
@@ -630,7 +644,7 @@ jq -n \
   }' >"$WATCH_SPLICE_CURSOR"
 
 log "watch-splice-stale-watch -> $WATCH_SPLICE_DIR/watch.json"
-cargo run -q -p morph-cli -- devnet --rpc-url "$RPC_URL" watch-latest-package \
+run_cli_without_devnet_key_env devnet --rpc-url "$RPC_URL" watch-latest-package \
   --channel-id "$WATCH_SPLICE_CHANNEL_ID" \
   --from-block "$WATCH_SPLICE_APPLY_BLOCK" \
   --cursor-file "$WATCH_SPLICE_CURSOR" \

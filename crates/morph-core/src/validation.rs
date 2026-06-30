@@ -69,7 +69,7 @@ pub enum MorphError {
     SponsorFeeTooHigh,
     #[error("sponsor total budget exceeded")]
     SponsorBudgetExceeded,
-    #[error("sponsor policy may only pay publication or challenge transactions")]
+    #[error("sponsor policy may only pay publication or supersede transactions")]
     SponsorOperationNotAllowed,
     #[error("vault operation is not allowed")]
     VaultOperationNotAllowed,
@@ -103,6 +103,8 @@ pub enum MorphError {
     SpliceHeaderContextMismatch,
     #[error("splice base state number does not match the current state")]
     SpliceBaseStateMismatch,
+    #[error("post-splice state does not match the splice successor context")]
+    SpliceNextStateMismatch,
     #[error("splice funding epoch must advance")]
     SpliceEpochNotAdvanced,
     #[error("splice vault commitment mismatch")]
@@ -217,6 +219,9 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     if !splice.current_state.capacity_sufficient() {
         return Err(MorphError::StateCapacityInsufficient);
     }
+    if !splice.next_state.capacity_sufficient() {
+        return Err(MorphError::StateCapacityInsufficient);
+    }
     if current.phase != Phase::Active {
         return Err(MorphError::SpliceStateNotActive);
     }
@@ -227,13 +232,16 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
         || splice.header.old_funding_anchor != current.funding_anchor
         || splice.header.old_vault_commitment != current.vault_set_commitment
         || splice.header.participants_commitment != current.participants_commitment
-        || splice.header.payload_commitment != current.payload_commitment
+        || splice.header.vault_materialisation_root != current.vault_materialisation_root
         || splice.header.challenge_policy_commitment != current.challenge_policy_commitment
     {
         return Err(MorphError::SpliceHeaderContextMismatch);
     }
     if splice.header.base_state_number != current.state_number {
         return Err(MorphError::SpliceBaseStateMismatch);
+    }
+    if !state_context_matches_splice_next(current, &splice.next_state.header, &splice.header) {
+        return Err(MorphError::SpliceNextStateMismatch);
     }
     if splice.header.new_funding_epoch <= splice.header.old_funding_epoch
         || splice.header.new_funding_anchor == splice.header.old_funding_anchor
@@ -300,6 +308,32 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     Ok(())
 }
 
+fn state_context_matches_splice_next(
+    current: &StateHeader,
+    next: &StateHeader,
+    header: &SpliceHeader,
+) -> bool {
+    current.protocol_version == next.protocol_version
+        && current.chain_id == next.chain_id
+        && current.signature_scheme_id == next.signature_scheme_id
+        && current.channel_id == next.channel_id
+        && current.funding_epoch == header.old_funding_epoch
+        && next.funding_epoch == header.new_funding_epoch
+        && current.funding_anchor == header.old_funding_anchor
+        && next.funding_anchor == header.new_funding_anchor
+        && current.vault_set_commitment == header.old_vault_commitment
+        && next.vault_set_commitment == header.new_vault_commitment
+        && next.vault_materialisation_root == header.new_vault_materialisation_root
+        && current.state_number == next.state_number
+        && current.mode == next.mode
+        && current.participants_commitment == next.participants_commitment
+        && current.asset_registry_commitment == next.asset_registry_commitment
+        && current.settlement_descriptor_commitment == next.settlement_descriptor_commitment
+        && current.descriptor_version == next.descriptor_version
+        && current.challenge_policy_commitment == next.challenge_policy_commitment
+        && current.state_layout_version == next.state_layout_version
+}
+
 pub fn validate_splice_authorization(header: &SpliceHeader, witness: &SpliceWitness) -> Result<()> {
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::SpliceUnsupportedSignatureScheme);
@@ -346,9 +380,6 @@ pub fn validate_sponsor_policy(policy: &SponsorPolicy, spend: &SponsorSpend) -> 
     {
         return Err(MorphError::SponsorStateOutOfRange);
     }
-    if policy.expiry != u64::MAX {
-        return Err(MorphError::SponsorPolicyUnsupported);
-    }
     if spend.publication_state_type_hash != policy.publication_state_type_hash {
         return Err(MorphError::SponsorStateTypeMismatch);
     }
@@ -366,7 +397,7 @@ pub fn validate_sponsor_policy(policy: &SponsorPolicy, spend: &SponsorSpend) -> 
     {
         return Err(MorphError::SponsorBudgetExceeded);
     }
-    if !spend.operation.is_publication_or_challenge() {
+    if !spend.operation.is_publication_or_supersede() {
         return Err(MorphError::SponsorOperationNotAllowed);
     }
     Ok(())
@@ -863,10 +894,7 @@ pub fn factory_right_leaf_hash(right: &FactoryRight) -> Bytes32 {
 
 pub fn validate_vault_spend(spend: &VaultSpend) -> Result<()> {
     match spend.operation {
-        ChannelOperation::Finalise
-        | ChannelOperation::CooperativeClose
-        | ChannelOperation::Splice
-        | ChannelOperation::Materialise => {}
+        ChannelOperation::Finalise | ChannelOperation::Splice | ChannelOperation::Materialise => {}
         ChannelOperation::Fund | ChannelOperation::Publish | ChannelOperation::Supersede => {
             return Err(MorphError::VaultOperationNotAllowed);
         }

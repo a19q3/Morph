@@ -339,6 +339,19 @@ fn validate_factory_id_derivation(expected_factory_id: &[u8]) -> Result<()> {
     if derived.as_slice() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
+    let mut input_index = 1;
+    loop {
+        match load_input(input_index, Source::Input) {
+            Ok(input) => {
+                if blake2b256(&[input.as_slice(), &index]).as_slice() == expected_factory_id {
+                    return Err(ScriptError::FactoryIdMismatch);
+                }
+                input_index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
     Ok(())
 }
 

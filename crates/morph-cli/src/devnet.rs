@@ -87,6 +87,8 @@ use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+pub const DEFAULT_SPONSOR_MIN_STATE_NUMBER: u64 = 1;
+pub const DEFAULT_SPONSOR_MAX_STATE_NUMBER: u64 = 1 << 20;
 const CONTRACTS: [(&str, &str); 7] = [
     ("morph-state-lock", "morph-state-lock"),
     ("morph-state-type", "morph-state-type"),
@@ -117,6 +119,7 @@ pub struct OpenChannelOptions {
     pub sponsor_capacity: u64,
     pub sponsor_min_state_number: u64,
     pub sponsor_max_state_number: u64,
+    pub strict_sponsor_range: bool,
     pub sponsor_max_fee_per_tx: Option<u64>,
     pub sponsor_max_total_fee: Option<u64>,
     pub fee: u64,
@@ -536,6 +539,7 @@ pub struct FundSponsorOptions {
     pub sponsor_capacity: u64,
     pub sponsor_min_state_number: u64,
     pub sponsor_max_state_number: u64,
+    pub strict_sponsor_range: bool,
     pub sponsor_max_fee_per_tx: Option<u64>,
     pub sponsor_max_total_fee: Option<u64>,
     pub fee: u64,
@@ -785,7 +789,6 @@ pub struct SponsorPolicyReport {
     pub max_fee_per_tx: u64,
     pub max_total_fee: u64,
     pub already_spent: u64,
-    pub expiry: u64,
     pub publication_state_type_hash: String,
     pub change_lock_hash: String,
 }
@@ -1672,6 +1675,12 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         options.sponsor_capacity > 0,
         "sponsor capacity must be non-zero"
     );
+    if options.strict_sponsor_range {
+        ensure_strict_sponsor_range(
+            options.sponsor_min_state_number,
+            options.sponsor_max_state_number,
+        )?;
+    }
 
     let owner_key = parse_privkey(&options.private_key)
         .with_context(|| "invalid secp256k1 private key for devnet channel opener")?;
@@ -1801,7 +1810,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .lock(vault_lock)
         .build();
     ensure_output_capacity("vault", &vault_output, 0)?;
-    set_state_payload_commitment(
+    set_state_vault_materialisation_root(
         &mut state_header,
         vault_cell_commitment_from_output(&vault_output, &[]),
     );
@@ -5334,8 +5343,13 @@ pub fn factory_exit_channel(
     let vault_lock_hash: [u8; BYTE32_LEN] = vault_lock.calc_script_hash().unpack();
 
     let owner_lock_hash = owner_lock.calc_script_hash();
-    let sponsor_policy_settings =
-        sponsor_policy_settings(options.sponsor_capacity, 0, u64::MAX, None, None)?;
+    let sponsor_policy_settings = sponsor_policy_settings(
+        options.sponsor_capacity,
+        DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+        DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+        None,
+        None,
+    )?;
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
         sponsor_policy_settings,
@@ -5486,7 +5500,7 @@ pub fn factory_exit_channel(
         .type_(child_vault_type.pack())
         .build();
     ensure_output_capacity("child vault", &vault_output, child_vault_data.len())?;
-    set_state_payload_commitment(
+    set_state_vault_materialisation_root(
         &mut state_header,
         vault_cell_commitment_from_output(&vault_output, child_vault_data.as_ref()),
     );
@@ -5849,8 +5863,13 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     );
     let xudt_type_hash: [u8; 32] = xudt_type.calc_script_hash().unpack();
 
-    let sponsor_policy_settings =
-        sponsor_policy_settings(options.sponsor_capacity, 0, u64::MAX, None, None)?;
+    let sponsor_policy_settings = sponsor_policy_settings(
+        options.sponsor_capacity,
+        DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+        DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+        None,
+        None,
+    )?;
     let sponsor_policy = sponsor_policy_bytes(
         &channel_id,
         sponsor_policy_settings,
@@ -5943,7 +5962,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .build();
     ensure_output_capacity("xUDT vault", &vault_output, 16)?;
     let vault_data = xudt_amount_bytes(total_xudt_amount);
-    set_state_payload_commitment(
+    set_state_vault_materialisation_root(
         &mut state_header,
         vault_cell_commitment_from_output(&vault_output, vault_data.as_ref()),
     );
@@ -6647,7 +6666,7 @@ pub fn save_splice_package(
     };
     let new_vault_output = new_vault_builder.build();
     ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
-    let new_payload_commitment =
+    let new_vault_materialisation_root =
         vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref());
 
     let mut header = SpliceHeader {
@@ -6666,8 +6685,8 @@ pub fn save_splice_package(
         new_vault_commitment: [0u8; BYTE32_LEN],
         asset_delta_commitment: [0u8; BYTE32_LEN],
         participants_commitment: current_state.header.participants_commitment,
-        payload_commitment: current_state.header.payload_commitment,
-        new_payload_commitment,
+        vault_materialisation_root: current_state.header.vault_materialisation_root,
+        new_vault_materialisation_root,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     header.old_vault_commitment = vault_descriptor_commitment(&old_vault);
@@ -6679,8 +6698,14 @@ pub fn save_splice_package(
         &options.alice_private_key,
         &options.bob_private_key,
     )?;
+    let mut next_state = current_state.clone();
+    next_state.header.funding_epoch = header.new_funding_epoch;
+    next_state.header.funding_anchor = header.new_funding_anchor;
+    next_state.header.vault_set_commitment = header.new_vault_commitment;
+    next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
     let transition = SpliceTransition {
         current_state,
+        next_state,
         header,
         witness,
         old_vault,
@@ -7274,6 +7299,7 @@ fn sponsor_for_watch_publication(
             sponsor_capacity: options.auto_sponsor_capacity,
             sponsor_min_state_number: selected_state_number,
             sponsor_max_state_number: selected_state_number,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(policy_fee),
             sponsor_max_total_fee: Some(policy_fee),
             fee: options.fee,
@@ -7290,6 +7316,12 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         options.sponsor_capacity > 0,
         "sponsor capacity must be non-zero"
     );
+    if options.strict_sponsor_range {
+        ensure_strict_sponsor_range(
+            options.sponsor_min_state_number,
+            options.sponsor_max_state_number,
+        )?;
+    }
 
     let owner_key = parse_privkey(&options.private_key)
         .with_context(|| "invalid secp256k1 private key for sponsor funding")?;
@@ -7454,7 +7486,7 @@ pub fn finalise_channel(
     );
     ensure!(
         vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
-            == header.payload_commitment(),
+            == header.vault_materialisation_root(),
         "StateHeader payload commitment does not match the live VaultCell"
     );
 
@@ -7751,7 +7783,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     };
     let new_vault_output = new_vault_builder.build();
     ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
-    set_state_payload_commitment(
+    set_state_vault_materialisation_root(
         &mut next_state_header,
         vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref()),
     );
@@ -7964,6 +7996,7 @@ pub fn splice_smoke(rpc: &CkbRpcClient, options: SpliceSmokeOptions) -> Result<S
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
             sponsor_max_total_fee: Some(sponsor_policy_fee),
             fee: options.fee,
@@ -8017,6 +8050,7 @@ pub fn splice_smoke(rpc: &CkbRpcClient, options: SpliceSmokeOptions) -> Result<S
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
             sponsor_max_total_fee: Some(sponsor_policy_fee),
             fee: options.fee,
@@ -8189,6 +8223,7 @@ pub fn xudt_splice_in_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
             sponsor_max_total_fee: Some(sponsor_policy_fee),
             fee: options.fee,
@@ -8371,6 +8406,7 @@ pub fn xudt_splice_out_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(sponsor_policy_fee),
             sponsor_max_total_fee: Some(sponsor_policy_fee),
             fee: options.fee,
@@ -8506,6 +8542,7 @@ pub fn splice_negative_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(options.fee),
             sponsor_max_total_fee: Some(options.fee),
             fee: options.fee,
@@ -9101,7 +9138,7 @@ fn build_xudt_finalise_transaction(
     );
     ensure!(
         vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
-            == header.payload_commitment(),
+            == header.vault_materialisation_root(),
         "StateHeader payload commitment does not match the live xUDT VaultCell"
     );
 
@@ -9349,8 +9386,9 @@ pub fn supersede_smoke(
             alice_capacity: options.alice_capacity,
             bob_capacity: options.bob_capacity,
             sponsor_capacity: options.sponsor_capacity,
-            sponsor_min_state_number: 0,
-            sponsor_max_state_number: u64::MAX,
+            sponsor_min_state_number: DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+            sponsor_max_state_number: DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+            strict_sponsor_range: true,
             sponsor_max_fee_per_tx: None,
             sponsor_max_total_fee: None,
             fee: options.fee,
@@ -9386,8 +9424,9 @@ pub fn supersede_smoke(
             private_key: options.private_key.clone(),
             state_out_point: stale_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
-            sponsor_min_state_number: 0,
-            sponsor_max_state_number: u64::MAX,
+            sponsor_min_state_number: DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+            sponsor_max_state_number: DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+            strict_sponsor_range: true,
             sponsor_max_fee_per_tx: None,
             sponsor_max_total_fee: None,
             fee: options.fee,
@@ -9469,6 +9508,7 @@ pub fn finalise_since_negative_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(policy_fee),
             sponsor_max_total_fee: Some(policy_fee),
             fee: options.fee,
@@ -9591,6 +9631,7 @@ pub fn sponsor_policy_negative_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(policy_fee),
             sponsor_max_total_fee: Some(policy_fee),
             fee: options.fee,
@@ -9708,6 +9749,7 @@ pub fn sponsor_budget_negative_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(rejected_max_fee),
             sponsor_max_total_fee: Some(rejected_max_fee),
             fee: options.fee,
@@ -9760,6 +9802,7 @@ pub fn sponsor_budget_negative_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(replacement_policy_fee),
             sponsor_max_total_fee: Some(replacement_policy_fee),
             fee: options.fee,
@@ -9844,6 +9887,7 @@ pub fn competing_spend_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
             sponsor_max_state_number: 1,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(policy_fee),
             sponsor_max_total_fee: Some(policy_fee),
             fee: options.fee,
@@ -9864,6 +9908,7 @@ pub fn competing_spend_smoke(
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 2,
             sponsor_max_state_number: 2,
+            strict_sponsor_range: false,
             sponsor_max_fee_per_tx: Some(policy_fee),
             sponsor_max_total_fee: Some(policy_fee),
             fee: options.fee,
@@ -11665,7 +11710,7 @@ fn vault_lock_args(
     Bytes::from(args)
 }
 
-fn set_state_payload_commitment(state_header: &mut [u8], commitment: [u8; BYTE32_LEN]) {
+fn set_state_vault_materialisation_root(state_header: &mut [u8], commitment: [u8; BYTE32_LEN]) {
     state_header[248..280].copy_from_slice(&commitment);
 }
 
@@ -11721,6 +11766,20 @@ fn sponsor_policy_settings(
     })
 }
 
+fn ensure_strict_sponsor_range(min_state_number: u64, max_state_number: u64) -> Result<()> {
+    ensure!(
+        min_state_number >= DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+        "strict sponsor range requires min_state_number >= {}",
+        DEFAULT_SPONSOR_MIN_STATE_NUMBER
+    );
+    ensure!(
+        max_state_number <= DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+        "strict sponsor range requires max_state_number <= {}",
+        DEFAULT_SPONSOR_MAX_STATE_NUMBER
+    );
+    Ok(())
+}
+
 fn sponsor_policy_bytes(
     channel_id: &[u8; 32],
     settings: SponsorPolicySettings,
@@ -11734,9 +11793,8 @@ fn sponsor_policy_bytes(
     put_u64(&mut raw, 48, settings.max_fee_per_tx);
     put_u64(&mut raw, 56, settings.max_total_fee);
     put_u64(&mut raw, 64, 0);
-    put_u64(&mut raw, 72, u64::MAX);
-    raw[80..112].copy_from_slice(&publication_state_type_hash);
-    raw[112..144].copy_from_slice(&change_lock_hash);
+    raw[72..104].copy_from_slice(&publication_state_type_hash);
+    raw[104..136].copy_from_slice(&change_lock_hash);
     raw
 }
 
@@ -11751,7 +11809,6 @@ fn sponsor_policy_report(
         max_fee_per_tx: settings.max_fee_per_tx,
         max_total_fee: settings.max_total_fee,
         already_spent: 0,
-        expiry: u64::MAX,
         publication_state_type_hash: hex32(&publication_state_type_hash),
         change_lock_hash: hex32(&change_lock_hash),
     }
@@ -11989,9 +12046,9 @@ fn core_state_cell_from_live(
                 header.settlement_descriptor_commitment(),
             )?,
             descriptor_version: header.descriptor_version(),
-            payload_commitment: bytes32_from_slice(
-                "state payload_commitment",
-                header.payload_commitment(),
+            vault_materialisation_root: bytes32_from_slice(
+                "state vault_materialisation_root",
+                header.vault_materialisation_root(),
             )?,
             challenge_policy_commitment: bytes32_from_slice(
                 "state challenge_policy_commitment",
@@ -12230,7 +12287,7 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
         asset_registry_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY"]),
         settlement_descriptor_commitment: input.settlement_descriptor_commitment,
         descriptor_version: input.descriptor_version,
-        payload_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD"]),
+        vault_materialisation_root: script_blake2b256(&[b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD"]),
         challenge_policy_commitment: input.challenge_policy_commitment,
         state_layout_version: 2,
     })
@@ -12656,6 +12713,25 @@ mod tests {
             xudt_settlement_output(lock, &xudt_type, 10_000_000_000, 0, 1);
         assert!(tampered_output.type_().to_opt().is_some());
         assert_eq!(tampered_data.as_ref(), &1u128.to_le_bytes());
+    }
+
+    #[test]
+    fn strict_sponsor_range_accepts_default_window() {
+        ensure_strict_sponsor_range(
+            DEFAULT_SPONSOR_MIN_STATE_NUMBER,
+            DEFAULT_SPONSOR_MAX_STATE_NUMBER,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn strict_sponsor_range_rejects_unbounded_policy() {
+        let err = ensure_strict_sponsor_range(0, u64::MAX).unwrap_err();
+
+        assert!(
+            err.to_string().contains("strict sponsor range"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

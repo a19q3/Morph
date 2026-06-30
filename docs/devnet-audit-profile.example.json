@@ -61,7 +61,7 @@
     {
       "id": "signed_descriptor_evolution",
       "severity": "P0",
-      "principle": "Settlement descriptors may evolve only as part of a signed current state or factory transition.",
+      "principle": "Settlement descriptors are signed current-state context and may not drift during supersession.",
       "required_coverage_tags": [
         "signed_descriptor_evolution"
       ],

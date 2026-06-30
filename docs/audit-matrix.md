@@ -21,7 +21,7 @@ convention.
 | Factory reserve is conserved during child-channel exit | `factory_type_and_vault_accept_local_exit_materialisation`, `factory_type_and_vault_accept_local_exit_xudt_materialisation`, `factory_type_and_vault_accept_reduced_exit_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_reserve_release`, `factory_type_and_vault_accept_reduced_exit_xudt_full_release_without_typed_change`, `factory_type_rejects_local_exit_digest_mismatch`, `factory_type_rejects_local_exit_state_lock_mismatch`, `factory_type_rejects_local_exit_xudt_amount_mismatch`, `factory_type_rejects_local_exit_xudt_type_mismatch`, `factory_type_rejects_reduced_exit_xudt_amount_mismatch`, `factory_type_rejects_reduced_exit_xudt_type_mismatch`, `factory_vault_rejects_reduced_exit_xudt_change_amount_mismatch`, `factory_vault_rejects_reduced_exit_xudt_missing_typed_change`, `factory_type_rejects_reduced_exit_xudt_capacity_mismatch` |
 | Factory splice reserve claims match exact vault deltas and materialised FactoryVault cells | `accepts_valid_factory_splice_in_transition`, `accepts_valid_factory_xudt_splice_out_transition`, `factory_splice_rejects_reserve_claim_without_vault_input`, `factory_splice_rejects_vault_release_without_rights_decrease`, `factory_splice_rejects_xudt_type_mismatch`, `factory_splice_rejects_invalid_signature`, `validates_factory_splice_package`, `validates_factory_xudt_splice_out_package`, `writes_reads_and_validates_factory_splice_package`, `rejects_factory_splice_participant_key_set_mismatch`, `rejects_factory_splice_vault_delta_mismatch`, `factory_splice_witness_fields_are_fixed_width`, `verifies_factory_splice_update`, `rejects_factory_splice_vault_delta_tamper`, `factory_type_and_vault_accept_factory_splice_in`, `factory_vault_rejects_factory_splice_capacity_mismatch`, `factory_type_and_vault_accept_factory_xudt_splice_in`, `factory_vault_rejects_factory_xudt_splice_output_capacity_mismatch`, `factory_vault_rejects_factory_xudt_splice_input_capacity_mismatch`, `factory_type_and_vault_accept_reduced_factory_xudt_splice_in`, `factory_vault_rejects_reduced_factory_xudt_splice_output_capacity_mismatch`, `factory_vault_rejects_reduced_factory_xudt_splice_input_capacity_mismatch` |
 | Vault value follows current state evidence | `vault_spend_accepts_finalise_after_since`, `vault_spend_rejects_unmatured_finalise`, `vault_lock_accepts_finalise_with_current_state` |
-| Vault outputs match the signed settlement descriptor | `accepts_signed_settlement_descriptor_update`, `state_type_accepts_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
+| StateHeader context rejects settlement descriptor drift, and vault outputs match the signed current descriptor | `rejects_signed_settlement_descriptor_update_as_context_change`, `state_type_rejects_signed_descriptor_update`, `vault_lock_accepts_finalise_with_current_state`, `vault_lock_rejects_descriptor_output_mismatch` |
 | Splice transitions preserve StateCell/VaultCell funding epochs | `state_and_vault_accept_splice_in_bridge`, `state_and_vault_accept_splice_out_bridge`, `state_and_vault_reject_splice_wrong_channel_header`, `vault_lock_rejects_splice_new_vault_capacity_mismatch` |
 | Authentic StateCell authority gates value and monitoring | `vault_lock_rejects_fake_state_header_without_state_type`, `state_type_rejects_standalone_settling_close_without_matching_vault`, `state_type_rejects_standalone_active_splice_retire_without_matching_vault`, `watchtower_state_detection_requires_authentic_state_scripts` |
 | Splice-out payouts stay participant-owned in the conservative splice policy | `validates_splice_out_fixture`, `validates_xudt_splice_out_fixture`, `participant_pubkey_lock_matches_private_key_lock` |
@@ -33,10 +33,10 @@ convention.
 | Unrelated Cells cannot influence channel validity | `rejects_unrelated_cell_used_for_channel_semantics` |
 | Sponsor budget cannot be drained | `sponsor_policy_rejects_drain_attempt` |
 | Sponsor fee pays a real Morph state publication, not an arbitrary transfer | `sponsor_lock_accepts_bounded_fee_with_wallet_change`, `sponsor_lock_rejects_fee_without_state_publication`, `sponsor_lock_rejects_fake_state_header_without_state_type` |
-| Sponsor fee/state bounds are enforced by script; finite script expiry is rejected | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range`, `sponsor_lock_rejects_finite_expiry_policy` |
+| Sponsor fee/state bounds are enforced by script; finite sponsor windows stay in operator policy | `sponsor_lock_rejects_fee_above_per_tx_limit`, `sponsor_lock_rejects_state_number_outside_policy_range` |
 | Watchtower operator bounds are checked before publication | `accepts_fixture_policy_run`, `rejects_shallow_detection_depth`, `rejects_fee_above_operator_limit`, `rejects_explicit_sponsor_when_policy_forbids_it`, `rejects_wrong_channel_policy`, `rejects_webhook_when_policy_forbids_it` |
 | Watchtower multi-channel config is canonical and key-free | `validates_fixture_config`, `rejects_duplicate_channels`, `rejects_channel_without_sponsor_path`, `resolves_channel_options_relative_to_config_file`, `rejects_zero_loop_options` |
-| Watchtower runtime key material stays outside the config | `resolves_private_key_from_file`, `rejects_ambiguous_private_key_sources`, `rejects_multi_token_private_key_file`, `falls_back_to_devnet_key_for_local_watchers` |
+| Watchtower runtime key material stays outside the config | `resolves_private_key_from_file`, `rejects_ambiguous_private_key_sources`, `rejects_multi_token_private_key_file`, `watchtower_private_key_file_is_not_shadowed_by_devnet_key_env` |
 | Watchtower service has bounded operational control | `service_stops_before_rpc_when_stop_file_exists`, `service_stops_after_bounded_errors_and_writes_health`, `rejects_invalid_service_options`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
 | Watchtower alerts are structured and deliverable | `appends_jsonl_alerts`, `posts_alert_to_webhook` |
 | Smoke evidence contains watchtower detection, publication, service, and health records | `summarises_smoke_metrics_and_script_failures`, `rejects_missing_watchtower_alert_coverage`, `rejects_missing_watchtower_service_coverage`, `rejects_unhealthy_watchtower_service_coverage` |
@@ -151,11 +151,10 @@ Implemented devnet-level checks:
   `factory-reduced-xudt-exit-full-smoke`,
   `factory-reduced-xudt-exit-one-sided-smoke`, and
   `factory-reduced-xudt-negative-exit-smoke`.
-- Finite sponsor expiry windows, sponsor source, scan cadence, and webhook
-  policy are operator/watchtower policy in the current conservative scope.
-  Finite script-level expiry is rejected by the sponsor lock; the remaining
-  runtime bounds are covered by host/operator policy checks, not by sponsor-lock
-  script claims.
+- Finite sponsor windows, sponsor source, scan cadence, and webhook policy are
+  operator/watchtower policy in the current conservative scope. The sponsor
+  policy wire format has no script-level expiry field; these runtime bounds are
+  covered by host/operator policy checks, not by sponsor-lock script claims.
 
 Implemented factory checks:
 

@@ -59,7 +59,9 @@ a claim that the current factory witness boundary is the old current boundary.
 
 In the current devnet profile, `funding_anchor` means the signed funding anchor
 identity. It is derived in a Type-ID-style way from the first funding input and
-the State Cell output index, and it is not a live output locator.
+the State Cell output index, and it is not a live output locator. This is the
+devnet funding-anchor profile; a mainnet-track profile should add live Fund Cell
+uniqueness checking before treating the anchor as deployment-grade identity.
 
 Tooling derives `funding_context_id = H("CKB_MORPH_FUNDING_CONTEXT",
 chain_id, channel_id, funding_anchor, vault_set_commitment)` from the signed
@@ -73,6 +75,12 @@ wire profile uses mode bytes `1` and `2`. These correspond to the paper's
 current `bilateral_plaintext` profile and the implemented factory
 commitment/proof profile. Bilateral commitment mode is reserved and is not
 emitted by current package or devnet flows.
+
+The host `Phase` enum is wider than the on-chain State type phase byte. Current
+State scripts accept only `Active` and `Settling`; `Funding` and `Closed` are
+local lifecycle labels used by the host node and Hub after opening and after
+finalisation. Factory progression is tracked by `FactoryStateHeader.update_number`,
+not by a `Phase::FactoryActive` value.
 
 Initial funding approval is split across layers. The scripts enforce canonical
 anchor derivation, active phase, state number zero, lock/type binding, and
@@ -90,7 +98,7 @@ agreed to. Mitigations are entirely off chain:
 - the funding tx must be reviewed by every participant before it is confirmed;
 - the host / wallet must reject a funding tx whose commitments do not match the
   mutually-derived initial configuration;
-- watchtowsers and package validators must treat the initial on-chain
+- watchtowers and package validators must treat the initial on-chain
   commitment as authoritative only after at least one participant has
   co-signed the resulting initial package.
 
@@ -132,13 +140,19 @@ current settling State Cell with a matching descriptor commitment and matured
 relative `since`. It also verifies the vault side of splice transitions.
 The current bilateral finalisation profile is atomic: it consumes the committed
 vault value and does not create terminal receipt Cells.
-Cooperative close is modelled in the host operation taxonomy, but it is not part
-of the current State type, vault contract, CLI, or devnet execution profile.
+Cooperative close is not part of the current State type, vault contract, CLI,
+host operation taxonomy, or devnet execution profile.
 
 `morph-sponsor-lock` pays only bounded publication fees for admitted channel
 state numbers and clean sponsor change.
 It does not sponsor funding, finalisation, splice, materialisation, or
 cooperative close transactions in the current profile.
+The v1 devnet operator default is `min_state_number=1` and
+`max_state_number=2^20`; stateful reports flag sponsor policies wider than that
+audited default window.
+Sponsor policies do not carry a script-level expiry field in the current wire
+profile. Finite sponsor windows are operator/watchtower policy, not a
+sponsor-lock consensus rule.
 
 ### Factory Scripts
 
@@ -153,6 +167,31 @@ is not part of the current conservative contract profile.
 `morph-factory-vault-lock` owns factory reserve conservation. It ensures a
 factory exit or splice changes the FactoryVaultCell exactly as the factory
 evidence permits.
+
+### Factory Local Exit Lifecycle
+
+Factory local-exit evidence is one-shot evidence for materialising a child
+channel from factory reserve rights. The embedded child State header must be
+`state_number=0` and `Active`: the factory transition creates the child channel's
+initial enforceable state, after which ordinary child-channel publish,
+supersede, splice, and finalise rules take over. Later child states are not
+authorised through another local-exit proof; they are authorised by the child
+channel's own participant signatures and state-number progression.
+
+The factory type script does not reconstruct the child participants from the
+materialised output. The binding is indirect and signed: the local-exit or
+reduced-exit evidence commits the exact child State header, including its
+`participants_commitment`, settlement descriptor commitment, descriptor version,
+lock hash, and vault shape. `morph-factory-type` then requires the output State
+Cell bytes to equal that committed header, while the child State type enforces
+the participant signature set for later state progression.
+
+Ordinary supersede may advance state number, phase, and profile-specific payload
+commitment, but preserves the settlement descriptor commitment and descriptor
+version as channel context. Splice has a separate
+`state_context_matches_splice_next` rule for the old/new funding-anchor bridge
+and applies the same descriptor stability while additionally binding the
+successor payload to the signed splice header.
 
 ## Resolution And Packages
 

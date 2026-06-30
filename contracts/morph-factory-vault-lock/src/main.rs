@@ -61,8 +61,12 @@ fn main() -> Result<()> {
     let envelope = WitnessEnvelope::parse(input_type_data.as_ref())?;
     let input_type_raw = envelope.body();
 
-    let old_header = find_unique_factory_state(Source::Input, factory_id, factory_type_hash)?;
-    let new_header = find_unique_factory_state(Source::Output, factory_id, factory_type_hash)?;
+    let old_header_data =
+        find_unique_factory_state_data(Source::Input, factory_id, factory_type_hash)?;
+    let new_header_data =
+        find_unique_factory_state_data(Source::Output, factory_id, factory_type_hash)?;
+    let old_header = FactoryStateHeader::parse(&old_header_data)?;
+    let new_header = FactoryStateHeader::parse(&new_header_data)?;
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
@@ -137,11 +141,11 @@ struct ChildVaultRelease {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn find_unique_factory_state(
+fn find_unique_factory_state_data(
     source: Source,
     expected_factory_id: &[u8],
     expected_type_hash: &[u8],
-) -> Result<FactoryStateHeader<'static>> {
+) -> Result<alloc::vec::Vec<u8>> {
     let mut found: Option<alloc::vec::Vec<u8>> = None;
     let mut index = 0;
     loop {
@@ -166,9 +170,7 @@ fn find_unique_factory_state(
         }
     }
 
-    let data = found.ok_or(ScriptError::StateCellMissing)?;
-    let leaked: &'static [u8] = alloc::boxed::Box::leak(data.into_boxed_slice());
-    FactoryStateHeader::parse(leaked)
+    found.ok_or(ScriptError::StateCellMissing)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -424,6 +426,9 @@ fn validate_factory_splice_cell_delta(
 
 #[cfg(target_arch = "riscv64")]
 fn validate_factory_reduced_exit_reserve_conservation(release: &ChildVaultRelease) -> Result<()> {
+    // Callers verify the reduced-exit witness against the on-chain old/new
+    // FactoryState headers before this arithmetic check; this function only
+    // enforces the vault cell delta authorised by that witness.
     let input_capacity = single_group_capacity(Source::GroupInput)?;
     let input_type =
         load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
@@ -521,5 +526,36 @@ fn single_group_capacity(source: Source) -> Result<u64> {
         Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => Ok(capacity),
         Err(_) => Err(ScriptError::Encoding),
         Ok(_) => Err(ScriptError::FactoryReserveMismatch),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use morph_script_common::{FACTORY_STATE_HEADER_LEN, FactoryStateHeader};
+
+    #[test]
+    fn factory_state_header_parse_is_borrowed_and_repeatable() {
+        for update_number in 0..100u64 {
+            let raw = factory_header_bytes(update_number);
+            let header = FactoryStateHeader::parse(&raw).unwrap();
+
+            assert_eq!(header.update_number(), update_number);
+        }
+    }
+
+    fn factory_header_bytes(update_number: u64) -> [u8; FACTORY_STATE_HEADER_LEN] {
+        let mut raw = [0u8; FACTORY_STATE_HEADER_LEN];
+        raw[0..2].copy_from_slice(&1u16.to_le_bytes());
+        raw[2..34].fill(1);
+        raw[34..36].copy_from_slice(&1u16.to_le_bytes());
+        raw[36..68].fill(2);
+        raw[68..76].copy_from_slice(&update_number.to_le_bytes());
+        raw[76..108].fill(3);
+        raw[108..140].fill(4);
+        raw[140..172].fill(5);
+        raw[172..204].fill(6);
+        raw[204..236].fill(7);
+        raw[236..238].copy_from_slice(&1u16.to_le_bytes());
+        raw
     }
 }

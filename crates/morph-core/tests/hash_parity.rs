@@ -84,7 +84,7 @@ fn state_header_signing_digest_matches_script_common() {
         asset_registry_commitment: bytes32(8),
         settlement_descriptor_commitment: bytes32(9),
         descriptor_version: 10,
-        payload_commitment: bytes32(11),
+        vault_materialisation_root: bytes32(11),
         challenge_policy_commitment: bytes32(12),
         state_layout_version: 13,
     };
@@ -103,7 +103,7 @@ fn state_header_signing_digest_matches_script_common() {
         asset_registry_commitment: header.asset_registry_commitment,
         settlement_descriptor_commitment: header.settlement_descriptor_commitment,
         descriptor_version: header.descriptor_version,
-        payload_commitment: header.payload_commitment,
+        vault_materialisation_root: header.vault_materialisation_root,
         challenge_policy_commitment: header.challenge_policy_commitment,
         state_layout_version: header.state_layout_version,
     });
@@ -130,8 +130,8 @@ fn splice_header_signing_digest_matches_script_common() {
         new_vault_commitment: bytes32(10),
         asset_delta_commitment: bytes32(11),
         participants_commitment: bytes32(12),
-        payload_commitment: bytes32(14),
-        new_payload_commitment: bytes32(15),
+        vault_materialisation_root: bytes32(14),
+        new_vault_materialisation_root: bytes32(15),
         challenge_policy_commitment: bytes32(13),
     };
     let mut raw = [0u8; wire::SPLICE_HEADER_LEN];
@@ -150,8 +150,8 @@ fn splice_header_signing_digest_matches_script_common() {
     raw[197..229].copy_from_slice(&header.new_vault_commitment);
     raw[229..261].copy_from_slice(&header.asset_delta_commitment);
     raw[261..293].copy_from_slice(&header.participants_commitment);
-    raw[293..325].copy_from_slice(&header.payload_commitment);
-    raw[325..357].copy_from_slice(&header.new_payload_commitment);
+    raw[293..325].copy_from_slice(&header.vault_materialisation_root);
+    raw[325..357].copy_from_slice(&header.new_vault_materialisation_root);
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
     let wire_header = wire::SpliceHeader::parse(&raw).unwrap();
 

@@ -4,6 +4,7 @@ import {
   BadgeCheck,
   Bell,
   Boxes,
+  Copy,
   Database,
   Factory,
   FileJson,
@@ -11,6 +12,8 @@ import {
   Landmark,
   LayoutDashboard,
   Network,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RadioTower,
   ReceiptText,
@@ -31,6 +34,7 @@ import {
   Asset,
   Balance,
   ChannelRecord,
+  EventSeverity,
   FactoryRecord,
   FlowKey,
   Hex32,
@@ -41,8 +45,10 @@ import {
   Pubkey,
   RecordProvenance,
   WatchtowerAlertRecord,
+  WatchAlertSeverity,
   assertHex32,
   assertIncludesPubkey,
+  assertInvoiceAmount,
   assertNonNegativeInteger,
   assertPositiveInteger,
   assertPubkey,
@@ -57,12 +63,95 @@ import {
   parsePubkeyList,
   shortHex,
 } from './domain';
+import { ChannelTable, EventPanel, FactoryPanel, InvoicePanel, PeerPanel, WatchtowerPanel } from './records';
+import { ChannelActions, FactoryActions, InvoiceActions, PeerActions, StateActions } from './actions';
+import {
+  balanceTotal,
+  channelSearchText,
+  copyTextToClipboard,
+  eventSearchText,
+  factorySearchText,
+  filterRecords,
+  formatActionError,
+  invoiceSearchText,
+  isAuthTokenError,
+  latestEventId,
+  lastRefreshLabel,
+  liveLabel,
+  liveTone,
+  peerSearchText,
+  queryTokens,
+  rpcDetail,
+  rpcLabel,
+  rpcTone,
+  sortChannelsForOperator,
+  sortEventsNewestFirst,
+  sortFactoriesForOperator,
+  sortPeersForOperator,
+  sortWatchtowerAlertsNewestFirst,
+  watchtowerAlertSearchText,
+} from './state';
 
 type ActionPanel = 'peer' | 'invoice' | 'channel' | 'factory' | 'state';
+type ChannelActionTab = 'open' | 'splice' | 'publish' | 'finalise';
+type FactoryActionTab = 'open' | 'advance' | 'materialise';
+type ToastTone = 'info' | 'ok' | 'bad';
+type TimeFilter = 'all' | '1h' | '24h' | '7d';
+type EventSeverityFilter = 'all' | EventSeverity;
+type WatchSeverityFilter = 'all' | WatchAlertSeverity;
+type Toast = {
+  id: number;
+  tone: ToastTone;
+  title: string;
+  body?: string;
+};
+type RecordBreakdown = {
+  channels: number;
+  invoices: number;
+  peers: number;
+  factories: number;
+  alerts: number;
+  events: number;
+};
 type RunAction = (label: string, action: () => Promise<NodeState>) => Promise<void>;
 type LiveMode = 'starting' | 'sse' | 'sse-reconnecting' | 'polling' | 'polling-auth' | 'offline';
+type FactoryActionTarget = {
+  factoryId: Hex32;
+  intent: 'advance' | 'materialise';
+  nonce: number;
+};
+type ChannelFormMode = 'open' | 'materialise';
+type ChannelFormDraft = {
+  channelId: string;
+  counterpartyPubkey: string;
+  counterpartyAlias: string;
+  fundingContextId: string;
+  local: string;
+  remote: string;
+  pending: string;
+  sponsorBudget: string;
+  asset: Asset;
+};
+type ChannelFormPrefill = {
+  nonce: number;
+  draft: Partial<ChannelFormDraft>;
+};
 
 const LIVE_POLL_INTERVAL_MS = 5_000;
+const DEFAULT_INVOICE_EXPIRY_SECS = '3600';
+const DEFAULT_PENDING_CAPACITY = '0';
+const DEFAULT_SPONSOR_BUDGET = '1000000';
+const MAX_PEER_ALIAS_LEN = 80;
+const SIDE_PANEL_PREVIEW_LIMIT = 5;
+const EVENT_PREVIEW_LIMIT = 10;
+const DRAWER_COLLAPSED_STORAGE_KEY = 'morph-hub.drawer-collapsed';
+
+const invoiceExpiryPresets = [
+  { label: '1h', value: '3600' },
+  { label: '6h', value: '21600' },
+  { label: '24h', value: '86400' },
+  { label: '7d', value: '604800' },
+];
 
 const actionItems: { key: ActionPanel; label: string; Icon: LucideIcon }[] = [
   { key: 'peer', label: 'Peers', Icon: Users },
@@ -78,9 +167,9 @@ const flowItems: Record<FlowKey, { label: string; detail: string; action: string
   'invoice-received': { label: 'Receive an invoice', detail: 'Incoming invoice is decoded and stored', action: 'Open invoices', panel: 'invoice', Icon: ReceiptText },
   'invoice-settled': { label: 'Settle an invoice', detail: 'Payment preimage has closed the invoice', action: 'Open invoices', panel: 'invoice', Icon: BadgeCheck },
   'channel-opened': { label: 'Open a channel', detail: 'Active bilateral channel is tracked', action: 'Open channels', panel: 'channel', Icon: GitBranch },
-  'state-published': { label: 'Publish channel state', detail: 'Latest state moved into settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
+  'state-published': { label: 'Update tracked state', detail: 'Local state moved into settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
   'channel-finalised': { label: 'Finalise a channel', detail: 'Settling channel is closed', action: 'Open channels', panel: 'channel', Icon: BadgeCheck },
-  'channel-spliced': { label: 'Splice a channel', detail: 'Funding context advanced', action: 'Open channels', panel: 'channel', Icon: Split },
+  'channel-spliced': { label: 'Record a splice', detail: 'Funding context advanced locally', action: 'Open channels', panel: 'channel', Icon: Split },
   'factory-opened': { label: 'Open a factory', detail: 'Shared factory reserve is tracked', action: 'Open factories', panel: 'factory', Icon: Factory },
   'factory-advanced': { label: 'Advance a factory', detail: 'Factory update number moved forward', action: 'Open factories', panel: 'factory', Icon: RefreshCw },
   'factory-child': { label: 'Materialise child channel', detail: 'Factory reserve created a channel', action: 'Open factories', panel: 'factory', Icon: Network },
@@ -101,9 +190,14 @@ type SectionKey = keyof typeof sectionIds;
 export function App() {
   const [state, setState] = useState<NodeState>(emptyState);
   const [activeAction, setActiveAction] = useState<ActionPanel>('invoice');
+  const [drawerCollapsed, setDrawerCollapsed] = useState(() => initialDrawerCollapsed());
   const [status, setStatus] = useState('Loading Morph Hub API');
+  const [lastRefreshMs, setLastRefreshMs] = useState<number | null>(null);
+  const [clockMs, setClockMs] = useState(Date.now());
   const [error, setError] = useState('');
+  const [toasts, setToasts] = useState<Toast[]>([]);
   const [busy, setBusy] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
   const [liveMode, setLiveMode] = useState<LiveMode>('starting');
   const [authTokenPresent, setAuthTokenPresent] = useState(hasApiToken());
   const [requiresToken, setRequiresToken] = useState(false);
@@ -111,12 +205,32 @@ export function App() {
   const [initialStateLoaded, setInitialStateLoaded] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>('overview');
   const [recordQuery, setRecordQuery] = useState('');
+  const [factoryActionTarget, setFactoryActionTarget] = useState<FactoryActionTarget | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
   const latestEventIdRef = useRef(0);
+  const toastIdRef = useRef(0);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts(current => current.filter(toast => toast.id !== id));
+  }, []);
+
+  const pushToast = useCallback((toast: Omit<Toast, 'id'>, ttlMs = 5_000) => {
+    const id = toastIdRef.current + 1;
+    toastIdRef.current = id;
+    setToasts(current => [...current.filter(item => item.id !== id), { ...toast, id }].slice(-3));
+    window.setTimeout(() => dismissToast(id), ttlMs);
+    return id;
+  }, [dismissToast]);
+
+  const replaceToast = useCallback((id: number, toast: Omit<Toast, 'id'>, ttlMs = 5_000) => {
+    setToasts(current => current.map(item => item.id === id ? { ...toast, id } : item));
+    window.setTimeout(() => dismissToast(id), ttlMs);
+  }, [dismissToast]);
 
   const applyState = useCallback((next: NodeState) => {
     latestEventIdRef.current = latestEventId(next.events);
     setState(next);
+    setLastRefreshMs(Date.now());
   }, []);
 
   const refresh = useCallback(async () => {
@@ -139,6 +253,33 @@ export function App() {
       setLiveMode('offline');
     });
   }, [refresh]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockMs(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT';
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        setCommandOpen(true);
+        return;
+      }
+      if (!typing && event.key === '/') {
+        event.preventDefault();
+        const search = document.querySelector<HTMLInputElement>('[data-testid="operator-search"]');
+        search?.focus();
+      }
+      if (event.key === 'Escape') {
+        setCommandOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     let stopped = false;
@@ -229,13 +370,17 @@ export function App() {
     setBusy(true);
     setError('');
     setStatus(`${label} submitted`);
+    const toastId = pushToast({ tone: 'info', title: `${label} submitted` });
     try {
       const next = await action();
       applyState(next);
       setStatus(`${label} accepted by Morph Hub API`);
+      replaceToast(toastId, { tone: 'ok', title: `${label} accepted`, body: 'Morph Hub state refreshed.' });
     } catch (err) {
-      setError(String((err as Error).message));
+      const message = formatActionError(label, err);
+      setError(message);
       setStatus(`${label} rejected`);
+      replaceToast(toastId, { tone: 'bad', title: `${label} rejected`, body: message }, 8_000);
     } finally {
       setBusy(false);
     }
@@ -304,6 +449,23 @@ export function App() {
     filteredFactories.length +
     filteredWatchtowerAlerts.length +
     filteredEvents.length;
+  const recordBreakdown: RecordBreakdown = searchActive
+    ? {
+      channels: filteredChannels.length,
+      invoices: filteredInvoices.length,
+      peers: filteredPeers.length,
+      factories: filteredFactories.length,
+      alerts: filteredWatchtowerAlerts.length,
+      events: filteredEvents.length,
+    }
+    : {
+      channels: state.channels.length,
+      invoices: state.invoices.length,
+      peers: state.peers.length,
+      factories: state.factories.length,
+      alerts: orderedWatchtowerAlerts.length,
+      events: state.events.length,
+    };
 
   const scrollTo = (key: SectionKey) => {
     const root = workspaceRef.current;
@@ -314,9 +476,25 @@ export function App() {
 
   const selectAction = (key: ActionPanel) => {
     setActiveAction(key);
+    setDrawerCollapsed(false);
     setError('');
     const label = actionItems.find(item => item.key === key)?.label ?? 'Operator';
     setStatus(`${label} controls selected`);
+  };
+
+  const openFactoryMaterialise = (factoryId: Hex32) => {
+    setFactoryActionTarget({ factoryId, intent: 'materialise', nonce: Date.now() });
+    setActiveAction('factory');
+    setError('');
+    setStatus(`Materialise child controls selected for ${shortHex(factoryId)}`);
+  };
+
+  const toggleDrawerCollapsed = () => {
+    setDrawerCollapsed(current => {
+      const next = !current;
+      sessionStorage.setItem(DRAWER_COLLAPSED_STORAGE_KEY, String(next));
+      return next;
+    });
   };
 
   const submitApiToken = (event: FormEvent) => {
@@ -337,7 +515,7 @@ export function App() {
   };
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${drawerCollapsed ? 'drawer-collapsed' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">M</div>
@@ -349,6 +527,11 @@ export function App() {
 
         <nav className="nav">
           <span className="nav-label">Monitor</span>
+          <button className="nav-item" data-testid="command-palette-open" onClick={() => setCommandOpen(true)}>
+            <Search size={16} />
+            <span className="label">Command</span>
+            <span className="count">⌘K</span>
+          </button>
           <NavButton
             Icon={LayoutDashboard}
             label="Overview"
@@ -428,15 +611,37 @@ export function App() {
           <small>{flowDataLoaded ? (state.missing_flows.length === 0 ? 'All actions recorded' : `${state.missing_flows.length} actions remaining`) : 'Waiting for Hub API'}</small>
         </div>
       </aside>
+      {commandOpen && (
+        <CommandPalette
+          busy={busy}
+          onClose={() => setCommandOpen(false)}
+          onRefresh={() => {
+            setCommandOpen(false);
+            void runAction('Refresh', refresh);
+          }}
+          onSearch={() => {
+            setCommandOpen(false);
+            document.querySelector<HTMLInputElement>('[data-testid="operator-search"]')?.focus();
+          }}
+          onOpenAction={panel => {
+            setCommandOpen(false);
+            selectAction(panel);
+          }}
+          onScroll={section => {
+            setCommandOpen(false);
+            scrollTo(section);
+          }}
+        />
+      )}
 
       <section className="workspace" ref={workspaceRef}>
         <header className="topbar" id={sectionIds.overview}>
           <div>
             <h1>Morph Node <span className={`network-badge ${state.network}`}><span className="dot" />{state.network}</span></h1>
-            <p>{status}</p>
+            <p>{status} · {lastRefreshLabel(lastRefreshMs, clockMs)} · {liveLabel(liveMode)}</p>
           </div>
           <div className="topbar-status">
-            <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} />
+            <StatusPill tone={rpcTone(state.rpc.status)} icon={<ShieldCheck size={15} />} label={rpcLabel(state)} title={rpcDetail(state)} />
             <StatusPill tone={authRequired && !requiresToken ? 'good' : 'warn'} icon={<ShieldCheck size={15} />} label={authRequired ? 'auth required' : 'loopback only'} />
             <StatusPill tone={liveTone(liveMode)} icon={<RadioTower size={15} />} label={liveLabel(liveMode)} />
             <StatusPill tone={evidence.localOnlyRecords > 0 ? 'warn' : evidence.watchtowerAlerts > 0 ? 'good' : 'neutral'} icon={<ShieldCheck size={15} />} label={evidenceStatusLabel(evidence)} />
@@ -489,12 +694,15 @@ export function App() {
 
         <FlowPanel state={state} onOpenAction={selectAction} busy={busy} />
 
+        <AcceptancePanel state={state} evidence={evidence} flowDataLoaded={flowDataLoaded} liveMode={liveMode} />
+
         <OperationSearch
           query={recordQuery}
           onQueryChange={setRecordQuery}
           active={searchActive}
           matchedCount={matchedRecordCount}
           totalCount={totalRecordCount}
+          breakdown={recordBreakdown}
         />
 
         <section className="content-grid">
@@ -505,30 +713,52 @@ export function App() {
               searchActive={searchActive}
               runAction={runAction}
               busy={busy}
+              onOpenAction={() => selectAction('channel')}
             />
           </div>
           <div id={sectionIds.invoices}>
-            <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} />
+            <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} onOpenAction={() => selectAction('invoice')} />
           </div>
           <div id={sectionIds.peers}>
-            <PeerPanel peers={filteredPeers} totalCount={orderedPeers.length} searchActive={searchActive} />
+            <PeerPanel state={state} peers={filteredPeers} totalCount={orderedPeers.length} searchActive={searchActive} runAction={runAction} busy={busy} onOpenAction={() => selectAction('peer')} />
           </div>
           <div id={sectionIds.factories}>
-            <FactoryPanel factories={filteredFactories} totalCount={orderedFactories.length} searchActive={searchActive} />
+            <FactoryPanel
+              factories={filteredFactories}
+              totalCount={orderedFactories.length}
+              searchActive={searchActive}
+              runAction={runAction}
+              busy={busy}
+              onOpenAction={() => selectAction('factory')}
+              onMaterialise={openFactoryMaterialise}
+            />
           </div>
           <div id={sectionIds.watchtower}>
-            <WatchtowerPanel watchtower={state.watchtower} alerts={filteredWatchtowerAlerts} totalCount={orderedWatchtowerAlerts.length} searchActive={searchActive} />
+            <WatchtowerPanel watchtower={state.watchtower} alerts={filteredWatchtowerAlerts} totalCount={orderedWatchtowerAlerts.length} searchActive={searchActive} onOpenAction={() => selectAction('state')} />
           </div>
           <div id={sectionIds.events}>
-            <EventPanel events={filteredEvents} totalCount={orderedEvents.length} searchActive={searchActive} />
+            <EventPanel events={filteredEvents} totalCount={orderedEvents.length} searchActive={searchActive} onRefresh={() => runAction('Refresh', refresh)} busy={busy} />
           </div>
         </section>
       </section>
 
       <aside className="action-drawer">
         <div className="drawer-head">
-          <span>Operate</span>
-          <strong>{activeActionLabel}</strong>
+          <div>
+            <span>Operate</span>
+            <strong>{activeActionLabel}</strong>
+          </div>
+          <button
+            type="button"
+            className="drawer-toggle"
+            onClick={toggleDrawerCollapsed}
+            aria-label={drawerCollapsed ? 'Expand action drawer' : 'Collapse action drawer'}
+            title={drawerCollapsed ? 'Expand action drawer' : 'Collapse action drawer'}
+            data-testid="drawer-collapse-toggle"
+          >
+            {drawerCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
+          </button>
+          <small>Writes local Hub state; chain evidence is shown separately.</small>
         </div>
         <div className="drawer-tabs">
           {actionItems.map(({ key, label, Icon }) => (
@@ -548,11 +778,19 @@ export function App() {
         {activeAction === 'peer' && <PeerActions state={state} runAction={runAction} busy={busy} />}
         {activeAction === 'invoice' && <InvoiceActions state={state} runAction={runAction} busy={busy} />}
         {activeAction === 'channel' && <ChannelActions state={state} runAction={runAction} busy={busy} />}
-        {activeAction === 'factory' && <FactoryActions state={state} runAction={runAction} busy={busy} />}
+        {activeAction === 'factory' && <FactoryActions state={state} runAction={runAction} busy={busy} target={factoryActionTarget} />}
         {activeAction === 'state' && <StateActions state={state} runAction={runAction} busy={busy} />}
       </aside>
+      <ToastViewport toasts={toasts} onDismiss={dismissToast} />
     </main>
   );
+}
+
+function initialDrawerCollapsed(): boolean {
+  if (typeof window === 'undefined') return false;
+  const stored = sessionStorage.getItem(DRAWER_COLLAPSED_STORAGE_KEY);
+  if (stored != null) return stored === 'true';
+  return window.innerWidth < 1280 && window.innerWidth > 1120;
 }
 
 function NavButton({
@@ -583,12 +821,88 @@ function StatusPill({
   icon,
   label,
   tone,
+  title,
 }: {
   icon: React.ReactNode;
   label: string;
   tone: 'good' | 'neutral' | 'warn' | 'bad';
+  title?: string;
 }) {
-  return <span className={`status-pill ${tone}`}>{icon}{label}</span>;
+  return <span className={`status-pill ${tone}`} title={title || label}>{icon}{label}</span>;
+}
+
+function ToastViewport({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
+  if (toasts.length === 0) return null;
+  return (
+    <div className="toast-stack" aria-live="polite" aria-atomic="false">
+      {toasts.map(toast => (
+        <article className={`toast ${toast.tone}`} key={toast.id}>
+          <div>
+            <strong>{toast.title}</strong>
+            {toast.body && <small>{toast.body}</small>}
+          </div>
+          <button type="button" title="Dismiss notification" aria-label="Dismiss notification" onClick={() => onDismiss(toast.id)}>
+            <X size={13} />
+          </button>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function CommandPalette({
+  busy,
+  onClose,
+  onRefresh,
+  onSearch,
+  onOpenAction,
+  onScroll,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onRefresh: () => void;
+  onSearch: () => void;
+  onOpenAction: (panel: ActionPanel) => void;
+  onScroll: (section: SectionKey) => void;
+}) {
+  const commands: { label: string; detail: string; Icon: LucideIcon; action: () => void; disabled?: boolean }[] = [
+    { label: 'Filter records', detail: 'Focus the global record search', Icon: Search, action: onSearch },
+    { label: 'Refresh API state', detail: 'Fetch the latest Hub state', Icon: RefreshCw, action: onRefresh, disabled: busy },
+    { label: 'Create invoice', detail: 'Open invoice controls', Icon: ReceiptText, action: () => onOpenAction('invoice') },
+    { label: 'Connect peer', detail: 'Open peer controls', Icon: Users, action: () => onOpenAction('peer') },
+    { label: 'Open channel', detail: 'Open channel controls', Icon: GitBranch, action: () => onOpenAction('channel') },
+    { label: 'Open factory', detail: 'Open factory controls', Icon: Factory, action: () => onOpenAction('factory') },
+    { label: 'State file', detail: 'Open state-file controls', Icon: FileJson, action: () => onOpenAction('state') },
+    { label: 'Watchtower feed', detail: 'Jump to watchtower evidence', Icon: RadioTower, action: () => onScroll('watchtower') },
+    { label: 'Events', detail: 'Jump to API event log', Icon: Bell, action: () => onScroll('events') },
+  ];
+
+  return (
+    <div className="modal-backdrop command-backdrop" role="presentation" onMouseDown={onClose}>
+      <div className="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" onMouseDown={event => event.stopPropagation()}>
+        <div className="command-head">
+          <div>
+            <span>Command palette</span>
+            <h3 id="command-palette-title">Operator actions</h3>
+          </div>
+          <button type="button" className="drawer-toggle" title="Close command palette" aria-label="Close command palette" onClick={onClose}>
+            <X size={15} />
+          </button>
+        </div>
+        <div className="command-list">
+          {commands.map(({ label, detail, Icon, action, disabled }) => (
+            <button type="button" key={label} onClick={action} disabled={disabled}>
+              <Icon size={15} />
+              <span>
+                <strong>{label}</strong>
+                <small>{detail}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function NodeInfoStrip({
@@ -620,7 +934,7 @@ function NodeInfoStrip({
         tone={state.watchtower.last_error ? 'bad' : state.watchtower.alerts.length > 0 ? 'warn' : 'neutral'}
       />
       <span className="node-info-separator" />
-      <NodeInfoPill Icon={ShieldCheck} label="RPC" value={rpcLabel(state)} tone={rpcTone(state.rpc.status)} />
+      <NodeInfoPill Icon={ShieldCheck} label="RPC" value={rpcLabel(state)} title={rpcDetail(state)} tone={rpcTone(state.rpc.status)} />
       <NodeInfoPill Icon={RadioTower} label="Live" value={liveLabel(liveMode).replace('live ', '')} tone={liveTone(liveMode)} />
       <NodeInfoPill Icon={FileJson} label="State" value={stateFile} title={state.state_path} monospace />
     </div>
@@ -759,19 +1073,179 @@ function FlowPanel({
   );
 }
 
+type AcceptanceTone = 'good' | 'neutral' | 'warn' | 'bad';
+
+type AcceptanceItem = {
+  key: string;
+  label: string;
+  value: string;
+  detail: string;
+  tone: AcceptanceTone;
+  Icon: LucideIcon;
+};
+
+function AcceptancePanel({
+  state,
+  evidence,
+  flowDataLoaded,
+  liveMode,
+}: {
+  state: NodeState;
+  evidence: EvidenceSummary;
+  flowDataLoaded: boolean;
+  liveMode: LiveMode;
+}) {
+  const items = acceptanceItems(state, evidence, flowDataLoaded, liveMode);
+  const blockers = items.filter(item => item.tone === 'bad').length;
+  const warnings = items.filter(item => item.tone === 'warn').length;
+  const badge = blockers > 0 ? `${blockers} blocked` : warnings > 0 ? `${warnings} warnings` : 'ready';
+
+  return (
+    <section className="acceptance-panel" data-testid="acceptance-panel">
+      <div className="section-head">
+        <h2>Devnet Acceptance</h2>
+        <span className={`badge ${blockers > 0 || warnings > 0 ? 'remaining' : 'complete'}`}>{badge}</span>
+      </div>
+      <div className="acceptance-grid">
+        {items.map(({ key, label, value, detail, tone, Icon }) => (
+          <article className={`acceptance-card ${tone}`} key={key}>
+            <span className="acceptance-icon"><Icon size={15} /></span>
+            <div>
+              <span>{label}</span>
+              <strong>{value}</strong>
+              <small>{detail}</small>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function acceptanceItems(
+  state: NodeState,
+  evidence: EvidenceSummary,
+  flowDataLoaded: boolean,
+  liveMode: LiveMode
+): AcceptanceItem[] {
+  const flowValue = flowDataLoaded ? `${state.completed_flows.length}/${state.required_flows.length}` : 'not loaded';
+  const flowDetail = !flowDataLoaded
+    ? 'The Hub API has not loaded the operator runbook yet.'
+    : state.missing_flows.length === 0
+      ? 'All required local operator flows are represented in Hub state.'
+      : `${state.missing_flows.length} required local operator flows still need evidence.`;
+  const flowTone: AcceptanceTone = !flowDataLoaded ? 'warn' : state.missing_flows.length === 0 ? 'good' : 'warn';
+
+  const watchtowerValue = !state.watchtower.configured
+    ? 'not configured'
+    : state.watchtower.file_exists
+      ? `${state.watchtower.alerts.length} alerts`
+      : 'file pending';
+  const watchtowerDetail = state.watchtower.last_error
+    ? state.watchtower.last_error
+    : !state.watchtower.configured
+      ? 'No watchtower alert JSONL is attached to this Hub process.'
+      : state.watchtower.file_exists
+        ? 'The alert feed is available to prove watchtower observations.'
+        : 'The configured alert feed has not been written yet.';
+  const watchtowerTone: AcceptanceTone = state.watchtower.last_error
+    ? 'bad'
+    : state.watchtower.configured && state.watchtower.file_exists
+      ? 'good'
+      : state.watchtower.configured
+        ? 'warn'
+        : 'neutral';
+
+  const provenanceValue = evidence.localOnlyRecords > 0
+    ? `${evidence.localOnlyRecords} local only`
+    : evidence.watchtowerAlerts > 0
+      ? `${evidence.watchtowerAlerts} evidenced`
+      : 'no records';
+  const provenanceDetail = evidence.localOnlyRecords > 0
+    ? 'State-file rows are useful for operation, but they are not CKB devnet confirmation.'
+    : evidence.watchtowerAlerts > 0
+      ? 'Visible evidence is coming from the configured watchtower alert feed.'
+      : 'No local rows or watchtower alerts have been loaded into this console.';
+  const provenanceTone: AcceptanceTone = evidence.localOnlyRecords > 0 ? 'warn' : evidence.watchtowerAlerts > 0 ? 'good' : 'neutral';
+
+  return [
+    {
+      key: 'live-api',
+      label: 'Live API',
+      value: liveLabel(liveMode),
+      detail: liveMode === 'offline'
+        ? 'The console cannot refresh evidence until the Hub API is reachable.'
+        : 'The console is refreshing state through SSE or polling.',
+      tone: liveTone(liveMode),
+      Icon: RadioTower,
+    },
+    {
+      key: 'devnet-scope',
+      label: 'Network scope',
+      value: state.network,
+      detail: 'This console is a devnet evidence surface, not a mainnet release certificate.',
+      tone: state.network === 'devnet' ? 'good' : 'warn',
+      Icon: Network,
+    },
+    {
+      key: 'runbook-flows',
+      label: 'Runbook flows',
+      value: flowValue,
+      detail: flowDetail,
+      tone: flowTone,
+      Icon: Activity,
+    },
+    {
+      key: 'watchtower-feed',
+      label: 'Watchtower feed',
+      value: watchtowerValue,
+      detail: watchtowerDetail,
+      tone: watchtowerTone,
+      Icon: ShieldCheck,
+    },
+    {
+      key: 'record-provenance',
+      label: 'Record provenance',
+      value: provenanceValue,
+      detail: provenanceDetail,
+      tone: provenanceTone,
+      Icon: FileJson,
+    },
+    {
+      key: 'release-artefact',
+      label: 'Release artefact',
+      value: 'clean-tree CLI gate',
+      detail: 'Production stateful artefacts pass only when devnet-stateful-assert sees a clean worktree and matching HEAD.',
+      tone: 'warn',
+      Icon: AlertTriangle,
+    },
+  ];
+}
+
 function OperationSearch({
   query,
   onQueryChange,
   active,
   matchedCount,
   totalCount,
+  breakdown,
 }: {
   query: string;
   onQueryChange: (query: string) => void;
   active: boolean;
   matchedCount: number;
   totalCount: number;
+  breakdown: RecordBreakdown;
 }) {
+  const summary = active ? `${matchedCount}/${totalCount} records` : `${totalCount} records`;
+  const chips = [
+    `${breakdown.channels} channels`,
+    `${breakdown.invoices} invoices`,
+    `${breakdown.peers} peers`,
+    `${breakdown.factories} factories`,
+    `${breakdown.alerts} alerts`,
+    `${breakdown.events} events`,
+  ];
   return (
     <section className="operator-search" data-testid="operator-search-panel">
       <label>
@@ -785,7 +1259,8 @@ function OperationSearch({
         />
       </label>
       <div className="operator-search-meta">
-        <span>{active ? `${matchedCount}/${totalCount} records` : `${totalCount} records`}</span>
+        <strong>{summary}</strong>
+        <span>{chips.join(' · ')}</span>
         {query && (
           <button type="button" title="Clear search" aria-label="Clear search" data-testid="operator-search-clear" onClick={() => onQueryChange('')}>
             <X size={14} />
@@ -796,1264 +1271,162 @@ function OperationSearch({
   );
 }
 
-function ChannelTable({
-  channels,
-  totalCount,
-  searchActive,
-  runAction,
-  busy,
+function RichEmptyState({
+  Icon,
+  title,
+  detail,
+  actionLabel,
+  onAction,
+  disabled,
 }: {
-  channels: ChannelRecord[];
-  totalCount: number;
-  searchActive: boolean;
-  runAction: RunAction;
-  busy: boolean;
+  Icon: LucideIcon;
+  title: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <section className="panel table-panel">
-      <div className="section-head">
-        <h2>Channels</h2>
-        <span className="badge">{searchActive ? `${channels.length}/${totalCount} tracked` : `${channels.length} tracked`}</span>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Channel</th>
-            <th>Phase</th>
-            <th>State</th>
-            <th>Funding</th>
-            <th>Value</th>
-            <th>Sponsor</th>
-            <th>Source</th>
-            <th>Next action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {channels.length === 0 && (
-            <tr><td colSpan={8} className="empty">{searchActive ? 'No channels match this filter' : 'No channels in the hub state file'}</td></tr>
-          )}
-          {channels.map(channel => (
-            <tr key={channel.channel_id}>
-              <td><strong>{shortHex(channel.channel_id)}</strong><small>{shortHex(channel.counterparty_pubkey)}</small></td>
-              <td><span className={`phase ${channel.phase}`}>{channel.phase}</span></td>
-              <td className="mono">#{channel.state_number}</td>
-              <td><strong>epoch {channel.funding_epoch}</strong><small>{shortHex(channel.funding_context_id)}</small></td>
-              <td className="mono">{formatBalance(channel.balances[0])}</td>
-              <td className="mono">{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
-              <td><ProvenanceBadge provenance={channel.provenance} /></td>
-              <td>
-                <ChannelRowActions channel={channel} runAction={runAction} busy={busy} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
-function ChannelRowActions({
-  channel,
-  runAction,
-  busy,
-}: {
-  channel: ChannelRecord;
-  runAction: RunAction;
-  busy: boolean;
-}) {
-  const canPublish = channel.phase === 'active' || channel.phase === 'settling';
-  const canSplice = channel.phase === 'active';
-  const canFinalise = channel.phase === 'settling';
-
-  const publish = () => {
-    void runAction('Publish channel state', () => postAction(`/api/channels/${channel.channel_id}/publish`, {
-      funding_context_id: channel.funding_context_id,
-      state_number: channel.state_number + 1,
-    }));
-  };
-
-  const splice = () => {
-    const nextFundingEpoch = channel.funding_epoch + 1;
-    const nextFundingContextId = randomHex32();
-    void runAction('Splice channel', () => postAction(`/api/channels/${channel.channel_id}/splice`, {
-      new_funding_epoch: nextFundingEpoch,
-      new_funding_context_id: nextFundingContextId,
-    }));
-  };
-
-  const finalise = () => {
-    void runAction('Finalise channel', () => postAction(`/api/channels/${channel.channel_id}/finalise`));
-  };
-
-  if (!canPublish && !canSplice && !canFinalise) {
-    return <span className="row-action-empty">No action</span>;
-  }
-
-  return (
-    <div className="row-actions" aria-label={`Actions for channel ${channel.channel_id}`}>
-      {canPublish && (
-        <button
-          type="button"
-          className="row-action"
-          data-testid="channel-row-publish"
-          data-channel-id={channel.channel_id}
-          onClick={publish}
-          disabled={busy}
-          title={`Publish state ${channel.state_number + 1} for ${shortHex(channel.channel_id)}`}
-        >
-          <RadioTower size={12} />
-          Publish
-        </button>
-      )}
-      {canSplice && (
-        <button
-          type="button"
-          className="row-action"
-          data-testid="channel-row-splice"
-          data-channel-id={channel.channel_id}
-          onClick={splice}
-          disabled={busy}
-          title={`Splice ${shortHex(channel.channel_id)} to epoch ${channel.funding_epoch + 1}`}
-        >
-          <Split size={12} />
-          Splice
-        </button>
-      )}
-      {canFinalise && (
-        <button
-          type="button"
-          className="row-action primary"
-          data-testid="channel-row-finalise"
-          data-channel-id={channel.channel_id}
-          onClick={finalise}
-          disabled={busy}
-          title={`Finalise ${shortHex(channel.channel_id)}`}
-        >
-          <BadgeCheck size={12} />
-          Finalise
+    <div className="empty rich">
+      <Icon size={24} />
+      <strong>{title}</strong>
+      <small>{detail}</small>
+      {actionLabel && onAction && (
+        <button type="button" className="row-action primary" onClick={onAction} disabled={disabled}>
+          <Plus size={12} /> {actionLabel}
         </button>
       )}
     </div>
   );
 }
 
-function InvoicePanel({ invoices, totalCount, searchActive }: { invoices: InvoiceRecord[]; totalCount: number; searchActive: boolean }) {
-  const orderedInvoices = sortInvoicesNewestFirst(invoices);
-  const openCount = invoices.filter(invoice => invoice.status === 'open').length;
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <h2>Invoices</h2>
-        <span className="badge">{searchActive ? `${invoices.length}/${totalCount} shown` : `${openCount} open`}</span>
-      </div>
-      <div className="stack-list">
-        {invoices.length === 0 && <div className="empty">{searchActive ? 'No invoices match this filter' : 'No invoices in the hub state file'}</div>}
-        {orderedInvoices.slice(0, 5).map(invoice => (
-            <div className="list-row" key={invoice.invoice_id}>
-              <div>
-                <strong>{invoice.description || shortHex(invoice.invoice_id)}</strong>
-                <small>{formatAmount(invoice.amount, invoice.asset)} · {assetLabel(invoice.asset)} · {shortHex(invoice.payment_hash)}</small>
-                <small>expires {formatTime(invoice.expires_at_unix)}</small>
-              </div>
-              <div className="row-badges">
-                <span className={`status ${invoice.status}`}>{invoice.status}</span>
-                <ProvenanceBadge provenance={invoice.provenance} />
-              </div>
-            </div>
-          ))}
-      </div>
-    </section>
-  );
-}
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
 
-function PeerPanel({ peers, totalCount, searchActive }: { peers: PeerRecord[]; totalCount: number; searchActive: boolean }) {
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <h2>Peers</h2>
-        <span className="badge">{searchActive ? `${peers.length}/${totalCount} connected` : `${peers.length} connected`}</span>
-      </div>
-      <div className="stack-list">
-        {peers.length === 0 && <div className="empty">{searchActive ? 'No peers match this filter' : 'No peers in the hub state file'}</div>}
-        {peers.slice(0, 5).map(peer => (
-          <div className="list-row" key={peer.node_id}>
-            <div>
-              <strong>{peer.alias}</strong>
-              <small>{shortHex(peer.pubkey)}</small>
-              <small>node {shortHex(peer.node_id)}</small>
-            </div>
-            <ProvenanceBadge provenance={peer.provenance} />
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function FactoryPanel({ factories, totalCount, searchActive }: { factories: FactoryRecord[]; totalCount: number; searchActive: boolean }) {
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <h2>Factories</h2>
-        <span className="badge">{searchActive ? `${factories.length}/${totalCount} active` : `${factories.length} active`}</span>
-      </div>
-      <div className="stack-list">
-        {factories.length === 0 && <div className="empty">{searchActive ? 'No factories match this filter' : 'No factories in the hub state file'}</div>}
-        {factories.map(factory => (
-          <div className="list-row" key={factory.factory_id}>
-            <div>
-              <strong>{shortHex(factory.factory_id)}</strong>
-              <small>update {factory.update_number} · {factory.materialised_child_channels.length} children</small>
-            </div>
-            <div className="row-badges">
-              <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
-              <ProvenanceBadge provenance={factory.provenance} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function WatchtowerPanel({
-  watchtower,
-  alerts,
-  totalCount,
-  searchActive,
-}: {
-  watchtower: NodeState['watchtower'];
-  alerts: WatchtowerAlertRecord[];
-  totalCount: number;
-  searchActive: boolean;
-}) {
-  const badge = !watchtower.configured
-    ? 'not configured'
-    : searchActive
-      ? `${alerts.length}/${totalCount} alerts`
-      : `${totalCount} alerts`;
-  return (
-    <section className="panel watchtower-panel">
-      <div className="section-head">
-        <h2>Watchtower</h2>
-        <span className={`badge ${watchtower.last_error ? 'remaining' : alerts.length ? 'remaining' : ''}`}>{badge}</span>
-      </div>
-      {watchtower.alert_file && (
-        <div className="watchtower-source">
-          <RadioTower size={14} />
-          <span className="mono">{watchtower.alert_file}</span>
-          <ProvenanceBadge provenance={watchtower.provenance} />
-        </div>
-      )}
-      {watchtower.last_error && <small className="inline-error watchtower-error">{watchtower.last_error}</small>}
-      {!watchtower.configured && <div className="empty">No watchtower alert file configured</div>}
-      {watchtower.configured && !watchtower.file_exists && <div className="empty">Watchtower alert file has not been written yet</div>}
-      {watchtower.configured && watchtower.file_exists && alerts.length === 0 && (
-        <div className="empty">{searchActive ? 'No watchtower alerts match this filter' : 'No watchtower alerts recorded'}</div>
-      )}
-      {alerts.length > 0 && (
-        <div className="event-log watchtower-log">
-          {alerts.slice(0, 10).map(alert => (
-            <div className={`event-entry ${alert.severity}`} key={`${alert.created_unix_ms}-${alert.channel_id}-${alert.event}`}>
-              <EventMark severity={alert.severity === 'warning' ? 'warning' : 'info'} />
-              <div className="event-main">
-                <div className="event-line">
-                  <strong>{alert.event}</strong>
-                  <time dateTime={new Date(alert.created_unix_ms).toISOString()}>{formatTimeMs(alert.created_unix_ms)}</time>
-                </div>
-                <small>{alert.message}</small>
-                <div className="event-meta">
-                  <span className="mono">{shortHex(alert.channel_id)}</span>
-                  <span className="mono">selected #{alert.selected_state_number}</span>
-                  {alert.observed_state_number != null && <span className="mono">observed #{alert.observed_state_number}</span>}
-                  <span className="mono">scan {alert.scanned_to_block}</span>
-                  {alert.publication_tx_hash && <span className="mono">tx {shortHex(alert.publication_tx_hash)}</span>}
-                  <ProvenanceBadge provenance={alert.provenance} />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function EventPanel({ events, totalCount, searchActive }: { events: HubEvent[]; totalCount: number; searchActive: boolean }) {
-  return (
-    <section className="panel">
-      <div className="section-head">
-        <h2>Events</h2>
-        <span className="badge">{searchActive ? `${events.length}/${totalCount} recorded` : `${events.length} recorded`}</span>
-      </div>
-      <div className="event-log">
-        {events.length === 0 && <div className="empty">{searchActive ? 'No events match this filter' : 'No API events recorded'}</div>}
-        {events.slice(0, 10).map(event => (
-          <div className={`event-entry ${event.severity}`} key={event.id}>
-            <EventMark severity={event.severity} />
-            <div className="event-main">
-              <div className="event-line">
-                <strong>{event.event}</strong>
-                <time dateTime={new Date(event.created_at_unix * 1000).toISOString()}>{formatTime(event.created_at_unix)}</time>
-              </div>
-              <small>{event.message}</small>
-              <div className="event-meta">
-                {event.subject_id && <span className="mono">{shortHex(event.subject_id)}</span>}
-                <ProvenanceBadge provenance={event.provenance} />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function EventMark({ severity }: { severity: HubEvent['severity'] }) {
-  const Icon = severity === 'info' ? Activity : AlertTriangle;
-  return (
-    <span className={`event-mark ${severity}`}>
-      <Icon size={14} />
-    </span>
-  );
-}
-
-function PeerActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
-  const [pubkey, setPubkey] = useState('');
-  const [alias, setAlias] = useState('');
-
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Connect peer', () => connectPeer(assertRemotePubkey(pubkey, state.pubkey, 'Peer pubkey'), requiredText(alias, 'Alias')));
-  };
-
-  return (
-    <div className="drawer-section">
-      <h2>Peer Layer</h2>
-      <form onSubmit={submit} className="form-grid">
-        <label>Peer pubkey<input className="mono" data-testid="peer-pubkey" value={pubkey} onChange={event => setPubkey(event.target.value)} /></label>
-        <label>Alias<input data-testid="peer-alias" value={alias} onChange={event => setAlias(event.target.value)} /></label>
-        <button data-testid="peer-connect" disabled={busy}><Users size={15} /> Connect peer</button>
-      </form>
-
-      <div className="form-section">
-        <h3>Known peers ({state.peers.length})</h3>
-        <div className="stack-list">
-          {state.peers.length === 0 && <div className="empty">No peers connected</div>}
-          {state.peers.map(peer => (
-            <div className="list-row" key={peer.node_id}>
-              <div>
-                <strong>{peer.alias}</strong>
-                <small>{shortHex(peer.pubkey)}</small>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function AssetSelect({ value, onChange }: { value: Asset; onChange: (asset: Asset) => void }) {
-  const isXudt = value.kind === 'xudt';
-  const typeHash = !isXudt ? '' : value.type_hash ?? '';
-  const selectAsset = (kind: 'ckb' | 'xudt') => {
-    onChange(kind === 'ckb' ? { kind: 'ckb' } : { kind: 'xudt', type_hash: typeHash ? (typeHash as Hex32) : undefined });
-  };
-  const updateHash = (raw: string) => {
-    onChange({ kind: 'xudt', type_hash: (raw || undefined) as Hex32 | undefined });
-  };
-  return (
-    <>
-      <label>Asset
-        <select value={value.kind} onChange={event => selectAsset(event.target.value as 'ckb' | 'xudt')}>
-          <option value="ckb">CKB</option>
-          <option value="xudt">xUDT</option>
-        </select>
-      </label>
-      {isXudt && (
-        <label>Type hash<input className="mono" value={typeHash} onChange={event => updateHash(event.target.value)} /></label>
-      )}
-    </>
-  );
-}
-
-function InvoiceActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [expirySecs, setExpirySecs] = useState('');
-  const [paymentMode, setPaymentMode] = useState<'preimage' | 'hash'>('preimage');
-  const [paymentSecret, setPaymentSecret] = useState('');
-  const [channelId, setChannelId] = useState('');
-  const [asset, setAsset] = useState<Asset>({ kind: 'ckb' });
-  const [decodeText, setDecodeText] = useState('');
-  const [receiveInvoiceId, setReceiveInvoiceId] = useState('');
-  const [settleInvoiceId, setSettleInvoiceId] = useState('');
-  const [settlePreimage, setSettlePreimage] = useState('');
-  const [copyStatus, setCopyStatus] = useState('');
-  const activeChannels = sortChannelsForOperator(state.channels, state.events).filter(channel => channel.phase === 'active');
-  const latestActiveChannel = activeChannels[0];
-  const latestOpenInvoice = newestInvoice(state.invoices.filter(invoice => invoice.status === 'open'));
-  const latestSettleableInvoice = newestInvoice(
-    state.invoices.filter(invoice => invoice.status === 'open' || invoice.status === 'received')
-  );
-
-  const submitCreate = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Create invoice', async () => {
-      const body = {
-        amount: assertPositiveInteger(amount, 'Amount'),
-        description: requiredText(description, 'Description'),
-        expiry_secs: Number(assertPositiveInteger(expirySecs, 'Expiry seconds')),
-        channel_id: channelId.trim() ? assertHex32(channelId, 'Channel id') : undefined,
-        payment_preimage: paymentMode === 'preimage' ? assertHex32(paymentSecret, 'Payment preimage') : undefined,
-        payment_hash: paymentMode === 'hash' ? assertHex32(paymentSecret, 'Payment hash') : undefined,
-        asset: normaliseAsset(asset),
-      };
-      return postAction('/api/invoices', body);
-    });
-  };
-
-  const submitDecode = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Decode invoice', () => postAction('/api/invoices/decode', { encoded_invoice: requiredText(decodeText, 'Encoded invoice') }));
-  };
-
-  const submitReceive = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Receive invoice', () => {
-      const invoiceId = assertHex32(receiveInvoiceId, 'Invoice id');
-      return postAction(`/api/invoices/${invoiceId}/receive`);
-    });
-  };
-
-  const submitSettle = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Settle invoice', () => {
-      const invoiceId = assertHex32(settleInvoiceId, 'Invoice id');
-      const paymentPreimage = assertHex32(settlePreimage, 'Payment preimage');
-      return postAction(`/api/invoices/${invoiceId}/settle`, { payment_preimage: paymentPreimage });
-    });
-  };
-
-  const copyLatestInvoice = async () => {
-    const encodedInvoice = latestSettleableInvoice?.encoded_invoice;
-    if (!encodedInvoice) return;
-    setCopyStatus('');
+  const copyValue = async () => {
+    setFailed(false);
     try {
-      await copyTextToClipboard(encodedInvoice);
-      setCopyStatus('copied');
-    } catch (err) {
-      setCopyStatus(String((err as Error).message));
+      await copyTextToClipboard(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setFailed(true);
+      window.setTimeout(() => setFailed(false), 2_500);
     }
   };
 
   return (
-    <div className="drawer-section">
-      <h2>Invoice Layer</h2>
-      <form onSubmit={submitCreate} className="form-grid">
-        <label>Amount<input className="mono" data-testid="invoice-amount" value={amount} onChange={event => setAmount(event.target.value)} /></label>
-        <label>Description<input data-testid="invoice-description" value={description} onChange={event => setDescription(event.target.value)} /></label>
-        <label>Expiry seconds<input className="mono" data-testid="invoice-expiry-secs" value={expirySecs} onChange={event => setExpirySecs(event.target.value)} /></label>
-        <label>Payment input
-          <select data-testid="invoice-payment-mode" value={paymentMode} onChange={event => setPaymentMode(event.target.value as 'preimage' | 'hash')}>
-            <option value="preimage">preimage</option>
-            <option value="hash">hash</option>
-          </select>
-        </label>
-        <label>
-          <span className="field-label-row">
-            {paymentMode === 'preimage' ? 'Payment preimage' : 'Payment hash'}
-            {paymentMode === 'preimage' && (
-              <button type="button" className="field-action" data-testid="invoice-generate-payment-secret" onClick={() => setPaymentSecret(randomHex32())}>
-                <RefreshCw size={12} /> Generate
-              </button>
-            )}
-          </span>
-          <input className="mono" data-testid="invoice-payment-secret" value={paymentSecret} onChange={event => setPaymentSecret(event.target.value)} />
-        </label>
-        <label>
-          <span className="field-label-row">
-            Channel id
-            <button
-              type="button"
-              className="field-action"
-              data-testid="invoice-use-active-channel"
-              onClick={() => setChannelId(latestActiveChannel?.channel_id ?? '')}
-              disabled={!latestActiveChannel}
-            >
-              <GitBranch size={12} /> Use active
-            </button>
-          </span>
-          <input className="mono" data-testid="invoice-channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} />
-        </label>
-        <AssetSelect value={asset} onChange={setAsset} />
-        <button data-testid="invoice-create" disabled={busy}><Plus size={15} /> Create invoice</button>
-      </form>
-
-      <div className="form-section">
-        <h3>Decode</h3>
-        <form onSubmit={submitDecode} className="form-grid">
-          <label>Encoded invoice<textarea className="mono" data-testid="invoice-decode-text" value={decodeText} onChange={event => setDecodeText(event.target.value)} /></label>
-          <button data-testid="invoice-decode" disabled={busy}><ReceiptText size={15} /> Decode</button>
-        </form>
-      </div>
-
-      <div className="form-section">
-        <h3>Receive</h3>
-        <form onSubmit={submitReceive} className="form-grid">
-          <label>
-            <span className="field-label-row">
-              Invoice id
-              <button type="button" className="field-action" data-testid="invoice-receive-latest" onClick={() => setReceiveInvoiceId(latestOpenInvoice?.invoice_id ?? '')} disabled={!latestOpenInvoice}>
-                <ReceiptText size={12} /> Latest
-              </button>
-            </span>
-            <input className="mono" data-testid="invoice-receive-id" value={receiveInvoiceId} onChange={event => setReceiveInvoiceId(event.target.value)} />
-          </label>
-          <button data-testid="invoice-receive" disabled={busy}><Database size={15} /> Mark received</button>
-        </form>
-      </div>
-
-      <div className="form-section">
-        <h3>Settle</h3>
-        <form onSubmit={submitSettle} className="form-grid">
-          <label>
-            <span className="field-label-row">
-              Invoice id
-              <button type="button" className="field-action" data-testid="invoice-settle-latest" onClick={() => setSettleInvoiceId(latestSettleableInvoice?.invoice_id ?? '')} disabled={!latestSettleableInvoice}>
-                <ReceiptText size={12} /> Latest
-              </button>
-            </span>
-            <input className="mono" data-testid="invoice-settle-id" value={settleInvoiceId} onChange={event => setSettleInvoiceId(event.target.value)} />
-          </label>
-          <label>Payment preimage<input className="mono" data-testid="invoice-settle-preimage" value={settlePreimage} onChange={event => setSettlePreimage(event.target.value)} /></label>
-          <button data-testid="invoice-settle" disabled={busy}><BadgeCheck size={15} /> Settle</button>
-        </form>
-      </div>
-
-      {latestSettleableInvoice && (
-        <button className="copy-button" data-testid="invoice-copy-latest" onClick={copyLatestInvoice} disabled={busy}>
-          <ReceiptText size={15} /> Copy latest invoice
-        </button>
-      )}
-      {copyStatus && <small className={copyStatus === 'copied' ? 'inline-ok' : 'inline-error'}>{copyStatus}</small>}
-    </div>
+    <button
+      type="button"
+      className={`copy-icon ${copied ? 'copied' : ''} ${failed ? 'failed' : ''}`}
+      title={failed ? 'Copy failed' : copied ? 'Copied' : label}
+      aria-label={failed ? 'Copy failed' : copied ? 'Copied' : label}
+      onClick={copyValue}
+    >
+      {copied ? <BadgeCheck size={12} /> : <Copy size={12} />}
+    </button>
   );
 }
 
-function ChannelActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
-  const [channelId, setChannelId] = useState('');
-  const [counterpartyPubkey, setCounterpartyPubkey] = useState('');
-  const [counterpartyAlias, setCounterpartyAlias] = useState('');
-  const [fundingContextId, setFundingContextId] = useState('');
-  const [local, setLocal] = useState('');
-  const [remote, setRemote] = useState('');
-  const [pending, setPending] = useState('');
-  const [sponsorBudget, setSponsorBudget] = useState('');
-  const [asset, setAsset] = useState<Asset>({ kind: 'ckb' });
-  const [spliceChannelId, setSpliceChannelId] = useState('');
-  const [publishChannelId, setPublishChannelId] = useState('');
-  const [finaliseChannelId, setFinaliseChannelId] = useState('');
-  const [spliceEpoch, setSpliceEpoch] = useState('');
-  const [spliceContextId, setSpliceContextId] = useState('');
-  const [publishContextId, setPublishContextId] = useState('');
-  const [publishStateNumber, setPublishStateNumber] = useState('');
-  const orderedChannels = sortChannelsForOperator(state.channels, state.events);
-  const activeChannels = orderedChannels.filter(channel => channel.phase === 'active');
-  const publishableChannels = orderedChannels.filter(channel => channel.phase === 'active' || channel.phase === 'settling');
-  const settlingChannels = orderedChannels.filter(channel => channel.phase === 'settling');
-  const selectedSpliceChannel = activeChannels.find(channel => channel.channel_id === spliceChannelId);
-  const selectedPublishChannel = publishableChannels.find(channel => channel.channel_id === publishChannelId);
-
-  const submitOpen = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Open channel', () => postAction('/api/channels', channelBody({
-      channelId,
-      counterpartyPubkey,
-      counterpartyAlias,
-      fundingContextId,
-      local,
-      remote,
-      pending,
-      sponsorBudget,
-      asset,
-      localPubkey: state.pubkey,
-    })));
-  };
-
-  const submitSplice = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Splice channel', () => {
-      const id = assertHex32(spliceChannelId, 'Channel id');
-      return postAction(`/api/channels/${id}/splice`, {
-        new_funding_epoch: Number(assertPositiveInteger(spliceEpoch, 'New funding epoch')),
-        new_funding_context_id: assertHex32(spliceContextId, 'New funding context id'),
-      });
-    });
-  };
-
-  const submitPublish = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Publish state', () => {
-      const id = assertHex32(publishChannelId, 'Channel id');
-      return postAction(`/api/channels/${id}/publish`, {
-        funding_context_id: assertHex32(publishContextId, 'Funding context id'),
-        state_number: Number(assertPositiveInteger(publishStateNumber, 'State number')),
-      });
-    });
-  };
-
-  const submitFinalise = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Finalise channel', () => {
-      const id = assertHex32(finaliseChannelId, 'Channel id');
-      return postAction(`/api/channels/${id}/finalise`);
-    });
-  };
-
-  const generateOpenChannelIds = () => {
-    setChannelId(randomHex32());
-    setFundingContextId(randomHex32());
-  };
-
-  const useSelectedSpliceDefaults = () => {
-    if (!selectedSpliceChannel) return;
-    setSpliceEpoch(String(selectedSpliceChannel.funding_epoch + 1));
-    setSpliceContextId(randomHex32());
-  };
-
-  const useSelectedPublishDefaults = () => {
-    if (!selectedPublishChannel) return;
-    setPublishContextId(selectedPublishChannel.funding_context_id);
-    setPublishStateNumber(String(selectedPublishChannel.state_number + 1));
-  };
-
+function EvidenceField({
+  label,
+  value,
+  copyValue,
+  mono = false,
+}: {
+  label: string;
+  value?: React.ReactNode;
+  copyValue?: string | null;
+  mono?: boolean;
+}) {
+  const empty = value == null || value === '';
   return (
-    <div className="drawer-section">
-      <h2>Node Layer</h2>
-      <form onSubmit={submitOpen} className="form-grid">
-        <div className="field-action-row">
-          <button type="button" className="field-action" data-testid="channel-generate-ids" onClick={generateOpenChannelIds}>
-            <RefreshCw size={12} /> Generate ids
-          </button>
-        </div>
-        <label>Channel id<input className="mono" data-testid="channel-id" value={channelId} onChange={event => setChannelId(event.target.value)} /></label>
-        <label>Counterparty pubkey<input className="mono" data-testid="channel-counterparty-pubkey" value={counterpartyPubkey} onChange={event => setCounterpartyPubkey(event.target.value)} /></label>
-        <label>Counterparty alias<input data-testid="channel-counterparty-alias" value={counterpartyAlias} onChange={event => setCounterpartyAlias(event.target.value)} /></label>
-        <label>Funding context id<input className="mono" data-testid="channel-funding-context-id" value={fundingContextId} onChange={event => setFundingContextId(event.target.value)} /></label>
-        <label>Local capacity<input className="mono" data-testid="channel-local" value={local} onChange={event => setLocal(event.target.value)} /></label>
-        <label>Remote capacity<input className="mono" data-testid="channel-remote" value={remote} onChange={event => setRemote(event.target.value)} /></label>
-        <label>Pending capacity<input className="mono" data-testid="channel-pending" value={pending} onChange={event => setPending(event.target.value)} /></label>
-        <label>Sponsor budget<input className="mono" data-testid="channel-sponsor-budget" value={sponsorBudget} onChange={event => setSponsorBudget(event.target.value)} /></label>
-        <AssetSelect value={asset} onChange={setAsset} />
-        <button data-testid="channel-open" disabled={busy}><GitBranch size={15} /> Open channel</button>
-      </form>
-
-      <div className="form-section">
-        <h3>Splice</h3>
-        <form onSubmit={submitSplice} className="form-grid">
-          <ChannelSelect testId="channel-splice-select" label="Active channel" channels={activeChannels} value={spliceChannelId} onChange={setSpliceChannelId} />
-          <div className="field-action-row">
-            <button type="button" className="field-action" data-testid="channel-splice-use-selected" onClick={useSelectedSpliceDefaults} disabled={!selectedSpliceChannel}>
-              <RefreshCw size={12} /> Use selected
-            </button>
-          </div>
-          <label>New funding epoch<input className="mono" data-testid="channel-splice-epoch" value={spliceEpoch} onChange={event => setSpliceEpoch(event.target.value)} /></label>
-          <label>New funding context id<input className="mono" data-testid="channel-splice-context-id" value={spliceContextId} onChange={event => setSpliceContextId(event.target.value)} /></label>
-          <button data-testid="channel-splice" disabled={busy || activeChannels.length === 0}><Split size={15} /> Splice</button>
-        </form>
-      </div>
-
-      <div className="form-section">
-        <h3>Publish state</h3>
-        <form onSubmit={submitPublish} className="form-grid">
-          <ChannelSelect testId="channel-publish-select" label="Publishable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
-          <div className="field-action-row">
-            <button type="button" className="field-action" data-testid="channel-publish-use-selected" onClick={useSelectedPublishDefaults} disabled={!selectedPublishChannel}>
-              <Activity size={12} /> Use selected
-            </button>
-          </div>
-          <label>Funding context id<input className="mono" data-testid="channel-publish-context-id" value={publishContextId} onChange={event => setPublishContextId(event.target.value)} /></label>
-          <label>State number<input className="mono" data-testid="channel-publish-state-number" value={publishStateNumber} onChange={event => setPublishStateNumber(event.target.value)} /></label>
-          <button data-testid="channel-publish" disabled={busy || publishableChannels.length === 0}><RadioTower size={15} /> Publish</button>
-        </form>
-      </div>
-
-      <div className="form-section">
-        <h3>Finalise</h3>
-        <form onSubmit={submitFinalise} className="form-grid">
-          <ChannelSelect testId="channel-finalise-select" label="Settling channel" channels={settlingChannels} value={finaliseChannelId} onChange={setFinaliseChannelId} />
-          <button data-testid="channel-finalise" disabled={busy || settlingChannels.length === 0}><BadgeCheck size={15} /> Finalise channel</button>
-        </form>
-      </div>
+    <div className="evidence-field">
+      <span>{label}</span>
+      <strong className={mono ? 'mono copy-line' : ''}>
+        {empty ? 'not available' : value}
+        {copyValue && <CopyButton value={copyValue} label={`Copy ${label.toLowerCase()}`} />}
+      </strong>
     </div>
   );
 }
 
-function FactoryActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
-  const [factoryId, setFactoryId] = useState('');
-  const [participants, setParticipants] = useState('');
-  const [reserve, setReserve] = useState('');
-  const [factoryAsset, setFactoryAsset] = useState<Asset>({ kind: 'ckb' });
-  const [selectedFactoryId, setSelectedFactoryId] = useState('');
-  const [newUpdateNumber, setNewUpdateNumber] = useState('');
-  const [childChannelId, setChildChannelId] = useState('');
-  const [childCounterpartyPubkey, setChildCounterpartyPubkey] = useState('');
-  const [childCounterpartyAlias, setChildCounterpartyAlias] = useState('');
-  const [childFundingContextId, setChildFundingContextId] = useState('');
-  const [childLocal, setChildLocal] = useState('');
-  const [childRemote, setChildRemote] = useState('');
-  const [childPending, setChildPending] = useState('');
-  const [childSponsorBudget, setChildSponsorBudget] = useState('');
-  const [childAsset, setChildAsset] = useState<Asset>({ kind: 'ckb' });
-  const orderedFactories = sortFactoriesForOperator(state.factories, state.events);
-  const selectedFactory = orderedFactories.find(factory => factory.factory_id === selectedFactoryId);
-
-  const submitOpen = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Open factory', () => {
-      const participant_pubkeys = parsePubkeyList(participants, 'Participant pubkeys');
-      assertIncludesPubkey(participant_pubkeys, state.pubkey, 'Participant pubkeys');
-      return postAction('/api/factories', {
-        factory_id: assertHex32(factoryId, 'Factory id'),
-        participant_pubkeys,
-        reserve: assertPositiveInteger(reserve, 'Reserve'),
-        asset: normaliseAsset(factoryAsset),
-      });
-    });
-  };
-
-  const submitAdvance = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Advance factory', () => {
-      const id = assertHex32(selectedFactoryId, 'Factory id');
-      return postAction(`/api/factories/${id}/advance`, {
-        new_update_number: Number(assertPositiveInteger(newUpdateNumber, 'New update number')),
-      });
-    });
-  };
-
-  const submitMaterialise = (event: FormEvent) => {
-    event.preventDefault();
-    void runAction('Materialise factory child', () => {
-      const id = assertHex32(selectedFactoryId, 'Factory id');
-      return postAction(`/api/factories/${id}/materialise-child`, channelBody({
-        channelId: childChannelId,
-        counterpartyPubkey: childCounterpartyPubkey,
-        counterpartyAlias: childCounterpartyAlias,
-        fundingContextId: childFundingContextId,
-        local: childLocal,
-        remote: childRemote,
-        pending: childPending,
-        sponsorBudget: childSponsorBudget,
-        asset: childAsset,
-        localPubkey: state.pubkey,
-        child: true,
-      }));
-    });
-  };
-
-  const addLocalParticipant = () => {
-    const entries = parsePubkeyDraft(participants);
-    if (!entries.includes(state.pubkey)) {
-      setParticipants([...entries, state.pubkey].join('\n'));
-    }
-  };
-
-  const generateFactoryId = () => {
-    setFactoryId(randomHex32());
-  };
-
-  const useSelectedFactoryUpdate = () => {
-    if (!selectedFactory) return;
-    setNewUpdateNumber(String(selectedFactory.update_number + 1));
-  };
-
-  const generateChildIds = () => {
-    setChildChannelId(randomHex32());
-    setChildFundingContextId(randomHex32());
-  };
-
-  return (
-    <div className="drawer-section">
-      <h2>Factory Layer</h2>
-      <form onSubmit={submitOpen} className="form-grid">
-        <label>
-          <span className="field-label-row">
-            Factory id
-            <button type="button" className="field-action" data-testid="factory-generate-id" onClick={generateFactoryId}>
-              <RefreshCw size={12} /> Generate
-            </button>
-          </span>
-          <input className="mono" data-testid="factory-id" value={factoryId} onChange={event => setFactoryId(event.target.value)} />
-        </label>
-        <label>
-          <span className="field-label-row">
-            Participant pubkeys
-            <button type="button" className="field-action" data-testid="factory-add-local-pubkey" onClick={addLocalParticipant} disabled={!state.pubkey}>
-              <Plus size={12} /> Add local
-            </button>
-          </span>
-          <textarea className="mono" data-testid="factory-participants" value={participants} onChange={event => setParticipants(event.target.value)} />
-        </label>
-        <label>Reserve<input className="mono" data-testid="factory-reserve" value={reserve} onChange={event => setReserve(event.target.value)} /></label>
-        <AssetSelect value={factoryAsset} onChange={setFactoryAsset} />
-        <button data-testid="factory-open" disabled={busy}><Factory size={15} /> Open factory</button>
-      </form>
-
-      <div className="form-section">
-        <h3>Advance</h3>
-        <form onSubmit={submitAdvance} className="form-grid">
-          <FactorySelect testId="factory-advance-select" factories={orderedFactories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
-          <div className="field-action-row">
-            <button type="button" className="field-action" data-testid="factory-advance-use-selected" onClick={useSelectedFactoryUpdate} disabled={!selectedFactory}>
-              <Activity size={12} /> Use selected
-            </button>
-          </div>
-          <label>New update number<input className="mono" data-testid="factory-new-update-number" value={newUpdateNumber} onChange={event => setNewUpdateNumber(event.target.value)} /></label>
-          <button data-testid="factory-advance" disabled={busy || orderedFactories.length === 0}><RefreshCw size={15} /> Advance</button>
-        </form>
-      </div>
-
-      <div className="form-section">
-        <h3>Materialise child</h3>
-        <form onSubmit={submitMaterialise} className="form-grid">
-          <FactorySelect testId="factory-materialise-select" factories={orderedFactories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
-          <div className="field-action-row">
-            <button type="button" className="field-action" data-testid="factory-child-generate-ids" onClick={generateChildIds}>
-              <RefreshCw size={12} /> Generate ids
-            </button>
-          </div>
-          <label>Child channel id<input className="mono" data-testid="factory-child-channel-id" value={childChannelId} onChange={event => setChildChannelId(event.target.value)} /></label>
-          <label>Counterparty pubkey<input className="mono" data-testid="factory-child-counterparty-pubkey" value={childCounterpartyPubkey} onChange={event => setChildCounterpartyPubkey(event.target.value)} /></label>
-          <label>Counterparty alias<input data-testid="factory-child-counterparty-alias" value={childCounterpartyAlias} onChange={event => setChildCounterpartyAlias(event.target.value)} /></label>
-          <label>Funding context id<input className="mono" data-testid="factory-child-funding-context-id" value={childFundingContextId} onChange={event => setChildFundingContextId(event.target.value)} /></label>
-          <label>Local capacity<input className="mono" data-testid="factory-child-local" value={childLocal} onChange={event => setChildLocal(event.target.value)} /></label>
-          <label>Remote capacity<input className="mono" data-testid="factory-child-remote" value={childRemote} onChange={event => setChildRemote(event.target.value)} /></label>
-          <label>Pending capacity<input className="mono" data-testid="factory-child-pending" value={childPending} onChange={event => setChildPending(event.target.value)} /></label>
-          <label>Sponsor budget<input className="mono" data-testid="factory-child-sponsor-budget" value={childSponsorBudget} onChange={event => setChildSponsorBudget(event.target.value)} /></label>
-          <AssetSelect value={childAsset} onChange={setChildAsset} />
-          <button data-testid="factory-materialise-child" disabled={busy || orderedFactories.length === 0}><Network size={15} /> Materialise child</button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function StateActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
-  const [raw, setRaw] = useState('');
-  const [stateFileStatus, setStateFileStatus] = useState('');
-  const [stateFileBusy, setStateFileBusy] = useState(false);
-  const [confirmRestore, setConfirmRestore] = useState(false);
-
-  const exportState = async () => {
-    setStateFileBusy(true);
-    setStateFileStatus('');
-    try {
-      const file = await getStateFile();
-      setRaw(JSON.stringify(file, null, 2));
-      setStateFileStatus('loaded');
-    } catch (err) {
-      setStateFileStatus(String((err as Error).message));
-    } finally {
-      setStateFileBusy(false);
-    }
-  };
-
-  const restoreState = () => {
-    setStateFileStatus('');
-    void runAction('Restore state file', () => replaceStateFile(JSON.parse(requiredText(raw, 'State file JSON'))));
-  };
-
-  return (
-    <div className="drawer-section">
-      <h2>State File</h2>
-      <div className="state-path">
-        <strong>{state.state_path || 'not loaded'}</strong>
-        <small>{state.security.state_restore_enabled ? 'Restore is enabled for this API process' : 'Restore is disabled by default'}</small>
-      </div>
-      <button className="copy-button" data-testid="state-load-json" onClick={exportState} disabled={busy || stateFileBusy}><FileJson size={15} /> Load state JSON</button>
-      {stateFileStatus && <small className={stateFileStatus === 'loaded' ? 'inline-ok' : 'inline-error'}>{stateFileStatus}</small>}
-      <textarea className="mono" data-testid="state-json" value={raw} onChange={event => setRaw(event.target.value)} />
-      <label className="check-row">
-        <input
-          type="checkbox"
-          checked={confirmRestore}
-          onChange={event => setConfirmRestore(event.target.checked)}
-          disabled={!state.security.state_restore_enabled}
-        />
-        <span>I understand this replaces the local Hub state file.</span>
-      </label>
-      <button
-        className="danger-button"
-        data-testid="state-restore-json"
-        onClick={restoreState}
-        disabled={busy || !raw.trim() || !state.security.state_restore_enabled || !confirmRestore}
-      >
-        <Upload size={15} /> Restore state file
-      </button>
-      {!state.security.state_restore_enabled && (
-        <small className="inline-error">Restart with --allow-state-restore to enable this write path.</small>
-      )}
-    </div>
-  );
-}
-
-function ChannelSelect({
-  channels,
+function ValidatedInput({
+  label,
   value,
   onChange,
-  label = 'Channel id',
+  validate,
   testId,
+  className,
+  maxLength,
+  disabled,
 }: {
-  channels: ChannelRecord[];
+  label: React.ReactNode;
   value: string;
   onChange: (value: string) => void;
-  label?: string;
-  testId: string;
+  validate: (value: string) => void;
+  testId?: string;
+  className?: string;
+  maxLength?: number;
+  disabled?: boolean;
 }) {
+  const [touched, setTouched] = useState(false);
+  const error = touched ? validationError(value, validate) : '';
   return (
-    <label>{label}
-      <select data-testid={testId} value={value} onChange={event => onChange(event.target.value)}>
-        <option value="">select channel</option>
-        {channels.map(channel => (
-          <option key={channel.channel_id} value={channel.channel_id}>{shortHex(channel.channel_id)} · {channel.phase}</option>
-        ))}
-      </select>
+    <label>
+      {label}
+      <input
+        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
+        data-testid={testId}
+        value={value}
+        maxLength={maxLength}
+        disabled={disabled}
+        onBlur={() => setTouched(true)}
+        onChange={event => onChange(event.target.value)}
+      />
+      {error && <small className="field-error">{error}</small>}
     </label>
   );
 }
 
-function FactorySelect({ factories, value, onChange, testId }: { factories: FactoryRecord[]; value: string; onChange: (value: string) => void; testId: string }) {
+function ValidatedTextarea({
+  label,
+  value,
+  onChange,
+  validate,
+  testId,
+  className,
+}: {
+  label: React.ReactNode;
+  value: string;
+  onChange: (value: string) => void;
+  validate: (value: string) => void;
+  testId?: string;
+  className?: string;
+}) {
+  const [touched, setTouched] = useState(false);
+  const error = touched ? validationError(value, validate) : '';
   return (
-    <label>Factory id
-      <select data-testid={testId} value={value} onChange={event => onChange(event.target.value)}>
-        <option value="">select factory</option>
-        {factories.map(factory => (
-          <option key={factory.factory_id} value={factory.factory_id}>{shortHex(factory.factory_id)} · update {factory.update_number}</option>
-        ))}
-      </select>
+    <label>
+      {label}
+      <textarea
+        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
+        data-testid={testId}
+        value={value}
+        onBlur={() => setTouched(true)}
+        onChange={event => onChange(event.target.value)}
+      />
+      {error && <small className="field-error">{error}</small>}
     </label>
   );
 }
 
-function channelBody(input: {
-  channelId: string;
-  counterpartyPubkey: string;
-  counterpartyAlias: string;
-  fundingContextId: string;
-  local: string;
-  remote: string;
-  pending: string;
-  sponsorBudget: string;
-  asset: Asset;
-  localPubkey: Pubkey;
-  child?: boolean;
-}) {
-  const base = {
-    counterparty_pubkey: assertRemotePubkey(input.counterpartyPubkey, input.localPubkey, 'Counterparty pubkey'),
-    counterparty_alias: input.counterpartyAlias.trim() || undefined,
-    funding_context_id: assertHex32(input.fundingContextId, 'Funding context id'),
-    local: assertPositiveInteger(input.local, 'Local capacity'),
-    remote: assertPositiveInteger(input.remote, 'Remote capacity'),
-    pending: input.pending.trim() ? assertNonNegativeInteger(input.pending, 'Pending capacity') : undefined,
-    sponsor_budget: Number(assertPositiveInteger(input.sponsorBudget, 'Sponsor budget')),
-    asset: normaliseAsset(input.asset),
-  };
-  if (input.child) {
-    return { ...base, child_channel_id: assertHex32(input.channelId, 'Child channel id') };
-  }
-  return { ...base, channel_id: assertHex32(input.channelId, 'Channel id') };
-}
-
-function requiredText(value: string, label: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error(`${label} must not be empty.`);
-  return trimmed;
-}
-
-function randomHex32(): Hex32 {
-  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
-    throw new Error('Secure browser randomness is unavailable.');
-  }
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  if (bytes.every(byte => byte === 0)) {
-    bytes[31] = 1;
-  }
-  return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}` as Hex32;
-}
-
-function parsePubkeyDraft(value: string): Pubkey[] {
-  return value
-    .split(/[\s,]+/)
-    .map(item => item.trim().toLowerCase())
-    .filter(Boolean);
-}
-
-function queryTokens(value: string): string[] {
-  return value
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
-}
-
-function filterRecords<T>(records: T[], tokens: string[], searchText: (record: T) => string[]): T[] {
-  if (tokens.length === 0) return records;
-  return records.filter(record => {
-    const haystack = searchText(record).join(' ').toLowerCase();
-    return tokens.every(token => haystack.includes(token));
-  });
-}
-
-function channelSearchText(channel: ChannelRecord): string[] {
-  return [
-    channel.channel_id,
-    channel.counterparty_pubkey,
-    channel.counterparty_node_id,
-    channel.phase,
-    channel.funding_context_id,
-    String(channel.funding_epoch),
-    String(channel.state_number),
-    String(channel.sponsor_budget),
-    channel.provenance.label,
-    channel.provenance.message,
-    ...channel.balances.map(balance => `${balance.local} ${balance.remote} ${balance.pending} ${assetLabel(balance.asset)}`),
-  ];
-}
-
-function invoiceSearchText(invoice: InvoiceRecord): string[] {
-  return [
-    invoice.invoice_id,
-    invoice.encoded_invoice,
-    invoice.status,
-    invoice.network,
-    invoice.payee_pubkey ?? '',
-    invoice.payee_node_id,
-    invoice.channel_id ?? '',
-    invoice.payment_hash,
-    invoice.description,
-    invoice.amount,
-    assetLabel(invoice.asset),
-    invoice.provenance.label,
-    invoice.provenance.message,
-  ];
-}
-
-function peerSearchText(peer: PeerRecord): string[] {
-  return [
-    peer.alias,
-    peer.pubkey,
-    peer.node_id,
-    peer.provenance.label,
-    peer.provenance.message,
-  ];
-}
-
-function factorySearchText(factory: FactoryRecord): string[] {
-  return [
-    factory.factory_id,
-    String(factory.update_number),
-    ...factory.participant_pubkeys,
-    ...factory.participant_node_ids,
-    ...factory.materialised_child_channels,
-    factory.provenance.label,
-    factory.provenance.message,
-    ...factory.reserve_balances.map(balance => `${balance.local} ${balance.remote} ${balance.pending} ${assetLabel(balance.asset)}`),
-  ];
-}
-
-function watchtowerAlertSearchText(alert: WatchtowerAlertRecord): string[] {
-  return [
-    alert.schema,
-    alert.channel_id,
-    alert.severity,
-    alert.event,
-    alert.message,
-    String(alert.selected_state_number),
-    String(alert.observed_state_number ?? ''),
-    alert.observed_out_point ?? '',
-    alert.publication_tx_hash ?? '',
-    alert.selected_funding_anchor ?? '',
-    alert.observed_funding_anchor ?? '',
-    alert.selected_funding_context_id ?? '',
-    alert.observed_funding_context_id ?? '',
-    String(alert.scanned_to_block),
-    String(alert.next_from_block),
-    alert.provenance.label,
-    alert.provenance.message,
-  ];
-}
-
-function eventSearchText(event: HubEvent): string[] {
-  return [
-    String(event.id),
-    event.severity,
-    event.event,
-    event.subject_id ?? '',
-    event.message,
-    String(event.created_at_unix),
-    event.provenance.label,
-    event.provenance.message,
-  ];
-}
-
-function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
-  return [...invoices].sort((left, right) => {
-    const byCreatedAt = right.created_at_unix - left.created_at_unix;
-    return byCreatedAt || right.invoice_id.localeCompare(left.invoice_id);
-  });
-}
-
-function newestInvoice(invoices: InvoiceRecord[]): InvoiceRecord | undefined {
-  return sortInvoicesNewestFirst(invoices)[0];
-}
-
-function sortEventsNewestFirst(events: HubEvent[]): HubEvent[] {
-  return [...events].sort((left, right) => {
-    const byId = right.id - left.id;
-    return byId || right.created_at_unix - left.created_at_unix;
-  });
-}
-
-function sortWatchtowerAlertsNewestFirst(alerts: WatchtowerAlertRecord[]): WatchtowerAlertRecord[] {
-  return [...alerts].sort((left, right) => {
-    const byCreatedAt = right.created_unix_ms - left.created_unix_ms;
-    return byCreatedAt || right.scanned_to_block - left.scanned_to_block || right.channel_id.localeCompare(left.channel_id);
-  });
-}
-
-function latestEventId(events: HubEvent[]): number {
-  return events.reduce((max, event) => Math.max(max, event.id), 0);
-}
-
-function sortChannelsForOperator(channels: ChannelRecord[], events: HubEvent[]): ChannelRecord[] {
-  const eventRank = subjectEventRank(events);
-  return [...channels].sort((left, right) => {
-    const byEvent = subjectRank(right.channel_id, eventRank) - subjectRank(left.channel_id, eventRank);
-    const byPhase = phaseRank(right.phase) - phaseRank(left.phase);
-    const byState = right.state_number - left.state_number;
-    const byFunding = right.funding_epoch - left.funding_epoch;
-    return byEvent || byPhase || byState || byFunding || right.channel_id.localeCompare(left.channel_id);
-  });
-}
-
-function sortFactoriesForOperator(factories: FactoryRecord[], events: HubEvent[]): FactoryRecord[] {
-  const eventRank = subjectEventRank(events);
-  return [...factories].sort((left, right) => {
-    const byEvent = subjectRank(right.factory_id, eventRank) - subjectRank(left.factory_id, eventRank);
-    const byUpdate = right.update_number - left.update_number;
-    const byChildren = right.materialised_child_channels.length - left.materialised_child_channels.length;
-    return byEvent || byUpdate || byChildren || right.factory_id.localeCompare(left.factory_id);
-  });
-}
-
-function sortPeersForOperator(peers: PeerRecord[], events: HubEvent[]): PeerRecord[] {
-  const eventRank = subjectEventRank(events);
-  return [...peers].sort((left, right) => {
-    const byEvent = subjectRank(right.node_id, eventRank) - subjectRank(left.node_id, eventRank);
-    const byAlias = left.alias.localeCompare(right.alias);
-    return byEvent || byAlias || left.node_id.localeCompare(right.node_id);
-  });
-}
-
-function subjectEventRank(events: HubEvent[]): Map<string, number> {
-  const rank = new Map<string, number>();
-  events.forEach(event => {
-    if (!event.subject_id) return;
-    const subject = event.subject_id.toLowerCase();
-    rank.set(subject, Math.max(rank.get(subject) ?? 0, event.id));
-  });
-  return rank;
-}
-
-function subjectRank(subjectId: string, eventRank: Map<string, number>): number {
-  return eventRank.get(subjectId.toLowerCase()) ?? 0;
-}
-
-function phaseRank(phase: ChannelRecord['phase']): number {
-  if (phase === 'active') return 4;
-  if (phase === 'settling') return 3;
-  if (phase === 'funding') return 2;
-  if (phase === 'closed') return 1;
-  return 0;
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  let clipboardError: unknown;
-  if (navigator.clipboard?.writeText && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (err) {
-      clipboardError = err;
-    }
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  textarea.style.top = '0';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
+function validationError(value: string, validate: (value: string) => void): string {
   try {
-    if (!document.execCommand('copy')) {
-      throw new Error('clipboard copy was rejected');
-    }
+    validate(value);
+    return '';
   } catch (err) {
-    throw clipboardError instanceof Error ? clipboardError : err;
-  } finally {
-    document.body.removeChild(textarea);
+    return err instanceof Error ? err.message : String(err);
   }
-}
-
-function balanceTotal(balance?: Balance): bigint {
-  if (!balance) return 0n;
-  return BigInt(balance.local) + BigInt(balance.remote) + BigInt(balance.pending);
-}
-
-function rpcTone(status: NodeState['rpc']['status']): 'good' | 'neutral' | 'warn' | 'bad' {
-  if (status === 'connected') return 'good';
-  if (status === 'not_configured') return 'neutral';
-  if (status === 'degraded') return 'warn';
-  return 'bad';
-}
-
-function rpcLabel(state: NodeState): string {
-  if (state.rpc.status === 'not_configured') return 'rpc not configured';
-  if (state.rpc.status === 'connected') return state.rpc.chain ? `${state.rpc.chain} connected` : 'rpc connected';
-  return state.rpc.status;
-}
-
-function liveTone(mode: LiveMode): 'good' | 'neutral' | 'warn' | 'bad' {
-  if (mode === 'sse' || mode === 'polling-auth') return 'good';
-  if (mode === 'polling') return 'neutral';
-  if (mode === 'sse-reconnecting' || mode === 'starting') return 'warn';
-  return 'bad';
-}
-
-function liveLabel(mode: LiveMode): string {
-  switch (mode) {
-    case 'sse':
-      return 'live sse';
-    case 'sse-reconnecting':
-      return 'live reconnecting';
-    case 'polling-auth':
-      return 'live polling auth';
-    case 'polling':
-      return 'live polling';
-    case 'offline':
-      return 'live offline';
-    case 'starting':
-      return 'live starting';
-  }
-}
-
-function isAuthTokenError(message: string): boolean {
-  return message.toLowerCase().includes('morph hub auth token');
 }

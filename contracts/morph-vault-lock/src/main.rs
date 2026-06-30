@@ -25,6 +25,8 @@ use morph_script_common::{
 
 #[cfg(target_arch = "riscv64")]
 const VAULT_ARGS_LEN: usize = BYTE32_LEN + 8 + BYTE32_LEN + 1 + BYTE32_LEN + 1;
+#[cfg(target_arch = "riscv64")]
+const MAX_WITNESS_INPUTS_PER_TX: usize = 64;
 
 #[cfg(target_arch = "riscv64")]
 entry!(program_entry);
@@ -84,7 +86,7 @@ fn main() -> Result<()> {
     let input = load_input(state_index, Source::Input).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
     validate_relative_block_since(since, min_since)?;
-    validate_current_vault_commitment(header.payload_commitment())?;
+    validate_current_vault_commitment(header.vault_materialisation_root())?;
 
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::SettlementWitnessMissing)?;
@@ -316,6 +318,9 @@ fn find_unique_state_input(
     expected_lock_code_hash: &[u8],
     expected_lock_hash_type: u8,
 ) -> Result<(usize, alloc::vec::Vec<u8>)> {
+    // The vault-lock group contains vault cells, not the peer State type cell.
+    // Scan transaction inputs, then require exact State header anchor plus
+    // State type/lock-script binding and reject duplicates.
     let mut found: Option<(usize, alloc::vec::Vec<u8>)> = None;
     let mut index = 0;
     loop {
@@ -374,7 +379,7 @@ fn validate_splice_vault_spend(
     let new_vault = witness.new_vault()?;
     validate_old_vault_inputs(&old_vault)?;
     let new_vault_commitment = validate_new_vault_output(current_script, &new_vault)?;
-    if new_header.payload_commitment() != new_vault_commitment.as_slice() {
+    if new_header.vault_materialisation_root() != new_vault_commitment.as_slice() {
         return Err(ScriptError::SpliceProofMismatch);
     }
     Ok(())
@@ -385,6 +390,9 @@ fn find_splice_witness_raw(expected_old_funding_anchor: &[u8]) -> Result<alloc::
     let mut found: Option<alloc::vec::Vec<u8>> = None;
     let mut index = 0;
     loop {
+        if index >= MAX_WITNESS_INPUTS_PER_TX {
+            return Err(ScriptError::SpliceProofEncoding);
+        }
         match load_witness_args(index, Source::Input) {
             Ok(witness_args) => {
                 if let Some(input_type) = witness_args.input_type().to_opt() {
