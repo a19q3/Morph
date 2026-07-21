@@ -1,5 +1,5 @@
 [package]
-name = "morph-cli"
+name = "morph-agent"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -7,24 +7,25 @@ authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[features]
-default = []
-devnet = []
-
 [dependencies]
 anyhow.workspace = true
-ckb-crypto.workspace = true
-ckb-hash.workspace = true
+aes-gcm.workspace = true
+axum.workspace = true
+base64.workspace = true
+biscuit-auth.workspace = true
 ckb-jsonrpc-types.workspace = true
 ckb-types.workspace = true
 clap.workspace = true
-getrandom.workspace = true
 hex.workspace = true
 k256.workspace = true
 morph-core = { path = "../morph-core" }
-morph-script-common = { path = "../../contracts/morph-script-common" }
+rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-url = "2.5"
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

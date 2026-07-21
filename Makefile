@@ -10,9 +10,9 @@ DENY ?= cargo deny
 # RUSTSEC-2026-0097 is the current rand advisory; RUSTSEC-2020-0097 is for xcb.
 AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097
 
-.PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
+.PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 
-ci: fmt-check lint supply-chain test fixture-checks contract-tests
+ci: fmt-check lint supply-chain test fixture-checks sdk-check hub-ui-check contract-tests
 
 full-test: test fixture-checks contract-tests
 
@@ -69,6 +69,12 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-config target/fixture-checks/watch-config.json --json > target/fixture-checks/watch-config-summary.json
+
+sdk-check:
+	cd sdk/typescript && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run check && npm test
+
+hub-ui-check:
+	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build
 
 build-contracts:
 	$(CONTRACT_CARGO) build --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt
