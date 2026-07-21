@@ -42,7 +42,7 @@ CKB-VM/devnet evidence. It covered:
 | Critical for Factory integrity | `FactoryStateHeader` did not commit the concrete shared-pool Cell. Creation and ordinary state signatures could not prove the FactoryVault lock/capacity/type/data represented by canonical Factory state. | Fixed in this change. |
 | High | `FactorySpliceHeader` signed reserve descriptors and deltas but not the concrete old/new FactoryVault materialisations. | Fixed in this change. |
 | High | Ordinary Factory state/reduced-rights/Merkle updates did not have an explicit host-and-script rule preventing reserve-root drift because no reserve root existed. | Fixed in this change. |
-| Critical for mainnet provenance | Vault materialisation roots commit Cell content, not the exact CKB OutPoint. A byte-identical, separately funded clone can satisfy a content-only match and create a substitution/orphaning path. This affects bilateral and Factory profiles. | Open; v2 activation/provenance binding required. |
+| Critical for mainnet provenance | Vault materialisation roots committed Cell content, not the exact CKB OutPoint. A byte-identical, separately funded clone could satisfy a content-only match and create a substitution/orphaning path in bilateral and Factory profiles. | Fixed with exact OutPoint activation/rotation; independent review remains required. |
 | High | Approved contract deployment identities are checked by operator manifests/allowlists, not pinned by a versioned on-chain deployment profile. | Open; required before external edge admission. |
 | High | The implemented Factory signature profile is fixed two-participant/2-of-2 with bounded proof shapes. It is a useful Factory prototype, not yet a general multiparty Factory. | Open; add an explicit versioned multiparty profile rather than silently widening v1. |
 | High | Existing Fiber evidence proves real three-node routing and exact hops, but the advertised Fiber edge is not yet backed by live Morph materialisation/failure callbacks inside Fiber's channel state machine. | Open; implement the minimal external-edge hook/adapter. |
@@ -54,26 +54,35 @@ CKB-VM/devnet evidence. It covered:
 
 ### Signed FactoryVault materialisation
 
-`FactoryStateHeader` grew from 238 to 270 bytes and now appends:
+`FactoryStateHeader` first grew from 238 to 270 bytes for the content root, and
+is now 302 bytes after appending the exact Vault OutPoint commitment:
 
 ```text
 vault_materialisation_root =
   H("CKB_MORPH_VAULT_CELL", lock_hash, capacity, type_hash_or_none, data)
+
+vault_outpoint_commitment =
+  H("CKB_MORPH_VAULT_OUTPOINT_V1", tx_hash, u32_le(index))
 ```
 
 Creation requires exactly one FactoryVault output whose lock args bind the
 Factory id and Factory type hash and whose materialisation matches the signed
-root. Missing, wrong, and ambiguous pools are rejected.
+root. It deliberately emits an unbound zero locator. A second transaction
+activates the Factory by preserving every other field and proving the exact
+Vault as the first raw/direct CellDep. Missing, wrong, ambiguous, cloned, lock-
+drifted, and noncanonical-dependency pools are rejected.
 
 Ordinary full-signature, reduced-rights, and sparse-Merkle updates must preserve
-the root. Only the four reserve-changing authorisation kinds may change it:
-local exit, reduced exit, full splice, and reduced splice.
+the root and locator. Only the four reserve-changing authorisation kinds may
+change the root: local exit, reduced exit, full splice, and reduced splice.
+Their successor locator must be unbound and reactivated after commitment.
 
 ### Signed splice bridge
 
-`FactorySpliceHeader` grew from 309 to 373 bytes and now signs the old and new
-FactoryVault materialisation roots. Full and reduced splice verification binds
-those fields to the old/new Factory headers.
+`FactorySpliceHeader` grew from 309 to 437 bytes and now signs the old and new
+FactoryVault materialisation roots and OutPoint commitments. Full and reduced
+splice verification binds those fields to the old/new Factory headers. The
+bilateral `StateHeader` and `SpliceHeader` are now 346 and 453 bytes.
 
 The Factory type scans the transaction for the exact old/new materialisations.
 The Factory vault lock independently hashes its own group input and unique
@@ -91,68 +100,95 @@ to silently remove the boundary.
   schema annotations, hash-parity fixtures, and CKB-VM fixtures use the same
   new layouts.
 - New negative tests cover missing/wrong/ambiguous FactoryVault creation and a
-  fully signed ordinary update attempting root drift.
+  fully signed ordinary update attempting root drift, byte-identical clone
+  activation, activation lock drift, and noncanonical Vault dependency order.
 
-## Why the current fix is necessary but not sufficient
+## Exact OutPoint activation and remaining limits
 
-The materialisation root closes an authorization gap: participants and scripts
-now agree on the exact Cell content. It does not create UTXO provenance. CKB
-allows anyone to fund another output with the same lock/capacity/type/data, so
-two Cells can have the same content commitment.
-
-The preferred v2 design is a two-stage activation profile:
+The materialisation root closes the content authorization gap, while the
+implemented two-stage activation adds UTXO provenance:
 
 1. The funding transaction creates the State/Factory cell and Vault with a
    signed content root and an unbound locator.
-2. After commitment, participants sign an activation update containing the
-   exact Vault OutPoint.
-3. The activation transaction includes that Vault as a read-only cell
-   dependency so the State/Factory type can verify locator, lock, capacity,
-   type, and data without spending it.
+2. After commitment, an activation update changes only the locator to the exact
+   Vault OutPoint. Because the funding signature already commits every other
+   field and content root, the script can enforce this deterministic update
+   without a second discretionary state transition.
+3. The activation transaction includes that Vault as its first direct read-only
+   CellDep so the State/Factory type can verify locator, lock, capacity, type,
+   and data without spending it or confusing it with a DepGroup member.
 4. Every later publication, splice, exit, and settlement preserves or
    explicitly rotates the locator and requires the exact committed input
    OutPoint.
 
 This preserves xUDT/RGB++ type scripts, avoids pretending a lock-only logical id
 is globally unique, and does not require Fiber to become Morph's source of
-truth. The v1 content-root profile should remain devnet-only after v2 is added;
-v1 and v2 must be distinguished by an explicit layout/protocol version.
+truth. The remaining release work is independent review, deployment/version
+pinning, and an explicit migration policy for the new wire layout.
 
 ## RGB++ and Fiber integration plan
 
-1. **Provenance-safe Morph v2** — add exact Vault OutPoint activation and
-   rotation for bilateral and Factory profiles, migration fixtures, negative
-   clone/substitution tests, and devnet crash/replay evidence.
+1. **Provenance-safe Morph baseline (implemented)** — exact Vault OutPoint
+   activation and rotation now cover bilateral and Factory profiles with
+   clone/substitution negatives and full devnet lifecycle evidence; formalize
+   migration/version policy and obtain independent review.
 2. **Morph edge lifecycle** — define a provider-neutral edge id that binds
    Factory right proof, materialised bilateral funding context, live Vault
    locator, asset type script, capacity, expiry, and force-close callback.
 3. **Minimal Fiber hook** — add only the capabilities missing from current RPC:
    admit/update/disable an externally enforced edge, query route use by edge
    id, and deliver HTLC settle/fail callbacks. Fiber never owns Morph Factory
-   rights or unilateral CKB recovery.
-4. **Real routed capacity** — run node1 -> Morph-backed provider edge -> node2
-   -> node3 payments, MPP, timeout, partial failure, restart, and forced edge
-   withdrawal tests. Evidence must bind Fiber payment ids/hops to Morph edge ids
-   and on-chain funding locators.
-5. **RGB++ verifier/watcher** — verify asset type-script identity plus Bitcoin
+   rights or unilateral CKB recovery. Exercise this control plane in shadow mode
+   before carrying value.
+4. **RGB++ verifier/watcher** — verify asset type-script identity plus Bitcoin
    commitment/SPV proof, CKB binding/leap transaction, confirmation depth, and
    reorg rollback. Quarantine the edge on proof or watcher uncertainty.
-6. **Agent layer** — keep x402 exact payment, scoped/delegable credentials,
+5. **Conditional force-close** — commit the pending-transfer root in Morph
+   signed state and make preimage/timeout outcomes enforceable on CKB. A Fiber
+   callback is evidence, not the only recovery path.
+6. **Real routed capacity** — only after steps 3-5, run node1 -> Morph-backed
+   provider edge -> node2 -> node3 payments, MPP, timeout, partial failure,
+   restart, and forced edge withdrawal tests. Evidence must bind Fiber payment
+   ids/hops to Morph edge ids and on-chain funding locators.
+7. **Agent layer** — keep x402 exact payment, scoped/delegable credentials,
    policy-capped outgoing wallet, encrypted fair exchange, replay protection,
    and idempotent receipts in `morph-agent`; add HTTP/gRPC ingress and
    revocation/HA/load evidence without moving this authority into Factory.
-7. **Release gates** — reproducible ELFs and manifests, clean CI and full
+8. **Release gates** — reproducible ELFs and manifests, clean CI and full
    cross-stack devnet, independent review, multi-operator watchtower rehearsal,
    incident/rollback runbooks, and conservative value caps.
 
+## Additional implementation defects fixed during this audit
+
+| Boundary | Defect | Remediation |
+| --- | --- | --- |
+| Sponsor policy | Host parsing read the owner field at the wrong offset, so a valid policy could be attributed to the wrong identity. | Corrected the offset and locked it with a regression test. |
+| xUDT channel creation | The devnet builder did not attach the participant proof required by the xUDT creation path. | Added the proof to the real transaction builder and exercised it in stateful devnet. |
+| Stateful evidence freshness | Operator-owned report/config files made a fresh run look stale. | Limited freshness comparison to generated protocol artifacts while retaining committed-input checks. |
+| Agent/Fiber evidence | Early evidence could demonstrate a terminal provider result without proving a real routed Fiber payment or its exact hops. | Routed both x402 and fair-exchange payments through Fiber node1 -> node2 -> node3 and bound payment ids plus hop pubkeys into the Agent evidence. |
+| Factory Vault authority | Factory state and splice signatures did not bind the concrete reserve Cell. | Added content roots to Factory state/splice, independent Factory type/vault checks, and CKB/xUDT negative paths. |
+| Vault provenance | Content roots allowed substitution by a separately funded byte-identical Vault. | Added deterministic two-stage OutPoint activation/rotation for bilateral and Factory Vaults and exact-input enforcement on exit/splice/finalise. |
+| Activation dependency selection | A raw CellDep index was incorrectly reused as a flattened resolved-dependency index when a secp DepGroup was present. | Made the Vault the first canonical direct CellDep, verified its raw dep type/outpoint, and read resolved CellDep zero; a prefixed dependency now fails. |
+| Activation economics | The first activation builder paid one shannon, below real CKB relay/fee acceptance. | Set the activation fee to 10,000 shannons and exercised every reserve-changing devnet flow. |
+| Watchtower scan origin | Watch scans began at the funding block even though the enforceable State outpoint is created by activation. | Persist and scan from the activated State block. |
+| Evidence budgets | New activation transactions and locator fields invalidated aggregate-cycle and reduced-exit byte baselines. | Recalibrated only the measured suite total and affected reduced-exit byte gate; per-transaction cycle, proof, and witness caps remain enforced. |
+
 ## Verification for this change
 
-- Host workspace tests and fixed-layout/hash parity tests pass.
+- `make ci AUDIT='cargo audit --no-fetch'` passes formatting, clippy,
+  supply-chain policy, host/property/hash-parity tests, fixtures, Agent SDK,
+  Hub UI, RISC-V builds, and CKB-VM tests.
 - Fixture generation/validation passes for bilateral, Factory, splice, reduced
   proof, local exit, and watcher packages.
-- 93 CKB-VM tests pass, including all Factory CKB/xUDT positive paths and the
+- 100 CKB-VM tests pass, including all Factory CKB/xUDT positive paths and the
   new materialisation negative paths.
+- Full Fiber/Morph acceptance run `20260721T142604Z` passes: 323 transaction
+  records, 322 committed transactions, 9 expected stateful failures, 24
+  Factory local exits, 32 Factory splices, 5 reduced exits, 9 watchtower
+  alerts, real node1 -> node2 -> node3 x402/fair-exchange payments, the full
+  Fiber recovery/UDT/watchtower matrix, and four funding-transaction tamper
+  cases.
 
 This evidence makes the Factory model materially stronger. It is not a mainnet
-or production-readiness claim; the open provenance finding is deliberately a
-hard blocker.
+or production-readiness claim; external-edge, RGB++ proof/reorg, migration,
+deployment-pinning, and independent-review gates remain deliberately open.

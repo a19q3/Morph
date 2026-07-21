@@ -25,7 +25,7 @@ is necessary evidence, but it is not enough for mainnet.
 | --- | --- | --- |
 | Independent protocol review | External review of state, vault, sponsor, splice, and factory rules. | Open. |
 | Independent script review | Review of no-std CKB parsing, cell selection, since handling, and error paths. | Open. |
-| Exact Vault provenance | Participant-signed activation/rotation binds every bilateral and Factory Vault to its exact CKB OutPoint; clone/substitution negatives pass. | Open; current roots bind content only. |
+| Exact Vault provenance | Activation/rotation binds every bilateral and Factory Vault to its exact CKB OutPoint; clone/substitution negatives pass. | Implemented and locally verified; independent review/migration policy remain open. |
 | Morph-backed routed edge | A provider-neutral edge and minimal Fiber hook prove real routed/MPP traffic against live Morph materialisation and failure callbacks. | Open; current real Fiber route is not Morph-backed. |
 | RGB++ proof and reorg pipeline | Bitcoin proof, CKB binding/leap, confirmation, quarantine, and rollback evidence for admitted RGB++ assets. | Open. |
 | Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Open. |
@@ -55,7 +55,8 @@ Local evidence covers:
 - CKB and CKB+xUDT settlement descriptors;
 - splice funding-anchor and vault-set transitions;
 - factory full-participant signatures;
-- exact FactoryVault content commitments on creation, exits, and splices;
+- exact bilateral/Factory Vault content commitments plus canonical OutPoint
+  activation, preservation, rotation, and clone-substitution negatives;
 - bounded reduced-rights, sparse-Merkle, reduced-exit, factory-splice, and
   reduced-splice proof bodies carried by `WitnessEnvelope`;
 - expected failure paths for malformed or attack-shaped transactions.
@@ -70,8 +71,7 @@ Local devnet evidence does not prove:
 - operational safety of key custody;
 - reproducibility of release artefacts in a separate environment;
 - correctness under independent review;
-- resistance to byte-identical Vault clone/substitution until exact OutPoint
-  activation is implemented;
+- independent validation of the implemented exact-OutPoint activation profile;
 - real Morph-backed external-edge operation inside a routing provider;
 - production RGB++ SPV/leap/reorg handling;
 - safe value limits for real users.

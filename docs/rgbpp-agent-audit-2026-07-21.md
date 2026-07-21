@@ -188,14 +188,16 @@ program and is a release blocker until exercised against a real implementation.
 No Fiber type is imported into Morph consensus code, and no fake Fiber funding
 outpoint is created.
 
-The expanded real-devnet matrix currently records 193 transactions and is
-stable at roughly 1.533 billion aggregate estimated cycles across repeated
-runs. The aggregate smoke/stateful budget is therefore 1.6 billion cycles.
+The expanded real-devnet matrix currently records 323 transactions, 322
+committed transactions, and six expected script-failure probes; it measured
+1.676 billion aggregate estimated cycles in the exact-OutPoint activation run.
+The aggregate smoke/stateful budget is therefore 1.85 billion cycles.
 This is a suite-size budget adjustment: the per-transaction 30 million cycle
 limit, named transaction limits, proof/witness limits, and byte limits remain
-active. The four reduced-exit fixtures measured at 10.17–10.21 million cycles,
-so their stale 10 million named/proof limits are calibrated to 11 million;
-their witness and transaction-size limits remain unchanged.
+active. The four reduced-exit fixtures measured at 10.27–10.34 million cycles,
+so their named/proof limits remain 11 million. The CKB reduced-exit transaction
+measured 9,618 bytes after the locator fields were added, so its narrowly stale
+9,600-byte named/proof limit is now 10,000 bytes; witness limits are unchanged.
 
 ## Evidence collected
 
@@ -207,7 +209,7 @@ The repository CI gate covers:
 - TypeScript SDK typecheck/build/smoke test and npm audit;
 - Hub UI typecheck/build and npm audit;
 - release RISC-V contract builds;
-- 89 ignored CKB-VM contract tests run serially.
+- 100 ignored CKB-VM contract tests run serially.
 
 The cross-stack gate additionally starts Fiber's real three-node `router-pay`
 topology and requires two Morph Agent payments: one x402 payment that produces

@@ -26,6 +26,7 @@ The integration path is:
 Factory right
   -> reserved right with proof and expiry
   -> committed child State/Vault materialisation
+  -> exact Vault OutPoint activation
   -> deployment/provenance/confirmation verification
   -> provider-neutral Morph edge descriptor
   -> explicit Fiber external-edge hook
@@ -219,6 +220,7 @@ substitute for step 4-6.
 - state/access roots, full sparse-Merkle right proof, and proof commitment;
 - reservation expiry and idempotency key;
 - committed child State and Vault outpoints;
+- content root plus the activated exact Vault OutPoint commitment;
 - full child State authorization and settlement descriptor;
 - exact State/StateLock/VaultLock/Factory/FactoryVault code hashes;
 - CKB block hash/height and confirmation depth;
@@ -308,11 +310,13 @@ settled Morph signed states remain enforceable.
 
 ## 10. Delivery Phases
 
-### Phase A — corrected Morph baseline (complete)
+### Phase A — corrected Morph baseline and exact Vault authority (complete)
 
 - restore native Factory architecture;
 - initial State/Factory consent;
 - exact initial Vault commitment;
+- two-stage exact Vault OutPoint activation/rotation for bilateral and Factory
+  profiles, with byte-identical-clone and noncanonical-CellDep rejection;
 - signed descriptor progress and fixed Vault root;
 - current 2-of-2 Factory signer-profile honesty;
 - full baseline CI and CKB-VM suite.
@@ -345,14 +349,19 @@ exchange through Morph payer/payee Agents attached to Fiber node1/node3. This
 proves the application sidecar against real Fiber routing. It does not satisfy
 Phase D: those route edges are still Fiber-native, not Morph-backed.
 
-### Phase D — Fiber hook integration (Morph adapter implemented; Fiber hook pending)
+### Phase D — Fiber hook control plane (Morph adapter implemented; Fiber hook pending)
 
 - external-edge wire schema and strict JSON-RPC client;
 - registration/update/disable/list;
 - payment prepare/resolve callback schema;
 - restart reconciliation;
 - implement and upstream or isolate the Fiber graph/forwarding hook;
-- real three-node routing and MPP over at least one Morph edge.
+- run registration, liquidity refresh, splice replacement, disable, callback,
+  and restart reconciliation in shadow mode without carrying user value.
+
+The control plane must not mark the edge routable for real funds yet. A Fiber
+TLC traversing a Morph edge is sovereign only if Morph can force-close every
+pending outcome after Fiber disappears.
 
 ### Phase E — RGB++ chain lifecycle
 
@@ -363,9 +372,20 @@ Phase D: those route edges are still Fiber-native, not Morph-backed.
 - Factory reserve and splice with proof/seal continuation;
 - two distinct RGB++ assets and substitution-negative tests.
 
-### Phase F — conditional force-close and operational hardening
+### Phase F — conditional force-close
 
 - Batch Cell profile without changing Factory;
+- pending-transfer root in signed Morph state;
+- preimage/timeout resolution and bounded aggregate payouts;
+- force-close tests with Fiber stopped at prepare, forward, fulfill, fail, and
+  timeout boundaries.
+
+### Phase G — routed data plane and operational hardening
+
+- enable real three-node routing and MPP over at least one Morph-backed edge
+  only after Phases D-F pass;
+- exercise mixed native-Fiber/Morph routes, partial MPP failure, fee updates,
+  splice drain/replacement, RGB++ proof invalidation, and provider replacement;
 - watchtower splice publication;
 - hash-checkpointed CKB reorg rollback;
 - encrypted store key rotation/backup;

@@ -94,7 +94,9 @@ initial `StateHeader`. This binds the descriptor, asset registry, challenge
 policy, participants, and materialised Vault before the channel exists. The
 State type also requires exactly one transaction output whose lock, type,
 capacity, and data hash to `vault_materialisation_root`; missing or ambiguous
-Vault materialisation is rejected.
+Vault materialisation is rejected. Creation leaves
+`vault_outpoint_commitment` zero because the funding transaction hash is not
+known until the transaction is committed.
 
 Initial Factory creation follows the same rule: the canonical factory-id input
 carries a full Factory signature envelope over update zero. Reduced or local
@@ -107,13 +109,23 @@ Factory type and Factory vault lock enforce the binding independently.
 Splice-created successor channels continue to use the separately signed splice
 bridge instead of a second redundant initial-state signature.
 
-This is a content/materialisation commitment, not yet a provenance locator.
-Two Cells with identical lock, capacity, type, and data have the same root. A
-mainnet-track v2 must bind the committed Vault to its exact CKB OutPoint after
-the creation transaction commits (for example through a participant-signed
-activation update that proves the live Vault as a cell dependency). Until that
-profile exists and is reviewed, clone/substitution resistance remains a
-mainnet blocker for both bilateral and Factory Vaults.
+The content root is paired with an exact provenance locator. After funding or
+any reserve-changing transition, an activation transaction consumes only the
+unbound State/Factory Cell, preserves every other header field and its lock,
+and sets:
+
+```text
+vault_outpoint_commitment =
+  H("CKB_MORPH_VAULT_OUTPOINT_V1", vault_tx_hash, u32_le(vault_index))
+```
+
+The referenced Vault must be the first raw/direct CellDep and its resolved
+content must match `vault_materialisation_root`. Requiring a direct canonical
+position avoids confusing a DepGroup member with the named Vault. Later
+updates preserve the locator; finalise, splice and Factory exits must consume
+that exact OutPoint. Reserve-changing successors return to the unbound state
+and must be activated before further use. Byte-identical clone Cells therefore
+cannot substitute for the committed bilateral or Factory Vault.
 
 ## Script Boundary
 

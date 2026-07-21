@@ -58,8 +58,10 @@ Implemented locally:
 - factory local exits that materialise child bilateral channels;
 - reduced factory paths for bounded rights updates, exits, sparse-Merkle
   updates, and splices, carried by `WitnessEnvelope`;
+- two-stage bilateral/Factory Vault activation that binds enforceable state to
+  an exact CKB OutPoint and rejects byte-identical clone substitution;
 - devnet smoke and stateful acceptance reports that bind scenarios to real
-  transactions, cycle estimates, and expected negative-path failures.
+  transactions, cycle estimates, and expected negative-path failures;
 - experimental Morph-owned RGB++/x402 Agent, native bilateral
   `ChannelBackend`, Factory-right edge registry, and isolated Fiber-hook
   adapter. The Agent x402/credential/fair-exchange flow is exercised over a
