@@ -3715,7 +3715,7 @@ mod tests {
         let path = repo_root.join("docs/devnet-smoke-budget.example.json");
 
         let profile = read_smoke_budget_profile(&path).unwrap();
-        assert_eq!(profile.max_total_cycles, Some(1_200_000_000));
+        assert_eq!(profile.max_total_cycles, Some(1_600_000_000));
         assert_eq!(profile.max_tx_bytes, Some(500_000));
         assert!(
             profile

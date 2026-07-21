@@ -169,6 +169,15 @@ program and is a release blocker until exercised against a real implementation.
 No Fiber type is imported into Morph consensus code, and no fake Fiber funding
 outpoint is created.
 
+The expanded real-devnet matrix currently records 193 transactions and is
+stable at roughly 1.533 billion aggregate estimated cycles across repeated
+runs. The aggregate smoke/stateful budget is therefore 1.6 billion cycles.
+This is a suite-size budget adjustment: the per-transaction 30 million cycle
+limit, named transaction limits, proof/witness limits, and byte limits remain
+active. The four reduced-exit fixtures measured at 10.17–10.21 million cycles,
+so their stale 10 million named/proof limits are calibrated to 11 million;
+their witness and transaction-size limits remain unchanged.
+
 ## Evidence collected
 
 The repository CI gate covers:
