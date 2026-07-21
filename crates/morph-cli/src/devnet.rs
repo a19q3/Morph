@@ -9193,20 +9193,20 @@ pub fn splice_negative_smoke(
         },
     )?);
 
-    let mut wrong_vault_type = ckb_package.package.clone();
-    wrong_vault_type.old_vault_out_point = None;
+    let mut wrong_vault_outpoint = ckb_package.package.clone();
+    wrong_vault_outpoint.old_vault_out_point = None;
     rejections.push(expect_splice_apply_rejection(
         rpc,
         &options,
         SpliceApplyRejectionCheck {
-            case: "wrong_vault_type",
+            case: "wrong_vault_outpoint",
             stage: "apply_preflight",
-            package: wrong_vault_type,
+            package: wrong_vault_outpoint,
             state_out_point: &ckb_state_out_point,
             vault_out_point: &xudt_vault_out_point,
             xudt_input_out_point: None,
             fee: options.fee,
-            expected: "live VaultCell xUDT asset does not match old vault descriptor",
+            expected: "does not match the exact VaultCell OutPoint",
         },
     )?);
 
