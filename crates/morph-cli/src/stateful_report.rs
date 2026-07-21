@@ -812,12 +812,12 @@ fn assert_stateful_artifact_fresh_against(
 
 fn current_git_state() -> Result<CurrentGitState> {
     let status = Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=no"])
         .output()
-        .context("failed to run git status --porcelain")?;
+        .context("failed to inspect tracked git worktree state")?;
     ensure!(
         status.status.success(),
-        "git status --porcelain failed: {}",
+        "tracked git worktree inspection failed: {}",
         String::from_utf8_lossy(&status.stderr).trim()
     );
     Ok(CurrentGitState {
