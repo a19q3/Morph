@@ -654,10 +654,10 @@ fn state_header_context_rejects_preserved_field_changes() {
 }
 
 #[test]
-fn state_header_context_allows_progress_payload_changes() {
+fn state_header_context_allows_signed_settlement_progress() {
     let old = header_with_epoch(1, Phase::Active, 3);
     let mut new = header_with_epoch(9, Phase::Settling, 3);
-    new.vault_materialisation_root = bytes32(9);
+    new.settlement_descriptor_commitment = bytes32(9);
 
     assert!(old.same_context_except_progress(&new));
 }
@@ -684,8 +684,8 @@ proptest! {
             7 => new.mode = Mode::FactoryProof,
             8 => new.participants_commitment = bytes32(marker),
             9 => new.asset_registry_commitment = bytes32(marker),
-            10 => new.settlement_descriptor_commitment = bytes32(marker),
-            11 => new.descriptor_version = old.descriptor_version + 1,
+            10 => new.descriptor_version = old.descriptor_version + 1,
+            11 => new.vault_materialisation_root = bytes32(marker),
             12 => new.challenge_policy_commitment = bytes32(marker),
             13 => new.state_layout_version = old.state_layout_version + 1,
             _ => unreachable!(),
@@ -695,12 +695,12 @@ proptest! {
     }
 
     #[test]
-    fn prop_state_header_context_allows_profile_payload_changes(marker in 64u8..=240) {
+    fn prop_state_header_context_allows_signed_settlement_progress(marker in 64u8..=240) {
         let old = header_with_epoch(1, Phase::Active, 3);
         let mut new = old.clone();
         new.state_number = 9;
         new.phase = Phase::Settling;
-        new.vault_materialisation_root = bytes32(marker);
+        new.settlement_descriptor_commitment = bytes32(marker);
 
         prop_assert!(old.same_context_except_progress(&new));
     }
@@ -1146,20 +1146,28 @@ fn accepts_valid_state_supersession() {
 }
 
 #[test]
-fn rejects_signed_settlement_descriptor_update_as_context_change() {
+fn accepts_signed_settlement_descriptor_update() {
     let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);
-    new.header.descriptor_version = 2;
     ctx.authorization = authorization_for(&mut new.header);
 
-    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
-    assert_eq!(err, MorphError::HeaderContextChanged);
+    validate_state_transition(&old, &new, &ctx).unwrap();
 }
 
 #[test]
-fn rejects_unsigned_settlement_descriptor_update_as_context_change() {
+fn rejects_unsigned_settlement_descriptor_update() {
     let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::InvalidStateSignatures);
+}
+
+#[test]
+fn rejects_signed_vault_materialisation_update_as_context_change() {
+    let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.header.vault_materialisation_root = bytes32(77);
+    ctx.authorization = authorization_for(&mut new.header);
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::HeaderContextChanged);

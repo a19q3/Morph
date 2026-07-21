@@ -64,8 +64,10 @@ pub struct StateHeader {
 
 impl StateHeader {
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
-        // In the bilateral plain profile this is the root of the materialised
-        // vault state and may change at splice.
+        // A signed settlement descriptor is state progress: it selects the
+        // participant payouts for the newer state. The materialised vault is
+        // funding context and can only change through the explicit splice
+        // transition, which has its own signed bridge checks.
         self.protocol_version == next.protocol_version
             && self.chain_id == next.chain_id
             && self.signature_scheme_id == next.signature_scheme_id
@@ -76,8 +78,8 @@ impl StateHeader {
             && self.mode == next.mode
             && self.participants_commitment == next.participants_commitment
             && self.asset_registry_commitment == next.asset_registry_commitment
-            && self.settlement_descriptor_commitment == next.settlement_descriptor_commitment
             && self.descriptor_version == next.descriptor_version
+            && self.vault_materialisation_root == next.vault_materialisation_root
             && self.challenge_policy_commitment == next.challenge_policy_commitment
             && self.state_layout_version == next.state_layout_version
     }

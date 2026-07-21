@@ -86,8 +86,28 @@ fn validate_create(new_data: &[u8], expected_factory_id: &[u8]) -> Result<()> {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
     validate_factory_id_derivation(expected_factory_id)?;
+    validate_initial_participant_authorisation(&new_header)?;
     validate_output_capacity()?;
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_initial_participant_authorisation(header: &FactoryStateHeader) -> Result<()> {
+    // As with bilateral funding, the new Factory type group has no GroupInput;
+    // input zero is the canonical factory-id anchor and carries the consent.
+    let witness_args =
+        load_witness_args(0, Source::Input).map_err(|_| ScriptError::ParticipantWitnessMissing)?;
+    let input_type = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(ScriptError::ParticipantWitnessMissing)?;
+    let input_type_data = input_type.raw_data();
+    let envelope = WitnessEnvelope::parse(input_type_data.as_ref())?;
+    if envelope.kind() != WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE {
+        return Err(ScriptError::WitnessEnvelopeEncoding);
+    }
+    let witness = FactorySignatureWitness::parse(envelope.body())?;
+    verify_factory_state_signatures(header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]

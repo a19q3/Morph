@@ -73,8 +73,12 @@ The current public mode surface is intentionally narrow. Host code names the
 implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
 wire profile uses mode bytes `1` and `2`. These correspond to the paper's
 current `bilateral_plaintext` profile and the implemented factory
-commitment/proof profile. Bilateral commitment mode is reserved and is not
-emitted by current package or devnet flows.
+commitment/proof profile. Directly funded initial states use mode `1` and must
+carry bilateral consent. Child states materialised by a Factory exit use mode
+`2` and must carry an exact local/reduced-exit envelope; the mode is preserved
+when the child later advances under its bilateral participant signatures.
+Bilateral commitment mode is reserved and is not emitted by current package or
+devnet flows.
 
 The host `Phase` enum is wider than the on-chain State type phase byte. Current
 State scripts accept only `Active` and `Settling`; `Funding` and `Closed` are
@@ -82,29 +86,20 @@ local lifecycle labels used by the host node and Hub after opening and after
 finalisation. Factory progression is tracked by `FactoryStateHeader.update_number`,
 not by a `Phase::FactoryActive` value.
 
-Initial funding approval is split across layers. The scripts enforce canonical
-anchor derivation, active phase, state number zero, lock/type binding, and
-capacity shape. Participant approval of the initial descriptor, asset registry,
-and challenge policy is handled by wallet, host, and package policy rather than
-by a separate script-checked initial-configuration signature object.
+Initial funding approval is enforced on chain. In addition to canonical anchor
+derivation, active phase, state number zero, lock/type binding, and capacity
+shape, the funding input carries a bilateral signature witness over the complete
+initial `StateHeader`. This binds the descriptor, asset registry, challenge
+policy, participants, and materialised Vault before the channel exists. The
+State type also requires exactly one transaction output whose lock, type,
+capacity, and data hash to `vault_materialisation_root`; missing or ambiguous
+Vault materialisation is rejected.
 
-**Accepted risk.** Because the initial `participants_commitment`,
-`settlement_descriptor_commitment`, `asset_registry_commitment`, and
-`challenge_policy_commitment` are not participant-signed at script level, a
-malicious funder (or wallet compromise at funding time) can plant a channel
-whose committed descriptor / registry / challenge-policy the counterparty never
-agreed to. Mitigations are entirely off chain:
-
-- the funding tx must be reviewed by every participant before it is confirmed;
-- the host / wallet must reject a funding tx whose commitments do not match the
-  mutually-derived initial configuration;
-- watchtowers and package validators must treat the initial on-chain
-  commitment as authoritative only after at least one participant has
-  co-signed the resulting initial package.
-
-Any deployment that cannot enforce these off-chain reviews must add an explicit
-initial-configuration signature object checked by the state-type script before
-mainnet.
+Initial Factory creation follows the same rule: the canonical factory-id input
+carries a full Factory signature envelope over update zero. Reduced or local
+proof kinds cannot be used to authorise creation. Splice-created successor
+channels continue to use the separately signed splice bridge instead of a
+second redundant initial-state signature.
 
 ## Script Boundary
 
@@ -168,6 +163,14 @@ is not part of the current conservative contract profile.
 factory exit or splice changes the FactoryVaultCell exactly as the factory
 evidence permits.
 
+The current executable Factory signature profile is deliberately bilateral:
+exactly two participant identifiers/public keys sign conservative updates.
+Rights trees can contain many typed rights, but they do not make the signer set
+dynamic. Host and Hub records reject any other participant count so they cannot
+display a Factory that the deployed scripts cannot authorise. Larger signer
+sets remain a future wire-profile upgrade; this limitation does not remove the
+Factory shared-reserve or child-materialisation model.
+
 ### Factory Local Exit Lifecycle
 
 Factory local-exit evidence is one-shot evidence for materialising a child
@@ -186,12 +189,12 @@ lock hash, and vault shape. `morph-factory-type` then requires the output State
 Cell bytes to equal that committed header, while the child State type enforces
 the participant signature set for later state progression.
 
-Ordinary supersede may advance state number, phase, and profile-specific payload
-commitment, but preserves the settlement descriptor commitment and descriptor
-version as channel context. Splice has a separate
+Ordinary supersede may advance state number, phase, and the participant-signed
+settlement descriptor commitment, but preserves the descriptor version and
+materialised Vault root as funding context. Splice has a separate
 `state_context_matches_splice_next` rule for the old/new funding-anchor bridge
-and applies the same descriptor stability while additionally binding the
-successor payload to the signed splice header.
+and is the only transition that may replace the materialised Vault root, while
+additionally binding the successor payload to the signed splice header.
 
 ## Resolution And Packages
 

@@ -1291,10 +1291,10 @@ impl HubServer {
         if let Some(response) = self.auth_failure_response(&request, required_scope, request_id) {
             return Ok(response);
         }
-        if matches!(request.method.as_str(), "POST" | "PUT") {
-            if let Some(response) = self.rate_limit_failure_response(request_id) {
-                return Ok(response);
-            }
+        if matches!(request.method.as_str(), "POST" | "PUT")
+            && let Some(response) = self.rate_limit_failure_response(request_id)
+        {
+            return Ok(response);
         }
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/api/health") | ("GET", "/api/state") => self.state_response(),
@@ -2041,14 +2041,13 @@ impl HubServer {
             .as_ref()
             .and_then(|metadata| metadata.modified().ok());
         let len = metadata.as_ref().map_or(0, fs::Metadata::len);
-        if let Ok(cache) = self.watch_alert_cache.lock() {
-            if cache.path.as_deref() == Some(path)
-                && cache.modified == modified
-                && cache.len == len
-                && cache.value.is_some()
-            {
-                return cache.value.clone().unwrap();
-            }
+        if let Ok(cache) = self.watch_alert_cache.lock()
+            && cache.path.as_deref() == Some(path)
+            && cache.modified == modified
+            && cache.len == len
+            && let Some(value) = &cache.value
+        {
+            return value.clone();
         }
 
         let value = load_watchtower_alerts(path);

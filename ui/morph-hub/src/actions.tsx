@@ -651,7 +651,7 @@ export function FactoryActions({
     event.preventDefault();
     void runAction('Open factory', () => {
       const customPubkeys = customParticipantPubkeys.trim()
-        ? parsePubkeyList(customParticipantPubkeys, 'Custom participant pubkeys')
+        ? parsePubkeyList(customParticipantPubkeys, 'Custom counterparty pubkey')
         : [];
       const participant_pubkeys = uniqueStrings([
         state.pubkey,
@@ -659,6 +659,9 @@ export function FactoryActions({
         ...customPubkeys,
       ]);
       assertIncludesPubkey(participant_pubkeys, state.pubkey, 'Participant pubkeys');
+      if (participant_pubkeys.length !== 2) {
+        throw new Error('Current Factory profile requires exactly two participant pubkeys');
+      }
       return postAction('/api/factories', {
         factory_id: assertHex32(factoryId, 'Factory id'),
         participant_pubkeys,
@@ -681,8 +684,8 @@ export function FactoryActions({
   const toggleParticipant = (pubkey: string) => {
     setSelectedParticipantPubkeys(current => (
       current.includes(pubkey)
-        ? current.filter(item => item !== pubkey)
-        : [...current, pubkey]
+        ? []
+        : [pubkey]
     ));
   };
 
@@ -724,7 +727,7 @@ export function FactoryActions({
           validate={value => { assertHex32(value, 'Factory id'); }}
         />
         <label>
-          Participants
+          Counterparty (current two-party Factory profile)
           <div className="participant-picker" data-testid="factory-participants">
             <span className="participant-chip selected" title={state.pubkey}>
               Local {shortHex(state.pubkey)}
@@ -748,12 +751,16 @@ export function FactoryActions({
           </div>
         </label>
         <ValidatedTextarea
-          label="Custom participant pubkeys"
+          label="Custom counterparty pubkey"
           className="mono compact"
           testId="factory-participants-custom"
           value={customParticipantPubkeys}
           onChange={setCustomParticipantPubkeys}
-          validate={value => { if (value.trim()) parsePubkeyList(value, 'Custom participant pubkeys'); }}
+          validate={value => {
+            if (!value.trim()) return;
+            const pubkeys = parsePubkeyList(value, 'Custom counterparty pubkey');
+            if (pubkeys.length !== 1) throw new Error('Enter exactly one counterparty pubkey');
+          }}
         />
         <ValidatedInput label="Reserve" className="mono" testId="factory-reserve" value={reserve} onChange={setReserve} validate={value => { assertPositiveInteger(value, 'Reserve'); }} />
         <AssetSelect value={factoryAsset} onChange={setFactoryAsset} />

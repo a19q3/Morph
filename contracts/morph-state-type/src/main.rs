@@ -17,9 +17,12 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
-    BYTE32_LEN, BilateralSignatureWitness, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
-    SpliceStateTransitionWitness, StateHeader, blake2b256, read_u64, validate_relative_block_since,
-    vault_cell_commitment, verify_bilateral_state_signatures,
+    BILATERAL_SIGNATURE_WITNESS_LEN, BYTE32_LEN, BilateralSignatureWitness,
+    FactoryLocalExitWitness, FactoryReducedExitWitness, PHASE_ACTIVE, PHASE_SETTLING, Result,
+    STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
+    SpliceStateTransitionWitness, StateHeader, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WitnessEnvelope, blake2b256, read_u64,
+    validate_relative_block_since, vault_cell_commitment, verify_bilateral_state_signatures,
     verify_splice_state_transition_bundle,
 };
 
@@ -97,7 +100,7 @@ fn validate_create(
         return Err(ScriptError::FundingAnchorMismatch);
     }
     if new_header.phase() != PHASE_ACTIVE {
-        return Err(ScriptError::NewStateNotSettling);
+        return Err(ScriptError::NewStateNotActive);
     }
     validate_output_lock_args_bind_output_type(0, Source::GroupOutput)?;
     if new_header.state_number() != 0
@@ -108,6 +111,8 @@ fn validate_create(
         return Ok(());
     }
     validate_anchor_derivation(expected_funding_anchor)?;
+    validate_initial_authorisation(new_data, &new_header)?;
+    find_unique_output_by_vault_commitment(new_header.vault_materialisation_root())?;
     validate_group_output_capacity()
 }
 
@@ -291,6 +296,78 @@ fn validate_participant_authorisation(header: &StateHeader) -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
+fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Result<()> {
+    // A newly-created type-script group has no GroupInput. Input zero carries
+    // either direct bilateral consent or the Factory exit that materialises
+    // this exact child State output.
+    let witness_args =
+        load_witness_args(0, Source::Input).map_err(|_| ScriptError::ParticipantWitnessMissing)?;
+    let input_type = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(ScriptError::ParticipantWitnessMissing)?;
+    let raw = input_type.raw_data();
+    match header.mode() {
+        STATE_MODE_BILATERAL_PLAINTEXT => {
+            if raw.len() != BILATERAL_SIGNATURE_WITNESS_LEN {
+                return Err(ScriptError::ParticipantWitnessEncoding);
+            }
+            let witness = BilateralSignatureWitness::parse(raw.as_ref())?;
+            verify_bilateral_state_signatures(header, &witness)
+        }
+        STATE_MODE_FACTORY_PROOF => {
+            let envelope = WitnessEnvelope::parse(raw.as_ref())?;
+            match envelope.kind() {
+                WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
+                    let witness = FactoryLocalExitWitness::parse(envelope.body())?;
+                    validate_factory_materialised_state(
+                        witness.state_output_index(),
+                        witness.state_type_hash(),
+                        witness.exit_state_header(),
+                        new_data,
+                    )
+                }
+                WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
+                    let witness = FactoryReducedExitWitness::parse(envelope.body())?;
+                    validate_factory_materialised_state(
+                        witness.state_output_index(),
+                        witness.state_type_hash(),
+                        witness.exit_state_header(),
+                        new_data,
+                    )
+                }
+                _ => Err(ScriptError::WitnessEnvelopeEncoding),
+            }
+        }
+        _ => Err(ScriptError::HeaderContextChanged),
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_materialised_state(
+    state_output_index: u32,
+    expected_state_type_hash: &[u8],
+    committed_header: &[u8],
+    new_data: &[u8],
+) -> Result<()> {
+    let output_index = state_output_index as usize;
+    let script_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+    if expected_state_type_hash != script_hash.as_slice() || committed_header != new_data {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let output_type_hash =
+        load_cell_type_hash(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_data =
+        load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    if output_type_hash.as_ref().map(|hash| hash.as_slice()) != Some(script_hash.as_slice())
+        || output_data.as_slice() != new_data
+    {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
 fn validate_finalise(old_header: &StateHeader, finalise_since: Option<u64>) -> Result<()> {
     if old_header.phase() != PHASE_SETTLING {
         return Err(ScriptError::NewStateNotSettling);
@@ -340,6 +417,43 @@ fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
         }
     }
     found.ok_or(ScriptError::StateCellMissing)
+}
+
+#[cfg(target_arch = "riscv64")]
+fn find_unique_output_by_vault_commitment(expected: &[u8]) -> Result<usize> {
+    let mut found = None;
+    let mut index = 0;
+    loop {
+        if index >= MAX_WITNESS_INPUTS_PER_TX {
+            return Err(ScriptError::Encoding);
+        }
+        match load_cell_capacity(index, Source::Output) {
+            Ok(capacity) => {
+                let lock_hash = load_cell_lock_hash(index, Source::Output)
+                    .map_err(|_| ScriptError::Encoding)?;
+                let type_hash = load_cell_type_hash(index, Source::Output)
+                    .map_err(|_| ScriptError::Encoding)?;
+                let data =
+                    load_cell_data(index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+                let commitment = vault_cell_commitment(
+                    lock_hash.as_slice(),
+                    capacity,
+                    type_hash.as_ref().map(|hash| hash.as_slice()),
+                    data.as_slice(),
+                );
+                if commitment.as_slice() == expected {
+                    if found.is_some() {
+                        return Err(ScriptError::VaultCellAmbiguous);
+                    }
+                    found = Some(index);
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    found.ok_or(ScriptError::VaultCellMissing)
 }
 
 #[cfg(target_arch = "riscv64")]

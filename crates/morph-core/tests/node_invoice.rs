@@ -297,6 +297,28 @@ fn factory_requires_local_participant_and_child_counterparty_membership() {
 }
 
 #[test]
+fn factory_projection_rejects_unsupported_participant_count() {
+    let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
+
+    assert_eq!(
+        node.open_factory(MorphFactoryRecord {
+            factory_id: bytes32(39),
+            participant_node_ids: BTreeSet::from([bytes32(1), bytes32(7), bytes32(8)]),
+            update_number: 0,
+            reserve_balances: vec![MorphAssetBalance {
+                asset: MorphAsset::Ckb,
+                local: 100_000,
+                remote: 100_000,
+                pending: 0,
+            }],
+            materialised_child_channels: BTreeSet::new(),
+        })
+        .unwrap_err(),
+        NodeError::FactoryParticipantCountUnsupported
+    );
+}
+
+#[test]
 fn factory_materialises_child_channel_once() {
     let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
     node.connect_peer(MorphPeer {

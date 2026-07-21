@@ -49,13 +49,14 @@ use morph_script_common::{
     FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH,
     FACTORY_STATE_HEADER_LEN, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
     FactoryStateHeader, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
-    SPONSOR_POLICY_LEN, STATE_HEADER_LEN, ScriptError, StateHeader as WireStateHeader,
-    StateHeaderInput, WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
-    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256 as script_blake2b256,
-    encode_state_header, factory_local_exit_digest, factory_participants_commitment,
-    participants_commitment, relative_block_since, settlement_descriptor_commitment,
-    vault_cell_commitment, verify_factory_merkle_update, verify_reduced_factory_exit_update,
+    SPONSOR_POLICY_LEN, STATE_HEADER_LEN, STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF,
+    ScriptError, StateHeader as WireStateHeader, StateHeaderInput, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, blake2b256 as script_blake2b256, encode_state_header,
+    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
+    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
+    verify_factory_merkle_update, verify_reduced_factory_exit_update,
     witness_envelope_body_commitment,
 };
 use serde::Serialize;
@@ -1793,7 +1794,6 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
         challenge_policy_commitment,
     });
-
     let state_output_for_capacity = CellOutput::new_builder()
         .lock(state_lock.clone())
         .type_(Some(state_type.clone()).pack())
@@ -1845,6 +1845,11 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .capacity(change_capacity)
         .lock(owner_lock.clone())
         .build();
+    let initial_signature_witness = bilateral_signature_witness(
+        &state_header,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
     let unsigned = TransactionBuilder::default()
         .cell_dep(secp_dep)
         .cell_dep(state_lock_contract.cell_dep.clone())
@@ -1861,7 +1866,11 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
-    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let signed = sign_single_secp_input_with_input_type(
+        unsigned,
+        &owner_key,
+        Bytes::copy_from_slice(&initial_signature_witness),
+    )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
 
     let tx_hash_string = sent.tx_hash.clone();
@@ -2088,7 +2097,20 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         .output_data(factory_vault_data.clone().pack())
         .output_data(Bytes::new().pack())
         .build();
-    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let initial_signature_witness = factory_signature_witness(
+        &factory_header,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+    let initial_contract_witness = factory_witness_envelope(
+        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+        &initial_signature_witness,
+    )?;
+    let signed = sign_single_secp_input_with_input_type(
+        unsigned,
+        &owner_key,
+        Bytes::from(initial_contract_witness),
+    )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash_string = sent.tx_hash.clone();
 
@@ -5476,6 +5498,7 @@ pub fn factory_exit_channel(
         descriptor_version,
         challenge_policy_commitment,
     });
+    state_header[148] = STATE_MODE_FACTORY_PROOF;
 
     let state_output_for_capacity = CellOutput::new_builder()
         .lock(state_lock.clone())
@@ -10043,8 +10066,25 @@ fn sign_single_secp_input(
     tx: ckb_types::core::TransactionView,
     privkey: &Privkey,
 ) -> Result<ckb_types::core::TransactionView> {
+    sign_single_secp_input_with_optional_input_type(tx, privkey, None)
+}
+
+fn sign_single_secp_input_with_input_type(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    input_type: Bytes,
+) -> Result<ckb_types::core::TransactionView> {
+    sign_single_secp_input_with_optional_input_type(tx, privkey, Some(input_type))
+}
+
+fn sign_single_secp_input_with_optional_input_type(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    input_type: Option<Bytes>,
+) -> Result<ckb_types::core::TransactionView> {
     let unsigned_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(vec![0u8; 65])))
+        .input_type(input_type.clone().pack())
         .build();
     let message = sighash_all_message(tx.hash(), &[unsigned_witness.as_bytes()]);
     let signature = privkey
@@ -10052,6 +10092,7 @@ fn sign_single_secp_input(
         .context("failed to sign CKB transaction")?;
     let witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(signature.serialize())))
+        .input_type(input_type.pack())
         .build();
     Ok(tx.as_advanced_builder().witness(witness.as_bytes()).build())
 }
@@ -12281,7 +12322,7 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
         funding_anchor: input.funding_anchor,
         vault_set_commitment: input.vault_set_commitment,
         state_number: 0,
-        mode: 1,
+        mode: STATE_MODE_BILATERAL_PLAINTEXT,
         phase: PHASE_ACTIVE,
         participants_commitment: input.participants_commitment,
         asset_registry_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY"]),
@@ -12539,6 +12580,9 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
             Some("NonMonotonicStateNumber")
         }
         value if value == ScriptError::NewStateNotSettling as i16 => Some("NewStateNotSettling"),
+        value if value == ScriptError::NewStateNotActive as i16 => Some("NewStateNotActive"),
+        value if value == ScriptError::VaultCellMissing as i16 => Some("VaultCellMissing"),
+        value if value == ScriptError::VaultCellAmbiguous as i16 => Some("VaultCellAmbiguous"),
         value if value == ScriptError::HeaderContextChanged as i16 => Some("HeaderContextChanged"),
         value if value == ScriptError::OutputBelowOccupiedCapacity as i16 => {
             Some("OutputBelowOccupiedCapacity")

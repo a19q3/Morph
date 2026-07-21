@@ -213,6 +213,8 @@ pub const VAULT_CELL_COMMITMENT_DOMAIN: &[u8] = b"CKB_MORPH_VAULT_CELL";
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION: u16 = 2;
+pub const STATE_MODE_BILATERAL_PLAINTEXT: u8 = 1;
+pub const STATE_MODE_FACTORY_PROOF: u8 = 2;
 pub const BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT: u8 = 2;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT: u8 = 1;
 pub const SPLICE_KIND_IN: u8 = 0;
@@ -264,6 +266,9 @@ pub enum ScriptError {
     FactorySpliceProofMismatch = 43,
     SponsorPolicyUnsupported = 44,
     WitnessEnvelopeEncoding = 45,
+    NewStateNotActive = 46,
+    VaultCellMissing = 47,
+    VaultCellAmbiguous = 48,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -397,8 +402,9 @@ impl<'a> StateHeader<'a> {
     }
 
     pub fn same_context_except_progress(&self, next: &Self) -> bool {
-        // vault_materialisation_root is profile-specific: in the bilateral plain
-        // profile it tracks vault materialisation and may change at splice.
+        // A signed settlement descriptor is state progress. The materialised
+        // vault remains fixed here and can only change through the separately
+        // authorised splice transition.
         self.protocol_version() == next.protocol_version()
             && self.chain_id() == next.chain_id()
             && self.signature_scheme_id() == next.signature_scheme_id()
@@ -409,8 +415,8 @@ impl<'a> StateHeader<'a> {
             && self.mode() == next.mode()
             && self.participants_commitment() == next.participants_commitment()
             && self.asset_registry_commitment() == next.asset_registry_commitment()
-            && self.settlement_descriptor_commitment() == next.settlement_descriptor_commitment()
             && self.descriptor_version() == next.descriptor_version()
+            && self.vault_materialisation_root() == next.vault_materialisation_root()
             && self.challenge_policy_commitment() == next.challenge_policy_commitment()
             && self.state_layout_version() == next.state_layout_version()
     }
@@ -5300,7 +5306,7 @@ mod tests {
     fn state_header_context_binds_epoch_and_vault_set() {
         let old_raw = header_bytes(1, 1, 7);
         let mut new_raw = header_bytes(9, PHASE_SETTLING, 7);
-        new_raw[248..280].fill(12);
+        new_raw[214..246].fill(12);
 
         let old = StateHeader::parse(&old_raw).unwrap();
         let new = StateHeader::parse(&new_raw).unwrap();
@@ -5318,7 +5324,12 @@ mod tests {
         let mut changed_descriptor_raw = header_bytes(9, PHASE_SETTLING, 7);
         changed_descriptor_raw[214..246].fill(11);
         let changed_descriptor = StateHeader::parse(&changed_descriptor_raw).unwrap();
-        assert!(!old.same_context_except_progress(&changed_descriptor));
+        assert!(old.same_context_except_progress(&changed_descriptor));
+
+        let mut changed_materialisation_raw = header_bytes(9, PHASE_SETTLING, 7);
+        changed_materialisation_raw[248..280].fill(11);
+        let changed_materialisation = StateHeader::parse(&changed_materialisation_raw).unwrap();
+        assert!(!old.same_context_except_progress(&changed_materialisation));
 
         let mut changed_descriptor_version_raw = header_bytes(9, PHASE_SETTLING, 7);
         put_u16(&mut changed_descriptor_version_raw, 246, 2);
