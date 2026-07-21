@@ -88,7 +88,7 @@ use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
-const VAULT_ACTIVATION_FEE: u64 = 1;
+const VAULT_ACTIVATION_FEE: u64 = 10_000;
 pub const DEFAULT_SPONSOR_MIN_STATE_NUMBER: u64 = 1;
 pub const DEFAULT_SPONSOR_MAX_STATE_NUMBER: u64 = 1 << 20;
 const CONTRACTS: [(&str, &str); 7] = [
