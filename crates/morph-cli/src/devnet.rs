@@ -1845,11 +1845,6 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .capacity(change_capacity)
         .lock(owner_lock.clone())
         .build();
-    let initial_signature_witness = bilateral_signature_witness(
-        &state_header,
-        &options.alice_private_key,
-        &options.bob_private_key,
-    )?;
     let unsigned = TransactionBuilder::default()
         .cell_dep(secp_dep)
         .cell_dep(state_lock_contract.cell_dep.clone())
@@ -1866,10 +1861,12 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
-    let signed = sign_single_secp_input_with_input_type(
+    let signed = sign_bilateral_state_creation(
         unsigned,
         &owner_key,
-        Bytes::copy_from_slice(&initial_signature_witness),
+        &state_header,
+        &options.alice_private_key,
+        &options.bob_private_key,
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
 
@@ -6037,7 +6034,13 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .build();
-    let signed = sign_single_secp_input(unsigned, &owner_key)?;
+    let signed = sign_bilateral_state_creation(
+        unsigned,
+        &owner_key,
+        &state_header,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
 
     let tx_hash_string = sent.tx_hash.clone();
@@ -10086,6 +10089,22 @@ fn sign_single_secp_input_with_input_type(
     sign_single_secp_input_with_optional_input_type(tx, privkey, Some(input_type))
 }
 
+fn sign_bilateral_state_creation(
+    tx: ckb_types::core::TransactionView,
+    owner_key: &Privkey,
+    state_header: &[u8],
+    alice_private_key: &str,
+    bob_private_key: &str,
+) -> Result<ckb_types::core::TransactionView> {
+    let participant_witness =
+        bilateral_signature_witness(state_header, alice_private_key, bob_private_key)?;
+    sign_single_secp_input_with_input_type(
+        tx,
+        owner_key,
+        Bytes::copy_from_slice(&participant_witness),
+    )
+}
+
 fn sign_single_secp_input_with_optional_input_type(
     tx: ckb_types::core::TransactionView,
     privkey: &Privkey,
@@ -12810,6 +12829,44 @@ mod tests {
             err.to_string().contains("valid SponsorPolicy"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn bilateral_state_creation_signer_carries_participant_witness() {
+        let owner_key = parse_privkey(&private_key_from_scalar(3)).unwrap();
+        let alice_private_key = private_key_from_scalar(1);
+        let bob_private_key = private_key_from_scalar(2);
+        let alice_key = k256_signing_key(&alice_private_key).unwrap();
+        let bob_key = k256_signing_key(&bob_private_key).unwrap();
+        let mut participant_pubkeys = [k256_pubkey(&alice_key), k256_pubkey(&bob_key)];
+        participant_pubkeys.sort();
+        let header = initial_state_header(InitialStateHeader {
+            chain_id: [0x10; BYTE32_LEN],
+            channel_id: [0x11; BYTE32_LEN],
+            funding_anchor: [0x12; BYTE32_LEN],
+            vault_set_commitment: [0x13; BYTE32_LEN],
+            participants_commitment: participants_commitment(
+                2,
+                &[&participant_pubkeys[0], &participant_pubkeys[1]],
+            ),
+            settlement_descriptor_commitment: [0x14; BYTE32_LEN],
+            descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
+            challenge_policy_commitment: [0x15; BYTE32_LEN],
+        });
+
+        let signed = sign_bilateral_state_creation(
+            TransactionBuilder::default().build(),
+            &owner_key,
+            &header,
+            &alice_private_key,
+            &bob_private_key,
+        )
+        .unwrap();
+        let witness = signed.witnesses().get(0).unwrap().raw_data();
+        let witness_args = WitnessArgs::from_slice(witness.as_ref()).unwrap();
+        let input_type = witness_args.input_type().to_opt().unwrap().raw_data();
+
+        assert_eq!(input_type.len(), BILATERAL_SIGNATURE_WITNESS_LEN);
     }
 
     #[test]
