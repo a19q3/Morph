@@ -8,11 +8,12 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use clap::{Parser, Subcommand};
-use k256::ecdsa::SigningKey;
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use morph_agent::{
     AgentConfig, AgentService, AssetKind, CredentialService, DurableStore, FiberRpcClient,
     RgbppAsset, serve,
 };
+use morph_core::blake2b256;
 
 const MAX_ASSET_CATALOG_BYTES: u64 = 1024 * 1024;
 
@@ -30,6 +31,11 @@ enum Command {
     GenerateKey,
     /// Generate a secp256k1 key for MORPH_AGENT_RECEIPT_PRIVATE_KEY.
     GenerateReceiptKey,
+    /// Derive a Morph account ID from a compressed secp256k1 public key.
+    AccountId {
+        #[arg(long)]
+        pubkey: String,
+    },
     /// Run the x402 gateway/facilitator against an unmodified Fiber node.
     Serve {
         #[arg(long, default_value = "127.0.0.1:4620")]
@@ -95,6 +101,9 @@ async fn main() -> Result<()> {
                 "public_key=0x{}",
                 hex::encode(key.verifying_key().to_encoded_point(true).as_bytes())
             );
+        }
+        Command::AccountId { pubkey } => {
+            println!("account_id={}", account_id_from_public_key(&pubkey)?);
         }
         Command::Serve {
             listen,
@@ -178,6 +187,18 @@ fn parse_receipt_signing_key(value: &str) -> Result<SigningKey> {
     SigningKey::from_slice(&raw).context("invalid MORPH_AGENT_RECEIPT_PRIVATE_KEY")
 }
 
+fn account_id_from_public_key(value: &str) -> Result<String> {
+    let raw = hex::decode(value.strip_prefix("0x").unwrap_or(value))
+        .context("compressed public key must be hexadecimal")?;
+    ensure!(raw.len() == 33, "compressed public key must be 33 bytes");
+    let key = VerifyingKey::from_sec1_bytes(&raw).context("invalid secp256k1 public key")?;
+    ensure!(
+        key.to_encoded_point(true).as_bytes() == raw,
+        "public key must use canonical compressed SEC1 encoding"
+    );
+    Ok(format!("0x{}", hex::encode(blake2b256(&raw))))
+}
+
 fn read_asset_catalog(path: &Path) -> Result<Vec<RgbppAsset>> {
     let metadata = fs::metadata(path)
         .with_context(|| format!("failed to stat asset catalog {}", path.display()))?;
@@ -191,4 +212,27 @@ fn read_asset_catalog(path: &Path) -> Result<Vec<RgbppAsset>> {
         serde_json::from_slice(&bytes).context("asset catalog must be a JSON asset array")?;
     ensure!(!assets.is_empty(), "asset catalog must not be empty");
     Ok(assets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_id_matches_the_typescript_sdk_vector() {
+        assert_eq!(
+            account_id_from_public_key(
+                "0x02989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+            )
+            .unwrap(),
+            "0xc3884ddf5c0e66af9bd067147e948641917a9fd9df768dc299172e35a613a6e8"
+        );
+    }
+
+    #[test]
+    fn account_id_rejects_uncompressed_keys() {
+        let key = SigningKey::from_slice(&[7; 32]).unwrap();
+        let uncompressed = hex::encode(key.verifying_key().to_encoded_point(false).as_bytes());
+        assert!(account_id_from_public_key(&uncompressed).is_err());
+    }
 }

@@ -329,7 +329,7 @@ The present host boundary additionally enforces stable edge identity across
 liquidity refresh, signer-derived endpoint IDs, sparse-Merkle right proof
 consistency, exact vault asset shape, and trusted CKB genesis/deployment IDs.
 
-### Phase C — issue #1255 Agent capability (implemented, real-Fiber E2E pending)
+### Phase C — issue #1255 Agent capability (implemented and real-Fiber E2E gated)
 
 - x402 JSON and HTTP headers;
 - Fiber invoice/pay/status integration;
@@ -338,6 +338,12 @@ consistency, exact vault asset shape, and trusted CKB genesis/deployment IDs.
 - encrypted atomic store and payment index;
 - fixed-upstream Gateway;
 - Rust and TypeScript SDKs.
+
+The acceptance harness establishes Fiber's native three-node `router-pay`
+topology, then executes one x402 credential purchase and one hash-locked fair
+exchange through Morph payer/payee Agents attached to Fiber node1/node3. This
+proves the application sidecar against real Fiber routing. It does not satisfy
+Phase D: those route edges are still Fiber-native, not Morph-backed.
 
 ### Phase D — Fiber hook integration (Morph adapter implemented; Fiber hook pending)
 

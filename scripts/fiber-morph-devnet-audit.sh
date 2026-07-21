@@ -149,6 +149,44 @@ require_fiber_period_check_expiry_evidence() {
   require_log_count_at_least "$stack_log" "tlcs count: 0" 4
 }
 
+require_morph_agent_fiber_evidence() {
+  local run_dir="$1"
+  local result="$run_dir/morph-agent-fiber-e2e/result.json"
+  local manifest="$run_dir/morph-agent-fiber-e2e/manifest.json"
+
+  require_file "$result"
+  require_file "$manifest"
+  jq_check "$result" \
+    '.schema == "morph.agent_fiber_devnet_e2e" and
+     .status == "passed" and
+     .route == "fiber-node1 -> fiber-node2 -> fiber-node3" and
+     .payer != .payee and
+     .x402.terminal_status == "Settled" and
+     (.x402.payment_hash | test("^0x[0-9a-f]{64}$")) and
+     (.x402.receipt_id | test("^0x[0-9a-f]{64}$")) and
+     (.x402.credential_id | test("^0x[0-9a-f]{64}$")) and
+     (.fair_exchange.payment_hash | test("^0x[0-9a-f]{64}$")) and
+     (.fair_exchange.offer_id | test("^0x[0-9a-f]{64}$")) and
+     (.fair_exchange.receipt_id | test("^0x[0-9a-f]{64}$")) and
+     (.fair_exchange.plaintext_sha256 | test("^0x[0-9a-f]{64}$"))' \
+    'Morph Agent Fiber devnet result is incomplete'
+  jq_check "$manifest" \
+    '.schema == "morph.agent_fiber_devnet_manifest" and
+     .status == "passed" and
+     .result == "result.json" and
+     .secrets_recorded == false and
+     (.ckb_network_id | test("^0x[0-9a-f]{64}$")) and
+     (.payer_account_id | test("^0x[0-9a-f]{64}$")) and
+     (.payee_account_id | test("^0x[0-9a-f]{64}$"))' \
+    'Morph Agent Fiber devnet manifest is incomplete'
+  jq -e -s \
+    '.[0].ckb_network_id == .[1].ckb_network_id and
+     .[0].payer == .[1].payer_account_id and
+     .[0].payee == .[1].payee_account_id' \
+    "$result" "$manifest" >/dev/null ||
+    fail "Morph Agent result and manifest identities do not match"
+}
+
 verify_morph_stateful() {
   local run_dir="$1"
   local summary_check="$run_dir/morph-stateful/scenarios/summary-check.json"
@@ -232,6 +270,8 @@ write_report() {
     --arg morph_summary_check "$run_dir/morph-stateful/scenarios/summary-check.json" \
     --arg morph_summary "$run_dir/morph-stateful/scenarios/summary.json" \
     --arg fiber_external "$run_dir/fiber-bruno-e2e_external-funding-open.json" \
+    --arg morph_agent_result "$run_dir/morph-agent-fiber-e2e/result.json" \
+    --arg morph_agent_manifest "$run_dir/morph-agent-fiber-e2e/manifest.json" \
     --arg fiber_restart "$run_dir/fiber-external-funding-restart.json" \
     --arg fiber_open_close "$run_dir/fiber-bruno-e2e_open-use-close-a-channel.json" \
     --arg fiber_three_nodes "$run_dir/fiber-bruno-e2e_3-nodes-transfer.json" \
@@ -290,7 +330,9 @@ write_report() {
           ] else [] end)
           + (if $include_coexistence_fiber == 1 then [
             {id: "fiber_external_funding_open", system: "fiber", suite: "e2e/external-funding-open", evidence: [$fiber_external]},
-            {id: "fiber_external_funding_restart", system: "fiber", suite: "e2e/external-funding-open/restart", evidence: [$fiber_restart]}
+            {id: "fiber_external_funding_restart", system: "fiber", suite: "e2e/external-funding-open/restart", evidence: [$fiber_restart]},
+            {id: "morph_agent_x402_fiber_multihop", system: "morph_agent", description: "Signed x402 payment, terminal Fiber settlement, and paid Biscuit credential over a three-node route.", evidence: [$morph_agent_result, $morph_agent_manifest, $fiber_router_pay]},
+            {id: "morph_agent_fair_exchange_fiber_multihop", system: "morph_agent", description: "Hash-locked encrypted result release after terminal three-node Fiber payment.", evidence: [$morph_agent_result, $morph_agent_manifest, $fiber_router_pay]}
           ] else [] end)
           + (if $include_extended_fiber == 1 then [
             {id: "fiber_open_use_close_channel", system: "fiber", suite: "e2e/open-use-close-a-channel", evidence: [$fiber_open_close]},
@@ -328,7 +370,9 @@ write_report() {
             {id: "budget_regression", system: "morph", severity: "P2", evidence: [$morph_summary]}
           ] else [] end)
           + (if $include_coexistence_fiber == 1 then [
-            {id: "fiber_external_funding_persistence", system: "fiber", severity: "P0", evidence: [$fiber_external, $fiber_restart]}
+            {id: "fiber_external_funding_persistence", system: "fiber", severity: "P0", evidence: [$fiber_external, $fiber_restart]},
+            {id: "morph_agent_terminal_payment_identity_binding", system: "morph_agent", severity: "P0", evidence: [$morph_agent_result, $morph_agent_manifest]},
+            {id: "morph_agent_credential_hashlock_release", system: "morph_agent", severity: "P0", evidence: [$morph_agent_result, $morph_agent_manifest]}
           ] else [] end)
           + (if $include_extended_fiber == 1 then [
             {id: "fiber_funding_tx_shape_validation", system: "fiber", severity: "P0", evidence: [$fiber_funding_remove_change, $fiber_funding_modify_change, $fiber_funding_from_peer, $fiber_funding_missing_inputs]},
@@ -358,6 +402,10 @@ write_report() {
             fiber_required_business_flows: (17 + (if $include_coexistence_fiber == 1 then 2 else 0 end)),
             fiber_required_security_families: (8 + (if $include_coexistence_fiber == 1 then 1 else 0 end)),
             fiber_funding_tx_verification_cases: 4
+          } else {} end)
+          + (if $include_coexistence_fiber == 1 then {
+            morph_agent_required_business_flows: 2,
+            morph_agent_required_security_families: 2
           } else {} end)
         )
     }' >"$report"
@@ -406,7 +454,7 @@ main() {
       include_morph=1
       include_coexistence_fiber=1
       jq_check "$matrix" \
-        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
+        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "morph_agent_fiber_multihop", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
         'coexistence acceptance matrix gate set is inaccurate'
       ;;
     full)
@@ -414,7 +462,7 @@ main() {
       include_coexistence_fiber=1
       include_extended_fiber=1
       jq_check "$matrix" \
-        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "fiber_security_and_recovery_matrix", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
+        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "fiber_security_and_recovery_matrix", "morph_agent_fiber_multihop", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
         'full acceptance matrix gate set is inaccurate'
       ;;
     fiber)
@@ -445,6 +493,14 @@ main() {
       "submitting signed funding tx" \
       "waiting for Closed" \
       "success"
+    require_fiber_suite_evidence "$run_dir" "fiber-bruno-e2e_router-pay.json" "e2e/router-pay" \
+      "e2e/router-pay/12-node1-send-payment" \
+      "e2e/router-pay/13-node-send-duplicate-payment-err" \
+      "e2e/router-pay/33-node2-update-channel"
+    require_morph_agent_fiber_evidence "$run_dir"
+    jq -e -s '.[0].git_commit == .[1].morph.head' \
+      "$run_dir/morph-agent-fiber-e2e/manifest.json" "$repo_state" >/dev/null ||
+      fail "Morph Agent evidence was not generated from the recorded Morph commit"
   fi
 
   if [ "$include_extended_fiber" = "1" ]; then

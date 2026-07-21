@@ -62,8 +62,9 @@ Implemented locally:
   transactions, cycle estimates, and expected negative-path failures.
 - experimental Morph-owned RGB++/x402 Agent, native bilateral
   `ChannelBackend`, Factory-right edge registry, and isolated Fiber-hook
-  adapter. These host interfaces are unit-tested; a real Fiber external-edge
-  hook and cross-stack devnet route are not yet implemented.
+  adapter. The Agent x402/credential/fair-exchange flow is exercised over a
+  real three-node Fiber devnet route; a real Fiber external-edge hook routing
+  a Morph-backed channel is not yet implemented.
 
 Still not claimed:
 

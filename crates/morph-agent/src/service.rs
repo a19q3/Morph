@@ -59,6 +59,8 @@ pub enum ServiceError {
     UnknownChallenge,
     #[error("payment has not reached Fiber's Paid state")]
     PaymentRequired,
+    #[error("outgoing Fiber payment did not reach a terminal state before the deadline")]
+    PaymentTimeout,
     #[error("requested asset is not configured by this Morph Agent")]
     UnsupportedAsset,
     #[error("a valid paid Biscuit credential is required")]
@@ -114,6 +116,7 @@ impl IntoResponse for ServiceError {
                 StatusCode::BAD_REQUEST
             }
             Self::PaymentRequired => StatusCode::PAYMENT_REQUIRED,
+            Self::PaymentTimeout => StatusCode::GATEWAY_TIMEOUT,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::UnsupportedAsset => StatusCode::UNPROCESSABLE_ENTITY,
             Self::FiberUnavailable | Self::GatewayUnavailable => StatusCode::BAD_GATEWAY,
@@ -746,7 +749,7 @@ async fn pay(
     if timeout == 0 || timeout > service.config.outgoing_payment_timeout_seconds {
         return Err(ServiceError::Unauthorized);
     }
-    let result = service
+    let initial_result = service
         .fiber
         .send_payment(json!({
             "invoice": request.requirements.invoice,
@@ -759,12 +762,37 @@ async fn pay(
             },
         }))
         .await?;
-    let payment_hash = result
+    let payment_hash = initial_result
         .get("payment_hash")
         .and_then(Value::as_str)
         .ok_or(ServiceError::FiberUnavailable)?
         .to_string();
     if payment_hash != request.requirements.payment_hash {
+        return Err(ServiceError::FiberUnavailable);
+    }
+    let initial_status = initial_result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("Unknown")
+        .to_string();
+    service.store.record_payment(TrackedPayment {
+        payment_hash: payment_hash.clone(),
+        requirement_id: request.requirements.requirement_id.clone(),
+        direction: PaymentDirection::Outgoing,
+        status: initial_status,
+        updated_at: now_seconds(),
+        fiber_result: initial_result.clone(),
+    })?;
+    let result = if payment_is_terminal(&initial_result) {
+        initial_result
+    } else {
+        wait_for_payment(&service.fiber, &payment_hash, Duration::from_secs(timeout)).await?
+    };
+    if result
+        .get("payment_hash")
+        .and_then(Value::as_str)
+        .is_some_and(|reported| reported != payment_hash)
+    {
         return Err(ServiceError::FiberUnavailable);
     }
     let status = result
@@ -1268,17 +1296,26 @@ pub async fn wait_for_payment(
 ) -> Result<Value, ServiceError> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let payment = fiber.get_payment(payment_hash).await?;
-        if payment_is_success(&payment)
-            || payment.get("status").and_then(Value::as_str) == Some("Failed")
-        {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(ServiceError::PaymentTimeout);
+        }
+        let payment = tokio::time::timeout(remaining, fiber.get_payment(payment_hash))
+            .await
+            .map_err(|_| ServiceError::PaymentTimeout)??;
+        if payment_is_terminal(&payment) {
             return Ok(payment);
         }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(ServiceError::PaymentRequired);
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(ServiceError::PaymentTimeout);
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(remaining.min(Duration::from_millis(250))).await;
     }
+}
+
+fn payment_is_terminal(payment: &Value) -> bool {
+    payment_is_success(payment) || payment.get("status").and_then(Value::as_str) == Some("Failed")
 }
 
 #[cfg(test)]
@@ -1294,6 +1331,7 @@ mod tests {
     struct MockFiberState {
         invoice: Option<Value>,
         invoice_address: Option<String>,
+        payment_poll_count: usize,
     }
 
     fn payer_id(seed: u8) -> String {
@@ -1355,6 +1393,32 @@ mod tests {
             "parse_invoice" => {
                 let state = state.lock().unwrap();
                 json!({ "invoice": state.invoice.clone().unwrap() })
+            }
+            "send_payment" => {
+                let state = state.lock().unwrap();
+                let payment_hash = state
+                    .invoice
+                    .as_ref()
+                    .and_then(|invoice| invoice.pointer("/data/payment_hash"))
+                    .cloned()
+                    .unwrap();
+                json!({ "payment_hash": payment_hash, "status": "Created" })
+            }
+            "get_payment" => {
+                let mut state = state.lock().unwrap();
+                state.payment_poll_count += 1;
+                let payment_hash = state
+                    .invoice
+                    .as_ref()
+                    .and_then(|invoice| invoice.pointer("/data/payment_hash"))
+                    .cloned()
+                    .unwrap();
+                let status = if state.payment_poll_count < 2 {
+                    "Inflight"
+                } else {
+                    "Success"
+                };
+                json!({ "payment_hash": payment_hash, "status": status })
             }
             _ => Value::Null,
         };
@@ -1543,6 +1607,55 @@ mod tests {
             .await,
             Err(ServiceError::Unauthorized)
         ));
+    }
+
+    #[tokio::test]
+    async fn outgoing_wallet_waits_for_fiber_terminal_success() {
+        let (mut service, _dir) = test_service(None).await;
+        let requirement = service
+            .make_challenge(
+                &CreateChallengeRequest {
+                    asset: service.config.supported_assets[0].clone(),
+                    amount: "7".to_string(),
+                    payer: payer_id(4),
+                    resource: "/outgoing-terminal".to_string(),
+                    operation: "GET".to_string(),
+                    description: None,
+                    expires_in_seconds: Some(300),
+                    rgbpp_proof_commitment: None,
+                },
+                random_byte32(),
+            )
+            .await
+            .unwrap();
+        let payload = PaymentPayload::new_signed(
+            &requirement,
+            None,
+            &SigningKey::from_slice(&[4; 32]).unwrap(),
+        )
+        .unwrap();
+        let configured = Arc::get_mut(&mut service).unwrap();
+        configured.config.outgoing_payer = Some(payer_id(4));
+        configured.config.outgoing_max_fee_amount = Some(5);
+
+        let Json(response) = pay(
+            State(service.clone()),
+            Json(PayRequest {
+                requirements: requirement.clone(),
+                payload,
+                timeout_seconds: Some(2),
+                max_fee_amount: Some("5".to_string()),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert!(response.completed);
+        assert_eq!(response.payment_hash, requirement.payment_hash);
+        assert_eq!(response.fiber_result["status"], "Success");
+        let payments = service.store.payments(10).unwrap();
+        assert_eq!(payments.len(), 1);
+        assert_eq!(payments[0].status, "Success");
     }
 
     #[tokio::test]

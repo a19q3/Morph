@@ -147,6 +147,25 @@ Fix:
   confirmations/freshness;
 - Agent challenges accept only operator-admitted proof commitments.
 
+### A-10 — Outgoing payment returned before Fiber reached a terminal state
+
+Severity: high.
+
+Fiber's `send_payment` normally returns an accepted payment in `Created`
+state. The first Agent wallet implementation returned that value immediately,
+so an x402 client could mistake provider acceptance for final payment.
+
+Fix:
+
+- persist the initial outgoing state before waiting;
+- poll `get_payment` until exact `Success` or `Failed`;
+- enforce the configured wall-clock deadline around each RPC poll;
+- return HTTP 504 on timeout rather than misusing x402's HTTP 402;
+- validate any payment hash repeated by Fiber and persist the final result.
+
+A regression test covers `Created -> Inflight -> Success`. The real devnet E2E
+covers two terminal payments through Fiber node1 -> node2 -> node3.
+
 Actual Bitcoin inclusion verification remains delegated to a pinned proof
 program and is a release blocker until exercised against a real implementation.
 
@@ -190,9 +209,17 @@ The repository CI gate covers:
 - release RISC-V contract builds;
 - 89 ignored CKB-VM contract tests run serially.
 
+The cross-stack gate additionally starts Fiber's real three-node `router-pay`
+topology and requires two Morph Agent payments: one x402 payment that produces
+a signed terminal receipt and Biscuit credential, and one hash-locked fair
+exchange whose plaintext is released only after payment. It verifies the
+incoming/outgoing durable indexes and records no generated secret in the
+manifest.
+
 The final command and exact result are recorded in the commit handoff. These
-tests prove the local implementation and existing scripts; they do not replace
-the missing cross-stack devnet evidence below.
+tests prove the local implementation and Fiber-native Agent route; they do not
+replace the still-missing Morph-backed external-edge, real RGB++ proof, and
+operational evidence below.
 
 ## Open release blockers
 

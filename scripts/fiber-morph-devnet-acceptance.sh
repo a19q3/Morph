@@ -19,6 +19,7 @@ FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
 FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
+FIBER_AGENT_ROUTER_SUITE="e2e/router-pay"
 FIBER_PERIOD_CHECK_EXPIRY_SUITE="${FIBER_PERIOD_CHECK_EXPIRY_SUITE:-e2e/period-check/force-close-expiry}"
 DEFAULT_FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/router-pay e2e/reestablish e2e/shutdown-force e2e/hold-invoice-cancel-failure $FIBER_PERIOD_CHECK_EXPIRY_SUITE e2e/udt e2e/udt-router-pay e2e/watchtower/force-close-after-open-channel e2e/watchtower/force-close-with-pending-tlcs e2e/watchtower/force-close-after-multiple-payments e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower"
 FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-$DEFAULT_FIBER_BRUNO_SUITES}"
@@ -26,7 +27,7 @@ FIBER_FUNDING_TX_VERIFICATION_CASES="${FIBER_FUNDING_TX_VERIFICATION_CASES:-remo
 FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 21716 8343 8344 8345 8346}"
 BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
 BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
-RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
+RUN_FIBER_RESTART_REGRESSION="1"
 FIBER_STACK_START_ATTEMPTS="${FIBER_STACK_START_ATTEMPTS:-3}"
 # ckb-librocksdb-sys 8.5.4 relies on transitive fixed-width integer includes;
 # modern GCC/Clang require the standard header to be explicit.
@@ -223,6 +224,7 @@ fiber_node2_rpc_url=$FIBER_NODE2_RPC_URL
 fiber_node3_rpc_url=$FIBER_NODE3_RPC_URL
 fiber_test_env=$FIBER_TEST_ENV
 fiber_coexistence_suite=$FIBER_COEXISTENCE_SUITE
+fiber_agent_router_suite=$FIBER_AGENT_ROUTER_SUITE
 fiber_bruno_suites=$FIBER_BRUNO_SUITES
 fiber_funding_tx_verification_cases=$FIBER_FUNDING_TX_VERIFICATION_CASES
 fiber_acceptance_tcp_ports=$FIBER_ACCEPTANCE_TCP_PORTS
@@ -708,11 +710,32 @@ run_coexistence_gate() {
   fi
   run_fiber_restart_regression
   stop_fiber_stack
+  run_morph_agent_fiber_gate
+}
+
+run_morph_agent_fiber_gate() {
+  local suite="$FIBER_AGENT_ROUTER_SUITE"
+  local label="${suite//\//_}"
+  start_fiber_stack "$suite" "$LOG_DIR/fiber-stack-morph-agent-$label.log"
+  run_bruno_suite "$suite"
+  log "running Morph Agent x402 and fair-exchange flows over Fiber's three-node route"
+  FIBER_CKB_RPC_URL="$FIBER_CKB_RPC_URL" \
+  FIBER_NODE1_RPC_URL="$FIBER_NODE1_RPC_URL" \
+  FIBER_NODE3_RPC_URL="$FIBER_NODE3_RPC_URL" \
+  OUT_DIR="$OUT_DIR/morph-agent-fiber-e2e" \
+    "$ROOT_DIR/scripts/morph-agent-fiber-devnet-e2e.sh" \
+    >"$LOG_DIR/morph-agent-fiber-e2e.log" 2>&1
+  stop_fiber_stack
 }
 
 run_extended_fiber_suites() {
   local suite
   for suite in $FIBER_BRUNO_SUITES; do
+    if [ "$suite" = "$FIBER_AGENT_ROUTER_SUITE" ] &&
+      [ -s "$OUT_DIR/fiber-bruno-${suite//\//_}.json" ]; then
+      log "Fiber Bruno suite $suite already passed as the Morph Agent routing substrate"
+      continue
+    fi
     if [ "$suite" = "$FIBER_PERIOD_CHECK_EXPIRY_SUITE" ]; then
       run_period_check_expiry_suite
       continue
@@ -747,6 +770,9 @@ write_acceptance_matrix() {
     --arg mode "$MODE" \
     --arg morph_stateful "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
     --arg fiber_external "$OUT_DIR/fiber-bruno-${FIBER_COEXISTENCE_SUITE//\//_}.json" \
+    --arg fiber_agent_router "$OUT_DIR/fiber-bruno-${FIBER_AGENT_ROUTER_SUITE//\//_}.json" \
+    --arg morph_agent_result "$OUT_DIR/morph-agent-fiber-e2e/result.json" \
+    --arg morph_agent_manifest "$OUT_DIR/morph-agent-fiber-e2e/manifest.json" \
     --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     '{
       schema: "morph.fiber_morph_devnet_acceptance_matrix",
@@ -779,7 +805,17 @@ write_acceptance_matrix() {
               required: true,
               evidence: [
                 "Fiber Bruno external-funding-open",
-                "optional restart regression before submit_signed_funding_tx"
+                "required restart regression before submit_signed_funding_tx"
+              ]
+            },
+            {
+              id: "morph_agent_fiber_multihop",
+              required: true,
+              evidence: [
+                $fiber_agent_router,
+                $morph_agent_result,
+                $morph_agent_manifest,
+                "x402 credential settlement and hash-locked fair exchange over Fiber node1 -> node2 -> node3"
               ]
             }
           ] else [] end)
@@ -820,6 +856,7 @@ EOF
     --arg matrix "$OUT_DIR/acceptance-matrix.json" \
     --arg mode "$MODE" \
     --arg morph_stateful_summary_check "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
+    --arg morph_agent_fiber_result "$OUT_DIR/morph-agent-fiber-e2e/result.json" \
     --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     --arg status "passed" \
     '{
@@ -830,6 +867,7 @@ EOF
       repo_state:$repo_state,
       acceptance_matrix:$matrix,
       morph_stateful_summary_check:$morph_stateful_summary_check,
+      morph_agent_fiber_result:$morph_agent_fiber_result,
       business_flow_audit:$business_flow_audit
     }' \
     >"$OUT_DIR/summary.json"

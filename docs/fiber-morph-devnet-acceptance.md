@@ -16,6 +16,8 @@ The gate proves coexistence before protocol merger:
   RPC endpoint.
 - Fiber then runs channel and external-funding acceptance on the same running
   devnet.
+- A fresh Fiber `router-pay` topology carries Morph Agent x402, Biscuit, and
+  fair-exchange payments from node1 through node2 to node3.
 
 This is deliberately stricter than a static compatibility document. It binds
 Fiber's channel/external-funding evidence to Morph's bilateral, sponsor, splice,
@@ -101,7 +103,11 @@ The production coexistence gate:
    so Morph uses Fiber's CKB devnet while preserving the same audit and budget
    gates as `make devnet-stateful-e2e`;
 5. runs Fiber's `e2e/external-funding-open` Bruno suite;
-6. runs Fiber's external-funding restart regression unless disabled.
+6. runs Fiber's required external-funding restart regression;
+7. starts a fresh `e2e/router-pay` three-node topology and passes its Bruno
+   suite;
+8. runs two real Morph Agent payments over that route, covering x402 terminal
+   settlement/Biscuit issuance and hash-locked fair exchange.
 
 ### `fiber`
 
@@ -159,6 +165,8 @@ Key files:
 - `summary.json`: top-level pass summary;
 - `logs/`: Fiber stack logs, Morph stateful logs, Bruno logs, and build logs;
 - `morph-stateful/scenarios/`: Morph stateful scenario and smoke artifacts.
+- `morph-agent-fiber-e2e/`: Agent result, no-secret manifest, and encrypted
+  payer/payee stores from the three-node route.
 
 ## Business-Flow And Security Audit
 
@@ -187,6 +195,9 @@ For Fiber, `coexistence` requires:
 
 - `e2e/external-funding-open`
 - `e2e/external-funding-open/restart`
+- `e2e/router-pay` as the real Morph Agent routing substrate
+- Morph Agent x402/credential and fair-exchange payments over node1 -> node2 ->
+  node3
 
 The `full` gate additionally requires:
 
@@ -268,7 +279,6 @@ FIBER_CXXFLAGS="-include cstdint"
 MORPH_FIBER_DEPLOYER_KEY_FILE=../fiber/tests/nodes/deployer/ckb/plain_key
 MORPH_FIBER_ALICE_KEY_FILE=../fiber/tests/nodes/1/ckb/plain_key
 MORPH_FIBER_BOB_KEY_FILE=../fiber/tests/nodes/2/ckb/plain_key
-RUN_FIBER_RESTART_REGRESSION=0
 BUILD_MORPH_CONTRACTS=0
 ```
 
@@ -288,7 +298,8 @@ default key exists for a production network.
 
 ## Current Boundary
 
-This gate proves same-devnet coexistence and strict scenario compatibility. It
-does not claim that Morph factory rights are already Fiber public graph edges.
-That remains a later protocol/backend integration step described in
-`docs/fiber-integration-plan.md`.
+This gate proves same-devnet coexistence, strict scenario compatibility, and
+Morph Agent application flows over real Fiber multi-hop routing. The routed
+channels in that Agent test are Fiber-native. It does not claim that Morph
+Factory rights or materialised bilateral channels are already Fiber public
+graph edges; that remains the external-edge hook in the integration plan.
