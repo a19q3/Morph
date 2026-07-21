@@ -16,6 +16,11 @@ const payerUrl = requiredEnv("MORPH_AGENT_PAYER_URL");
 const ckbNetworkId = requiredByte32Env("MORPH_AGENT_CKB_NETWORK_ID");
 const privateKey = requiredByte32Env("MORPH_AGENT_PAYER_PRIVATE_KEY");
 const expectedPayee = requiredByte32Env("MORPH_AGENT_EXPECTED_PAYEE");
+const expectedFiberRoute = [
+  requiredPubkeyEnv("MORPH_AGENT_FIBER_NODE1_PUBKEY"),
+  requiredPubkeyEnv("MORPH_AGENT_FIBER_NODE2_PUBKEY"),
+  requiredPubkeyEnv("MORPH_AGENT_FIBER_NODE3_PUBKEY"),
+];
 
 const payerPublicKey = secp256k1.getPublicKey(decodeHex(privateKey, 32), true);
 const payer = deriveMorphAccountId(payerPublicKey);
@@ -65,6 +70,7 @@ const outgoing = await payerAgent.pay({
 });
 assert.equal(outgoing.payment_hash, requirement.payment_hash);
 assert.equal(outgoing.completed, true);
+const x402Route = requireThreeNodeFiberRoute(outgoing.fiber_result, expectedFiberRoute);
 
 const settlement = await retryPaymentRequired(() =>
   payeeAgent.settle({ requirements: requirement, payload }),
@@ -102,6 +108,10 @@ const fairOutgoing = await payerAgent.pay({
   max_fee_amount: "1000",
 });
 assert.equal(fairOutgoing.completed, true);
+const fairExchangeRoute = requireThreeNodeFiberRoute(
+  fairOutgoing.fiber_result,
+  expectedFiberRoute,
+);
 const claim = await retryPaymentRequired(() =>
   payeeAgent.claimFairOffer(offer.offer_id, fairPayload),
 );
@@ -125,6 +135,10 @@ console.log(JSON.stringify({
   payer,
   payee: expectedPayee,
   ckb_network_id: ckbNetworkId,
+  routing: {
+    x402_node_pubkeys: x402Route,
+    fair_exchange_node_pubkeys: fairExchangeRoute,
+  },
   x402: {
     payment_hash: requirement.payment_hash,
     receipt_id: settlement.receipt.receipt_id,
@@ -163,6 +177,27 @@ function requiredByte32Env(name) {
   const value = requiredEnv(name);
   decodeHex(value, 32);
   return value.toLowerCase();
+}
+
+function requiredPubkeyEnv(name) {
+  const value = requiredEnv(name).toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]{66}$/.test(value)) throw new Error(`${name} must be a compressed public key`);
+  return value;
+}
+
+function requireThreeNodeFiberRoute(fiberResult, expectedRoute) {
+  assert.ok(fiberResult !== null && typeof fiberResult === "object");
+  assert.ok(Array.isArray(fiberResult.routers), "debug Fiber result must expose routers");
+  assert.equal(fiberResult.routers.length, 1, "devnet payment must use one completed part");
+  const nodes = fiberResult.routers[0]?.nodes;
+  assert.ok(Array.isArray(nodes), "Fiber route must expose its nodes");
+  const actualRoute = nodes.map(node => {
+    assert.ok(node !== null && typeof node === "object");
+    assert.equal(typeof node.pubkey, "string");
+    return node.pubkey.toLowerCase().replace(/^0x/, "");
+  });
+  assert.deepEqual(actualRoute, expectedRoute, "payment must traverse node1 -> node2 -> node3");
+  return actualRoute;
 }
 
 function decodeHex(value, expectedLength) {

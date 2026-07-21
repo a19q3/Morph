@@ -721,6 +721,7 @@ run_morph_agent_fiber_gate() {
   log "running Morph Agent x402 and fair-exchange flows over Fiber's three-node route"
   FIBER_CKB_RPC_URL="$FIBER_CKB_RPC_URL" \
   FIBER_NODE1_RPC_URL="$FIBER_NODE1_RPC_URL" \
+  FIBER_NODE2_RPC_URL="$FIBER_NODE2_RPC_URL" \
   FIBER_NODE3_RPC_URL="$FIBER_NODE3_RPC_URL" \
   OUT_DIR="$OUT_DIR/morph-agent-fiber-e2e" \
     "$ROOT_DIR/scripts/morph-agent-fiber-devnet-e2e.sh" \

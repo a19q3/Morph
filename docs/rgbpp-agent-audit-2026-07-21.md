@@ -213,8 +213,10 @@ The cross-stack gate additionally starts Fiber's real three-node `router-pay`
 topology and requires two Morph Agent payments: one x402 payment that produces
 a signed terminal receipt and Biscuit credential, and one hash-locked fair
 exchange whose plaintext is released only after payment. It verifies the
-incoming/outgoing durable indexes and records no generated secret in the
-manifest.
+incoming/outgoing durable indexes, asserts the exact node1 -> node2 -> node3
+pubkey sequence reported by Fiber for both payments, and records no generated
+secret in the manifest. Production audit also requires the Agent evidence to
+come from the clean Morph commit captured by the top-level run.
 
 The final command and exact result are recorded in the commit handoff. These
 tests prove the local implementation and Fiber-native Agent route; they do not

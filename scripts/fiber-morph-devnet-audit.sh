@@ -160,6 +160,8 @@ require_morph_agent_fiber_evidence() {
     '.schema == "morph.agent_fiber_devnet_e2e" and
      .status == "passed" and
      .route == "fiber-node1 -> fiber-node2 -> fiber-node3" and
+     (.routing.x402_node_pubkeys | length == 3) and
+     (.routing.fair_exchange_node_pubkeys | length == 3) and
      .payer != .payee and
      .x402.terminal_status == "Settled" and
      (.x402.payment_hash | test("^0x[0-9a-f]{64}$")) and
@@ -175,14 +177,22 @@ require_morph_agent_fiber_evidence() {
      .status == "passed" and
      .result == "result.json" and
      .secrets_recorded == false and
+     .tracked_worktree_clean == true and
      (.ckb_network_id | test("^0x[0-9a-f]{64}$")) and
+     (.fiber_node1_pubkey | test("^[0-9a-f]{66}$")) and
+     (.fiber_node2_pubkey | test("^[0-9a-f]{66}$")) and
+     (.fiber_node3_pubkey | test("^[0-9a-f]{66}$")) and
      (.payer_account_id | test("^0x[0-9a-f]{64}$")) and
      (.payee_account_id | test("^0x[0-9a-f]{64}$"))' \
     'Morph Agent Fiber devnet manifest is incomplete'
   jq -e -s \
     '.[0].ckb_network_id == .[1].ckb_network_id and
      .[0].payer == .[1].payer_account_id and
-     .[0].payee == .[1].payee_account_id' \
+     .[0].payee == .[1].payee_account_id and
+     .[0].routing.x402_node_pubkeys ==
+       [.[1].fiber_node1_pubkey, .[1].fiber_node2_pubkey, .[1].fiber_node3_pubkey] and
+     .[0].routing.fair_exchange_node_pubkeys ==
+       [.[1].fiber_node1_pubkey, .[1].fiber_node2_pubkey, .[1].fiber_node3_pubkey]' \
     "$result" "$manifest" >/dev/null ||
     fail "Morph Agent result and manifest identities do not match"
 }

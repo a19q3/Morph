@@ -6,6 +6,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/target/morph-agent-fiber-devnet-e2e/$RUN_ID}"
 FIBER_CKB_RPC_URL="${FIBER_CKB_RPC_URL:-http://127.0.0.1:8114}"
 FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
+FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 PAYEE_LISTEN="${MORPH_AGENT_PAYEE_LISTEN:-127.0.0.1:24620}"
 PAYER_LISTEN="${MORPH_AGENT_PAYER_LISTEN:-127.0.0.1:24621}"
@@ -101,9 +102,11 @@ log "building Morph Agent and TypeScript SDK"
 
 ckb_network_id="$(rpc_result "$FIBER_CKB_RPC_URL" get_block_hash '["0x0"]' | jq -er '.')"
 node1_pubkey="$(rpc_result "$FIBER_NODE1_RPC_URL" node_info '[]' | jq -er '.pubkey')"
+node2_pubkey="$(rpc_result "$FIBER_NODE2_RPC_URL" node_info '[]' | jq -er '.pubkey')"
 node3_pubkey="$(rpc_result "$FIBER_NODE3_RPC_URL" node_info '[]' | jq -er '.pubkey')"
 [[ "$ckb_network_id" =~ ^0x[0-9a-f]{64}$ ]] || fail "CKB genesis hash is malformed"
 [[ "$node1_pubkey" =~ ^[0-9a-f]{66}$ ]] || fail "Fiber node1 pubkey is malformed"
+[[ "$node2_pubkey" =~ ^[0-9a-f]{66}$ ]] || fail "Fiber node2 pubkey is malformed"
 [[ "$node3_pubkey" =~ ^[0-9a-f]{66}$ ]] || fail "Fiber node3 pubkey is malformed"
 
 node1_account_id="$(account_id "$node1_pubkey")"
@@ -116,6 +119,10 @@ payee_biscuit_key="$(extract_generated_secret generate-key)"
 payer_biscuit_key="$(extract_generated_secret generate-key)"
 payee_receipt_key="$(extract_generated_secret generate-receipt-key)"
 payer_receipt_key="$(extract_generated_secret generate-receipt-key)"
+tracked_worktree_clean=false
+if [ -z "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)" ]; then
+  tracked_worktree_clean=true
+fi
 
 log "starting payee Agent on Fiber node3"
 (
@@ -155,11 +162,16 @@ MORPH_AGENT_PAYER_URL="$PAYER_URL" \
 MORPH_AGENT_CKB_NETWORK_ID="$ckb_network_id" \
 MORPH_AGENT_PAYER_PRIVATE_KEY="$PAYER_PRIVATE_KEY" \
 MORPH_AGENT_EXPECTED_PAYEE="$node3_account_id" \
+MORPH_AGENT_FIBER_NODE1_PUBKEY="$node1_pubkey" \
+MORPH_AGENT_FIBER_NODE2_PUBKEY="$node2_pubkey" \
+MORPH_AGENT_FIBER_NODE3_PUBKEY="$node3_pubkey" \
   node "$ROOT_DIR/sdk/typescript/test/fiber-devnet.mjs" >"$OUT_DIR/result.json"
 
 jq -e \
   '.schema == "morph.agent_fiber_devnet_e2e" and .status == "passed" and
    .route == "fiber-node1 -> fiber-node2 -> fiber-node3" and
+   (.routing.x402_node_pubkeys | length == 3) and
+   (.routing.fair_exchange_node_pubkeys | length == 3) and
    .x402.terminal_status == "Settled" and
    (.fair_exchange.receipt_id | type == "string")' \
   "$OUT_DIR/result.json" >/dev/null
@@ -171,9 +183,11 @@ jq -n \
   --arg git_commit "$(git -C "$ROOT_DIR" rev-parse --short HEAD)" \
   --arg ckb_network_id "$ckb_network_id" \
   --arg fiber_node1_pubkey "$node1_pubkey" \
+  --arg fiber_node2_pubkey "$node2_pubkey" \
   --arg fiber_node3_pubkey "$node3_pubkey" \
   --arg payer_account_id "$payer_account_id" \
   --arg payee_account_id "$node3_account_id" \
+  --argjson tracked_worktree_clean "$tracked_worktree_clean" \
   '{
     schema:$schema,
     status:$status,
@@ -181,9 +195,11 @@ jq -n \
     git_commit:$git_commit,
     ckb_network_id:$ckb_network_id,
     fiber_node1_pubkey:$fiber_node1_pubkey,
+    fiber_node2_pubkey:$fiber_node2_pubkey,
     fiber_node3_pubkey:$fiber_node3_pubkey,
     payer_account_id:$payer_account_id,
     payee_account_id:$payee_account_id,
+    tracked_worktree_clean:$tracked_worktree_clean,
     result:"result.json",
     secrets_recorded:false
   }' >"$OUT_DIR/manifest.json"
