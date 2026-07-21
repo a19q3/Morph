@@ -12288,9 +12288,9 @@ fn activate_state_vault_binding(
     let mut activated_header = *state_header;
     set_state_vault_outpoint_commitment(&mut activated_header, &tx_hash_bytes, vault_output_index);
     let tx = TransactionBuilder::default()
+        .cell_dep(direct_cell_dep(vault_out_point))
         .cell_dep(state_lock_contract.cell_dep.clone())
         .cell_dep(state_contract.cell_dep.clone())
-        .cell_dep(direct_cell_dep(vault_out_point))
         .input(CellInput::new(state_out_point, 0))
         .output(state_output.clone())
         .output_data(Bytes::copy_from_slice(&activated_header).pack())
@@ -12335,9 +12335,9 @@ fn activate_factory_vault_binding(
         vault_output_index,
     );
     let unsigned = TransactionBuilder::default()
+        .cell_dep(direct_cell_dep(vault_out_point))
         .cell_dep(secp_dep.clone())
         .cell_dep(factory_contract.cell_dep.clone())
-        .cell_dep(direct_cell_dep(vault_out_point))
         .input(CellInput::new(factory_out_point, 0))
         .output(factory_output.clone())
         .output_data(Bytes::copy_from_slice(&activated_header).pack())

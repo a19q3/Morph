@@ -284,45 +284,43 @@ fn validate_activation_cell_dep(expected_root: &[u8], expected_outpoint: &[u8]) 
         load_input_out_point(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let funding_tx_hash = state_outpoint.tx_hash();
     let transaction = load_transaction().map_err(|_| ScriptError::Encoding)?;
-    let mut found = false;
-    for (index, dep) in transaction.raw().cell_deps().into_iter().enumerate() {
-        if dep.dep_type().as_slice()[0] != 0 {
-            continue;
-        }
-        let outpoint = dep.out_point();
-        let tx_hash = outpoint.tx_hash();
-        let output_index: u32 = outpoint.index().unpack();
-        if vault_outpoint_commitment(tx_hash.as_slice(), output_index).as_slice()
+    let cell_deps = transaction.raw().cell_deps();
+    let dep = cell_deps.get(0).ok_or(ScriptError::VaultOutPointMismatch)?;
+    if dep.dep_type().as_slice()[0] != 0 {
+        return Err(ScriptError::VaultOutPointMismatch);
+    }
+    let outpoint = dep.out_point();
+    let tx_hash = outpoint.tx_hash();
+    let output_index: u32 = outpoint.index().unpack();
+    if tx_hash != funding_tx_hash
+        || vault_outpoint_commitment(tx_hash.as_slice(), output_index).as_slice()
             != expected_outpoint
+    {
+        return Err(ScriptError::VaultOutPointMismatch);
+    }
+    for extra_dep in cell_deps.into_iter().skip(1) {
+        let extra_outpoint = extra_dep.out_point();
+        let extra_index: u32 = extra_outpoint.index().unpack();
+        if vault_outpoint_commitment(extra_outpoint.tx_hash().as_slice(), extra_index).as_slice()
+            == expected_outpoint
         {
-            continue;
-        }
-        if found || tx_hash != funding_tx_hash {
             return Err(ScriptError::VaultOutPointMismatch);
         }
-        let capacity =
-            load_cell_capacity(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
-        let lock_hash =
-            load_cell_lock_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
-        let type_hash =
-            load_cell_type_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
-        let data = load_cell_data(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
-        let root = vault_cell_commitment(
-            lock_hash.as_slice(),
-            capacity,
-            type_hash.as_ref().map(|hash| hash.as_slice()),
-            data.as_slice(),
-        );
-        if root.as_slice() != expected_root {
-            return Err(ScriptError::VaultOutPointMismatch);
-        }
-        found = true;
     }
-    if found {
-        Ok(())
-    } else {
-        Err(ScriptError::VaultOutPointMismatch)
+    let capacity = load_cell_capacity(0, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+    let lock_hash = load_cell_lock_hash(0, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+    let type_hash = load_cell_type_hash(0, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+    let data = load_cell_data(0, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+    let root = vault_cell_commitment(
+        lock_hash.as_slice(),
+        capacity,
+        type_hash.as_ref().map(|hash| hash.as_slice()),
+        data.as_slice(),
+    );
+    if root.as_slice() != expected_root {
+        return Err(ScriptError::VaultOutPointMismatch);
     }
+    Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]

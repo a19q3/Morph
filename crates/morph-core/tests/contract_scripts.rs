@@ -3363,6 +3363,7 @@ fn factory_vault_activation_tx(
     committed_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
     actual_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
     drift_output_lock: bool,
+    prefix_dummy_dep: bool,
 ) -> (Context, TransactionView) {
     let mut context = Context::default();
     let owner_lock = deploy_always_success(&mut context);
@@ -3399,7 +3400,25 @@ fn factory_vault_activation_tx(
     } else {
         owner_lock
     };
-    let tx = TransactionBuilder::default()
+    let dummy_dep = if prefix_dummy_dep {
+        let dummy_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![11]));
+        Some(
+            context.create_cell(
+                CellOutput::new_builder()
+                    .capacity(CELL_CAPACITY)
+                    .lock(dummy_lock)
+                    .build(),
+                Bytes::new(),
+            ),
+        )
+    } else {
+        None
+    };
+    let mut builder = TransactionBuilder::default();
+    if let Some(dummy_dep) = dummy_dep {
+        builder = builder.cell_dep(CellDep::new_builder().out_point(dummy_dep).build());
+    }
+    let tx = builder
         .cell_dep(
             CellDep::new_builder()
                 .out_point(actual_vault_out_point)
@@ -3424,7 +3443,7 @@ fn factory_vault_activation_tx(
 fn factory_type_accepts_exact_sibling_vault_activation() {
     let vault_out_point = fixture_vault_out_point();
     let (context, tx) =
-        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false);
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false);
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("exact sibling FactoryVaultCell activation should verify");
@@ -3433,8 +3452,12 @@ fn factory_type_accepts_exact_sibling_vault_activation() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn factory_type_rejects_byte_identical_clone_vault_activation() {
-    let (context, tx) =
-        factory_vault_activation_tx(fixture_vault_out_point(), test_out_point(88, 1), false);
+    let (context, tx) = factory_vault_activation_tx(
+        fixture_vault_out_point(),
+        test_out_point(88, 1),
+        false,
+        false,
+    );
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -3442,7 +3465,17 @@ fn factory_type_rejects_byte_identical_clone_vault_activation() {
 #[test]
 fn factory_type_rejects_vault_activation_lock_drift() {
     let vault_out_point = fixture_vault_out_point();
-    let (context, tx) = factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, true);
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_noncanonical_vault_activation_dep_position() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
