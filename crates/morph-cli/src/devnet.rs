@@ -50,13 +50,13 @@ use morph_script_common::{
     FACTORY_STATE_HEADER_LEN, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
     FactoryStateHeader, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
     SPONSOR_POLICY_LEN, STATE_HEADER_LEN, STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF,
-    ScriptError, StateHeader as WireStateHeader, StateHeaderInput, WITNESS_ENVELOPE_FORMAT,
-    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, blake2b256 as script_blake2b256, encode_state_header,
-    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
-    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
-    verify_factory_merkle_update, verify_reduced_factory_exit_update,
+    ScriptError, SponsorPolicy as WireSponsorPolicy, StateHeader as WireStateHeader,
+    StateHeaderInput, WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256 as script_blake2b256,
+    encode_state_header, factory_local_exit_digest, factory_participants_commitment,
+    participants_commitment, relative_block_since, settlement_descriptor_commitment,
+    vault_cell_commitment, verify_factory_merkle_update, verify_reduced_factory_exit_update,
     witness_envelope_body_commitment,
 };
 use serde::Serialize;
@@ -6221,6 +6221,24 @@ pub fn publish_state(
     publish_state_with_descriptor_update(rpc, options, None)
 }
 
+fn validate_sponsor_policy_owner(
+    sponsor_args: &[u8],
+    expected_channel_id: &[u8],
+    expected_change_lock: &[u8],
+) -> Result<()> {
+    let policy = WireSponsorPolicy::parse(sponsor_args)
+        .map_err(|err| anyhow!("sponsor lock args are not a valid SponsorPolicy: {err:?}"))?;
+    ensure!(
+        policy.channel_id() == expected_channel_id,
+        "sponsor policy is for a different channel"
+    );
+    ensure!(
+        policy.change_lock() == expected_change_lock,
+        "private key does not control the sponsor change lock"
+    );
+    Ok(())
+}
+
 fn publish_state_with_descriptor_update(
     rpc: &CkbRpcClient,
     options: PublishStateOptions,
@@ -6247,20 +6265,11 @@ fn publish_state_with_descriptor_update(
     );
 
     let sponsor_args = sponsor_cell.output.lock().args().raw_data();
-    ensure!(
-        sponsor_args.len() == SPONSOR_POLICY_LEN,
-        "sponsor lock args must be {} bytes",
-        SPONSOR_POLICY_LEN
-    );
-    ensure!(
-        &sponsor_args[0..32] == old_header.channel_id(),
-        "sponsor policy is for a different channel"
-    );
-    let expected_change_lock = &sponsor_args[112..144];
-    ensure!(
-        expected_change_lock == owner_lock.calc_script_hash().as_slice(),
-        "private key does not control the sponsor change lock"
-    );
+    validate_sponsor_policy_owner(
+        sponsor_args.as_ref(),
+        old_header.channel_id(),
+        owner_lock.calc_script_hash().as_slice(),
+    )?;
 
     let (new_state_data, signature_witness, new_state_number, state_package) =
         if let Some(path) = &options.state_package {
@@ -12774,6 +12783,31 @@ mod tests {
 
         assert!(
             err.to_string().contains("strict sponsor range"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sponsor_owner_validation_uses_canonical_policy_layout() {
+        let channel_id = [0x11; BYTE32_LEN];
+        let change_lock = [0x22; BYTE32_LEN];
+        let mut policy = [0u8; SPONSOR_POLICY_LEN];
+        policy[0..32].copy_from_slice(&channel_id);
+        policy[104..136].copy_from_slice(&change_lock);
+
+        validate_sponsor_policy_owner(&policy, &channel_id, &change_lock).unwrap();
+    }
+
+    #[test]
+    fn sponsor_owner_validation_rejects_truncated_policy_without_panicking() {
+        let channel_id = [0x11; BYTE32_LEN];
+        let change_lock = [0x22; BYTE32_LEN];
+        let truncated = [0u8; SPONSOR_POLICY_LEN - 1];
+
+        let err = validate_sponsor_policy_owner(&truncated, &channel_id, &change_lock).unwrap_err();
+
+        assert!(
+            err.to_string().contains("valid SponsorPolicy"),
             "unexpected error: {err}"
         );
     }
