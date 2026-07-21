@@ -21,8 +21,9 @@ use morph_script_common::{
     FactoryVaultDescriptor, Result, ScriptError, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
-    WitnessEnvelope, read_u128, verify_factory_reduced_splice_update, verify_factory_splice_update,
-    verify_factory_state_signatures, verify_reduced_factory_exit_update,
+    WitnessEnvelope, read_u128, vault_cell_commitment, verify_factory_reduced_splice_update,
+    verify_factory_splice_update, verify_factory_state_signatures,
+    verify_reduced_factory_exit_update,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -70,6 +71,7 @@ fn main() -> Result<()> {
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
+    validate_factory_vault_materialisation_roots(&old_header, &new_header)?;
     match envelope.kind() {
         WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
             let witness = FactoryLocalExitWitness::parse(input_type_raw)?;
@@ -129,6 +131,47 @@ fn main() -> Result<()> {
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_vault_materialisation_roots(
+    old_header: &FactoryStateHeader,
+    new_header: &FactoryStateHeader,
+) -> Result<()> {
+    let current_lock_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+
+    let input_capacity = single_group_capacity(Source::GroupInput)?;
+    let input_type =
+        load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_commitment = vault_cell_commitment(
+        current_lock_hash.as_slice(),
+        input_capacity,
+        input_type.as_ref().map(|hash| hash.as_slice()),
+        input_data.as_slice(),
+    );
+    if input_commitment.as_slice() != old_header.vault_materialisation_root() {
+        return Err(ScriptError::FactoryReserveMismatch);
+    }
+
+    let output_index = single_output_index_by_lock_hash(current_lock_hash.as_slice())?;
+    let output_capacity =
+        load_cell_capacity(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_type =
+        load_cell_type_hash(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_data =
+        load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_commitment = vault_cell_commitment(
+        current_lock_hash.as_slice(),
+        output_capacity,
+        output_type.as_ref().map(|hash| hash.as_slice()),
+        output_data.as_slice(),
+    );
+    if output_commitment.as_slice() != new_header.vault_materialisation_root() {
+        return Err(ScriptError::FactoryReserveMismatch);
+    }
+
     Ok(())
 }
 
@@ -556,6 +599,7 @@ mod tests {
         raw[172..204].fill(6);
         raw[204..236].fill(7);
         raw[236..238].copy_from_slice(&1u16.to_le_bytes());
+        raw[238..270].fill(8);
         raw
     }
 }

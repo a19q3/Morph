@@ -149,12 +149,14 @@ impl SigningBytes for FactorySpliceHeader {
         out.extend_from_slice(&self.vault_delta_commitment);
         out.extend_from_slice(&self.non_interference_digest);
         out.extend_from_slice(&self.participants_commitment);
+        out.extend_from_slice(&self.old_vault_materialisation_root);
+        out.extend_from_slice(&self.new_vault_materialisation_root);
     }
 }
 
 impl FactorySpliceHeader {
     pub fn signing_digest(&self) -> [u8; 32] {
-        let mut bytes = Vec::with_capacity(320);
+        let mut bytes = Vec::with_capacity(384);
         self.encode_signing_bytes(&mut bytes);
         blake2b256(&bytes)
     }

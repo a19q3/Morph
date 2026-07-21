@@ -2022,23 +2022,12 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let participants_commitment =
         factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
     let challenge_policy_commitment = script_blake2b256(&[b"CKB_MORPH_FACTORY_CHALLENGE_POLICY"]);
-    let factory_header = factory_state_header(FactoryHeaderInput {
-        chain_id,
-        factory_id,
-        update_number: 0,
-        state_root,
-        participants_commitment,
-        access_manifest_root,
-        non_interference_digest,
-        challenge_policy_commitment,
-    });
-
     let factory_output = CellOutput::new_builder()
         .capacity(options.factory_capacity)
         .lock(owner_lock.clone())
         .type_(Some(factory_type.clone()).pack())
         .build();
-    ensure_output_capacity("factory", &factory_output, factory_header.len())?;
+    ensure_output_capacity("factory", &factory_output, FACTORY_STATE_HEADER_LEN)?;
 
     let factory_vault_output = CellOutput::new_builder()
         .capacity(options.factory_vault_capacity)
@@ -2054,6 +2043,20 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         &factory_vault_output,
         factory_vault_data.len(),
     )?;
+    let factory_header = factory_state_header(FactoryHeaderInput {
+        chain_id,
+        factory_id,
+        update_number: 0,
+        state_root,
+        participants_commitment,
+        access_manifest_root,
+        non_interference_digest,
+        challenge_policy_commitment,
+        vault_materialisation_root: vault_cell_commitment_from_output(
+            &factory_vault_output,
+            factory_vault_data.as_ref(),
+        ),
+    });
 
     let fixed_output_capacity = options
         .factory_capacity
@@ -2226,6 +2229,10 @@ pub fn update_factory(
         ensure!(
             old_header.same_context_except_progress(&package_header),
             "factory state package does not match the current factory context"
+        );
+        ensure!(
+            old_header.vault_materialisation_root() == package_header.vault_materialisation_root(),
+            "ordinary factory state packages cannot change the FactoryVault materialisation"
         );
         ensure!(
             package_header.update_number() > old_update_number,
@@ -2690,6 +2697,20 @@ pub fn save_factory_splice_package(
         external_input,
         withdrawal,
     }];
+    let old_vault_materialisation_root = vault_cell_commitment_from_output(
+        &factory_vault_cell.output,
+        factory_vault_cell.data.as_ref(),
+    );
+    let new_vault_capacity = u64::try_from(new_ckb_amount)
+        .map_err(|_| anyhow!("new FactoryVault CKB amount exceeds u64 capacity"))?;
+    let new_vault_output = CellOutput::new_builder()
+        .capacity(new_vault_capacity)
+        .lock(factory_vault_cell.output.lock())
+        .type_(factory_vault_cell.output.type_())
+        .build();
+    let new_vault_data = new_xudt_amount.map(xudt_amount_bytes).unwrap_or_default();
+    let new_vault_materialisation_root =
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref());
     let header = FactorySpliceHeader {
         protocol_version: old_header.protocol_version(),
         chain_id: bytes32_from_slice("factory chain id", old_header.chain_id())?,
@@ -2705,6 +2726,8 @@ pub fn save_factory_splice_package(
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: [0u8; BYTE32_LEN],
         participants_commitment: expected_participants,
+        old_vault_materialisation_root,
+        new_vault_materialisation_root,
     };
     let transition = FactorySpliceTransition {
         header,
@@ -2929,6 +2952,20 @@ pub fn save_factory_reduced_splice_package(
         external_input,
         withdrawal,
     }];
+    let old_vault_materialisation_root = vault_cell_commitment_from_output(
+        &factory_vault_cell.output,
+        factory_vault_cell.data.as_ref(),
+    );
+    let new_vault_capacity = u64::try_from(new_ckb_amount)
+        .map_err(|_| anyhow!("new FactoryVault CKB amount exceeds u64 capacity"))?;
+    let new_vault_output = CellOutput::new_builder()
+        .capacity(new_vault_capacity)
+        .lock(factory_vault_cell.output.lock())
+        .type_(factory_vault_cell.output.type_())
+        .build();
+    let new_vault_data = new_xudt_amount.map(xudt_amount_bytes).unwrap_or_default();
+    let new_vault_materialisation_root =
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref());
     let header = FactorySpliceHeader {
         protocol_version: old_header.protocol_version(),
         chain_id: bytes32_from_slice("factory chain id", old_header.chain_id())?,
@@ -2944,6 +2981,8 @@ pub fn save_factory_reduced_splice_package(
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: [0u8; BYTE32_LEN],
         participants_commitment: expected_participants,
+        old_vault_materialisation_root,
+        new_vault_materialisation_root,
     };
     let update = FactorySingleRightMerkleUpdate {
         before_root: old_state_root,
@@ -3191,6 +3230,18 @@ pub fn apply_factory_splice(
     }
 
     let mut new_factory_data = factory_cell.data.to_vec();
+    ensure!(
+        old_header.vault_materialisation_root()
+            == transition.header.old_vault_materialisation_root.as_slice(),
+        "live FactoryState commitment does not match the signed factory splice old root"
+    );
+    ensure!(
+        vault_cell_commitment_from_output(
+            &factory_vault_cell.output,
+            factory_vault_cell.data.as_ref(),
+        ) == transition.header.old_vault_materialisation_root,
+        "live FactoryVaultCell does not match the signed factory splice old root"
+    );
     put_u64(
         &mut new_factory_data,
         68,
@@ -3199,6 +3250,7 @@ pub fn apply_factory_splice(
     new_factory_data[76..108].copy_from_slice(&transition.header.new_state_root);
     new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
     new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
+    new_factory_data[238..270].copy_from_slice(&transition.header.new_vault_materialisation_root);
     let parsed_new_header = FactoryStateHeader::parse(&new_factory_data)
         .map_err(|err| anyhow!("constructed factory splice header is invalid: {err:?}"))?;
     ensure!(
@@ -3224,6 +3276,11 @@ pub fn apply_factory_splice(
         Bytes::new()
     };
     let new_vault_output = new_vault_builder.build();
+    ensure!(
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref())
+            == transition.header.new_vault_materialisation_root,
+        "constructed FactoryVault output does not match the signed factory splice new root"
+    );
     ensure_output_capacity(
         "post-splice factory vault",
         &new_vault_output,
@@ -3581,6 +3638,18 @@ pub fn apply_factory_reduced_splice(
     }
 
     let mut new_factory_data = factory_cell.data.to_vec();
+    ensure!(
+        old_header.vault_materialisation_root()
+            == transition.header.old_vault_materialisation_root.as_slice(),
+        "live FactoryState commitment does not match the signed reduced splice old root"
+    );
+    ensure!(
+        vault_cell_commitment_from_output(
+            &factory_vault_cell.output,
+            factory_vault_cell.data.as_ref(),
+        ) == transition.header.old_vault_materialisation_root,
+        "live FactoryVaultCell does not match the signed reduced splice old root"
+    );
     put_u64(
         &mut new_factory_data,
         68,
@@ -3589,6 +3658,7 @@ pub fn apply_factory_reduced_splice(
     new_factory_data[76..108].copy_from_slice(&transition.header.new_state_root);
     new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
     new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
+    new_factory_data[238..270].copy_from_slice(&transition.header.new_vault_materialisation_root);
     let parsed_new_header = FactoryStateHeader::parse(&new_factory_data)
         .map_err(|err| anyhow!("constructed reduced factory splice header is invalid: {err:?}"))?;
     ensure!(
@@ -3614,6 +3684,11 @@ pub fn apply_factory_reduced_splice(
         Bytes::new()
     };
     let new_vault_output = new_vault_builder.build();
+    ensure!(
+        vault_cell_commitment_from_output(&new_vault_output, new_vault_data.as_ref())
+            == transition.header.new_vault_materialisation_root,
+        "constructed FactoryVault output does not match the signed reduced splice new root"
+    );
     ensure_output_capacity(
         "post-splice factory vault",
         &new_vault_output,
@@ -5562,6 +5637,19 @@ pub fn factory_exit_channel(
         &factory_vault_change_output,
         factory_vault_change_data.len(),
     )?;
+    let old_factory_vault_materialisation_root = vault_cell_commitment_from_output(
+        &factory_vault_cell.output,
+        factory_vault_cell.data.as_ref(),
+    );
+    ensure!(
+        old_header.vault_materialisation_root()
+            == old_factory_vault_materialisation_root.as_slice(),
+        "live FactoryVaultCell does not match the FactoryStateHeader commitment"
+    );
+    let new_factory_vault_materialisation_root = vault_cell_commitment_from_output(
+        &factory_vault_change_output,
+        factory_vault_change_data.as_ref(),
+    );
 
     ensure_output_capacity("factory", &factory_cell.output, FACTORY_STATE_HEADER_LEN)?;
     let (new_factory_data, factory_exit_witness, local_exit_package, reduced_exit, authorisation) =
@@ -5591,6 +5679,7 @@ pub fn factory_exit_channel(
                 new_factory_data[76..108].copy_from_slice(&state_root);
                 new_factory_data[140..172].copy_from_slice(&access_manifest_root);
                 new_factory_data[172..204].copy_from_slice(&exit_digest);
+                new_factory_data[238..270].copy_from_slice(&new_factory_vault_materialisation_root);
                 let factory_signature = factory_signature_witness(
                     &new_factory_data,
                     &options.alice_private_key,
@@ -5663,6 +5752,7 @@ pub fn factory_exit_channel(
                     &state_lock_hash,
                     &state_header,
                     &descriptor,
+                    new_factory_vault_materialisation_root,
                 )?;
                 let contract_witness = factory_witness_envelope(
                     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
@@ -11291,6 +11381,7 @@ fn reduced_exit_from_factory_header(
     state_lock_hash: &[u8],
     state_header: &[u8],
     descriptor: &[u8],
+    new_factory_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> Result<BuiltReducedExit> {
     ensure!(
         reserve_claim.release_quantity > 0,
@@ -11371,6 +11462,7 @@ fn reduced_exit_from_factory_header(
     put_u64(&mut new_header, 68, new_update_number);
     new_header[76..108].copy_from_slice(&new_state_root);
     new_header[140..172].copy_from_slice(&new_access_manifest_root);
+    new_header[238..270].copy_from_slice(&new_factory_vault_materialisation_root);
     let preliminary_new = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("preliminary reduced-exit header is invalid: {err:?}"))?;
     let non_interference_digest = parsed_witness
@@ -12338,6 +12430,7 @@ struct FactoryHeaderInput {
     access_manifest_root: [u8; 32],
     non_interference_digest: [u8; 32],
     challenge_policy_commitment: [u8; 32],
+    vault_materialisation_root: [u8; 32],
 }
 
 fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
@@ -12375,6 +12468,7 @@ fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_
     raw[172..204].copy_from_slice(&input.non_interference_digest);
     raw[204..236].copy_from_slice(&input.challenge_policy_commitment);
     put_u16(&mut raw, 236, 1);
+    raw[238..270].copy_from_slice(&input.vault_materialisation_root);
     raw
 }
 

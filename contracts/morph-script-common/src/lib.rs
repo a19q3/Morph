@@ -8,7 +8,7 @@ pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_LEN: usize = 314;
 pub const WITNESS_ENVELOPE_MAGIC: &[u8; 8] = b"MORPHW!!";
 pub const WITNESS_ENVELOPE_LEN: usize = 8 + 2 + 2 + 2 + 4 + BYTE32_LEN;
-pub const FACTORY_STATE_HEADER_LEN: usize = 238;
+pub const FACTORY_STATE_HEADER_LEN: usize = 270;
 pub const SPONSOR_POLICY_LEN: usize = 136;
 pub const SPLICE_HEADER_LEN: usize = 389;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
@@ -83,7 +83,7 @@ pub const FACTORY_LOCAL_EXIT_XUDT_WITNESS_LEN: usize = 2
     + BYTE32_LEN
     + STATE_HEADER_LEN
     + BILATERAL_CKB_XUDT_DESCRIPTOR_LEN;
-pub const FACTORY_SPLICE_HEADER_LEN: usize = 309;
+pub const FACTORY_SPLICE_HEADER_LEN: usize = 373;
 pub const FACTORY_VAULT_ASSET_AMOUNT_LEN: usize = 1 + BYTE32_LEN + 16;
 pub const FACTORY_VAULT_DESCRIPTOR_MAX_ASSETS: u8 = 2;
 pub const FACTORY_VAULT_DESCRIPTOR_LEN: usize = BYTE32_LEN + 2 + 2 * FACTORY_VAULT_ASSET_AMOUNT_LEN;
@@ -570,6 +570,10 @@ impl<'a> FactoryStateHeader<'a> {
 
     pub fn state_layout_version(&self) -> u16 {
         read_u16(self.raw, 236)
+    }
+
+    pub fn vault_materialisation_root(&self) -> &'a [u8] {
+        field(self.raw, 238, BYTE32_LEN)
     }
 
     pub fn signing_digest(&self) -> [u8; 32] {
@@ -2494,6 +2498,14 @@ impl<'a> FactorySpliceHeader<'a> {
         field(self.raw, 277, BYTE32_LEN)
     }
 
+    pub fn old_vault_materialisation_root(&self) -> &'a [u8] {
+        field(self.raw, 309, BYTE32_LEN)
+    }
+
+    pub fn new_vault_materialisation_root(&self) -> &'a [u8] {
+        field(self.raw, 341, BYTE32_LEN)
+    }
+
     pub fn signing_digest(&self) -> [u8; 32] {
         blake2b256(&[FACTORY_SPLICE_HEADER_DOMAIN, self.raw])
     }
@@ -2519,6 +2531,8 @@ impl<'a> FactorySpliceHeader<'a> {
             && self.old_access_manifest_root() == old_header.access_manifest_root()
             && self.new_access_manifest_root() == new_header.access_manifest_root()
             && self.non_interference_digest() == new_header.non_interference_digest()
+            && self.old_vault_materialisation_root() == old_header.vault_materialisation_root()
+            && self.new_vault_materialisation_root() == new_header.vault_materialisation_root()
     }
 }
 
@@ -4795,6 +4809,7 @@ mod tests {
         raw[172..204].fill(7);
         raw[204..236].fill(8);
         put_u16(&mut raw, 236, 1);
+        raw[238..270].fill(9);
         raw
     }
 
@@ -4981,6 +4996,8 @@ mod tests {
         raw[213..245].copy_from_slice(vault_delta_commitment);
         raw[245..277].copy_from_slice(new_header.non_interference_digest());
         raw[277..309].copy_from_slice(participants_commitment);
+        raw[309..341].copy_from_slice(old_header.vault_materialisation_root());
+        raw[341..373].copy_from_slice(new_header.vault_materialisation_root());
         raw
     }
 

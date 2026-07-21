@@ -60,6 +60,37 @@ Implementation safety-boundary baseline: `8944bf7`.
 - Remaining limitation: this uses the current current vault commitment shape; any
   future multi-vault set must update the commitment and tests together.
 
+## FactoryVault materialisation authority
+
+- Issue: the original `FactoryStateHeader` committed rights and reserve-policy
+  roots, but not the actual shared-pool Cell. Factory creation signatures and
+  ordinary updates therefore did not bind the FactoryVault lock, capacity,
+  type, or data, and Factory splice signatures bound descriptors/deltas without
+  binding their concrete old/new Cell materialisations.
+- Attack model: a host or transaction builder substitutes a different reserve
+  Cell while presenting otherwise valid Factory rights, exit, or splice
+  evidence; a bridge cannot derive the current pool materialisation from the
+  canonical Factory state alone.
+- Fix: `FactoryStateHeader` now includes
+  `vault_materialisation_root = H(lock_hash, capacity, type_hash, data)`.
+  Factory creation requires exactly one matching FactoryVault output. Ordinary
+  signature, reduced-rights, and sparse-Merkle updates must preserve the root.
+  Local/reduced exits and full/reduced splices require matching old input and
+  new output materialisations. `FactorySpliceHeader` additionally signs both
+  roots, and `morph-factory-vault-lock` independently checks its group input and
+  output against the old/new Factory headers.
+- Negative tests:
+  `factory_type_rejects_initial_state_without_committed_factory_vault`,
+  `factory_type_rejects_initial_state_with_wrong_factory_vault_commitment`,
+  `factory_type_rejects_initial_state_with_ambiguous_factory_vaults`,
+  `factory_type_rejects_signed_ordinary_update_with_factory_vault_root_drift`,
+  plus the existing Factory splice/exit capacity, type, and amount mismatch
+  families.
+- Remaining limitation: the root commits Cell content, not its exact OutPoint.
+  A separately funded byte-identical clone has the same commitment. Exact
+  provenance binding is therefore an open mainnet blocker, not closed by this
+  materialisation fix.
+
 ## Merkle locality is not mint authority
 
 - Issue: a single-right sparse Merkle proof proves locality, not economic

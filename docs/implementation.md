@@ -49,7 +49,8 @@ state, but they cannot rewrite vault settlement or drain participant assets.
 | `StateHeader` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set commitment, state number, phase, and settlement descriptor commitment. |
 | `BilateralSignatureWitness` | script-common | Two sorted participant public keys and signatures over the state digest. |
 | `SpliceStateTransitionWitness` | script-common, CLI | Bounded body proving an old funding anchor can move to a new funding anchor. |
-| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, and reserve context. |
+| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, reserve context, and the exact materialised FactoryVault commitment. |
+| `FactorySpliceHeader` | core, script-common, CLI | Signed Factory splice bridge binding rights-root progress, reserve deltas, and the old/new materialised FactoryVault Cells. |
 | `FactoryRight` | script-common, core, CLI | Fixed-layout representation of a participant right such as balance or reserve claim. |
 | `WitnessEnvelope` | script-common, CLI, factory scripts | Factory authorisation envelope: kind, flags, body length, and body digest. |
 | `SponsorPolicy` | script-common, CLI | Script-level sponsor fee policy. |
@@ -97,9 +98,22 @@ Vault materialisation is rejected.
 
 Initial Factory creation follows the same rule: the canonical factory-id input
 carries a full Factory signature envelope over update zero. Reduced or local
-proof kinds cannot be used to authorise creation. Splice-created successor
-channels continue to use the separately signed splice bridge instead of a
-second redundant initial-state signature.
+proof kinds cannot be used to authorise creation. The signed
+`FactoryStateHeader.vault_materialisation_root` commits the unique FactoryVault
+output's lock hash, capacity, optional type hash, and data. Ordinary Factory
+updates must preserve this root; local/reduced exits and full/reduced splices
+must materialise old and new FactoryVault Cells matching the signed roots. The
+Factory type and Factory vault lock enforce the binding independently.
+Splice-created successor channels continue to use the separately signed splice
+bridge instead of a second redundant initial-state signature.
+
+This is a content/materialisation commitment, not yet a provenance locator.
+Two Cells with identical lock, capacity, type, and data have the same root. A
+mainnet-track v2 must bind the committed Vault to its exact CKB OutPoint after
+the creation transaction commits (for example through a participant-signed
+activation update that proves the live Vault as a cell dependency). Until that
+profile exists and is reviewed, clone/substitution resistance remains a
+mainnet blocker for both bilateral and Factory Vaults.
 
 ## Script Boundary
 

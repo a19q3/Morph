@@ -19,7 +19,7 @@
 // - SpliceAssetDelta: 113 bytes
 // - SpliceAssetDeltas: 228 bytes
 // - SpliceStateTransitionWitness: 1081 bytes
-// - FactoryStateHeader: 238 bytes
+// - FactoryStateHeader: 270 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness: 262 bytes
 // - FactoryRight: 114 bytes
@@ -29,12 +29,12 @@
 // - FactoryReducedExitXudtWitness: 3618 bytes
 // - FactoryLocalExitWitness: 766 bytes
 // - FactoryLocalExitXudtWitness: 830 bytes
-// - FactorySpliceHeader: 309 bytes
+// - FactorySpliceHeader: 373 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
 // - FactoryVaultDeltas: 196 bytes
-// - FactorySpliceWitness: 1033 bytes
-// - FactoryReducedSpliceWitness: 9491 bytes
+// - FactorySpliceWitness: 1097 bytes
+// - FactoryReducedSpliceWitness: 9555 bytes
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
@@ -177,6 +177,7 @@ struct FactoryStateHeader {
     non_interference_digest: Byte32,
     challenge_policy_commitment: Byte32,
     state_layout_version: uint16,
+    vault_materialisation_root: Byte32,
 }
 
 struct BilateralSignatureWitness {
@@ -391,6 +392,8 @@ struct FactorySpliceHeader {
     vault_delta_commitment: Byte32,
     non_interference_digest: Byte32,
     participants_commitment: Byte32,
+    old_vault_materialisation_root: Byte32,
+    new_vault_materialisation_root: Byte32,
 }
 
 struct FactoryVaultAssetAmount {

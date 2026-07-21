@@ -175,6 +175,8 @@ fn factory_splice_header_signing_digest_matches_script_common() {
         vault_delta_commitment: bytes32(9),
         non_interference_digest: bytes32(10),
         participants_commitment: bytes32(11),
+        old_vault_materialisation_root: bytes32(12),
+        new_vault_materialisation_root: bytes32(13),
     };
     let mut raw = [0u8; wire::FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
@@ -191,6 +193,8 @@ fn factory_splice_header_signing_digest_matches_script_common() {
     raw[213..245].copy_from_slice(&header.vault_delta_commitment);
     raw[245..277].copy_from_slice(&header.non_interference_digest);
     raw[277..309].copy_from_slice(&header.participants_commitment);
+    raw[309..341].copy_from_slice(&header.old_vault_materialisation_root);
+    raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
     let wire_header = wire::FactorySpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());

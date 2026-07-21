@@ -508,6 +508,8 @@ fn factory_splice_transition(
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: blake2b256(b"factory splice fixture"),
         participants_commitment: bytes32(0),
+        old_vault_materialisation_root: bytes32(93),
+        new_vault_materialisation_root: bytes32(94),
     };
     let witness = factory_splice_witness_for(&mut header);
     FactorySpliceTransition {

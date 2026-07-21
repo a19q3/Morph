@@ -253,6 +253,8 @@ pub struct FactorySpliceHeader {
     pub vault_delta_commitment: Bytes32,
     pub non_interference_digest: Bytes32,
     pub participants_commitment: Bytes32,
+    pub old_vault_materialisation_root: Bytes32,
+    pub new_vault_materialisation_root: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
