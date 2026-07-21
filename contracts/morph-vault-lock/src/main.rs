@@ -10,7 +10,7 @@ use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
     load_cell_capacity, load_cell_data, load_cell_lock, load_cell_lock_hash, load_cell_type,
-    load_cell_type_hash, load_input, load_script, load_witness_args,
+    load_cell_type_hash, load_input, load_input_out_point, load_script, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
@@ -19,8 +19,9 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BYTE32_LEN,
     BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor, PHASE_ACTIVE,
     PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitness, SpliceVaultDescriptor,
-    StateHeader, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, read_u64, read_u128,
-    validate_relative_block_since, vault_cell_commitment, verify_splice_state_transition_bundle,
+    StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
+    read_u64, read_u128, validate_relative_block_since, vault_cell_commitment,
+    vault_outpoint_commitment, verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -68,6 +69,10 @@ fn main() -> Result<()> {
         state_lock_hash_type,
     )?;
     let header = StateHeader::parse(&state_data)?;
+    validate_current_vault_commitment(
+        header.vault_materialisation_root(),
+        header.vault_outpoint_commitment(),
+    )?;
     if header.phase() == PHASE_ACTIVE {
         validate_splice_vault_spend(
             &script,
@@ -86,8 +91,6 @@ fn main() -> Result<()> {
     let input = load_input(state_index, Source::Input).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
     validate_relative_block_since(since, min_since)?;
-    validate_current_vault_commitment(header.vault_materialisation_root())?;
-
     let witness_args = load_witness_args(0, Source::GroupInput)
         .map_err(|_| ScriptError::SettlementWitnessMissing)?;
     let input_type = witness_args
@@ -285,7 +288,10 @@ fn load_xudt_amount(index: usize, source: Source) -> Result<u128> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_current_vault_commitment(expected: &[u8]) -> Result<()> {
+fn validate_current_vault_commitment(expected: &[u8], expected_outpoint: &[u8]) -> Result<()> {
+    if expected_outpoint == UNBOUND_VAULT_OUTPOINT_COMMITMENT {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
     let capacity = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     match load_cell_capacity(1, Source::GroupInput) {
         Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => {}
@@ -305,6 +311,13 @@ fn validate_current_vault_commitment(expected: &[u8]) -> Result<()> {
     );
     if commitment.as_slice() != expected {
         return Err(ScriptError::SettlementDescriptorMismatch);
+    }
+    let outpoint =
+        load_input_out_point(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output_index: u32 = outpoint.index().unpack();
+    let locator = vault_outpoint_commitment(outpoint.tx_hash().as_slice(), output_index);
+    if locator.as_slice() != expected_outpoint {
+        return Err(ScriptError::VaultOutPointMismatch);
     }
     Ok(())
 }

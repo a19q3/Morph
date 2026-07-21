@@ -11,30 +11,30 @@
 // WitnessEnvelope header followed by one bounded body. These lengths are
 // part of the audited transaction shape:
 //
-// - StateHeader: 314 bytes
-// - SpliceHeader: 389 bytes
+// - StateHeader: 346 bytes
+// - SpliceHeader: 453 bytes
 // - SpliceSignatureWitness: 198 bytes
 // - SpliceVaultAssetAmount: 49 bytes
 // - SpliceVaultDescriptor: 132 bytes
 // - SpliceAssetDelta: 113 bytes
 // - SpliceAssetDeltas: 228 bytes
-// - SpliceStateTransitionWitness: 1081 bytes
-// - FactoryStateHeader: 270 bytes
+// - SpliceStateTransitionWitness: 1145 bytes
+// - FactoryStateHeader: 302 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness: 262 bytes
 // - FactoryRight: 114 bytes
 // - FactoryReducedRightsWitness: 2580 bytes
 // - FactoryMerkleUpdateWitness: 8720 bytes
-// - FactoryReducedExitWitness: 3554 bytes
-// - FactoryReducedExitXudtWitness: 3618 bytes
-// - FactoryLocalExitWitness: 766 bytes
-// - FactoryLocalExitXudtWitness: 830 bytes
-// - FactorySpliceHeader: 373 bytes
+// - FactoryReducedExitWitness: 3586 bytes
+// - FactoryReducedExitXudtWitness: 3650 bytes
+// - FactoryLocalExitWitness: 798 bytes
+// - FactoryLocalExitXudtWitness: 862 bytes
+// - FactorySpliceHeader: 437 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
 // - FactoryVaultDeltas: 196 bytes
-// - FactorySpliceWitness: 1097 bytes
-// - FactoryReducedSpliceWitness: 9555 bytes
+// - FactorySpliceWitness: 1161 bytes
+// - FactoryReducedSpliceWitness: 9619 bytes
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
@@ -94,6 +94,7 @@ struct StateHeader {
     vault_materialisation_root: Byte32,
     challenge_policy_commitment: Byte32,
     state_layout_version: uint16,
+    vault_outpoint_commitment: Byte32,
 }
 
 struct SpliceHeader {
@@ -115,6 +116,8 @@ struct SpliceHeader {
     vault_materialisation_root: Byte32,
     new_vault_materialisation_root: Byte32,
     challenge_policy_commitment: Byte32,
+    old_vault_outpoint_commitment: Byte32,
+    new_vault_outpoint_commitment: Byte32,
 }
 
 struct SpliceSignatureWitness {
@@ -178,6 +181,7 @@ struct FactoryStateHeader {
     challenge_policy_commitment: Byte32,
     state_layout_version: uint16,
     vault_materialisation_root: Byte32,
+    vault_outpoint_commitment: Byte32,
 }
 
 struct BilateralSignatureWitness {
@@ -394,6 +398,8 @@ struct FactorySpliceHeader {
     participants_commitment: Byte32,
     old_vault_materialisation_root: Byte32,
     new_vault_materialisation_root: Byte32,
+    old_vault_outpoint_commitment: Byte32,
+    new_vault_outpoint_commitment: Byte32,
 }
 
 struct FactoryVaultAssetAmount {

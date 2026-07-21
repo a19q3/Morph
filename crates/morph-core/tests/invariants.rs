@@ -22,6 +22,7 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 1,
     }
@@ -44,6 +45,7 @@ fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 2,
     }
@@ -324,6 +326,8 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         participants_commitment: current_state.header.participants_commitment,
         vault_materialisation_root: current_state.header.vault_materialisation_root,
         new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
+        old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
+        new_vault_outpoint_commitment: [0; 32],
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
@@ -333,6 +337,7 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
     next_state.header.funding_anchor = header.new_funding_anchor;
     next_state.header.vault_set_commitment = header.new_vault_commitment;
     next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
+    next_state.header.vault_outpoint_commitment = header.new_vault_outpoint_commitment;
     SpliceTransition {
         current_state,
         next_state,
@@ -510,6 +515,8 @@ fn factory_splice_transition(
         participants_commitment: bytes32(0),
         old_vault_materialisation_root: bytes32(93),
         new_vault_materialisation_root: bytes32(94),
+        old_vault_outpoint_commitment: bytes32(95),
+        new_vault_outpoint_commitment: [0; 32],
     };
     let witness = factory_splice_witness_for(&mut header);
     FactorySpliceTransition {

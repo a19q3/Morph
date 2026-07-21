@@ -85,6 +85,7 @@ fn state_header_signing_digest_matches_script_common() {
         settlement_descriptor_commitment: bytes32(9),
         descriptor_version: 10,
         vault_materialisation_root: bytes32(11),
+        vault_outpoint_commitment: bytes32(14),
         challenge_policy_commitment: bytes32(12),
         state_layout_version: 13,
     };
@@ -104,6 +105,7 @@ fn state_header_signing_digest_matches_script_common() {
         settlement_descriptor_commitment: header.settlement_descriptor_commitment,
         descriptor_version: header.descriptor_version,
         vault_materialisation_root: header.vault_materialisation_root,
+        vault_outpoint_commitment: header.vault_outpoint_commitment,
         challenge_policy_commitment: header.challenge_policy_commitment,
         state_layout_version: header.state_layout_version,
     });
@@ -132,6 +134,8 @@ fn splice_header_signing_digest_matches_script_common() {
         participants_commitment: bytes32(12),
         vault_materialisation_root: bytes32(14),
         new_vault_materialisation_root: bytes32(15),
+        old_vault_outpoint_commitment: bytes32(16),
+        new_vault_outpoint_commitment: bytes32(17),
         challenge_policy_commitment: bytes32(13),
     };
     let mut raw = [0u8; wire::SPLICE_HEADER_LEN];
@@ -153,6 +157,8 @@ fn splice_header_signing_digest_matches_script_common() {
     raw[293..325].copy_from_slice(&header.vault_materialisation_root);
     raw[325..357].copy_from_slice(&header.new_vault_materialisation_root);
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
+    raw[389..421].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[421..453].copy_from_slice(&header.new_vault_outpoint_commitment);
     let wire_header = wire::SpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());
@@ -177,6 +183,8 @@ fn factory_splice_header_signing_digest_matches_script_common() {
         participants_commitment: bytes32(11),
         old_vault_materialisation_root: bytes32(12),
         new_vault_materialisation_root: bytes32(13),
+        old_vault_outpoint_commitment: bytes32(14),
+        new_vault_outpoint_commitment: bytes32(15),
     };
     let mut raw = [0u8; wire::FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
@@ -195,6 +203,8 @@ fn factory_splice_header_signing_digest_matches_script_common() {
     raw[277..309].copy_from_slice(&header.participants_commitment);
     raw[309..341].copy_from_slice(&header.old_vault_materialisation_root);
     raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
+    raw[373..405].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[405..437].copy_from_slice(&header.new_vault_outpoint_commitment);
     let wire_header = wire::FactorySpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());

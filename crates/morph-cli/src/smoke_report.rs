@@ -2542,6 +2542,11 @@ fn collect_from_value(
     if let Some(tx) = transaction_from_object(check, path, object) {
         collections.transactions.push(tx);
     }
+    for prefix in ["activation", "factory_activation", "state_activation"] {
+        if let Some(tx) = prefixed_transaction_from_object(check, path, object, prefix) {
+            collections.transactions.push(tx);
+        }
+    }
 
     if let Some(payout) = splice_payout_from_object(check, path, object) {
         collections.splice_payouts.push(payout);
@@ -2810,6 +2815,29 @@ fn transaction_from_object(
         tx_hash,
         status: string_field(object, "status"),
         block_number: object.get("block_number").and_then(Value::as_u64),
+        estimated_cycles,
+        tx_size_bytes,
+    })
+}
+
+fn prefixed_transaction_from_object(
+    check: &str,
+    path: &str,
+    object: &serde_json::Map<String, Value>,
+    prefix: &str,
+) -> Option<TransactionSummary> {
+    let tx_hash = string_field(object, &format!("{prefix}_tx_hash"))?;
+    let metrics = object.get(&format!("{prefix}_metrics"))?.as_object()?;
+    let estimated_cycles = metrics.get("estimated_cycles")?.as_u64()?;
+    let tx_size_bytes = metrics.get("tx_size_bytes")?.as_u64()? as usize;
+    Some(TransactionSummary {
+        check: check.to_string(),
+        path: append_path(path, prefix),
+        tx_hash,
+        status: string_field(object, &format!("{prefix}_status")),
+        block_number: object
+            .get(&format!("{prefix}_block_number"))
+            .and_then(Value::as_u64),
         estimated_cycles,
         tx_size_bytes,
     })

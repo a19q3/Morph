@@ -73,6 +73,8 @@ pub enum MorphError {
     SponsorOperationNotAllowed,
     #[error("vault operation is not allowed")]
     VaultOperationNotAllowed,
+    #[error("vault exact OutPoint binding is missing or invalid")]
+    VaultOutPointBindingInvalid,
     #[error("vault state is not in settling phase")]
     VaultStateNotSettling,
     #[error("vault spend lacks current-state or phase authorisation")]
@@ -161,6 +163,11 @@ pub fn validate_state_transition(
     if new.header.phase != Phase::Settling {
         return Err(MorphError::NewStateNotSettling);
     }
+    if old.header.vault_outpoint_commitment == [0; 32]
+        || new.header.vault_outpoint_commitment == [0; 32]
+    {
+        return Err(MorphError::VaultOutPointBindingInvalid);
+    }
     require_same_header_context(&old.header, &new.header)?;
     validate_state_authorization(&new.header, &ctx.authorization)?;
     if ctx.referenced_funding_anchor != new.header.funding_anchor {
@@ -225,6 +232,11 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     if current.phase != Phase::Active {
         return Err(MorphError::SpliceStateNotActive);
     }
+    if current.vault_outpoint_commitment == [0; 32]
+        || splice.next_state.header.vault_outpoint_commitment != [0; 32]
+    {
+        return Err(MorphError::VaultOutPointBindingInvalid);
+    }
     if splice.header.chain_id != current.chain_id
         || splice.header.signature_scheme_id != current.signature_scheme_id
         || splice.header.channel_id != current.channel_id
@@ -234,6 +246,7 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
         || splice.header.participants_commitment != current.participants_commitment
         || splice.header.vault_materialisation_root != current.vault_materialisation_root
         || splice.header.challenge_policy_commitment != current.challenge_policy_commitment
+        || splice.header.old_vault_outpoint_commitment != current.vault_outpoint_commitment
     {
         return Err(MorphError::SpliceHeaderContextMismatch);
     }
@@ -324,6 +337,7 @@ fn state_context_matches_splice_next(
         && current.vault_set_commitment == header.old_vault_commitment
         && next.vault_set_commitment == header.new_vault_commitment
         && next.vault_materialisation_root == header.new_vault_materialisation_root
+        && next.vault_outpoint_commitment == header.new_vault_outpoint_commitment
         && current.state_number == next.state_number
         && current.mode == next.mode
         && current.participants_commitment == next.participants_commitment
@@ -531,6 +545,11 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
 
     if splice.header.new_update_number <= splice.header.old_update_number {
         return Err(MorphError::FactorySpliceUpdateNotAdvanced);
+    }
+    if splice.header.old_vault_outpoint_commitment == [0; 32]
+        || splice.header.new_vault_outpoint_commitment != [0; 32]
+    {
+        return Err(MorphError::VaultOutPointBindingInvalid);
     }
     let computed_old_root = factory_right_sparse_root(&splice.update.before)?;
     let computed_new_root = factory_right_sparse_root(&splice.update.after)?;

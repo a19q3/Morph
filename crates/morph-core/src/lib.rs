@@ -19,7 +19,7 @@ pub use bridge::*;
 pub use hash::{
     SigningBytes, blake2b256, factory_vault_delta_commitment, factory_vault_descriptor_commitment,
     funding_context_id, participants_commitment, splice_asset_delta_commitment,
-    vault_descriptor_commitment,
+    vault_descriptor_commitment, vault_outpoint_commitment,
 };
 pub use node::*;
 pub use rgbpp::*;

@@ -10,8 +10,8 @@ use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
     QueryIter, load_cell_capacity, load_cell_data, load_cell_lock, load_cell_lock_hash,
-    load_cell_occupied_capacity, load_cell_type_hash, load_input, load_script, load_script_hash,
-    load_witness_args,
+    load_cell_occupied_capacity, load_cell_type_hash, load_input, load_input_out_point,
+    load_script, load_script_hash, load_transaction, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
@@ -23,12 +23,13 @@ use morph_script_common::{
     FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
     FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySignatureWitness,
     FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN,
-    ScriptError, StateHeader, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope,
-    blake2b256, read_u128, validate_factory_merkle_update_local_predicate, vault_cell_commitment,
-    verify_factory_merkle_update, verify_factory_reduced_splice_update,
+    ScriptError, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope, blake2b256, read_u128,
+    validate_factory_merkle_update_local_predicate, vault_cell_commitment,
+    vault_outpoint_commitment, verify_factory_merkle_update, verify_factory_reduced_splice_update,
     verify_factory_splice_update, verify_factory_state_signatures,
     verify_reduced_factory_exit_update, verify_reduced_factory_rights_update,
 };
@@ -85,12 +86,16 @@ fn validate_create(new_data: &[u8], expected_factory_id: &[u8]) -> Result<()> {
     if new_header.update_number() != 0 {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
+    if new_header.vault_is_bound() {
+        return Err(ScriptError::VaultActivationInvalid);
+    }
     validate_factory_id_derivation(expected_factory_id)?;
     validate_initial_participant_authorisation(&new_header)?;
     validate_factory_vault_materialisation(
         Source::Output,
         expected_factory_id,
         new_header.vault_materialisation_root(),
+        None,
     )?;
     validate_output_capacity()?;
     Ok(())
@@ -125,6 +130,19 @@ fn validate_update(
     if new_header.factory_id() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
+    validate_output_lock_preserved()?;
+    if !old_header.vault_is_bound() {
+        if !old_header.is_vault_activation_to(&new_header) {
+            return Err(ScriptError::VaultActivationInvalid);
+        }
+        validate_factory_activation_cell_dep(
+            expected_factory_id,
+            new_header.vault_materialisation_root(),
+            new_header.vault_outpoint_commitment(),
+        )?;
+        validate_output_capacity()?;
+        return Ok(());
+    }
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
@@ -136,7 +154,11 @@ fn validate_update(
         WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS
         | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
-            if old_header.vault_materialisation_root() != new_header.vault_materialisation_root() {
+            if !new_header.vault_is_bound()
+                || old_header.vault_materialisation_root()
+                    != new_header.vault_materialisation_root()
+                || old_header.vault_outpoint_commitment() != new_header.vault_outpoint_commitment()
+            {
                 return Err(ScriptError::HeaderContextChanged);
             }
         }
@@ -144,15 +166,20 @@ fn validate_update(
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
         | WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
+            if new_header.vault_is_bound() {
+                return Err(ScriptError::VaultActivationInvalid);
+            }
             validate_factory_vault_materialisation(
                 Source::Input,
                 expected_factory_id,
                 old_header.vault_materialisation_root(),
+                Some(old_header.vault_outpoint_commitment()),
             )?;
             validate_factory_vault_materialisation(
                 Source::Output,
                 expected_factory_id,
                 new_header.vault_materialisation_root(),
+                None,
             )?;
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
@@ -218,7 +245,11 @@ fn validate_factory_vault_materialisation(
     source: Source,
     expected_factory_id: &[u8],
     expected_commitment: &[u8],
+    expected_outpoint: Option<&[u8]>,
 ) -> Result<()> {
+    if expected_outpoint == Some(UNBOUND_VAULT_OUTPOINT_COMMITMENT.as_slice()) {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
     let factory_type_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
     let mut candidates = 0usize;
     let mut commitment_matches = false;
@@ -249,6 +280,18 @@ fn validate_factory_vault_materialisation(
                         data.as_slice(),
                     );
                     if commitment.as_slice() == expected_commitment {
+                        if let Some(expected_outpoint) = expected_outpoint {
+                            let outpoint = load_input_out_point(index, source)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            let output_index: u32 = outpoint.index().unpack();
+                            let locator = vault_outpoint_commitment(
+                                outpoint.tx_hash().as_slice(),
+                                output_index,
+                            );
+                            if locator.as_slice() != expected_outpoint {
+                                return Err(ScriptError::VaultOutPointMismatch);
+                            }
+                        }
                         commitment_matches = true;
                     }
                 }
@@ -263,6 +306,79 @@ fn validate_factory_vault_materialisation(
     } else {
         Err(ScriptError::VaultCellMissing)
     }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_activation_cell_dep(
+    expected_factory_id: &[u8],
+    expected_root: &[u8],
+    expected_outpoint: &[u8],
+) -> Result<()> {
+    if expected_outpoint == UNBOUND_VAULT_OUTPOINT_COMMITMENT {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
+    let state_outpoint =
+        load_input_out_point(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let funding_tx_hash = state_outpoint.tx_hash();
+    let factory_type_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+    let transaction = load_transaction().map_err(|_| ScriptError::Encoding)?;
+    let mut found = false;
+    for (index, dep) in transaction.raw().cell_deps().into_iter().enumerate() {
+        if dep.dep_type().as_slice()[0] != 0 {
+            continue;
+        }
+        let outpoint = dep.out_point();
+        let tx_hash = outpoint.tx_hash();
+        let output_index: u32 = outpoint.index().unpack();
+        if vault_outpoint_commitment(tx_hash.as_slice(), output_index).as_slice()
+            != expected_outpoint
+        {
+            continue;
+        }
+        if found || tx_hash != funding_tx_hash {
+            return Err(ScriptError::VaultOutPointMismatch);
+        }
+        let lock = load_cell_lock(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let args = lock.args().raw_data();
+        if args.len() != 2 * BYTE32_LEN
+            || &args.as_ref()[..BYTE32_LEN] != expected_factory_id
+            || &args.as_ref()[BYTE32_LEN..] != factory_type_hash.as_slice()
+        {
+            return Err(ScriptError::VaultOutPointMismatch);
+        }
+        let capacity =
+            load_cell_capacity(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let lock_hash =
+            load_cell_lock_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let type_hash =
+            load_cell_type_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let data = load_cell_data(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let root = vault_cell_commitment(
+            lock_hash.as_slice(),
+            capacity,
+            type_hash.as_ref().map(|hash| hash.as_slice()),
+            data.as_slice(),
+        );
+        if root.as_slice() != expected_root {
+            return Err(ScriptError::VaultOutPointMismatch);
+        }
+        found = true;
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(ScriptError::VaultOutPointMismatch)
+    }
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_output_lock_preserved() -> Result<()> {
+    let input_lock = load_cell_lock(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output_lock = load_cell_lock(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input_lock != output_lock {
+        return Err(ScriptError::StateTypeMismatch);
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]

@@ -60,6 +60,9 @@ pub struct StateHeader {
     pub vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
     pub state_layout_version: u16,
+    /// Domain-separated commitment to the exact CKB VaultCell OutPoint.
+    /// All zeros denotes the short-lived, non-spendable pre-activation state.
+    pub vault_outpoint_commitment: Bytes32,
 }
 
 impl StateHeader {
@@ -82,6 +85,7 @@ impl StateHeader {
             && self.vault_materialisation_root == next.vault_materialisation_root
             && self.challenge_policy_commitment == next.challenge_policy_commitment
             && self.state_layout_version == next.state_layout_version
+            && self.vault_outpoint_commitment == next.vault_outpoint_commitment
     }
 }
 
@@ -255,6 +259,8 @@ pub struct FactorySpliceHeader {
     pub participants_commitment: Bytes32,
     pub old_vault_materialisation_root: Bytes32,
     pub new_vault_materialisation_root: Bytes32,
+    pub old_vault_outpoint_commitment: Bytes32,
+    pub new_vault_outpoint_commitment: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,6 +521,8 @@ pub struct SpliceHeader {
     #[serde(alias = "new_payload_commitment")]
     pub new_vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
+    pub old_vault_outpoint_commitment: Bytes32,
+    pub new_vault_outpoint_commitment: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

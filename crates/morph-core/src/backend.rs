@@ -707,6 +707,7 @@ mod tests {
                 settlement_descriptor_commitment: settlement_descriptor_commitment(&descriptor),
                 descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
                 vault_materialisation_root: [8; 32],
+                vault_outpoint_commitment: [10; 32],
                 challenge_policy_commitment: [9; 32],
                 state_layout_version: 2,
             },

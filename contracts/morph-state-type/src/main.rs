@@ -10,8 +10,8 @@ use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
     QueryIter, load_cell_capacity, load_cell_data, load_cell_lock, load_cell_lock_hash,
-    load_cell_occupied_capacity, load_cell_type, load_cell_type_hash, load_input, load_script,
-    load_script_hash, load_witness_args,
+    load_cell_occupied_capacity, load_cell_type, load_cell_type_hash, load_input,
+    load_input_out_point, load_script, load_script_hash, load_transaction, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
@@ -20,9 +20,10 @@ use morph_script_common::{
     BILATERAL_SIGNATURE_WITNESS_LEN, BYTE32_LEN, BilateralSignatureWitness,
     FactoryLocalExitWitness, FactoryReducedExitWitness, PHASE_ACTIVE, PHASE_SETTLING, Result,
     STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
-    SpliceStateTransitionWitness, StateHeader, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WitnessEnvelope, blake2b256, read_u64,
-    validate_relative_block_since, vault_cell_commitment, verify_bilateral_state_signatures,
+    SpliceStateTransitionWitness, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WitnessEnvelope, blake2b256, read_u64, validate_relative_block_since, vault_cell_commitment,
+    vault_outpoint_commitment, verify_bilateral_state_signatures,
     verify_splice_state_transition_bundle,
 };
 
@@ -102,6 +103,9 @@ fn validate_create(
     if new_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::NewStateNotActive);
     }
+    if new_header.vault_is_bound() {
+        return Err(ScriptError::VaultActivationInvalid);
+    }
     validate_output_lock_args_bind_output_type(0, Source::GroupOutput)?;
     if new_header.state_number() != 0
         || find_splice_witness_raw(expected_funding_anchor, false).is_ok()
@@ -160,7 +164,10 @@ fn validate_splice_retire(
     old_header: &StateHeader,
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
-    find_unique_input_by_vault_commitment(old_header.vault_materialisation_root())?;
+    find_unique_input_by_vault_reference(
+        old_header.vault_materialisation_root(),
+        old_header.vault_outpoint_commitment(),
+    )?;
     let witness_raw = find_splice_witness_raw(expected_funding_anchor, true)?;
     let witness = SpliceStateTransitionWitness::parse(&witness_raw)
         .map_err(|_| ScriptError::SpliceProofEncoding)?;
@@ -220,6 +227,12 @@ fn validate_supersede(
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
     }
+    if !old_header.vault_is_bound() {
+        return validate_vault_activation(old_header, &new_header);
+    }
+    if !new_header.vault_is_bound() {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
     if new_header.state_number() <= old_header.state_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
@@ -240,6 +253,76 @@ fn validate_supersede(
     }
 
     Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_vault_activation(old_header: &StateHeader, new_header: &StateHeader) -> Result<()> {
+    if !old_header.is_vault_activation_to(new_header) {
+        return Err(ScriptError::VaultActivationInvalid);
+    }
+    validate_output_lock_preserved()?;
+    validate_activation_cell_dep(
+        new_header.vault_materialisation_root(),
+        new_header.vault_outpoint_commitment(),
+    )?;
+
+    let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    let occupied =
+        load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if cap < occupied {
+        return Err(ScriptError::OutputBelowOccupiedCapacity);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_activation_cell_dep(expected_root: &[u8], expected_outpoint: &[u8]) -> Result<()> {
+    if expected_outpoint == UNBOUND_VAULT_OUTPOINT_COMMITMENT {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
+    let state_outpoint =
+        load_input_out_point(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let funding_tx_hash = state_outpoint.tx_hash();
+    let transaction = load_transaction().map_err(|_| ScriptError::Encoding)?;
+    let mut found = false;
+    for (index, dep) in transaction.raw().cell_deps().into_iter().enumerate() {
+        if dep.dep_type().as_slice()[0] != 0 {
+            continue;
+        }
+        let outpoint = dep.out_point();
+        let tx_hash = outpoint.tx_hash();
+        let output_index: u32 = outpoint.index().unpack();
+        if vault_outpoint_commitment(tx_hash.as_slice(), output_index).as_slice()
+            != expected_outpoint
+        {
+            continue;
+        }
+        if found || tx_hash != funding_tx_hash {
+            return Err(ScriptError::VaultOutPointMismatch);
+        }
+        let capacity =
+            load_cell_capacity(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let lock_hash =
+            load_cell_lock_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let type_hash =
+            load_cell_type_hash(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let data = load_cell_data(index, Source::CellDep).map_err(|_| ScriptError::Encoding)?;
+        let root = vault_cell_commitment(
+            lock_hash.as_slice(),
+            capacity,
+            type_hash.as_ref().map(|hash| hash.as_slice()),
+            data.as_slice(),
+        );
+        if root.as_slice() != expected_root {
+            return Err(ScriptError::VaultOutPointMismatch);
+        }
+        found = true;
+    }
+    if found {
+        Ok(())
+    } else {
+        Err(ScriptError::VaultOutPointMismatch)
+    }
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -377,13 +460,22 @@ fn validate_finalise(old_header: &StateHeader, finalise_since: Option<u64>) -> R
     let input = load_input(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
     validate_relative_block_since(since, required_since)?;
-    find_unique_input_by_vault_commitment(old_header.vault_materialisation_root())?;
+    find_unique_input_by_vault_reference(
+        old_header.vault_materialisation_root(),
+        old_header.vault_outpoint_commitment(),
+    )?;
 
     Ok(())
 }
 
 #[cfg(target_arch = "riscv64")]
-fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
+fn find_unique_input_by_vault_reference(
+    expected_root: &[u8],
+    expected_outpoint: &[u8],
+) -> Result<usize> {
+    if expected_outpoint == UNBOUND_VAULT_OUTPOINT_COMMITMENT {
+        return Err(ScriptError::VaultOutPointUnbound);
+    }
     let mut found = None;
     let mut index = 0;
     loop {
@@ -404,7 +496,13 @@ fn find_unique_input_by_vault_commitment(expected: &[u8]) -> Result<usize> {
                     type_hash.as_ref().map(|hash| hash.as_slice()),
                     data.as_slice(),
                 );
-                if commitment.as_slice() == expected {
+                let outpoint = load_input_out_point(index, Source::Input)
+                    .map_err(|_| ScriptError::Encoding)?;
+                let output_index: u32 = outpoint.index().unpack();
+                let locator =
+                    vault_outpoint_commitment(outpoint.tx_hash().as_slice(), output_index);
+                if commitment.as_slice() == expected_root && locator.as_slice() == expected_outpoint
+                {
                     if found.is_some() {
                         return Err(ScriptError::StateCellAmbiguous);
                     }

@@ -7661,6 +7661,7 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 1,
     }

@@ -15,6 +15,7 @@ use morph_core::{
     SpliceTransition, SpliceWitness, StateCell, StateHeader, VaultAsset, VaultAssetAmount,
     VaultDescriptor, bytes32, funding_context_id, participants_commitment,
     splice_asset_delta_commitment, validate_splice_transition, vault_descriptor_commitment,
+    vault_outpoint_commitment,
 };
 use morph_script_common::{
     COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_LEN,
@@ -60,6 +61,7 @@ pub struct StoredSpliceStateRef {
     pub descriptor_version: u16,
     #[serde(alias = "payload_commitment")]
     pub vault_materialisation_root: String,
+    pub vault_outpoint_commitment: String,
     pub challenge_policy_commitment: String,
     pub state_layout_version: u16,
     pub capacity: u64,
@@ -127,6 +129,8 @@ pub struct StoredSplicePackage {
     pub vault_materialisation_root: String,
     #[serde(alias = "new_payload_commitment")]
     pub new_vault_materialisation_root: String,
+    pub old_vault_outpoint_commitment: String,
+    pub new_vault_outpoint_commitment: String,
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
@@ -203,12 +207,14 @@ impl StoredSplicePackage {
                 &transition.header.channel_id,
                 &transition.header.old_funding_anchor,
                 &transition.header.old_vault_commitment,
+                &transition.header.old_vault_outpoint_commitment,
             )),
             new_funding_context_id: Some(funding_context_id_hex(
                 &transition.header.chain_id,
                 &transition.header.channel_id,
                 &transition.header.new_funding_anchor,
                 &transition.header.new_vault_commitment,
+                &transition.header.new_vault_outpoint_commitment,
             )),
             old_funding_epoch: transition.header.old_funding_epoch,
             new_funding_epoch: transition.header.new_funding_epoch,
@@ -221,6 +227,12 @@ impl StoredSplicePackage {
             vault_materialisation_root: hex_prefixed(&transition.header.vault_materialisation_root),
             new_vault_materialisation_root: hex_prefixed(
                 &transition.header.new_vault_materialisation_root,
+            ),
+            old_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.old_vault_outpoint_commitment,
+            ),
+            new_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.new_vault_outpoint_commitment,
             ),
             challenge_policy_commitment: hex_prefixed(
                 &transition.header.challenge_policy_commitment,
@@ -320,6 +332,16 @@ impl StoredSplicePackage {
             "new_vault_materialisation_root must be canonical"
         );
         ensure!(
+            self.old_vault_outpoint_commitment
+                == canonical_hex32(&self.old_vault_outpoint_commitment)?,
+            "old_vault_outpoint_commitment must be canonical"
+        );
+        ensure!(
+            self.new_vault_outpoint_commitment
+                == canonical_hex32(&self.new_vault_outpoint_commitment)?,
+            "new_vault_outpoint_commitment must be canonical"
+        );
+        ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
             "challenge_policy_commitment must be canonical"
         );
@@ -382,6 +404,7 @@ impl StoredSplicePackage {
                         &transition.header.channel_id,
                         &transition.header.old_funding_anchor,
                         &transition.header.old_vault_commitment,
+                        &transition.header.old_vault_outpoint_commitment,
                     ),
                 "old_funding_context_id does not match splice old funding context"
             );
@@ -394,8 +417,17 @@ impl StoredSplicePackage {
                         &transition.header.channel_id,
                         &transition.header.new_funding_anchor,
                         &transition.header.new_vault_commitment,
+                        &transition.header.new_vault_outpoint_commitment,
                     ),
                 "new_funding_context_id does not match splice new funding context"
+            );
+        }
+        if let Some(out_point) = &self.old_vault_out_point {
+            let tx_hash = hex32_bytes(&out_point.tx_hash)?;
+            ensure!(
+                vault_outpoint_commitment(&tx_hash, out_point.index)
+                    == transition.header.old_vault_outpoint_commitment,
+                "old_vault_out_point does not match old_vault_outpoint_commitment"
             );
         }
 
@@ -495,6 +527,8 @@ impl StoredSplicePackage {
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
             vault_materialisation_root: hex32_bytes(&self.vault_materialisation_root)?,
             new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
+            old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
+            new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
             challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
         };
         let mut next_state = current_state.clone();
@@ -502,6 +536,7 @@ impl StoredSplicePackage {
         next_state.header.funding_anchor = header.new_funding_anchor;
         next_state.header.vault_set_commitment = header.new_vault_commitment;
         next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
+        next_state.header.vault_outpoint_commitment = header.new_vault_outpoint_commitment;
         Ok(SpliceTransition {
             current_state,
             next_state,
@@ -545,6 +580,7 @@ impl StoredSpliceStateRef {
             ),
             descriptor_version: state.header.descriptor_version,
             vault_materialisation_root: hex_prefixed(&state.header.vault_materialisation_root),
+            vault_outpoint_commitment: hex_prefixed(&state.header.vault_outpoint_commitment),
             challenge_policy_commitment: hex_prefixed(&state.header.challenge_policy_commitment),
             state_layout_version: state.header.state_layout_version,
             capacity: state.capacity,
@@ -603,6 +639,10 @@ impl StoredSpliceStateRef {
             "current_state.vault_materialisation_root must be canonical"
         );
         ensure!(
+            self.vault_outpoint_commitment == canonical_hex32(&self.vault_outpoint_commitment)?,
+            "current_state.vault_outpoint_commitment must be canonical"
+        );
+        ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
             "current_state.challenge_policy_commitment must be canonical"
         );
@@ -625,6 +665,7 @@ impl StoredSpliceStateRef {
                 )?,
                 descriptor_version: self.descriptor_version,
                 vault_materialisation_root: hex32_bytes(&self.vault_materialisation_root)?,
+                vault_outpoint_commitment: hex32_bytes(&self.vault_outpoint_commitment)?,
                 challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
                 state_layout_version: self.state_layout_version,
             },
@@ -817,6 +858,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
             settlement_descriptor_commitment: bytes32(5),
             descriptor_version: 1,
             vault_materialisation_root: bytes32(6),
+            vault_outpoint_commitment: vault_outpoint_commitment(&bytes32(91), 1),
             challenge_policy_commitment: bytes32(8),
             state_layout_version: 1,
         },
@@ -844,6 +886,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         participants_commitment,
         vault_materialisation_root: current_state.header.vault_materialisation_root,
         new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
+        old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
+        new_vault_outpoint_commitment: [0; 32],
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let digest = header.signing_digest();
@@ -864,12 +908,14 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
             &header.channel_id,
             &header.old_funding_anchor,
             &header.old_vault_commitment,
+            &header.old_vault_outpoint_commitment,
         )),
         new_funding_context_id: Some(funding_context_id_hex(
             &header.chain_id,
             &header.channel_id,
             &header.new_funding_anchor,
             &header.new_vault_commitment,
+            &header.new_vault_outpoint_commitment,
         )),
         old_funding_epoch: header.old_funding_epoch,
         new_funding_epoch: header.new_funding_epoch,
@@ -881,6 +927,8 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         participants_commitment: hex_prefixed(&header.participants_commitment),
         vault_materialisation_root: hex_prefixed(&header.vault_materialisation_root),
         new_vault_materialisation_root: hex_prefixed(&header.new_vault_materialisation_root),
+        old_vault_outpoint_commitment: hex_prefixed(&header.old_vault_outpoint_commitment),
+        new_vault_outpoint_commitment: hex_prefixed(&header.new_vault_outpoint_commitment),
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
@@ -1218,6 +1266,7 @@ fn next_state_header_for_splice(transition: &SpliceTransition) -> StateHeader {
     header.funding_anchor = transition.header.new_funding_anchor;
     header.vault_set_commitment = transition.header.new_vault_commitment;
     header.vault_materialisation_root = transition.header.new_vault_materialisation_root;
+    header.vault_outpoint_commitment = transition.header.new_vault_outpoint_commitment;
     header.phase = Phase::Active;
     header
 }
@@ -1249,6 +1298,7 @@ fn state_header_wire_bytes(header: &StateHeader) -> Result<[u8; STATE_HEADER_LEN
         settlement_descriptor_commitment: header.settlement_descriptor_commitment,
         descriptor_version: header.descriptor_version,
         vault_materialisation_root: header.vault_materialisation_root,
+        vault_outpoint_commitment: header.vault_outpoint_commitment,
         challenge_policy_commitment: header.challenge_policy_commitment,
         state_layout_version: 2,
     }))
@@ -1314,6 +1364,8 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
     raw[293..325].copy_from_slice(&header.vault_materialisation_root);
     raw[325..357].copy_from_slice(&header.new_vault_materialisation_root);
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
+    raw[389..421].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[421..453].copy_from_slice(&header.new_vault_outpoint_commitment);
     raw
 }
 
@@ -1622,12 +1674,14 @@ fn funding_context_id_hex(
     channel_id: &Bytes32,
     funding_anchor: &Bytes32,
     vault_set_commitment: &Bytes32,
+    vault_outpoint_commitment: &Bytes32,
 ) -> String {
     hex_prefixed(&funding_context_id(
         chain_id,
         channel_id,
         funding_anchor,
         vault_set_commitment,
+        vault_outpoint_commitment,
     ))
 }
 

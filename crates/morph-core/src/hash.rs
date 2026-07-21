@@ -15,6 +15,7 @@ pub const VAULT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_VAULT_DESCRIPTOR";
 pub const FACTORY_SPLICE_HEADER_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_SPLICE_HEADER";
 pub const FACTORY_VAULT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DESCRIPTOR";
 pub const FACTORY_VAULT_DELTA_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_VAULT_DELTA";
+pub const VAULT_OUTPOINT_COMMITMENT_DOMAIN: &[u8] = b"CKB_MORPH_VAULT_OUTPOINT_V1";
 
 pub trait SigningBytes {
     fn encode_signing_bytes(&self, out: &mut Vec<u8>);
@@ -50,13 +51,23 @@ pub fn funding_context_id(
     channel_id: &Bytes32,
     funding_anchor: &Bytes32,
     vault_set_commitment: &Bytes32,
+    vault_outpoint_commitment: &Bytes32,
 ) -> Bytes32 {
-    let mut bytes = Vec::with_capacity(FUNDING_CONTEXT_DOMAIN.len() + 32 * 4);
+    let mut bytes = Vec::with_capacity(FUNDING_CONTEXT_DOMAIN.len() + 32 * 5);
     bytes.extend_from_slice(FUNDING_CONTEXT_DOMAIN);
     bytes.extend_from_slice(chain_id);
     bytes.extend_from_slice(channel_id);
     bytes.extend_from_slice(funding_anchor);
     bytes.extend_from_slice(vault_set_commitment);
+    bytes.extend_from_slice(vault_outpoint_commitment);
+    blake2b256(&bytes)
+}
+
+pub fn vault_outpoint_commitment(tx_hash: &Bytes32, index: u32) -> Bytes32 {
+    let mut bytes = Vec::with_capacity(VAULT_OUTPOINT_COMMITMENT_DOMAIN.len() + 36);
+    bytes.extend_from_slice(VAULT_OUTPOINT_COMMITMENT_DOMAIN);
+    bytes.extend_from_slice(tx_hash);
+    bytes.extend_from_slice(&index.to_le_bytes());
     blake2b256(&bytes)
 }
 
@@ -80,6 +91,7 @@ impl SigningBytes for StateHeader {
         out.extend_from_slice(&self.vault_materialisation_root);
         out.extend_from_slice(&self.challenge_policy_commitment);
         out.extend_from_slice(&self.state_layout_version.to_le_bytes());
+        out.extend_from_slice(&self.vault_outpoint_commitment);
     }
 }
 
@@ -96,6 +108,7 @@ impl StateHeader {
             &self.channel_id,
             &self.funding_anchor,
             &self.vault_set_commitment,
+            &self.vault_outpoint_commitment,
         )
     }
 }
@@ -121,6 +134,8 @@ impl SigningBytes for SpliceHeader {
         out.extend_from_slice(&self.vault_materialisation_root);
         out.extend_from_slice(&self.new_vault_materialisation_root);
         out.extend_from_slice(&self.challenge_policy_commitment);
+        out.extend_from_slice(&self.old_vault_outpoint_commitment);
+        out.extend_from_slice(&self.new_vault_outpoint_commitment);
     }
 }
 
@@ -151,6 +166,8 @@ impl SigningBytes for FactorySpliceHeader {
         out.extend_from_slice(&self.participants_commitment);
         out.extend_from_slice(&self.old_vault_materialisation_root);
         out.extend_from_slice(&self.new_vault_materialisation_root);
+        out.extend_from_slice(&self.old_vault_outpoint_commitment);
+        out.extend_from_slice(&self.new_vault_outpoint_commitment);
     }
 }
 

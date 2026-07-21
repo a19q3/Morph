@@ -1853,6 +1853,7 @@ pub fn funding_context_id_for_header(header: &StateHeader<'_>) -> String {
         header.channel_id(),
         header.funding_anchor(),
         header.vault_set_commitment(),
+        header.vault_outpoint_commitment(),
     ))
 }
 

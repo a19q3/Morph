@@ -30,7 +30,7 @@ use morph_core::types::{
 use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
 use morph_core::{
     factory_vault_delta_commitment, participants_commitment as core_participants_commitment,
-    splice_asset_delta_commitment, vault_descriptor_commitment,
+    splice_asset_delta_commitment, vault_descriptor_commitment, vault_outpoint_commitment,
 };
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
@@ -88,6 +88,7 @@ use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+const VAULT_ACTIVATION_FEE: u64 = 1;
 pub const DEFAULT_SPONSOR_MIN_STATE_NUMBER: u64 = 1;
 pub const DEFAULT_SPONSOR_MAX_STATE_NUMBER: u64 = 1 << 20;
 const CONTRACTS: [(&str, &str); 7] = [
@@ -859,6 +860,13 @@ pub struct OpenChannelReport {
     pub fee: u64,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+    pub activation_tx_hash: String,
+    pub activation_status: String,
+    pub activation_block_number: Option<u64>,
+    pub activation_block_hash: Option<String>,
+    pub activation_fee: u64,
+    pub activation_metrics: TransactionMetrics,
+    pub activation_mined_blocks: Vec<String>,
     pub participants: Vec<ParticipantReport>,
     pub scripts: Vec<ResolvedScriptReport>,
     pub cells: Vec<ChannelCellReport>,
@@ -880,6 +888,13 @@ pub struct OpenFactoryReport {
     pub fee: u64,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+    pub activation_tx_hash: String,
+    pub activation_status: String,
+    pub activation_block_number: Option<u64>,
+    pub activation_block_hash: Option<String>,
+    pub activation_fee: u64,
+    pub activation_metrics: TransactionMetrics,
+    pub activation_mined_blocks: Vec<String>,
     pub participants: Vec<FactoryParticipantReport>,
     pub scripts: Vec<ResolvedScriptReport>,
     pub cells: Vec<ChannelCellReport>,
@@ -903,6 +918,19 @@ pub struct FactoryExitChannelReport {
     pub vault_out_point: PrintableOutPoint,
     pub factory_vault_out_point: PrintableOutPoint,
     pub sponsor_out_point: PrintableOutPoint,
+    pub factory_activation_tx_hash: String,
+    pub factory_activation_status: String,
+    pub factory_activation_block_number: Option<u64>,
+    pub factory_activation_block_hash: Option<String>,
+    pub factory_activation_metrics: TransactionMetrics,
+    pub factory_activation_mined_blocks: Vec<String>,
+    pub state_activation_tx_hash: String,
+    pub state_activation_status: String,
+    pub state_activation_block_number: Option<u64>,
+    pub state_activation_block_hash: Option<String>,
+    pub state_activation_metrics: TransactionMetrics,
+    pub state_activation_mined_blocks: Vec<String>,
+    pub activation_fee: u64,
     pub state_capacity: u64,
     pub vault_capacity: u64,
     pub child_xudt_amount: Option<u128>,
@@ -1025,6 +1053,13 @@ pub struct ApplyFactorySpliceReport {
     pub contract_witness_len: usize,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+    pub activation_tx_hash: String,
+    pub activation_status: String,
+    pub activation_block_number: Option<u64>,
+    pub activation_block_hash: Option<String>,
+    pub activation_fee: u64,
+    pub activation_metrics: TransactionMetrics,
+    pub activation_mined_blocks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1306,6 +1341,13 @@ pub struct ApplySpliceReport {
     pub contract_witness_len: usize,
     pub metrics: TransactionMetrics,
     pub mined_blocks: Vec<String>,
+    pub activation_tx_hash: String,
+    pub activation_status: String,
+    pub activation_block_number: Option<u64>,
+    pub activation_block_hash: Option<String>,
+    pub activation_fee: u64,
+    pub activation_metrics: TransactionMetrics,
+    pub activation_mined_blocks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1799,8 +1841,11 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .type_(Some(state_type.clone()).pack())
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
-    let state_output = CellOutput::new_builder()
-        .capacity(state_capacity)
+    let funding_state_capacity = state_capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("StateCell activation capacity overflow"))?;
+    let funding_state_output = CellOutput::new_builder()
+        .capacity(funding_state_capacity)
         .lock(state_lock.clone())
         .type_(Some(state_type.clone()).pack())
         .build();
@@ -1821,7 +1866,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .build();
     ensure_output_capacity("sponsor", &sponsor_output, 0)?;
 
-    let fixed_output_capacity = state_capacity
+    let fixed_output_capacity = funding_state_capacity
         .checked_add(options.vault_capacity)
         .and_then(|value| value.checked_add(options.sponsor_capacity))
         .ok_or_else(|| anyhow!("channel output capacity overflow"))?;
@@ -1852,7 +1897,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .cell_dep(vault_contract.cell_dep.clone())
         .cell_dep(sponsor_contract.cell_dep.clone())
         .input(channel_input)
-        .output(state_output.clone())
+        .output(funding_state_output.clone())
         .output(vault_output.clone())
         .output(sponsor_output.clone())
         .output(change_output.clone())
@@ -1869,28 +1914,44 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         &options.bob_private_key,
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let (activation, state_output, state_header) = activate_state_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_state_output,
+        &state_header,
+        &state_lock_contract,
+        &state_contract,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
 
-    let tx_hash_string = sent.tx_hash.clone();
-    let cell =
-        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
-            ChannelCellReport {
-                role: role.to_string(),
-                out_point: PrintableOutPoint {
-                    tx_hash: tx_hash_string.clone(),
-                    index,
-                },
-                capacity: output.capacity().unpack(),
-                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
-                type_hash: output
-                    .type_()
-                    .to_opt()
-                    .map(|script| hex32(script.calc_script_hash().as_slice())),
-                data_len,
-            }
-        };
+    let funding_tx_hash_string = sent.tx_hash.clone();
+    let activation_tx_hash_string = activation.tx_hash.clone();
+    let cell = |role: &str,
+                tx_hash: &str,
+                index: u32,
+                output: &CellOutput,
+                data_len: usize|
+     -> ChannelCellReport {
+        ChannelCellReport {
+            role: role.to_string(),
+            out_point: PrintableOutPoint {
+                tx_hash: tx_hash.to_string(),
+                index,
+            },
+            capacity: output.capacity().unpack(),
+            lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+            type_hash: output
+                .type_()
+                .to_opt()
+                .map(|script| hex32(script.calc_script_hash().as_slice())),
+            data_len,
+        }
+    };
 
     Ok(OpenChannelReport {
-        tx_hash: tx_hash_string.clone(),
+        tx_hash: funding_tx_hash_string.clone(),
         status: sent.status,
         block_number: sent.block_number,
         block_hash: sent.block_hash,
@@ -1910,6 +1971,13 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         fee: options.fee,
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash: activation_tx_hash_string.clone(),
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
         participants: vec![
             ParticipantReport {
                 role: "alice".to_string(),
@@ -1934,10 +2002,16 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
             })
             .collect(),
         cells: vec![
-            cell("state", 0, &state_output, state_header.len()),
-            cell("vault", 1, &vault_output, 0),
-            cell("sponsor", 2, &sponsor_output, 0),
-            cell("change", 3, &change_output, 0),
+            cell(
+                "state",
+                &activation_tx_hash_string,
+                0,
+                &state_output,
+                state_header.len(),
+            ),
+            cell("vault", &funding_tx_hash_string, 1, &vault_output, 0),
+            cell("sponsor", &funding_tx_hash_string, 2, &sponsor_output, 0),
+            cell("change", &funding_tx_hash_string, 3, &change_output, 0),
         ],
     })
 }
@@ -2022,12 +2096,16 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let participants_commitment =
         factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
     let challenge_policy_commitment = script_blake2b256(&[b"CKB_MORPH_FACTORY_CHALLENGE_POLICY"]);
-    let factory_output = CellOutput::new_builder()
-        .capacity(options.factory_capacity)
+    let funding_factory_capacity = options
+        .factory_capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("FactoryStateCell activation capacity overflow"))?;
+    let funding_factory_output = CellOutput::new_builder()
+        .capacity(funding_factory_capacity)
         .lock(owner_lock.clone())
         .type_(Some(factory_type.clone()).pack())
         .build();
-    ensure_output_capacity("factory", &factory_output, FACTORY_STATE_HEADER_LEN)?;
+    ensure_output_capacity("factory", &funding_factory_output, FACTORY_STATE_HEADER_LEN)?;
 
     let factory_vault_output = CellOutput::new_builder()
         .capacity(options.factory_vault_capacity)
@@ -2058,8 +2136,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         ),
     });
 
-    let fixed_output_capacity = options
-        .factory_capacity
+    let fixed_output_capacity = funding_factory_capacity
         .checked_add(options.factory_vault_capacity)
         .ok_or_else(|| anyhow!("factory output capacity overflow"))?;
     let change_capacity = funding_cell
@@ -2082,7 +2159,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         .build();
 
     let mut builder = TransactionBuilder::default()
-        .cell_dep(secp_dep)
+        .cell_dep(secp_dep.clone())
         .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep.clone());
     if let Some(contract) = xudt_contract.as_ref() {
@@ -2090,7 +2167,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     }
     let unsigned = builder
         .input(factory_input)
-        .output(factory_output.clone())
+        .output(funding_factory_output.clone())
         .output(factory_vault_output.clone())
         .output(change_output.clone())
         .output_data(Bytes::copy_from_slice(&factory_header).pack())
@@ -2112,28 +2189,45 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         Bytes::from(initial_contract_witness),
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
-    let tx_hash_string = sent.tx_hash.clone();
+    let (activation, factory_output, factory_header) = activate_factory_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_factory_output,
+        &factory_header,
+        &secp_dep,
+        &factory_contract,
+        &owner_key,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
+    let funding_tx_hash_string = sent.tx_hash.clone();
+    let activation_tx_hash_string = activation.tx_hash.clone();
 
-    let cell =
-        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
-            ChannelCellReport {
-                role: role.to_string(),
-                out_point: PrintableOutPoint {
-                    tx_hash: tx_hash_string.clone(),
-                    index,
-                },
-                capacity: output.capacity().unpack(),
-                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
-                type_hash: output
-                    .type_()
-                    .to_opt()
-                    .map(|script| hex32(script.calc_script_hash().as_slice())),
-                data_len,
-            }
-        };
+    let cell = |role: &str,
+                tx_hash: &str,
+                index: u32,
+                output: &CellOutput,
+                data_len: usize|
+     -> ChannelCellReport {
+        ChannelCellReport {
+            role: role.to_string(),
+            out_point: PrintableOutPoint {
+                tx_hash: tx_hash.to_string(),
+                index,
+            },
+            capacity: output.capacity().unpack(),
+            lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+            type_hash: output
+                .type_()
+                .to_opt()
+                .map(|script| hex32(script.calc_script_hash().as_slice())),
+            data_len,
+        }
+    };
 
     Ok(OpenFactoryReport {
-        tx_hash: tx_hash_string.clone(),
+        tx_hash: funding_tx_hash_string.clone(),
         status: sent.status,
         block_number: sent.block_number,
         block_hash: sent.block_hash,
@@ -2147,6 +2241,13 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         fee: options.fee,
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash: activation_tx_hash_string.clone(),
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
         participants: factory_participant_reports(alice_pubkey, bob_pubkey),
         scripts: contracts
             .into_iter()
@@ -2158,14 +2259,21 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
             })
             .collect(),
         cells: vec![
-            cell("factory", 0, &factory_output, factory_header.len()),
+            cell(
+                "factory",
+                &activation_tx_hash_string,
+                0,
+                &factory_output,
+                factory_header.len(),
+            ),
             cell(
                 "factory-vault",
+                &funding_tx_hash_string,
                 1,
                 &factory_vault_output,
                 factory_vault_data.len(),
             ),
-            cell("change", 2, &change_output, 0),
+            cell("change", &funding_tx_hash_string, 2, &change_output, 0),
         ],
     })
 }
@@ -2728,6 +2836,11 @@ pub fn save_factory_splice_package(
         participants_commitment: expected_participants,
         old_vault_materialisation_root,
         new_vault_materialisation_root,
+        old_vault_outpoint_commitment: bytes32_from_slice(
+            "factory vault_outpoint_commitment",
+            old_header.vault_outpoint_commitment(),
+        )?,
+        new_vault_outpoint_commitment: [0; BYTE32_LEN],
     };
     let transition = FactorySpliceTransition {
         header,
@@ -2983,6 +3096,11 @@ pub fn save_factory_reduced_splice_package(
         participants_commitment: expected_participants,
         old_vault_materialisation_root,
         new_vault_materialisation_root,
+        old_vault_outpoint_commitment: bytes32_from_slice(
+            "factory vault_outpoint_commitment",
+            old_header.vault_outpoint_commitment(),
+        )?,
+        new_vault_outpoint_commitment: [0; BYTE32_LEN],
     };
     let update = FactorySingleRightMerkleUpdate {
         before_root: old_state_root,
@@ -3074,6 +3192,11 @@ pub fn apply_factory_splice(
                 == transition.header.old_access_manifest_root.as_slice(),
         "factory splice package old header does not match the live FactoryStateCell"
     );
+    ensure_vault_outpoint_binding(
+        "--factory-vault-out-point",
+        old_header.vault_outpoint_commitment(),
+        &factory_vault_out_point,
+    )?;
 
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
@@ -3251,6 +3374,7 @@ pub fn apply_factory_splice(
     new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
     new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
     new_factory_data[238..270].copy_from_slice(&transition.header.new_vault_materialisation_root);
+    new_factory_data[270..302].copy_from_slice(&transition.header.new_vault_outpoint_commitment);
     let parsed_new_header = FactoryStateHeader::parse(&new_factory_data)
         .map_err(|err| anyhow!("constructed factory splice header is invalid: {err:?}"))?;
     ensure!(
@@ -3258,8 +3382,17 @@ pub fn apply_factory_splice(
         "constructed factory splice header update number mismatch"
     );
 
-    let new_factory_output = factory_cell.output.clone();
-    ensure_output_capacity("factory", &new_factory_output, new_factory_data.len())?;
+    let funding_factory_capacity = factory_cell
+        .capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("post-splice FactoryStateCell activation capacity overflow"))?;
+    let funding_factory_output = factory_cell
+        .output
+        .clone()
+        .as_builder()
+        .capacity(funding_factory_capacity)
+        .build();
+    ensure_output_capacity("factory", &funding_factory_output, new_factory_data.len())?;
 
     let mut new_vault_builder = CellOutput::new_builder()
         .capacity(new_vault_capacity)
@@ -3289,8 +3422,8 @@ pub fn apply_factory_splice(
 
     let withdrawal_target = factory_splice_participant_withdrawal_target(&package, &transition)?;
     let mut builder = TransactionBuilder::default()
-        .cell_dep(secp_dep)
-        .cell_dep(factory_contract.cell_dep)
+        .cell_dep(secp_dep.clone())
+        .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep);
     if let Some(xudt_contract) = &xudt_contract {
         builder = builder.cell_dep(xudt_contract.cell_dep.clone());
@@ -3303,9 +3436,9 @@ pub fn apply_factory_splice(
         builder = builder.input(CellInput::new(out_point.clone(), 0));
     }
     builder = builder
-        .output(new_factory_output)
+        .output(funding_factory_output.clone())
         .output(new_vault_output)
-        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(Bytes::copy_from_slice(&new_factory_data).pack())
         .output_data(new_vault_data.pack());
 
     let mut withdrawal_out_point = None;
@@ -3376,6 +3509,7 @@ pub fn apply_factory_splice(
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(fixed_output_delta)
+        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -3404,6 +3538,22 @@ pub fn apply_factory_splice(
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash = sent.tx_hash.clone();
+    let (activation, _, _) = activate_factory_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_factory_output,
+        new_factory_data
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("post-splice FactoryStateHeader has an invalid length"))?,
+        &secp_dep,
+        &factory_contract,
+        &owner_key,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
+    let activation_tx_hash = activation.tx_hash.clone();
 
     Ok(ApplyFactorySpliceReport {
         tx_hash: sent.tx_hash,
@@ -3423,7 +3573,7 @@ pub fn apply_factory_splice(
         old_update_number: transition.header.old_update_number,
         new_update_number: transition.header.new_update_number,
         factory_out_point: PrintableOutPoint {
-            tx_hash: tx_hash.clone(),
+            tx_hash: activation_tx_hash.clone(),
             index: 0,
         },
         factory_vault_out_point: PrintableOutPoint {
@@ -3440,6 +3590,13 @@ pub fn apply_factory_splice(
         contract_witness_len: contract_witness.len(),
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash,
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
     })
 }
 
@@ -3482,6 +3639,11 @@ pub fn apply_factory_reduced_splice(
                 == transition.header.old_access_manifest_root.as_slice(),
         "reduced factory splice package old header does not match the live FactoryStateCell"
     );
+    ensure_vault_outpoint_binding(
+        "--factory-vault-out-point",
+        old_header.vault_outpoint_commitment(),
+        &factory_vault_out_point,
+    )?;
 
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
@@ -3659,6 +3821,7 @@ pub fn apply_factory_reduced_splice(
     new_factory_data[140..172].copy_from_slice(&transition.header.new_access_manifest_root);
     new_factory_data[172..204].copy_from_slice(&transition.header.non_interference_digest);
     new_factory_data[238..270].copy_from_slice(&transition.header.new_vault_materialisation_root);
+    new_factory_data[270..302].copy_from_slice(&transition.header.new_vault_outpoint_commitment);
     let parsed_new_header = FactoryStateHeader::parse(&new_factory_data)
         .map_err(|err| anyhow!("constructed reduced factory splice header is invalid: {err:?}"))?;
     ensure!(
@@ -3666,8 +3829,17 @@ pub fn apply_factory_reduced_splice(
         "constructed reduced factory splice header update number mismatch"
     );
 
-    let new_factory_output = factory_cell.output.clone();
-    ensure_output_capacity("factory", &new_factory_output, new_factory_data.len())?;
+    let funding_factory_capacity = factory_cell
+        .capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("post-splice FactoryStateCell activation capacity overflow"))?;
+    let funding_factory_output = factory_cell
+        .output
+        .clone()
+        .as_builder()
+        .capacity(funding_factory_capacity)
+        .build();
+    ensure_output_capacity("factory", &funding_factory_output, new_factory_data.len())?;
 
     let mut new_vault_builder = CellOutput::new_builder()
         .capacity(new_vault_capacity)
@@ -3698,8 +3870,8 @@ pub fn apply_factory_reduced_splice(
     let withdrawal_target =
         factory_reduced_splice_participant_withdrawal_target(&package, &transition)?;
     let mut builder = TransactionBuilder::default()
-        .cell_dep(secp_dep)
-        .cell_dep(factory_contract.cell_dep)
+        .cell_dep(secp_dep.clone())
+        .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep);
     if let Some(xudt_contract) = &xudt_contract {
         builder = builder.cell_dep(xudt_contract.cell_dep.clone());
@@ -3712,9 +3884,9 @@ pub fn apply_factory_reduced_splice(
         builder = builder.input(CellInput::new(out_point.clone(), 0));
     }
     builder = builder
-        .output(new_factory_output)
+        .output(funding_factory_output.clone())
         .output(new_vault_output)
-        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(Bytes::copy_from_slice(&new_factory_data).pack())
         .output_data(new_vault_data.pack());
 
     let mut withdrawal_out_point = None;
@@ -3791,6 +3963,7 @@ pub fn apply_factory_reduced_splice(
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(fixed_output_delta)
+        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -3819,6 +3992,22 @@ pub fn apply_factory_reduced_splice(
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash = sent.tx_hash.clone();
+    let (activation, _, _) = activate_factory_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_factory_output,
+        new_factory_data
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("post-splice reduced FactoryStateHeader has an invalid length"))?,
+        &secp_dep,
+        &factory_contract,
+        &owner_key,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
+    let activation_tx_hash = activation.tx_hash.clone();
 
     Ok(ApplyFactorySpliceReport {
         tx_hash: sent.tx_hash,
@@ -3838,7 +4027,7 @@ pub fn apply_factory_reduced_splice(
         old_update_number: transition.header.old_update_number,
         new_update_number: transition.header.new_update_number,
         factory_out_point: PrintableOutPoint {
-            tx_hash: tx_hash.clone(),
+            tx_hash: activation_tx_hash.clone(),
             index: 0,
         },
         factory_vault_out_point: PrintableOutPoint {
@@ -3855,6 +4044,13 @@ pub fn apply_factory_reduced_splice(
         contract_witness_len: contract_witness.len(),
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash,
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
     })
 }
 
@@ -5313,6 +5509,11 @@ pub fn factory_exit_channel(
         factory_type.args().raw_data().as_ref() == old_header.factory_id(),
         "factory type args do not match the factory id in cell data"
     );
+    ensure_vault_outpoint_binding(
+        "--factory-vault-out-point",
+        old_header.vault_outpoint_commitment(),
+        &factory_vault_out_point,
+    )?;
     let old_update_number = old_header.update_number();
     let new_update_number = options
         .update_number
@@ -5577,8 +5778,11 @@ pub fn factory_exit_channel(
         .type_(Some(state_type.clone()).pack())
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
-    let state_output = CellOutput::new_builder()
-        .capacity(state_capacity)
+    let funding_state_capacity = state_capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("child StateCell activation capacity overflow"))?;
+    let funding_state_output = CellOutput::new_builder()
+        .capacity(funding_state_capacity)
         .lock(state_lock)
         .type_(Some(state_type).pack())
         .build();
@@ -5680,6 +5884,7 @@ pub fn factory_exit_channel(
                 new_factory_data[140..172].copy_from_slice(&access_manifest_root);
                 new_factory_data[172..204].copy_from_slice(&exit_digest);
                 new_factory_data[238..270].copy_from_slice(&new_factory_vault_materialisation_root);
+                new_factory_data[270..302].fill(0);
                 let factory_signature = factory_signature_witness(
                     &new_factory_data,
                     &options.alice_private_key,
@@ -5768,6 +5973,22 @@ pub fn factory_exit_channel(
             }
         };
 
+    let funding_factory_capacity = factory_cell
+        .capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("post-exit FactoryStateCell activation capacity overflow"))?;
+    let funding_factory_output = factory_cell
+        .output
+        .clone()
+        .as_builder()
+        .capacity(funding_factory_capacity)
+        .build();
+    ensure_output_capacity(
+        "post-exit factory",
+        &funding_factory_output,
+        new_factory_data.len(),
+    )?;
+
     let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     ensure!(
         fee_cell.out_point != factory_out_point,
@@ -5777,8 +5998,9 @@ pub fn factory_exit_channel(
         fee_cell.out_point != factory_vault_out_point,
         "fee input cannot be the FactoryVaultCell itself"
     );
-    let fixed_fee_cell_capacity = state_capacity
+    let fixed_fee_cell_capacity = funding_state_capacity
         .checked_add(options.sponsor_capacity)
+        .and_then(|value| value.checked_add(VAULT_ACTIVATION_FEE))
         .and_then(|value| value.checked_add(options.fee))
         .ok_or_else(|| anyhow!("factory exit fee-side output capacity overflow"))?;
     let fee_change_capacity = fee_cell
@@ -5800,10 +6022,10 @@ pub fn factory_exit_channel(
         .build();
 
     let mut builder = TransactionBuilder::default()
-        .cell_dep(secp_dep)
-        .cell_dep(state_lock_contract.cell_dep)
-        .cell_dep(state_contract.cell_dep)
-        .cell_dep(factory_contract.cell_dep)
+        .cell_dep(secp_dep.clone())
+        .cell_dep(state_lock_contract.cell_dep.clone())
+        .cell_dep(state_contract.cell_dep.clone())
+        .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep)
         .cell_dep(vault_contract.cell_dep)
         .cell_dep(sponsor_contract.cell_dep);
@@ -5814,13 +6036,13 @@ pub fn factory_exit_channel(
         .input(channel_input)
         .input(CellInput::new(factory_vault_out_point.clone(), 0))
         .input(CellInput::new(fee_cell.out_point.clone(), 0))
-        .output(factory_cell.output.clone())
-        .output(state_output.clone())
+        .output(funding_factory_output.clone())
+        .output(funding_state_output.clone())
         .output(vault_output.clone())
         .output(factory_vault_change_output.clone())
         .output(sponsor_output.clone())
         .output(fee_change_output)
-        .output_data(Bytes::from(new_factory_data).pack())
+        .output_data(Bytes::copy_from_slice(&new_factory_data).pack())
         .output_data(Bytes::copy_from_slice(&state_header).pack())
         .output_data(child_vault_data.pack())
         .output_data(factory_vault_change_data.pack())
@@ -5834,6 +6056,34 @@ pub fn factory_exit_channel(
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash = sent.tx_hash.clone();
+    let (factory_activation, _, _) = activate_factory_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_factory_output,
+        new_factory_data
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("post-exit FactoryStateHeader has an invalid length"))?,
+        &secp_dep,
+        &factory_contract,
+        &owner_key,
+        0,
+        3,
+        options.mine_blocks,
+    )?;
+    let (state_activation, _, _) = activate_state_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_state_output,
+        &state_header,
+        &state_lock_contract,
+        &state_contract,
+        state_output_index,
+        vault_output_index,
+        options.mine_blocks,
+    )?;
+    let factory_activation_tx_hash = factory_activation.tx_hash.clone();
+    let state_activation_tx_hash = state_activation.tx_hash.clone();
 
     Ok(FactoryExitChannelReport {
         tx_hash: sent.tx_hash,
@@ -5848,12 +6098,12 @@ pub fn factory_exit_channel(
         funding_anchor: hex32(&funding_anchor),
         finalise_since: options.finalise_since,
         factory_out_point: PrintableOutPoint {
-            tx_hash: tx_hash.clone(),
+            tx_hash: factory_activation_tx_hash.clone(),
             index: 0,
         },
         state_out_point: PrintableOutPoint {
-            tx_hash: tx_hash.clone(),
-            index: state_output_index,
+            tx_hash: state_activation_tx_hash.clone(),
+            index: 0,
         },
         vault_out_point: PrintableOutPoint {
             tx_hash: tx_hash.clone(),
@@ -5864,6 +6114,21 @@ pub fn factory_exit_channel(
             index: 3,
         },
         sponsor_out_point: PrintableOutPoint { tx_hash, index: 4 },
+        factory_activation_tx_hash,
+        factory_activation_status: factory_activation.status,
+        factory_activation_block_number: factory_activation.block_number,
+        factory_activation_block_hash: factory_activation.block_hash,
+        factory_activation_metrics: factory_activation.metrics,
+        factory_activation_mined_blocks: factory_activation.mined_blocks,
+        state_activation_tx_hash,
+        state_activation_status: state_activation.status,
+        state_activation_block_number: state_activation.block_number,
+        state_activation_block_hash: state_activation.block_hash,
+        state_activation_metrics: state_activation.metrics,
+        state_activation_mined_blocks: state_activation.mined_blocks,
+        activation_fee: VAULT_ACTIVATION_FEE
+            .checked_mul(2)
+            .expect("two activation fees fit in u64"),
         state_capacity,
         vault_capacity: options.vault_capacity,
         child_xudt_amount: child_xudt
@@ -6059,8 +6324,11 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .type_(Some(state_type.clone()).pack())
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
-    let state_output = CellOutput::new_builder()
-        .capacity(state_capacity)
+    let funding_state_capacity = state_capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("StateCell activation capacity overflow"))?;
+    let funding_state_output = CellOutput::new_builder()
+        .capacity(funding_state_capacity)
         .lock(state_lock.clone())
         .type_(Some(state_type.clone()).pack())
         .build();
@@ -6083,7 +6351,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .build();
     ensure_output_capacity("sponsor", &sponsor_output, 0)?;
 
-    let fixed_output_capacity = state_capacity
+    let fixed_output_capacity = funding_state_capacity
         .checked_add(options.vault_capacity)
         .and_then(|value| value.checked_add(options.sponsor_capacity))
         .ok_or_else(|| anyhow!("channel output capacity overflow"))?;
@@ -6115,7 +6383,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .cell_dep(sponsor_contract.cell_dep.clone())
         .cell_dep(xudt_contract.cell_dep.clone())
         .input(channel_input)
-        .output(state_output.clone())
+        .output(funding_state_output.clone())
         .output(vault_output.clone())
         .output(sponsor_output.clone())
         .output(change_output.clone())
@@ -6132,28 +6400,44 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         &options.bob_private_key,
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    let (activation, state_output, state_header) = activate_state_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_state_output,
+        &state_header,
+        &state_lock_contract,
+        &state_contract,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
 
-    let tx_hash_string = sent.tx_hash.clone();
-    let cell =
-        |role: &str, index: u32, output: &CellOutput, data_len: usize| -> ChannelCellReport {
-            ChannelCellReport {
-                role: role.to_string(),
-                out_point: PrintableOutPoint {
-                    tx_hash: tx_hash_string.clone(),
-                    index,
-                },
-                capacity: output.capacity().unpack(),
-                lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
-                type_hash: output
-                    .type_()
-                    .to_opt()
-                    .map(|script| hex32(script.calc_script_hash().as_slice())),
-                data_len,
-            }
-        };
+    let funding_tx_hash_string = sent.tx_hash.clone();
+    let activation_tx_hash_string = activation.tx_hash.clone();
+    let cell = |role: &str,
+                tx_hash: &str,
+                index: u32,
+                output: &CellOutput,
+                data_len: usize|
+     -> ChannelCellReport {
+        ChannelCellReport {
+            role: role.to_string(),
+            out_point: PrintableOutPoint {
+                tx_hash: tx_hash.to_string(),
+                index,
+            },
+            capacity: output.capacity().unpack(),
+            lock_hash: hex32(output.lock().calc_script_hash().as_slice()),
+            type_hash: output
+                .type_()
+                .to_opt()
+                .map(|script| hex32(script.calc_script_hash().as_slice())),
+            data_len,
+        }
+    };
 
     Ok(OpenChannelReport {
-        tx_hash: tx_hash_string.clone(),
+        tx_hash: funding_tx_hash_string.clone(),
         status: sent.status,
         block_number: sent.block_number,
         block_hash: sent.block_hash,
@@ -6173,6 +6457,13 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         fee: options.fee,
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash: activation_tx_hash_string.clone(),
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
         participants: vec![
             ParticipantReport {
                 role: "alice".to_string(),
@@ -6197,10 +6488,16 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
             })
             .collect(),
         cells: vec![
-            cell("state", 0, &state_output, state_header.len()),
-            cell("xudt-vault", 1, &vault_output, 16),
-            cell("sponsor", 2, &sponsor_output, 0),
-            cell("change", 3, &change_output, 0),
+            cell(
+                "state",
+                &activation_tx_hash_string,
+                0,
+                &state_output,
+                state_header.len(),
+            ),
+            cell("xudt-vault", &funding_tx_hash_string, 1, &vault_output, 16),
+            cell("sponsor", &funding_tx_hash_string, 2, &sponsor_output, 0),
+            cell("change", &funding_tx_hash_string, 3, &change_output, 0),
         ],
     })
 }
@@ -6812,6 +7109,8 @@ pub fn save_splice_package(
         participants_commitment: current_state.header.participants_commitment,
         vault_materialisation_root: current_state.header.vault_materialisation_root,
         new_vault_materialisation_root,
+        old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
+        new_vault_outpoint_commitment: [0; BYTE32_LEN],
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     header.old_vault_commitment = vault_descriptor_commitment(&old_vault);
@@ -6828,6 +7127,7 @@ pub fn save_splice_package(
     next_state.header.funding_anchor = header.new_funding_anchor;
     next_state.header.vault_set_commitment = header.new_vault_commitment;
     next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
+    next_state.header.vault_outpoint_commitment = header.new_vault_outpoint_commitment;
     let transition = SpliceTransition {
         current_state,
         next_state,
@@ -7743,6 +8043,11 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         old_header.phase() == PHASE_ACTIVE,
         "splice can only consume an active StateCell"
     );
+    ensure_vault_outpoint_binding(
+        "--vault-out-point",
+        old_header.vault_outpoint_commitment(),
+        &vault_out_point,
+    )?;
 
     ensure!(
         vault_cell.capacity == splice_assets.old_vault_capacity,
@@ -7858,14 +8163,18 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         state_lock_contract.data_hash.clone(),
         Bytes::copy_from_slice(new_state_type.calc_script_hash().as_slice()),
     );
-    let new_state_output = CellOutput::new_builder()
-        .capacity(state_cell.capacity)
+    let funding_state_capacity = state_cell
+        .capacity
+        .checked_add(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("post-splice StateCell activation capacity overflow"))?;
+    let funding_state_output = CellOutput::new_builder()
+        .capacity(funding_state_capacity)
         .lock(new_state_lock)
         .type_(Some(new_state_type).pack())
         .build();
     ensure_output_capacity(
         "post-splice state",
-        &new_state_output,
+        &funding_state_output,
         next_state_header.len(),
     )?;
 
@@ -7927,8 +8236,8 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
 
     let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep)
-        .cell_dep(state_lock_contract.cell_dep)
-        .cell_dep(state_contract.cell_dep)
+        .cell_dep(state_lock_contract.cell_dep.clone())
+        .cell_dep(state_contract.cell_dep.clone())
         .cell_dep(vault_contract.cell_dep);
     if let Some(xudt_contract) = &xudt_contract {
         builder = builder.cell_dep(xudt_contract.cell_dep.clone());
@@ -7941,7 +8250,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         builder = builder.input(CellInput::new(out_point.clone(), 0));
     }
     builder = builder
-        .output(new_state_output.clone())
+        .output(funding_state_output.clone())
         .output(new_vault_output.clone())
         .output_data(Bytes::copy_from_slice(&next_state_header).pack())
         .output_data(new_vault_data.pack());
@@ -8014,6 +8323,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(required_output_delta)
+        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -8042,6 +8352,21 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     )?;
     let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
     let tx_hash = sent.tx_hash.clone();
+    let (activation, _, _) = activate_state_vault_binding(
+        rpc,
+        &sent.tx_hash,
+        &funding_state_output,
+        next_state_header
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("post-splice StateHeader has an invalid length"))?,
+        &state_lock_contract,
+        &state_contract,
+        0,
+        1,
+        options.mine_blocks,
+    )?;
+    let activation_tx_hash = activation.tx_hash.clone();
 
     Ok(ApplySpliceReport {
         tx_hash: sent.tx_hash.clone(),
@@ -8057,7 +8382,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         old_state_number: old_header.state_number(),
         new_state_number: old_header.state_number(),
         state_out_point: PrintableOutPoint {
-            tx_hash: tx_hash.clone(),
+            tx_hash: activation_tx_hash.clone(),
             index: 0,
         },
         vault_out_point: PrintableOutPoint {
@@ -8094,6 +8419,13 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         contract_witness_len: splice_witness.len(),
         metrics: sent.metrics,
         mined_blocks: sent.mined_blocks,
+        activation_tx_hash,
+        activation_status: activation.status,
+        activation_block_number: activation.block_number,
+        activation_block_hash: activation.block_hash,
+        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_metrics: activation.metrics,
+        activation_mined_blocks: activation.mined_blocks,
     })
 }
 
@@ -11463,6 +11795,7 @@ fn reduced_exit_from_factory_header(
     new_header[76..108].copy_from_slice(&new_state_root);
     new_header[140..172].copy_from_slice(&new_access_manifest_root);
     new_header[238..270].copy_from_slice(&new_factory_vault_materialisation_root);
+    new_header[270..302].fill(0);
     let preliminary_new = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("preliminary reduced-exit header is invalid: {err:?}"))?;
     let non_interference_digest = parsed_witness
@@ -11875,6 +12208,145 @@ fn set_state_vault_materialisation_root(state_header: &mut [u8], commitment: [u8
     state_header[248..280].copy_from_slice(&commitment);
 }
 
+fn set_state_vault_outpoint_commitment(
+    state_header: &mut [u8],
+    tx_hash: &[u8; BYTE32_LEN],
+    index: u32,
+) {
+    state_header[314..346].copy_from_slice(&vault_outpoint_commitment(tx_hash, index));
+}
+
+fn set_factory_vault_outpoint_commitment(
+    factory_header: &mut [u8],
+    tx_hash: &[u8; BYTE32_LEN],
+    index: u32,
+) {
+    factory_header[270..302].copy_from_slice(&vault_outpoint_commitment(tx_hash, index));
+}
+
+fn ensure_vault_outpoint_binding(
+    label: &str,
+    expected_commitment: &[u8],
+    out_point: &OutPoint,
+) -> Result<()> {
+    let tx_hash = out_point.tx_hash();
+    let mut tx_hash_bytes = [0u8; BYTE32_LEN];
+    tx_hash_bytes.copy_from_slice(tx_hash.as_slice());
+    let index: u32 = out_point.index().unpack();
+    ensure!(
+        expected_commitment == vault_outpoint_commitment(&tx_hash_bytes, index),
+        "{label} does not match the exact VaultCell OutPoint committed by the live state"
+    );
+    Ok(())
+}
+
+fn direct_cell_dep(out_point: OutPoint) -> CellDep {
+    CellDep::new_builder()
+        .out_point(out_point)
+        .dep_type(DepType::Code)
+        .build()
+}
+
+fn funding_out_points(
+    tx_hash: &str,
+    state_output_index: u32,
+    vault_output_index: u32,
+) -> Result<(OutPoint, OutPoint, [u8; BYTE32_LEN])> {
+    let tx_hash = parse_h256(tx_hash)?;
+    let mut tx_hash_bytes = [0u8; BYTE32_LEN];
+    tx_hash_bytes.copy_from_slice(tx_hash.as_bytes());
+    Ok((
+        OutPoint::new(tx_hash.clone().pack(), state_output_index),
+        OutPoint::new(tx_hash.pack(), vault_output_index),
+        tx_hash_bytes,
+    ))
+}
+
+fn activate_state_vault_binding(
+    rpc: &CkbRpcClient,
+    funding_tx_hash: &str,
+    funding_state_output: &CellOutput,
+    state_header: &[u8; STATE_HEADER_LEN],
+    state_lock_contract: &ResolvedContract,
+    state_contract: &ResolvedContract,
+    state_output_index: u32,
+    vault_output_index: u32,
+    mine_blocks: u64,
+) -> Result<(SentTransactionReport, CellOutput, [u8; STATE_HEADER_LEN])> {
+    let (state_out_point, vault_out_point, tx_hash_bytes) =
+        funding_out_points(funding_tx_hash, state_output_index, vault_output_index)?;
+    let funding_capacity: u64 = funding_state_output.capacity().unpack();
+    let state_capacity = funding_capacity
+        .checked_sub(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("StateCell cannot fund vault activation"))?;
+    let state_output = funding_state_output
+        .clone()
+        .as_builder()
+        .capacity(state_capacity)
+        .build();
+    ensure_output_capacity("activated state", &state_output, state_header.len())?;
+    let mut activated_header = *state_header;
+    set_state_vault_outpoint_commitment(&mut activated_header, &tx_hash_bytes, vault_output_index);
+    let tx = TransactionBuilder::default()
+        .cell_dep(state_lock_contract.cell_dep.clone())
+        .cell_dep(state_contract.cell_dep.clone())
+        .cell_dep(direct_cell_dep(vault_out_point))
+        .input(CellInput::new(state_out_point, 0))
+        .output(state_output.clone())
+        .output_data(Bytes::copy_from_slice(&activated_header).pack())
+        .build();
+    let sent = send_and_mine(rpc, tx, mine_blocks)?;
+    Ok((sent, state_output, activated_header))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn activate_factory_vault_binding(
+    rpc: &CkbRpcClient,
+    funding_tx_hash: &str,
+    funding_factory_output: &CellOutput,
+    factory_header: &[u8; FACTORY_STATE_HEADER_LEN],
+    secp_dep: &CellDep,
+    factory_contract: &ResolvedContract,
+    owner_key: &Privkey,
+    factory_output_index: u32,
+    vault_output_index: u32,
+    mine_blocks: u64,
+) -> Result<(
+    SentTransactionReport,
+    CellOutput,
+    [u8; FACTORY_STATE_HEADER_LEN],
+)> {
+    let (factory_out_point, vault_out_point, tx_hash_bytes) =
+        funding_out_points(funding_tx_hash, factory_output_index, vault_output_index)?;
+    let funding_capacity: u64 = funding_factory_output.capacity().unpack();
+    let factory_capacity = funding_capacity
+        .checked_sub(VAULT_ACTIVATION_FEE)
+        .ok_or_else(|| anyhow!("FactoryStateCell cannot fund vault activation"))?;
+    let factory_output = funding_factory_output
+        .clone()
+        .as_builder()
+        .capacity(factory_capacity)
+        .build();
+    ensure_output_capacity("activated factory", &factory_output, factory_header.len())?;
+    let mut activated_header = *factory_header;
+    set_factory_vault_outpoint_commitment(
+        &mut activated_header,
+        &tx_hash_bytes,
+        vault_output_index,
+    );
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(secp_dep.clone())
+        .cell_dep(factory_contract.cell_dep.clone())
+        .cell_dep(direct_cell_dep(vault_out_point))
+        .input(CellInput::new(factory_out_point, 0))
+        .output(factory_output.clone())
+        .output_data(Bytes::copy_from_slice(&activated_header).pack())
+        .build();
+    let signed = sign_single_secp_input(unsigned, owner_key)?;
+    let sent = send_and_mine(rpc, signed, mine_blocks)?;
+    Ok((sent, factory_output, activated_header))
+}
+
 fn vault_cell_commitment_from_output(output: &CellOutput, data: &[u8]) -> [u8; BYTE32_LEN] {
     let type_hash = output.type_().to_opt().map(|script| {
         let hash: [u8; BYTE32_LEN] = script.calc_script_hash().unpack();
@@ -12211,6 +12683,10 @@ fn core_state_cell_from_live(
                 "state vault_materialisation_root",
                 header.vault_materialisation_root(),
             )?,
+            vault_outpoint_commitment: bytes32_from_slice(
+                "state vault_outpoint_commitment",
+                header.vault_outpoint_commitment(),
+            )?,
             challenge_policy_commitment: bytes32_from_slice(
                 "state challenge_policy_commitment",
                 header.challenge_policy_commitment(),
@@ -12450,6 +12926,7 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
         settlement_descriptor_commitment: input.settlement_descriptor_commitment,
         descriptor_version: input.descriptor_version,
         vault_materialisation_root: script_blake2b256(&[b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD"]),
+        vault_outpoint_commitment: [0; BYTE32_LEN],
         challenge_policy_commitment: input.challenge_policy_commitment,
         state_layout_version: 2,
     })
@@ -12469,6 +12946,7 @@ fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_
     raw[204..236].copy_from_slice(&input.challenge_policy_commitment);
     put_u16(&mut raw, 236, 1);
     raw[238..270].copy_from_slice(&input.vault_materialisation_root);
+    raw[270..302].fill(0);
     raw
 }
 

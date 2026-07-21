@@ -596,6 +596,10 @@ fn derive_edge(
         || descriptor_version(&evidence.settlement_descriptor)?
             != evidence.state.header.descriptor_version
         || evidence.vault.commitment() != evidence.state.header.vault_materialisation_root
+        || crate::vault_outpoint_commitment(
+            &evidence.vault.out_point.tx_hash,
+            evidence.vault.out_point.index,
+        ) != evidence.state.header.vault_outpoint_commitment
     {
         return Err(BridgeError::InvalidMaterialisation);
     }
@@ -1061,6 +1065,10 @@ mod tests {
             settlement_descriptor_commitment: settlement_descriptor_commitment(&descriptor),
             descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
             vault_materialisation_root: vault.commitment(),
+            vault_outpoint_commitment: crate::vault_outpoint_commitment(
+                &vault.out_point.tx_hash,
+                vault.out_point.index,
+            ),
             challenge_policy_commitment: [45; 32],
             state_layout_version: 2,
         };
@@ -1173,6 +1181,20 @@ mod tests {
         assert_eq!(
             registry.activate(evidence, &deployment(), 6, 101),
             Err(BridgeError::UntrustedDeployment)
+        );
+    }
+
+    #[test]
+    fn byte_identical_clone_vault_never_becomes_a_provider_edge() {
+        let mut registry = SovereignEdgeRegistry::default();
+        let reservation = reservation(100);
+        let reservation_id = registry.reserve(reservation, 100).unwrap();
+        registry.begin_materialisation(&reservation_id).unwrap();
+        let mut cloned = evidence(reservation_id);
+        cloned.vault.out_point.tx_hash = [99; 32];
+        assert_eq!(
+            registry.activate(cloned, &deployment(), 6, 101),
+            Err(BridgeError::InvalidMaterialisation)
         );
     }
 
