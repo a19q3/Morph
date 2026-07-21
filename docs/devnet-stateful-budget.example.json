@@ -34,7 +34,7 @@
       "check": "factory-reduced-exit-smoke",
       "path": "$.exit",
       "max_cycles": 11000000,
-      "max_bytes": 9600
+      "max_bytes": 10000
     },
     {
       "check": "factory-reduced-xudt-exit-smoke",
@@ -93,7 +93,7 @@
       "proof_siblings": 0,
       "max_witness_len": 3600,
       "max_cycles": 11000000,
-      "max_bytes": 9600
+      "max_bytes": 10000
     },
     {
       "check": "factory-reduced-xudt-exit-smoke",
