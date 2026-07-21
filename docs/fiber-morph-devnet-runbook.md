@@ -48,9 +48,25 @@ Required tools:
 - Rust and Cargo
 - `jq`
 - `curl`
-- `nc`
 - Node.js and `npm`
+- either `lsof` or `ss` (from iproute2) for deterministic failed-stack cleanup
 - CKB and ckb-cli build prerequisites
+
+Fiber's devnet helpers use `nc -z` for loopback readiness probes. When netcat
+is not installed, the Morph runner automatically exposes its restricted
+loopback-only `scripts/nc-z-shim.sh` in the per-run tool directory.
+
+The runner also supplies `FIBER_CXXFLAGS=-include cstdint` by default. This is
+a build-only compatibility flag for Fiber's locked `ckb-librocksdb-sys 8.5.4`
+on modern C++ compilers; it is recorded in the acceptance manifest and does
+not patch the Fiber checkout.
+
+For the same-chain Morph transaction matrix, the runner explicitly reads
+Fiber's public devnet fixture keys for the funded deployer and the two Morph
+channel signers. This removes dependence on secret variables inherited from
+an operator shell. Only fixture file paths are recorded; key material is never
+printed. Override `MORPH_FIBER_{DEPLOYER,ALICE,BOB}_KEY_FILE` when using a
+different disposable devnet.
 
 Run:
 

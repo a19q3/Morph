@@ -392,6 +392,8 @@ main() {
   jq_check "$repo_state" '.schema == "morph.fiber_morph_repo_state"' 'repo-state schema mismatch'
   jq_check "$repo_state" '.morph.status == ""' 'Morph worktree was not clean when the run recorded repo state'
   jq_check "$repo_state" '.fiber.status == ""' 'Fiber tracked worktree was not clean when the run recorded repo state'
+  jq_check "$matrix" 'all(.gates[]; .required == true)' 'acceptance matrix contains a non-required gate'
+  jq_check "$matrix" '([.gates[].id] | length) == ([.gates[].id] | unique | length)' 'acceptance matrix contains duplicate gates'
 
   local mode
   mode="$(jq -r '.mode // empty' "$matrix")"
@@ -403,14 +405,23 @@ main() {
     coexistence)
       include_morph=1
       include_coexistence_fiber=1
+      jq_check "$matrix" \
+        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
+        'coexistence acceptance matrix gate set is inaccurate'
       ;;
     full)
       include_morph=1
       include_coexistence_fiber=1
       include_extended_fiber=1
+      jq_check "$matrix" \
+        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_channel_external_funding", "fiber_security_and_recovery_matrix", "morph_channel_factory_matrix", "same_ckb_devnet_coexistence"] | sort)' \
+        'full acceptance matrix gate set is inaccurate'
       ;;
     fiber)
       include_extended_fiber=1
+      jq_check "$matrix" \
+        '([.gates[].id] | sort) == (["business_flow_and_security_audit", "fiber_security_and_recovery_matrix"] | sort)' \
+        'Fiber-only acceptance matrix gate set is inaccurate'
       ;;
     *)
       fail "unsupported acceptance audit mode: ${mode:-<empty>}"

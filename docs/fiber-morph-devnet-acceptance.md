@@ -245,9 +245,12 @@ The coexistence and full gates are intentionally strict:
 - Fiber external funding must pass on the same CKB devnet where Morph deployed
   and exercised its scripts.
 
-The clean-worktree requirement is intentional. The underlying Morph
+The tracked-clean-worktree requirement is intentional. The underlying Morph
 `devnet-stateful-assert` gate checks artifact freshness against the current
-commit, so a production pass must be reproducible from a committed tree.
+commit, so every tracked production input must be reproducible from a commit.
+Untracked operator files do not change the tested commit and therefore do not
+invalidate a run; their presence is still captured in
+`repo-state.json` as `morph.worktree_status` for audit context.
 
 ## Useful Environment Variables
 
@@ -261,6 +264,10 @@ FIBER_MORPH_ACCEPTANCE_MODE=coexistence
 FIBER_TEST_ENV=debug
 FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/udt"
 FIBER_FUNDING_TX_VERIFICATION_CASES="remove_change missing_inputs"
+FIBER_CXXFLAGS="-include cstdint"
+MORPH_FIBER_DEPLOYER_KEY_FILE=../fiber/tests/nodes/deployer/ckb/plain_key
+MORPH_FIBER_ALICE_KEY_FILE=../fiber/tests/nodes/1/ckb/plain_key
+MORPH_FIBER_BOB_KEY_FILE=../fiber/tests/nodes/2/ckb/plain_key
 RUN_FIBER_RESTART_REGRESSION=0
 BUILD_MORPH_CONTRACTS=0
 ```
@@ -268,6 +275,16 @@ BUILD_MORPH_CONTRACTS=0
 `FIBER_BRUNO_SUITES` and `FIBER_FUNDING_TX_VERIFICATION_CASES` are useful for
 local debugging. Production `fiber` and `full` audit runs expect the strict
 default suite and case set above.
+
+`FIBER_CXXFLAGS` defaults to `-include cstdint` so Fiber's locked
+`ckb-librocksdb-sys 8.5.4` builds with current GCC and Clang releases. The
+exact value is recorded in the run manifest and can be overridden for an
+older toolchain.
+
+The Morph stateful run reads the three public, devnet-only Fiber fixture keys
+from the paths above. Their paths, never their contents, are recorded in the
+manifest. Overrides must still be single-line 32-byte secp256k1 keys. No
+default key exists for a production network.
 
 ## Current Boundary
 
