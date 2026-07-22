@@ -1920,7 +1920,10 @@ impl HubServer {
                 403,
                 "Forbidden",
                 "insufficient_auth_scope",
-                "Morph Hub auth token does not include the required scope for this endpoint",
+                format!(
+                    "Morph Hub auth token needs the {} scope for this endpoint",
+                    auth_scope_label(required_scope)
+                ),
                 request_id,
             )
         })
@@ -1941,12 +1944,20 @@ impl HubServer {
             limiter.mutating_requests = 0;
         }
         if limiter.mutating_requests >= MAX_MUTATIONS_PER_WINDOW {
-            return Some(api_error_response(
-                429,
-                "Too Many Requests",
-                "rate_limited",
-                "too many Morph Hub mutating requests; retry after the rate limit window resets",
-                request_id,
+            let retry_after = MUTATION_RATE_LIMIT_WINDOW
+                .saturating_sub(limiter.window_started.elapsed())
+                .as_secs()
+                .max(1);
+            return Some(with_header(
+                api_error_response(
+                    429,
+                    "Too Many Requests",
+                    "rate_limited",
+                    "too many Morph Hub mutating requests; retry after the rate limit window resets",
+                    request_id,
+                ),
+                "Retry-After",
+                retry_after.to_string(),
             ));
         }
         limiter.mutating_requests += 1;
@@ -3704,6 +3715,8 @@ mod tests {
             [("authorization", "Bearer secret-token")],
         );
         assert_eq!(response.status, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("restore scope"));
 
         let response = route_json_with_headers(
             &server,
@@ -3713,6 +3726,8 @@ mod tests {
             [("authorization", "Bearer secret-token")],
         );
         assert_eq!(response.status, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("write scope"));
     }
 
     #[test]
@@ -3732,6 +3747,10 @@ mod tests {
         assert_eq!(response.status, 429);
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["code"].as_str(), Some("rate_limited"));
+        assert!(response.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("retry-after")
+                && value.parse::<u64>().is_ok_and(|seconds| seconds >= 1)
+        }));
     }
 
     #[test]
@@ -4223,8 +4242,14 @@ mod tests {
             body["model"]["factory_participant_count"].as_u64(),
             Some(CURRENT_FACTORY_PARTICIPANT_COUNT as u64)
         );
-        assert_eq!(body["model"]["chain_actions_enabled"].as_bool(), Some(false));
-        assert_eq!(body["model"]["provider_edges_exposed"].as_bool(), Some(false));
+        assert_eq!(
+            body["model"]["chain_actions_enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            body["model"]["provider_edges_exposed"].as_bool(),
+            Some(false)
+        );
         assert!(
             body["completed_flows"]
                 .as_array()

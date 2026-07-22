@@ -210,6 +210,32 @@ pinning, and an explicit migration policy for the new wire layout.
 | Watchtower scan origin | Watch scans began at the funding block even though the enforceable State outpoint is created by activation. | Persist and scan from the activated State block. |
 | Evidence budgets | New activation transactions and locator fields invalidated aggregate-cycle and reduced-exit byte baselines. | Recalibrated only the measured suite total and affected reduced-exit byte gate; per-transaction cycle, proof, and witness caps remain enforced. |
 
+## Hub model-boundary follow-up
+
+The Hub now exposes an explicit `model` contract instead of requiring the UI
+to infer protocol authority from local records. It identifies the current
+sovereign devnet profile, the two-party Factory signer limit, the
+`FactoryState/Vault` and bilateral `State/Vault` authority boundaries, and the
+replaceable routing/application-sidecar roles. It also reports that Hub does
+not build chain transactions and that Factory-right reservations, provider
+edges, RGB++ proof evidence, and Agent terminal receipts are not yet exposed.
+
+Materialised child-channel projections carry their parent `factory_id`, so the
+dashboard can preserve the `Factory -> child channel` relationship without
+claiming that the local record is right-proof or settlement evidence. The UI
+shows the intended `Factory right -> materialised bilateral channel -> optional
+provider edge` path together with the currently unavailable evidence surfaces.
+
+Operator controls now consume bearer-token scopes before offering mutations,
+state publication is described and confirmed as a transition into local
+`Settling`, and rate-limit errors preserve `Retry-After` and request-correlation
+metadata. Channel and Factory totals are grouped by real asset identity rather
+than formatting xUDT balances as CKB or calling local balances proven Vault
+value.
+
+This is an honest projection-boundary improvement, not an implementation claim
+for the still-open external edge, RGB++ verifier/reorg, or Agent ingress work.
+
 ## Verification for this change
 
 - `make ci AUDIT='cargo audit --no-fetch'` passes formatting, clippy,

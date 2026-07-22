@@ -190,12 +190,12 @@ const flowItems: Record<FlowKey, { label: string; detail: string; action: string
   'invoice-received': { label: 'Receive an invoice', detail: 'Incoming invoice is decoded and stored', action: 'Open invoices', panel: 'invoice', Icon: ReceiptText },
   'invoice-settled': { label: 'Settle an invoice', detail: 'Payment preimage has closed the invoice', action: 'Open invoices', panel: 'invoice', Icon: BadgeCheck },
   'channel-opened': { label: 'Open a channel', detail: 'Active bilateral channel is tracked', action: 'Open channels', panel: 'channel', Icon: GitBranch },
-  'state-published': { label: 'Update tracked state', detail: 'Local state moved into settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
+  'state-published': { label: 'Record state publication', detail: 'Local channel projection entered settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
   'channel-finalised': { label: 'Finalise a channel', detail: 'Settling channel is closed', action: 'Open channels', panel: 'channel', Icon: BadgeCheck },
   'channel-spliced': { label: 'Record a splice', detail: 'Funding context advanced locally', action: 'Open channels', panel: 'channel', Icon: Split },
   'factory-opened': { label: 'Open a factory', detail: 'Shared factory reserve is tracked', action: 'Open factories', panel: 'factory', Icon: Factory },
   'factory-advanced': { label: 'Advance a factory', detail: 'Factory update number moved forward', action: 'Open factories', panel: 'factory', Icon: RefreshCw },
-  'factory-child': { label: 'Materialise child channel', detail: 'Factory reserve created a channel', action: 'Open factories', panel: 'factory', Icon: Network },
+  'factory-child': { label: 'Record materialised child', detail: 'Local Factory record links a child channel', action: 'Open factories', panel: 'factory', Icon: Network },
 };
 
 const sectionIds = {
@@ -717,7 +717,7 @@ export function App() {
 
         <AcceptancePanel state={state} evidence={evidence} flowDataLoaded={flowDataLoaded} liveMode={liveMode} />
 
-        <ModelBoundaryPanel model={state.model} />
+        <ModelBoundaryPanel model={state.model ?? emptyState.model} />
 
         <OperationSearch
           query={recordQuery}
