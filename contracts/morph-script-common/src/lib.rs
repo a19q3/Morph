@@ -278,6 +278,7 @@ pub enum ScriptError {
     VaultOutPointMismatch = 50,
     VaultActivationInvalid = 51,
     StateCarrierMismatch = 52,
+    SponsorFeeMismatch = 53,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;

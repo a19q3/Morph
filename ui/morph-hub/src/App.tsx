@@ -59,12 +59,14 @@ import {
   formatBalance,
   formatTime,
   formatTimeMs,
+  hasHubScope,
   assetLabel,
   parsePubkeyList,
   shortHex,
 } from './domain';
 import { ChannelTable, EventPanel, FactoryPanel, InvoicePanel, PeerPanel, WatchtowerPanel } from './records';
 import { ChannelActions, FactoryActions, InvoiceActions, PeerActions, StateActions } from './actions';
+import { ModelBoundaryPanel } from './model';
 import {
   balanceTotal,
   channelSearchText,
@@ -145,6 +147,27 @@ const MAX_PEER_ALIAS_LEN = 80;
 const SIDE_PANEL_PREVIEW_LIMIT = 5;
 const EVENT_PREVIEW_LIMIT = 10;
 const DRAWER_COLLAPSED_STORAGE_KEY = 'morph-hub.drawer-collapsed';
+
+function formatAssetPortfolio(balances: Balance[]): string {
+  const totals = new Map<string, { asset: Asset; amount: bigint }>();
+  for (const balance of balances) {
+    const key = balance.asset.kind === 'ckb' ? 'ckb' : `xudt:${balance.asset.type_hash ?? 'unknown'}`;
+    const current = totals.get(key);
+    totals.set(key, {
+      asset: balance.asset,
+      amount: (current?.amount ?? 0n) + balanceTotal(balance),
+    });
+  }
+  if (totals.size === 0) return 'No local records';
+  return [...totals.values()]
+    .sort((left, right) => (left.asset.kind === 'ckb' ? -1 : 1) - (right.asset.kind === 'ckb' ? -1 : 1))
+    .map(({ asset, amount }) => (
+      asset.kind === 'ckb'
+        ? formatAmount(amount, asset)
+        : `${formatAmount(amount, asset)} · ${shortHex(asset.type_hash)}`
+    ))
+    .join(' / ');
+}
 
 const invoiceExpiryPresets = [
   { label: '1h', value: '3600' },
@@ -387,16 +410,14 @@ export function App() {
   };
 
   const totals = useMemo(() => {
-    const vaultValue = state.channels.reduce((sum, channel) => sum + balanceTotal(channel.balances[0]), 0n);
     const sponsorBudget = state.channels.reduce((sum, channel) => sum + BigInt(channel.sponsor_budget), 0n);
     const settlingStates = state.channels.filter(channel => channel.phase === 'settling').length;
-    const factoryReserve = state.factories.reduce(
-      (sum, factory) => sum + factory.reserve_balances.reduce((inner, balance) => inner + balanceTotal(balance), 0n),
-      0n
-    );
-    return { vaultValue, sponsorBudget, settlingStates, factoryReserve };
+    const channelValue = formatAssetPortfolio(state.channels.flatMap(channel => channel.balances));
+    const factoryReserve = formatAssetPortfolio(state.factories.flatMap(factory => factory.reserve_balances));
+    return { channelValue, sponsorBudget, settlingStates, factoryReserve };
   }, [state.channels, state.factories]);
   const evidence = useMemo(() => evidenceSummary(state), [state]);
+  const canWrite = hasHubScope(state.security, 'write');
 
   const flowDataLoaded = state.required_flows.length > 0;
   const completedCount = state.completed_flows.length;
@@ -686,15 +707,17 @@ export function App() {
         </div>
 
         <section className="metric-grid">
-          <Metric label="Vault value" value={formatAmount(totals.vaultValue, { kind: 'ckb' })} icon={<Landmark size={16} />} />
+          <Metric label="Recorded channel value" value={totals.channelValue} icon={<Landmark size={16} />} />
           <Metric label="Sponsor budget" value={formatAmount(totals.sponsorBudget, { kind: 'ckb' })} icon={<WalletCards size={16} />} />
           <Metric label="Settling states" value={String(totals.settlingStates)} icon={<AlertTriangle size={16} />} tone={totals.settlingStates ? 'warn' : 'base'} />
-          <Metric label="Factory reserve" value={formatAmount(totals.factoryReserve, { kind: 'ckb' })} icon={<Factory size={16} />} />
+          <Metric label="Recorded factory reserve" value={totals.factoryReserve} icon={<Factory size={16} />} />
         </section>
 
         <FlowPanel state={state} onOpenAction={selectAction} busy={busy} />
 
         <AcceptancePanel state={state} evidence={evidence} flowDataLoaded={flowDataLoaded} liveMode={liveMode} />
+
+        <ModelBoundaryPanel model={state.model} />
 
         <OperationSearch
           query={recordQuery}
@@ -713,6 +736,7 @@ export function App() {
               searchActive={searchActive}
               runAction={runAction}
               busy={busy}
+              canWrite={canWrite}
               onOpenAction={() => selectAction('channel')}
             />
           </div>
@@ -729,6 +753,7 @@ export function App() {
               searchActive={searchActive}
               runAction={runAction}
               busy={busy}
+              canWrite={canWrite}
               onOpenAction={() => selectAction('factory')}
               onMaterialise={openFactoryMaterialise}
             />

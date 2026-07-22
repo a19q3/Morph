@@ -374,6 +374,7 @@ struct HubView {
     state_path: String,
     rpc: RpcView,
     security: HubSecurityView,
+    model: HubModelView,
     provenance: RecordProvenanceView,
     watchtower: WatchtowerView,
     peers: Vec<PeerView>,
@@ -384,6 +385,22 @@ struct HubView {
     required_flows: Vec<&'static str>,
     completed_flows: Vec<&'static str>,
     missing_flows: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct HubModelView {
+    profile: &'static str,
+    hub_role: &'static str,
+    factory_authority: &'static str,
+    channel_authority: &'static str,
+    routing_role: &'static str,
+    agent_role: &'static str,
+    factory_participant_count: usize,
+    chain_actions_enabled: bool,
+    factory_rights_exposed: bool,
+    provider_edges_exposed: bool,
+    rgbpp_evidence_exposed: bool,
+    agent_receipts_exposed: bool,
 }
 
 #[derive(Serialize)]
@@ -461,6 +478,7 @@ struct PeerView {
 #[derive(Serialize)]
 struct ChannelView {
     channel_id: String,
+    factory_id: Option<String>,
     counterparty_pubkey: String,
     counterparty_node_id: String,
     funding_epoch: u64,
@@ -536,6 +554,23 @@ fn local_state_provenance() -> RecordProvenanceView {
         chain_status: "not_chain_verified",
         label: "Local only",
         message: "Recorded in the Morph Hub state file only; this is not CKB devnet confirmation.",
+    }
+}
+
+fn hub_model_view() -> HubModelView {
+    HubModelView {
+        profile: "sovereign-devnet-v1",
+        hub_role: "local_operator_projection",
+        factory_authority: "factory_state_and_vault",
+        channel_authority: "state_and_vault",
+        routing_role: "external_optional_provider",
+        agent_role: "application_sidecar",
+        factory_participant_count: CURRENT_FACTORY_PARTICIPANT_COUNT,
+        chain_actions_enabled: false,
+        factory_rights_exposed: false,
+        provider_edges_exposed: false,
+        rgbpp_evidence_exposed: false,
+        agent_receipts_exposed: false,
     }
 }
 
@@ -992,6 +1027,18 @@ impl HubStore {
         security: HubSecurityView,
         watchtower: WatchtowerView,
     ) -> Result<HubView> {
+        let child_factories = self
+            .state
+            .node
+            .factories
+            .values()
+            .flat_map(|factory| {
+                factory
+                    .materialised_child_channels
+                    .iter()
+                    .map(move |channel_id| (*channel_id, factory.factory_id))
+            })
+            .collect::<BTreeMap<_, _>>();
         Ok(HubView {
             pubkey: self.state.pubkey.clone(),
             node_id: hex_prefixed(&self.state.node.node_id),
@@ -999,6 +1046,7 @@ impl HubStore {
             state_path: self.path.display().to_string(),
             rpc,
             security,
+            model: hub_model_view(),
             provenance: local_state_provenance(),
             watchtower,
             peers: self
@@ -1013,7 +1061,13 @@ impl HubStore {
                 .node
                 .channels
                 .values()
-                .map(|channel| channel_view(channel, &self.state.peer_pubkeys))
+                .map(|channel| {
+                    channel_view(
+                        channel,
+                        child_factories.get(&channel.channel_id).copied(),
+                        &self.state.peer_pubkeys,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
             invoices: self
                 .state
@@ -2878,10 +2932,12 @@ fn peer_view(peer: &MorphPeer, peer_pubkeys: &BTreeMap<Bytes32, String>) -> Resu
 
 fn channel_view(
     channel: &MorphChannelRecord,
+    factory_id: Option<Bytes32>,
     peer_pubkeys: &BTreeMap<Bytes32, String>,
 ) -> Result<ChannelView> {
     Ok(ChannelView {
         channel_id: hex_prefixed(&channel.channel_id),
+        factory_id: factory_id.map(|id| hex_prefixed(&id)),
         counterparty_pubkey: pubkey_for_node_id(&channel.counterparty_node_id, peer_pubkeys)?
             .to_string(),
         counterparty_node_id: hex_prefixed(&channel.counterparty_node_id),
@@ -4148,6 +4204,27 @@ mod tests {
             body["factories"][0]["materialised_child_channels"][0].as_str(),
             Some(child_id.as_str())
         );
+        let child = body["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|channel| channel["channel_id"].as_str() == Some(child_id.as_str()))
+            .expect("materialised child should be projected as a channel");
+        assert_eq!(child["factory_id"].as_str(), Some(factory_id.as_str()));
+        assert_eq!(
+            body["model"]["profile"].as_str(),
+            Some("sovereign-devnet-v1")
+        );
+        assert_eq!(
+            body["model"]["hub_role"].as_str(),
+            Some("local_operator_projection")
+        );
+        assert_eq!(
+            body["model"]["factory_participant_count"].as_u64(),
+            Some(CURRENT_FACTORY_PARTICIPANT_COUNT as u64)
+        );
+        assert_eq!(body["model"]["chain_actions_enabled"].as_bool(), Some(false));
+        assert_eq!(body["model"]["provider_edges_exposed"].as_bool(), Some(false));
         assert!(
             body["completed_flows"]
                 .as_array()

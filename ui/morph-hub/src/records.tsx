@@ -23,6 +23,7 @@ import {
   formatBalance,
   formatTime,
   formatTimeMs,
+  hasHubScope,
   shortHex,
 } from './domain';
 
@@ -41,6 +42,7 @@ export function ChannelTable({
   searchActive,
   runAction,
   busy,
+  canWrite,
   onOpenAction,
 }: {
   channels: ChannelRecord[];
@@ -48,6 +50,7 @@ export function ChannelTable({
   searchActive: boolean;
   runAction: RunAction;
   busy: boolean;
+  canWrite: boolean;
   onOpenAction: () => void;
 }) {
   return (
@@ -82,7 +85,7 @@ export function ChannelTable({
                     detail="Open a bilateral channel to start tracking local off-chain state."
                     actionLabel="Open channel"
                     onAction={onOpenAction}
-                    disabled={busy}
+                    disabled={busy || !canWrite}
                   />
                 )}
               </td>
@@ -93,6 +96,7 @@ export function ChannelTable({
               <td>
                 <span className="copy-line"><strong>{shortHex(channel.channel_id)}</strong><CopyButton value={channel.channel_id} label="Copy channel id" /></span>
                 <span className="copy-line muted"><small>{shortHex(channel.counterparty_pubkey)}</small><CopyButton value={channel.counterparty_pubkey} label="Copy counterparty pubkey" /></span>
+                {channel.factory_id && <span className="copy-line muted"><small>factory {shortHex(channel.factory_id)}</small><CopyButton value={channel.factory_id} label="Copy parent factory id" /></span>}
               </td>
               <td><span className={`phase ${channel.phase}`}>{channel.phase}</span></td>
               <td className="mono">#{channel.state_number}</td>
@@ -104,7 +108,7 @@ export function ChannelTable({
               <td className="mono">{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
               <td><ProvenanceBadge provenance={channel.provenance} /></td>
               <td>
-                <ChannelRowActions channel={channel} runAction={runAction} busy={busy} />
+                <ChannelRowActions channel={channel} runAction={runAction} busy={busy} canWrite={canWrite} />
               </td>
             </tr>
           ))}
@@ -118,21 +122,24 @@ function ChannelRowActions({
   channel,
   runAction,
   busy,
+  canWrite,
 }: {
   channel: ChannelRecord;
   runAction: RunAction;
   busy: boolean;
+  canWrite: boolean;
 }) {
   const [confirmingFinalise, setConfirmingFinalise] = useState(false);
+  const [confirmingPublish, setConfirmingPublish] = useState(false);
   const canPublish = channel.phase === 'active' || channel.phase === 'settling';
   const canSplice = channel.phase === 'active';
   const canFinalise = channel.phase === 'settling';
 
   const publish = () => {
-    void runAction('Update tracked state', () => postAction(`/api/channels/${channel.channel_id}/publish`, {
+    void runAction('Record state publication', () => postAction(`/api/channels/${channel.channel_id}/publish`, {
       funding_context_id: channel.funding_context_id,
       state_number: channel.state_number + 1,
-    }));
+    })).then(() => setConfirmingPublish(false));
   };
 
   const splice = () => {
@@ -148,6 +155,10 @@ function ChannelRowActions({
     void runAction('Finalise channel', () => postAction(`/api/channels/${channel.channel_id}/finalise`)).then(() => setConfirmingFinalise(false));
   };
 
+  if (!canWrite) {
+    return <span className="row-action-empty">Read only</span>;
+  }
+
   if (!canPublish && !canSplice && !canFinalise) {
     return <span className="row-action-empty">No action</span>;
   }
@@ -160,12 +171,12 @@ function ChannelRowActions({
           className="row-action"
           data-testid="channel-row-publish"
           data-channel-id={channel.channel_id}
-          onClick={publish}
-          disabled={busy}
-          title={`Update tracked state ${channel.state_number + 1} for ${shortHex(channel.channel_id)}`}
+          onClick={() => setConfirmingPublish(true)}
+          disabled={busy || !canWrite}
+          title={`Record state ${channel.state_number + 1} publication and enter settling for ${shortHex(channel.channel_id)}`}
         >
           <RadioTower size={12} />
-          Update state
+          Record publication
         </button>
       )}
       {canSplice && (
@@ -175,7 +186,7 @@ function ChannelRowActions({
           data-testid="channel-row-splice"
           data-channel-id={channel.channel_id}
           onClick={splice}
-          disabled={busy}
+          disabled={busy || !canWrite}
           title={`Record ${shortHex(channel.channel_id)} splice to epoch ${channel.funding_epoch + 1}`}
         >
           <Split size={12} />
@@ -189,7 +200,7 @@ function ChannelRowActions({
           data-testid="channel-row-finalise"
           data-channel-id={channel.channel_id}
           onClick={() => setConfirmingFinalise(true)}
-          disabled={busy}
+          disabled={busy || !canWrite}
           title={`Finalise ${shortHex(channel.channel_id)}`}
         >
           <BadgeCheck size={12} />
@@ -205,6 +216,17 @@ function ChannelRowActions({
           busy={busy}
           onCancel={() => setConfirmingFinalise(false)}
           onConfirm={finalise}
+        />
+      )}
+      {confirmingPublish && (
+        <ConfirmActionDialog
+          title={`Record state #${channel.state_number + 1} publication?`}
+          detail={`This writes a local publication record for ${shortHex(channel.channel_id)} and ${channel.phase === 'active' ? 'moves the channel into settling' : 'keeps the channel in settling'}. It does not broadcast a CKB transaction.`}
+          confirmLabel="Enter settling"
+          confirmTestId="confirm-row-state-publication"
+          busy={busy}
+          onCancel={() => setConfirmingPublish(false)}
+          onConfirm={publish}
         />
       )}
     </div>
@@ -347,9 +369,11 @@ export function PeerPanel({
   const [pubkey, setPubkey] = useState('');
   const [alias, setAlias] = useState('');
   const visiblePeers = showAll ? peers : peers.slice(0, SIDE_PANEL_PREVIEW_LIMIT);
+  const canWrite = hasHubScope(state.security, 'write');
 
   const submitQuickAdd = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Connect peer', () => connectPeer(assertRemotePubkey(pubkey, state.pubkey, 'Peer pubkey'), requiredText(alias, 'Alias'))).then(() => {
       setPubkey('');
       setAlias('');
@@ -363,7 +387,7 @@ export function PeerPanel({
         <h2>Peers</h2>
         <div className="section-actions">
           <span className="badge">{searchActive ? `${peers.length}/${totalCount} connected` : `${peers.length} connected`}</span>
-          <button type="button" className="row-action primary" data-testid="peer-panel-add" onClick={() => setQuickAddOpen(open => !open)} disabled={busy}>
+          <button type="button" className="row-action primary" data-testid="peer-panel-add" onClick={() => setQuickAddOpen(open => !open)} disabled={busy || !canWrite}>
             <Plus size={12} /> Add
           </button>
         </div>
@@ -372,7 +396,7 @@ export function PeerPanel({
         <form className="quick-row-form" onSubmit={submitQuickAdd}>
           <ValidatedInput label="Peer pubkey" className="mono" testId="peer-panel-pubkey" value={pubkey} onChange={setPubkey} validate={value => { assertRemotePubkey(value, state.pubkey, 'Peer pubkey'); }} />
           <ValidatedInput label="Alias" testId="peer-panel-alias" value={alias} onChange={setAlias} maxLength={MAX_PEER_ALIAS_LEN} validate={value => { requiredText(value, 'Alias'); }} />
-          <button data-testid="peer-panel-connect" disabled={busy}><Users size={15} /> Connect</button>
+          <button data-testid="peer-panel-connect" disabled={busy || !canWrite}><Users size={15} /> Connect</button>
         </form>
       )}
       <div className="stack-list">
@@ -385,7 +409,7 @@ export function PeerPanel({
             detail="Add a counterparty pubkey before opening channels or factories."
             actionLabel="Open peer controls"
             onAction={onOpenAction}
-            disabled={busy}
+            disabled={busy || !canWrite}
           />
         ))}
         {visiblePeers.map(peer => (
@@ -416,6 +440,7 @@ export function FactoryPanel({
   searchActive,
   runAction,
   busy,
+  canWrite,
   onOpenAction,
   onMaterialise,
 }: {
@@ -424,6 +449,7 @@ export function FactoryPanel({
   searchActive: boolean;
   runAction: RunAction;
   busy: boolean;
+  canWrite: boolean;
   onOpenAction: () => void;
   onMaterialise: (factoryId: Hex32) => void;
 }) {
@@ -443,7 +469,7 @@ export function FactoryPanel({
             detail="Open a factory to track shared reserve state and materialise child channels."
             actionLabel="Open factory"
             onAction={onOpenAction}
-            disabled={busy}
+            disabled={busy || !canWrite}
           />
         ))}
         {factories.map(factory => (
@@ -455,7 +481,7 @@ export function FactoryPanel({
             <div className="row-badges">
               <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
               <ProvenanceBadge provenance={factory.provenance} />
-              <FactoryRowActions factory={factory} runAction={runAction} busy={busy} onMaterialise={onMaterialise} />
+              <FactoryRowActions factory={factory} runAction={runAction} busy={busy} canWrite={canWrite} onMaterialise={onMaterialise} />
             </div>
             <FactoryEvidenceInspector factory={factory} />
           </div>
@@ -466,7 +492,7 @@ export function FactoryPanel({
 }
 
 function FactoryEvidenceInspector({ factory }: { factory: FactoryRecord }) {
-  const firstChild = factory.materialised_child_channels[0] ?? null;
+  const childPreview = factory.materialised_child_channels.slice(0, 3);
   const participantPreview = factory.participant_node_ids.slice(0, 2);
   const reserve = factory.reserve_balances[0];
   return (
@@ -475,7 +501,21 @@ function FactoryEvidenceInspector({ factory }: { factory: FactoryRecord }) {
       <EvidenceField label="Update" value={`#${factory.update_number}`} mono />
       <EvidenceField label="Participants" value={`${factory.participant_node_ids.length} nodes`} />
       <EvidenceField label="Reserve" value={reserve ? formatBalance(reserve) : undefined} mono />
-      <EvidenceField label="First child" value={firstChild ? shortHex(firstChild) : undefined} copyValue={firstChild} mono />
+      <div className="evidence-field wide">
+        <span>Materialised children</span>
+        <div className="evidence-chips">
+          {childPreview.length === 0 && <span>none recorded</span>}
+          {childPreview.map(channelId => (
+            <span className="mono copy-line" key={channelId}>
+              {shortHex(channelId)}
+              <CopyButton value={channelId} label="Copy materialised child channel id" />
+            </span>
+          ))}
+          {factory.materialised_child_channels.length > childPreview.length && (
+            <span>{factory.materialised_child_channels.length - childPreview.length} more</span>
+          )}
+        </div>
+      </div>
       <div className="evidence-field wide">
         <span>Participant ids</span>
         <div className="evidence-chips">
@@ -498,11 +538,13 @@ function FactoryRowActions({
   factory,
   runAction,
   busy,
+  canWrite,
   onMaterialise,
 }: {
   factory: FactoryRecord;
   runAction: RunAction;
   busy: boolean;
+  canWrite: boolean;
   onMaterialise: (factoryId: Hex32) => void;
 }) {
   const advance = () => {
@@ -519,7 +561,7 @@ function FactoryRowActions({
         data-testid="factory-row-advance"
         data-factory-id={factory.factory_id}
         onClick={advance}
-        disabled={busy}
+        disabled={busy || !canWrite}
         title={`Advance ${shortHex(factory.factory_id)} to update ${factory.update_number + 1}`}
       >
         <RefreshCw size={12} />
@@ -531,7 +573,7 @@ function FactoryRowActions({
         data-testid="factory-row-materialise"
         data-factory-id={factory.factory_id}
         onClick={() => onMaterialise(factory.factory_id)}
-        disabled={busy}
+        disabled={busy || !canWrite}
         title={`Materialise child from ${shortHex(factory.factory_id)}`}
       >
         <Network size={12} />

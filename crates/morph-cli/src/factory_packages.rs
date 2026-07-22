@@ -3845,6 +3845,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn factory_state_header_wire_bytes_for_test(
         factory_id: &Bytes32,
         update_number: u64,

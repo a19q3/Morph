@@ -12379,6 +12379,7 @@ fn funding_out_points(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn activate_state_vault_binding(
     rpc: &CkbRpcClient,
     funding_tx_hash: &str,

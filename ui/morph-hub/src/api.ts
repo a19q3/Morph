@@ -22,8 +22,37 @@ export interface RestoreStateSummary {
 const apiBase = import.meta.env.VITE_MORPH_HUB_API_URL ?? '';
 const bundledApiToken = import.meta.env.VITE_MORPH_HUB_AUTH_TOKEN ?? '';
 const tokenStorageKey = 'morph-hub-api-token';
+const requestTimeoutMs = 12_000;
 
 let sessionApiToken = readStoredToken();
+
+export class ApiRequestError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly requestId?: string;
+  readonly retryAfterSeconds?: number;
+
+  constructor({
+    message,
+    status,
+    code,
+    requestId,
+    retryAfterSeconds,
+  }: {
+    message: string;
+    status: number;
+    code?: string;
+    requestId?: string;
+    retryAfterSeconds?: number;
+  }) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
 
 export function hasApiToken(): boolean {
   return Boolean(currentApiToken());
@@ -80,24 +109,63 @@ export function openEventStream(): EventSource | null {
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const apiToken = currentApiToken();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), requestTimeoutMs);
   if (init.body !== undefined) headers.set('content-type', 'application/json');
   if (apiToken) headers.set('authorization', `Bearer ${apiToken}`);
-  const response = await fetch(`${apiBase}${path}`, { ...init, headers });
-  if (!response.ok) {
-    const message = await readError(response);
-    throw new Error(message);
+  try {
+    const response = await fetch(`${apiBase}${path}`, { ...init, headers, signal: controller.signal });
+    if (!response.ok) {
+      throw await readError(response);
+    }
+    return response.json() as Promise<T>;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new ApiRequestError({
+        message: `Morph Hub API timed out after ${requestTimeoutMs / 1000} seconds.`,
+        status: 0,
+        code: 'request_timeout',
+      });
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
   }
-  return response.json() as Promise<T>;
 }
 
-async function readError(response: Response): Promise<string> {
+async function readError(response: Response): Promise<ApiRequestError> {
   const text = await response.text();
-  if (!text) return `${response.status} ${response.statusText}`;
+  const headerRequestId = response.headers.get('x-morph-hub-request-id')?.trim() || undefined;
+  const retryAfterHeader = response.headers.get('retry-after');
+  const retryAfter = retryAfterHeader == null ? Number.NaN : Number(retryAfterHeader);
+  const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined;
+  if (!text) {
+    return new ApiRequestError({
+      message: `${response.status} ${response.statusText}`,
+      status: response.status,
+      requestId: headerRequestId,
+      retryAfterSeconds,
+    });
+  }
   try {
-    const parsed = JSON.parse(text) as { error?: string };
-    return parsed.error ? `${response.status} ${response.statusText}: ${parsed.error}` : `${response.status} ${response.statusText}: ${text}`;
+    const parsed = JSON.parse(text) as { error?: string; code?: string; request_id?: string };
+    const requestId = parsed.request_id?.trim() || headerRequestId;
+    const detail = parsed.error || text;
+    const diagnostic = [parsed.code, requestId ? `request ${requestId}` : ''].filter(Boolean).join(' · ');
+    return new ApiRequestError({
+      message: `${response.status} ${response.statusText}: ${detail}${diagnostic ? ` (${diagnostic})` : ''}`,
+      status: response.status,
+      code: parsed.code,
+      requestId,
+      retryAfterSeconds,
+    });
   } catch {
-    return `${response.status} ${response.statusText}: ${text}`;
+    return new ApiRequestError({
+      message: `${response.status} ${response.statusText}: ${text}`,
+      status: response.status,
+      requestId: headerRequestId,
+      retryAfterSeconds,
+    });
   }
 }
 
