@@ -80,8 +80,12 @@ Verification for the addendum: `make ci AUDIT='cargo audit --no-fetch'`
 passes, including formatting, clippy, cargo-deny, host/property tests, fixtures,
 SDK/UI builds, RISC-V contract builds, and 106 CKB-VM cases (one fixture-only
 test remains intentionally filtered). `cargo check --workspace --all-features`
-also passes. A new full cross-stack run must be generated from the committed
-tree before treating earlier Fiber/Morph evidence as evidence for this diff.
+also passes. Full Fiber/Morph acceptance run `20260722T084901Z`, bound to clean
+commit `788cfad`, passes its 31-flow business audit: 323 Morph transaction
+records, 322 committed transactions, 9 expected stateful failures, 24 Factory
+local exits, 32 Factory splices, 5 reduced exits, 9 watchtower alerts, real
+node1 -> node2 -> node3 x402/fair-exchange settlement, Fiber restart/UDT/
+watchtower suites, and four funding-transaction tamper cases.
 
 ## Changes made
 
