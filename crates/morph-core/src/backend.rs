@@ -70,6 +70,7 @@ pub trait ChannelBackend {
         &mut self,
         prepared_id: &Bytes32,
         update: MorphSignedStateUpdate,
+        committed_at_unix: u64,
     ) -> BackendResult<BackendSettlementEvidence>;
     fn cancel_payment(
         &mut self,
@@ -278,8 +279,14 @@ impl ChannelBackend for MorphBilateralChannelBackend {
         &mut self,
         prepared_id: &Bytes32,
         update: MorphSignedStateUpdate,
+        committed_at_unix: u64,
     ) -> BackendResult<BackendSettlementEvidence> {
         let prepared = self.prepared_by_id(prepared_id)?.clone();
+        if committed_at_unix < prepared.prepared_at_unix
+            || committed_at_unix >= prepared.intent.expires_at_unix
+        {
+            return Err(BackendError::InvalidCommitTime);
+        }
         if prepared.base_state_number != self.current_state.header.state_number {
             return Err(BackendError::StalePreparation);
         }
@@ -574,6 +581,8 @@ pub enum BackendError {
     AssetRegistryMismatch,
     #[error("cancellation time predates preparation")]
     InvalidCancellationTime,
+    #[error("commit time predates preparation or is at/after intent expiry")]
+    InvalidCommitTime,
     #[error(transparent)]
     Agent(#[from] crate::agent::AgentError),
     #[error(transparent)]
@@ -805,6 +814,7 @@ mod tests {
                     &keys,
                     descriptor([21; 32], 5_500, [22; 32], 4_500),
                 ),
+                120,
             )
             .unwrap();
         assert_eq!(evidence.provider_id, "morph-bilateral-v1");
@@ -828,9 +838,34 @@ mod tests {
             backend.commit_payment(
                 &prepared.prepared_id,
                 update(&backend, &keys, wrong_descriptor),
+                120,
             ),
             Err(BackendError::PaymentDeltaMismatch)
         );
+    }
+
+    #[test]
+    fn commit_rejects_times_outside_the_prepared_intent_window() {
+        let (mut backend, keys, _) = fixture();
+        let prepared = backend.prepare_payment(intent(&backend), 110).unwrap();
+        let signed_update = update(
+            &backend,
+            &keys,
+            descriptor([21; 32], 5_500, [22; 32], 4_500),
+        );
+
+        assert_eq!(
+            backend.commit_payment(&prepared.prepared_id, signed_update.clone(), 109),
+            Err(BackendError::InvalidCommitTime)
+        );
+        assert_eq!(
+            backend.commit_payment(&prepared.prepared_id, signed_update, 200),
+            Err(BackendError::InvalidCommitTime)
+        );
+        assert!(matches!(
+            backend.payment_state(&prepared.intent.intent_id),
+            Some(BackendPaymentState::Prepared(_))
+        ));
     }
 
     #[test]

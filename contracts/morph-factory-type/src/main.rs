@@ -23,7 +23,7 @@ use morph_script_common::{
     FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
     FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySignatureWitness,
     FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN,
-    ScriptError, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
+    STATE_CARRIER_ACTIVATION_FEE, ScriptError, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
@@ -140,6 +140,7 @@ fn validate_update(
             new_header.vault_materialisation_root(),
             new_header.vault_outpoint_commitment(),
         )?;
+        validate_activation_carrier_capacity()?;
         validate_output_capacity()?;
         return Ok(());
     }
@@ -161,6 +162,7 @@ fn validate_update(
             {
                 return Err(ScriptError::HeaderContextChanged);
             }
+            validate_preserved_carrier_capacity()?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT
@@ -181,6 +183,7 @@ fn validate_update(
                 new_header.vault_materialisation_root(),
                 None,
             )?;
+            validate_unbound_carrier_capacity()?;
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
@@ -540,6 +543,36 @@ fn validate_output_capacity() -> Result<()> {
         load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
     if cap < occupied {
         return Err(ScriptError::OutputBelowOccupiedCapacity);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_preserved_carrier_capacity() -> Result<()> {
+    let input = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input != output {
+        return Err(ScriptError::StateCarrierMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_activation_carrier_capacity() -> Result<()> {
+    let input = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input.checked_sub(STATE_CARRIER_ACTIVATION_FEE) != Some(output) {
+        return Err(ScriptError::StateCarrierMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_unbound_carrier_capacity() -> Result<()> {
+    let input = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input.checked_add(STATE_CARRIER_ACTIVATION_FEE) != Some(output) {
+        return Err(ScriptError::StateCarrierMismatch);
     }
     Ok(())
 }

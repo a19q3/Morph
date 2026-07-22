@@ -203,7 +203,8 @@ For a payment it:
 6. checks payer decrease, payee increase, exact amount, asset, lock hashes, and
    value conservation, while forbidding an xUDT payment from changing either
    participant's CKB carrier amount;
-7. returns canonical Morph state settlement evidence.
+7. accepts commit only after preparation and strictly before the intent expiry;
+8. returns canonical Morph state settlement evidence.
 
 Channel node IDs are hashes of the actual signed-State participant public keys;
 they are not caller-selected aliases. The payment asset's CKB genesis must also
@@ -317,6 +318,8 @@ settled Morph signed states remain enforceable.
 - exact initial Vault commitment;
 - two-stage exact Vault OutPoint activation/rotation for bilateral and Factory
   profiles, with byte-identical-clone and noncanonical-CellDep rejection;
+- type-bound FactoryState locking, independent fee-input signatures, and exact
+  State/Factory carrier-capacity deltas across update/activation/splice/exit;
 - signed descriptor progress and fixed Vault root;
 - current 2-of-2 Factory signer-profile honesty;
 - full baseline CI and CKB-VM suite.
@@ -438,6 +441,8 @@ Until then, documentation and APIs must distinguish:
 - no independent contract/Agent security audit has been completed.
 - production ingress controls (TLS/mTLS, rate limits, admin protection for the
   payment index, and proof-admission service authentication) are not yet wired.
+- legacy owner-locked devnet factories require recreation under the type-bound
+  StateLock profile; no mainnet migration mechanism is claimed.
 
 These blockers are reasons not to claim completion. They are not reasons to
 delete Factory, weaken the bilateral backend, or let Fiber become the source of

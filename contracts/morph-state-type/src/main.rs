@@ -19,8 +19,8 @@ use ckb_std::{default_alloc, entry};
 use morph_script_common::{
     BILATERAL_SIGNATURE_WITNESS_LEN, BYTE32_LEN, BilateralSignatureWitness,
     FactoryLocalExitWitness, FactoryReducedExitWitness, PHASE_ACTIVE, PHASE_SETTLING, Result,
-    STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
-    SpliceStateTransitionWitness, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF,
+    ScriptError, SpliceStateTransitionWitness, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
     WitnessEnvelope, blake2b256, read_u64, validate_relative_block_since, vault_cell_commitment,
     vault_outpoint_commitment, verify_bilateral_state_signatures,
@@ -155,7 +155,8 @@ fn validate_splice_create(
     )?;
     let old_header = StateHeader::parse(&old_data)?;
     validate_state_lock_continuity(old_index, Source::Input, 0, Source::GroupOutput)?;
-    verify_splice_state_transition_bundle(&old_header, new_header, &witness)
+    verify_splice_state_transition_bundle(&old_header, new_header, &witness)?;
+    validate_splice_carrier_capacity(old_index)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -244,15 +245,9 @@ fn validate_supersede(
     }
     validate_participant_authorisation(&new_header)?;
     validate_output_lock_preserved()?;
+    validate_preserved_carrier_capacity()?;
 
-    let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
-    let occupied =
-        load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
-    if cap < occupied {
-        return Err(ScriptError::OutputBelowOccupiedCapacity);
-    }
-
-    Ok(())
+    validate_group_output_capacity()
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -265,12 +260,37 @@ fn validate_vault_activation(old_header: &StateHeader, new_header: &StateHeader)
         new_header.vault_materialisation_root(),
         new_header.vault_outpoint_commitment(),
     )?;
+    validate_activation_carrier_capacity()?;
+    validate_group_output_capacity()
+}
 
-    let cap = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
-    let occupied =
-        load_cell_occupied_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
-    if cap < occupied {
-        return Err(ScriptError::OutputBelowOccupiedCapacity);
+#[cfg(target_arch = "riscv64")]
+fn validate_preserved_carrier_capacity() -> Result<()> {
+    let input = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input != output {
+        return Err(ScriptError::StateCarrierMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_activation_carrier_capacity() -> Result<()> {
+    let input = load_cell_capacity(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input.checked_sub(STATE_CARRIER_ACTIVATION_FEE) != Some(output) {
+        return Err(ScriptError::StateCarrierMismatch);
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_carrier_capacity(old_input_index: usize) -> Result<()> {
+    let input =
+        load_cell_capacity(old_input_index, Source::Input).map_err(|_| ScriptError::Encoding)?;
+    let output = load_cell_capacity(0, Source::GroupOutput).map_err(|_| ScriptError::Encoding)?;
+    if input.checked_add(STATE_CARRIER_ACTIVATION_FEE) != Some(output) {
+        return Err(ScriptError::StateCarrierMismatch);
     }
     Ok(())
 }

@@ -49,9 +49,10 @@ use morph_script_common::{
     FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH,
     FACTORY_STATE_HEADER_LEN, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
     FactoryStateHeader, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
-    SPONSOR_POLICY_LEN, STATE_HEADER_LEN, STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF,
-    ScriptError, SponsorPolicy as WireSponsorPolicy, StateHeader as WireStateHeader,
-    StateHeaderInput, WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    SPONSOR_POLICY_LEN, STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN,
+    STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
+    SponsorPolicy as WireSponsorPolicy, StateHeader as WireStateHeader, StateHeaderInput,
+    WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
     WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256 as script_blake2b256,
     encode_state_header, factory_local_exit_digest, factory_participants_commitment,
@@ -88,7 +89,6 @@ use crate::watch_policy::{WatchPolicyRun, read_watchtower_policy};
 
 const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
-const VAULT_ACTIVATION_FEE: u64 = 10_000;
 pub const DEFAULT_SPONSOR_MIN_STATE_NUMBER: u64 = 1;
 pub const DEFAULT_SPONSOR_MAX_STATE_NUMBER: u64 = 1 << 20;
 const CONTRACTS: [(&str, &str); 7] = [
@@ -429,7 +429,8 @@ pub struct FactoryExitChannelOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
     pub alice_private_key: String,
-    pub bob_private_key: String,
+    pub bob_private_key: Option<String>,
+    pub bob_public_key: Option<String>,
     pub factory_out_point: String,
     pub factory_vault_out_point: String,
     pub update_number: Option<u64>,
@@ -1842,7 +1843,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
     let funding_state_capacity = state_capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("StateCell activation capacity overflow"))?;
     let funding_state_output = CellOutput::new_builder()
         .capacity(funding_state_capacity)
@@ -1975,7 +1976,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
         participants: vec![
@@ -2049,6 +2050,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let funding_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
     let xudt_contract = if options.factory_vault_xudt_amount.is_some() {
@@ -2063,6 +2065,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         factory_contract.data_hash.clone(),
         Bytes::copy_from_slice(&factory_id),
     );
+    let factory_state_lock = type_bound_state_lock(&state_lock_contract, &factory_type);
     let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
     let mut factory_vault_args = factory_id.to_vec();
     factory_vault_args.extend_from_slice(&factory_type_hash);
@@ -2098,11 +2101,11 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let challenge_policy_commitment = script_blake2b256(&[b"CKB_MORPH_FACTORY_CHALLENGE_POLICY"]);
     let funding_factory_capacity = options
         .factory_capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("FactoryStateCell activation capacity overflow"))?;
     let funding_factory_output = CellOutput::new_builder()
         .capacity(funding_factory_capacity)
-        .lock(owner_lock.clone())
+        .lock(factory_state_lock)
         .type_(Some(factory_type.clone()).pack())
         .build();
     ensure_output_capacity("factory", &funding_factory_output, FACTORY_STATE_HEADER_LEN)?;
@@ -2194,9 +2197,8 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         &sent.tx_hash,
         &funding_factory_output,
         &factory_header,
-        &secp_dep,
+        &state_lock_contract,
         &factory_contract,
-        &owner_key,
         0,
         1,
         options.mine_blocks,
@@ -2245,7 +2247,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
         participants: factory_participant_reports(alice_pubkey, bob_pubkey),
@@ -2289,10 +2291,6 @@ pub fn update_factory(
     let owner_lock = secp256k1_lock(&owner_key)?;
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
-    ensure!(
-        factory_cell.output.lock() == owner_lock,
-        "private key does not control the FactoryStateCell lock"
-    );
     let factory_type = factory_cell
         .output
         .type_()
@@ -2450,11 +2448,18 @@ pub fn update_factory(
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     ensure!(
         byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
         "factory cell type script does not use the deployed morph-factory-type code hash"
     );
+    ensure_type_bound_state_lock(
+        &factory_cell.output,
+        &factory_type,
+        &state_lock_contract,
+        "FactoryStateCell",
+    )?;
 
     let fee_cell = find_largest_live_cell(rpc, &owner_lock, tip_number)?;
     ensure!(
@@ -2474,6 +2479,7 @@ pub fn update_factory(
 
     let unsigned = TransactionBuilder::default()
         .cell_dep(secp_dep)
+        .cell_dep(state_lock_contract.cell_dep)
         .cell_dep(factory_contract.cell_dep)
         .input(CellInput::new(factory_out_point, 0))
         .input(CellInput::new(fee_cell.out_point.clone(), 0))
@@ -3174,10 +3180,6 @@ pub fn apply_factory_splice(
     let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
     let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
-    ensure!(
-        factory_cell.output.lock() == owner_lock,
-        "private key does not control the FactoryStateCell lock"
-    );
     let old_header = FactoryStateHeader::parse(factory_cell.data.as_ref()).map_err(|err| {
         anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
     })?;
@@ -3201,6 +3203,7 @@ pub fn apply_factory_splice(
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
     let factory_type = factory_cell
@@ -3212,6 +3215,12 @@ pub fn apply_factory_splice(
         byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
         "FactoryStateCell type script does not use deployed morph-factory-type"
     );
+    ensure_type_bound_state_lock(
+        &factory_cell.output,
+        &factory_type,
+        &state_lock_contract,
+        "FactoryStateCell",
+    )?;
     ensure!(
         factory_type.args().raw_data().as_ref() == transition.header.factory_id.as_slice(),
         "factory type args do not match the factory splice package"
@@ -3384,7 +3393,7 @@ pub fn apply_factory_splice(
 
     let funding_factory_capacity = factory_cell
         .capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("post-splice FactoryStateCell activation capacity overflow"))?;
     let funding_factory_output = factory_cell
         .output
@@ -3423,6 +3432,7 @@ pub fn apply_factory_splice(
     let withdrawal_target = factory_splice_participant_withdrawal_target(&package, &transition)?;
     let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep.clone())
+        .cell_dep(state_lock_contract.cell_dep.clone())
         .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep);
     if let Some(xudt_contract) = &xudt_contract {
@@ -3509,7 +3519,7 @@ pub fn apply_factory_splice(
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(fixed_output_delta)
-        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
+        .and_then(|value| value.checked_sub(STATE_CARRIER_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -3546,9 +3556,8 @@ pub fn apply_factory_splice(
             .as_slice()
             .try_into()
             .map_err(|_| anyhow!("post-splice FactoryStateHeader has an invalid length"))?,
-        &secp_dep,
+        &state_lock_contract,
         &factory_contract,
-        &owner_key,
         0,
         1,
         options.mine_blocks,
@@ -3594,7 +3603,7 @@ pub fn apply_factory_splice(
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
     })
@@ -3621,10 +3630,6 @@ pub fn apply_factory_reduced_splice(
     let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
     let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
-    ensure!(
-        factory_cell.output.lock() == owner_lock,
-        "private key does not control the FactoryStateCell lock"
-    );
     let old_header = FactoryStateHeader::parse(factory_cell.data.as_ref()).map_err(|err| {
         anyhow!("factory cell does not contain a valid FactoryStateHeader: {err:?}")
     })?;
@@ -3648,6 +3653,7 @@ pub fn apply_factory_reduced_splice(
     let tip_number = rpc.tip_header()?.number_value()?;
     let secp_dep = find_secp256k1_cell_dep(rpc)?;
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
     let factory_type = factory_cell
@@ -3659,6 +3665,12 @@ pub fn apply_factory_reduced_splice(
         byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
         "FactoryStateCell type script does not use deployed morph-factory-type"
     );
+    ensure_type_bound_state_lock(
+        &factory_cell.output,
+        &factory_type,
+        &state_lock_contract,
+        "FactoryStateCell",
+    )?;
     ensure!(
         factory_type.args().raw_data().as_ref() == transition.header.factory_id.as_slice(),
         "factory type args do not match the reduced factory splice package"
@@ -3831,7 +3843,7 @@ pub fn apply_factory_reduced_splice(
 
     let funding_factory_capacity = factory_cell
         .capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("post-splice FactoryStateCell activation capacity overflow"))?;
     let funding_factory_output = factory_cell
         .output
@@ -3871,6 +3883,7 @@ pub fn apply_factory_reduced_splice(
         factory_reduced_splice_participant_withdrawal_target(&package, &transition)?;
     let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep.clone())
+        .cell_dep(state_lock_contract.cell_dep.clone())
         .cell_dep(factory_contract.cell_dep.clone())
         .cell_dep(factory_vault_contract.cell_dep);
     if let Some(xudt_contract) = &xudt_contract {
@@ -3963,7 +3976,7 @@ pub fn apply_factory_reduced_splice(
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(fixed_output_delta)
-        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
+        .and_then(|value| value.checked_sub(STATE_CARRIER_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -4000,9 +4013,8 @@ pub fn apply_factory_reduced_splice(
             .as_slice()
             .try_into()
             .map_err(|_| anyhow!("post-splice reduced FactoryStateHeader has an invalid length"))?,
-        &secp_dep,
+        &state_lock_contract,
         &factory_contract,
-        &owner_key,
         0,
         1,
         options.mine_blocks,
@@ -4048,7 +4060,7 @@ pub fn apply_factory_reduced_splice(
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
     })
@@ -4299,7 +4311,8 @@ pub fn factory_splice_smoke(
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
+            bob_private_key: Some(options.bob_private_key),
+            bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
                 apply.factory_out_point.tx_hash, apply.factory_out_point.index
@@ -4416,7 +4429,8 @@ pub fn factory_reduced_splice_smoke(
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
+            bob_private_key: Some(options.bob_private_key),
+            bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
                 apply.factory_out_point.tx_hash, apply.factory_out_point.index
@@ -4571,7 +4585,8 @@ pub fn factory_xudt_splice_smoke(
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
+            bob_private_key: Some(options.bob_private_key),
+            bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
                 apply.factory_out_point.tx_hash, apply.factory_out_point.index
@@ -4728,7 +4743,8 @@ pub fn factory_reduced_xudt_splice_smoke(
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
+            bob_private_key: Some(options.bob_private_key),
+            bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
                 apply.factory_out_point.tx_hash, apply.factory_out_point.index
@@ -4869,7 +4885,8 @@ pub fn factory_reduced_exit_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
             update_number: None,
@@ -4983,7 +5000,8 @@ pub fn factory_reduced_xudt_exit_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
             update_number: None,
@@ -5103,7 +5121,8 @@ pub fn factory_reduced_xudt_negative_exit_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
             update_number: None,
@@ -5214,7 +5233,8 @@ pub fn factory_xudt_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point: printable_out_point_string(&update.factory_out_point),
             factory_vault_out_point,
             update_number: None,
@@ -5357,7 +5377,8 @@ pub fn factory_xudt_negative_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point: live_factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
             update_number: None,
@@ -5396,7 +5417,8 @@ pub fn factory_xudt_negative_smoke(
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
-            bob_private_key: options.bob_private_key.clone(),
+            bob_private_key: Some(options.bob_private_key.clone()),
+            bob_public_key: None,
             factory_out_point: live_factory_out_point,
             factory_vault_out_point,
             update_number: None,
@@ -5483,20 +5505,49 @@ pub fn factory_exit_channel(
         .with_context(|| "invalid secp256k1 private key for factory exit")?;
     let alice_key = parse_privkey(&options.alice_private_key)
         .with_context(|| "invalid Alice channel private key")?;
-    let bob_key = parse_privkey(&options.bob_private_key)
-        .with_context(|| "invalid Bob channel private key")?;
+    let bob_private_pubkey = options
+        .bob_private_key
+        .as_deref()
+        .map(|value| {
+            let key = parse_privkey(value).with_context(|| "invalid Bob channel private key")?;
+            compressed_pubkey(&key)
+        })
+        .transpose()?;
+    let bob_explicit_pubkey = options
+        .bob_public_key
+        .as_deref()
+        .map(|value| parse_compressed_pubkey_hex(value, "Bob channel public key"))
+        .transpose()?;
+    let bob_pubkey = match (bob_private_pubkey, bob_explicit_pubkey) {
+        (Some(from_private), Some(explicit)) => {
+            ensure!(
+                from_private == explicit,
+                "Bob private and public keys identify different participants"
+            );
+            from_private
+        }
+        (Some(from_private), None) => from_private,
+        (None, Some(explicit)) => explicit,
+        (None, None) => {
+            return Err(anyhow!(
+                "Bob private key or compressed public key is required for factory membership"
+            ));
+        }
+    };
+    if options.authorisation == FactoryExitAuthorisation::FullParticipants {
+        ensure!(
+            options.bob_private_key.is_some(),
+            "full-participant factory exit requires Bob's private key"
+        );
+    }
     let owner_lock = secp256k1_lock(&owner_key)?;
     let alice_lock = secp256k1_lock(&alice_key)?;
-    let bob_lock = secp256k1_lock(&bob_key)?;
+    let bob_lock = secp256k1_lock_from_pubkey(&bob_pubkey)?;
 
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
     let factory_vault_cell = load_live_cell(rpc, factory_vault_out_point.clone())?;
-    ensure!(
-        factory_cell.output.lock() == owner_lock,
-        "private key does not control the FactoryStateCell lock"
-    );
     let factory_type = factory_cell
         .output
         .type_()
@@ -5541,6 +5592,12 @@ pub fn factory_exit_channel(
         byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
         "factory cell type script does not use the deployed morph-factory-type code hash"
     );
+    ensure_type_bound_state_lock(
+        &factory_cell.output,
+        &factory_type,
+        &state_lock_contract,
+        "FactoryStateCell",
+    )?;
     let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
     let factory_vault_lock = factory_vault_cell.output.lock();
     ensure!(
@@ -5754,7 +5811,6 @@ pub fn factory_exit_channel(
     });
 
     let alice_pubkey = compressed_pubkey(&alice_key)?;
-    let bob_pubkey = compressed_pubkey(&bob_key)?;
     let mut participant_pubkeys = [alice_pubkey, bob_pubkey];
     participant_pubkeys.sort();
     let participants_commitment =
@@ -5779,7 +5835,7 @@ pub fn factory_exit_channel(
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
     let funding_state_capacity = state_capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("child StateCell activation capacity overflow"))?;
     let funding_state_output = CellOutput::new_builder()
         .capacity(funding_state_capacity)
@@ -5888,7 +5944,9 @@ pub fn factory_exit_channel(
                 let factory_signature = factory_signature_witness(
                     &new_factory_data,
                     &options.alice_private_key,
-                    &options.bob_private_key,
+                    options.bob_private_key.as_deref().ok_or_else(|| {
+                        anyhow!("full-participant factory exit requires Bob's private key")
+                    })?,
                 )?;
                 let local_exit_witness = factory_local_exit_witness(
                     &factory_signature,
@@ -5920,8 +5978,6 @@ pub fn factory_exit_channel(
             FactoryExitAuthorisation::ReducedReserveClaim => {
                 let alice_factory_key = k256_signing_key(&options.alice_private_key)
                     .with_context(|| "invalid Alice factory private key")?;
-                let bob_factory_key = k256_signing_key(&options.bob_private_key)
-                    .with_context(|| "invalid Bob factory private key")?;
                 let reserve_claim = match &child_xudt {
                     Some((_, xudt_type_hash, total_amount, _, _, child_amount)) => {
                         ReducedExitReserveClaim {
@@ -5947,7 +6003,7 @@ pub fn factory_exit_channel(
                 let reduced = reduced_exit_from_factory_header(
                     factory_cell.data.as_ref(),
                     &alice_factory_key,
-                    &bob_factory_key,
+                    &bob_pubkey,
                     new_update_number,
                     reserve_claim,
                     state_output_index,
@@ -5975,7 +6031,7 @@ pub fn factory_exit_channel(
 
     let funding_factory_capacity = factory_cell
         .capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("post-exit FactoryStateCell activation capacity overflow"))?;
     let funding_factory_output = factory_cell
         .output
@@ -6000,7 +6056,7 @@ pub fn factory_exit_channel(
     );
     let fixed_fee_cell_capacity = funding_state_capacity
         .checked_add(options.sponsor_capacity)
-        .and_then(|value| value.checked_add(VAULT_ACTIVATION_FEE))
+        .and_then(|value| value.checked_add(STATE_CARRIER_ACTIVATION_FEE))
         .and_then(|value| value.checked_add(options.fee))
         .ok_or_else(|| anyhow!("factory exit fee-side output capacity overflow"))?;
     let fee_change_capacity = fee_cell
@@ -6064,9 +6120,8 @@ pub fn factory_exit_channel(
             .as_slice()
             .try_into()
             .map_err(|_| anyhow!("post-exit FactoryStateHeader has an invalid length"))?,
-        &secp_dep,
+        &state_lock_contract,
         &factory_contract,
-        &owner_key,
         0,
         3,
         options.mine_blocks,
@@ -6126,7 +6181,7 @@ pub fn factory_exit_channel(
         state_activation_block_hash: state_activation.block_hash,
         state_activation_metrics: state_activation.metrics,
         state_activation_mined_blocks: state_activation.mined_blocks,
-        activation_fee: VAULT_ACTIVATION_FEE
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE
             .checked_mul(2)
             .expect("two activation fees fit in u64"),
         state_capacity,
@@ -6325,7 +6380,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         .build();
     let state_capacity = occupied_capacity(&state_output_for_capacity, state_header.len())?;
     let funding_state_capacity = state_capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("StateCell activation capacity overflow"))?;
     let funding_state_output = CellOutput::new_builder()
         .capacity(funding_state_capacity)
@@ -6461,7 +6516,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
         participants: vec![
@@ -8165,7 +8220,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     );
     let funding_state_capacity = state_cell
         .capacity
-        .checked_add(VAULT_ACTIVATION_FEE)
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("post-splice StateCell activation capacity overflow"))?;
     let funding_state_output = CellOutput::new_builder()
         .capacity(funding_state_capacity)
@@ -8323,7 +8378,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         .checked_add(external_input_capacity)
         .ok_or_else(|| anyhow!("fee and external input capacity overflow"))?
         .checked_sub(required_output_delta)
-        .and_then(|value| value.checked_sub(VAULT_ACTIVATION_FEE))
+        .and_then(|value| value.checked_sub(STATE_CARRIER_ACTIVATION_FEE))
         .and_then(|value| value.checked_sub(options.fee))
         .ok_or_else(|| {
             anyhow!(
@@ -8423,7 +8478,7 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
         activation_status: activation.status,
         activation_block_number: activation.block_number,
         activation_block_hash: activation.block_hash,
-        activation_fee: VAULT_ACTIVATION_FEE,
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
     })
@@ -9456,6 +9511,18 @@ fn decode_hex_len(value: &str, byte_len: usize, label: &str) -> Result<Vec<u8>> 
     let bytes = hex::decode(stripped).with_context(|| format!("{label} is not valid hex"))?;
     ensure!(bytes.len() == byte_len, "{label} must be {byte_len} bytes");
     Ok(bytes)
+}
+
+fn parse_compressed_pubkey_hex(
+    value: &str,
+    label: &str,
+) -> Result<[u8; COMPRESSED_SECP256K1_PUBKEY_LEN]> {
+    let bytes = decode_hex_len(value, COMPRESSED_SECP256K1_PUBKEY_LEN, label)?;
+    k256::PublicKey::from_sec1_bytes(&bytes)
+        .map_err(|_| anyhow!("{label} is not a valid secp256k1 public key"))?;
+    let mut pubkey = [0u8; COMPRESSED_SECP256K1_PUBKEY_LEN];
+    pubkey.copy_from_slice(&bytes);
+    Ok(pubkey)
 }
 
 struct BuiltXudtFinalise {
@@ -10552,21 +10619,18 @@ fn sign_factory_update_transaction(
     privkey: &Privkey,
     input_type: Bytes,
 ) -> Result<ckb_types::core::TransactionView> {
-    let unsigned_factory_witness = WitnessArgs::new_builder()
-        .lock(Some(Bytes::from(vec![0u8; 65])))
+    let factory_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let fee_witness = WitnessArgs::default();
-    let message = sighash_all_message(
-        tx.hash(),
-        &[unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()],
-    );
+    let unsigned_fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .build();
+    let message = sighash_all_message(tx.hash(), &[unsigned_fee_witness.as_bytes()]);
     let signature = privkey
         .sign_recoverable(&message)
         .context("failed to sign CKB factory update transaction")?;
-    let factory_witness = WitnessArgs::new_builder()
+    let fee_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(signature.serialize())))
-        .input_type(Some(input_type).pack())
         .build();
     Ok(tx
         .as_advanced_builder()
@@ -10580,24 +10644,21 @@ fn sign_factory_exit_transaction(
     privkey: &Privkey,
     input_type: Bytes,
 ) -> Result<ckb_types::core::TransactionView> {
-    let unsigned_factory_witness = WitnessArgs::new_builder()
-        .lock(Some(Bytes::from(vec![0u8; 65])))
+    let factory_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
     let factory_vault_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let fee_witness = WitnessArgs::default();
-    let message = sighash_all_message(
-        tx.hash(),
-        &[unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()],
-    );
+    let unsigned_fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .build();
+    let message = sighash_all_message(tx.hash(), &[unsigned_fee_witness.as_bytes()]);
     let signature = privkey
         .sign_recoverable(&message)
         .context("failed to sign CKB factory exit transaction")?;
-    let factory_witness = WitnessArgs::new_builder()
+    let fee_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(signature.serialize())))
-        .input_type(Some(input_type).pack())
         .build();
     Ok(tx
         .as_advanced_builder()
@@ -10613,16 +10674,17 @@ fn sign_factory_splice_transaction(
     input_type: Bytes,
     extra_owner_inputs: usize,
 ) -> Result<ckb_types::core::TransactionView> {
-    let unsigned_factory_witness = WitnessArgs::new_builder()
-        .lock(Some(Bytes::from(vec![0u8; 65])))
+    let factory_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
     let factory_vault_witness = WitnessArgs::new_builder()
         .input_type(Some(input_type.clone()).pack())
         .build();
-    let fee_witness = WitnessArgs::default();
+    let unsigned_fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .build();
     let extra_owner_witness = WitnessArgs::default();
-    let mut owner_witnesses = vec![unsigned_factory_witness.as_bytes(), fee_witness.as_bytes()];
+    let mut owner_witnesses = vec![unsigned_fee_witness.as_bytes()];
     for _ in 0..extra_owner_inputs {
         owner_witnesses.push(extra_owner_witness.as_bytes());
     }
@@ -10630,9 +10692,8 @@ fn sign_factory_splice_transaction(
     let signature = privkey
         .sign_recoverable(&message)
         .context("failed to sign CKB factory splice transaction")?;
-    let factory_witness = WitnessArgs::new_builder()
+    let fee_witness = WitnessArgs::new_builder()
         .lock(Some(Bytes::from(signature.serialize())))
-        .input_type(Some(input_type).pack())
         .build();
     let mut builder = tx
         .as_advanced_builder()
@@ -10884,6 +10945,26 @@ fn is_authentic_observed_state_cell(
     }
     let expected_lock_args: [u8; BYTE32_LEN] = type_script.calc_script_hash().unpack();
     lock.args().raw_data().as_ref() == expected_lock_args.as_slice()
+}
+
+fn type_bound_state_lock(state_lock_contract: &ResolvedContract, type_script: &Script) -> Script {
+    data1_script(
+        state_lock_contract.data_hash.clone(),
+        Bytes::copy_from_slice(type_script.calc_script_hash().as_slice()),
+    )
+}
+
+fn ensure_type_bound_state_lock(
+    output: &CellOutput,
+    type_script: &Script,
+    state_lock_contract: &ResolvedContract,
+    label: &str,
+) -> Result<()> {
+    ensure!(
+        output.lock() == type_bound_state_lock(state_lock_contract, type_script),
+        "{label} lock is not the deployed type-bound morph-state-lock"
+    );
+    Ok(())
 }
 
 fn script_uses_data1_code_hash(script: &Script, code_hash: &H256) -> bool {
@@ -11703,7 +11784,7 @@ fn reduced_exit_initial_roots_with_descriptor(
 fn reduced_exit_from_factory_header(
     old_header_bytes: &[u8],
     alice: &SigningKey,
-    bob: &SigningKey,
+    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
     new_update_number: u64,
     reserve_claim: ReducedExitReserveClaim,
     state_output_index: u32,
@@ -11736,9 +11817,10 @@ fn reduced_exit_from_factory_header(
         old_header.update_number()
     );
 
-    let mut witness = reduced_exit_witness_bytes(
-        alice,
-        bob,
+    let alice_pubkey = k256_pubkey(alice);
+    let mut witness = reduced_exit_witness_bytes_from_pubkeys(
+        &alice_pubkey,
+        bob_pubkey,
         reserve_claim,
         state_output_index,
         vault_output_index,
@@ -11750,7 +11832,8 @@ fn reduced_exit_from_factory_header(
     )?;
     let parsed_witness = FactoryReducedExitWitness::parse(&witness)
         .map_err(|err| anyhow!("constructed reduced-exit witness is invalid: {err:?}"))?;
-    let participant_entries = reduced_exit_participant_entries(alice, bob);
+    let participant_entries =
+        reduced_exit_participant_entries_from_pubkeys(&alice_pubkey, bob_pubkey);
     let participants_commitment = factory_participants_commitment(
         2,
         &[
@@ -11846,6 +11929,33 @@ fn reduced_exit_witness_bytes(
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Result<Vec<u8>> {
+    reduced_exit_witness_bytes_from_pubkeys(
+        &k256_pubkey(alice),
+        &k256_pubkey(bob),
+        reserve_claim,
+        state_output_index,
+        vault_output_index,
+        state_type_hash,
+        vault_lock_hash,
+        state_lock_hash,
+        state_header,
+        descriptor,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reduced_exit_witness_bytes_from_pubkeys(
+    alice_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    reserve_claim: ReducedExitReserveClaim,
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &[u8],
+    vault_lock_hash: &[u8],
+    state_lock_hash: &[u8],
+    state_header: &[u8],
+    descriptor: &[u8],
+) -> Result<Vec<u8>> {
     ensure!(
         state_type_hash.len() == BYTE32_LEN,
         "state type hash must be 32 bytes"
@@ -11874,7 +11984,7 @@ fn reduced_exit_witness_bytes(
             ));
         }
     };
-    let entries = reduced_exit_participant_entries(alice, bob);
+    let entries = reduced_exit_participant_entries_from_pubkeys(alice_pubkey, bob_pubkey);
     let (before, after) = reduced_exit_rights_pair(reserve_claim);
 
     let mut raw = vec![0u8; witness_len];
@@ -11931,9 +12041,16 @@ fn reduced_exit_participant_entries(
     alice: &SigningKey,
     bob: &SigningKey,
 ) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
+    reduced_exit_participant_entries_from_pubkeys(&k256_pubkey(alice), &k256_pubkey(bob))
+}
+
+fn reduced_exit_participant_entries_from_pubkeys(
+    alice_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
     let mut entries = [
-        ([1u8; BYTE32_LEN], k256_pubkey(alice)),
-        ([2u8; BYTE32_LEN], k256_pubkey(bob)),
+        ([1u8; BYTE32_LEN], *alice_pubkey),
+        ([2u8; BYTE32_LEN], *bob_pubkey),
     ];
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
@@ -12277,7 +12394,7 @@ fn activate_state_vault_binding(
         funding_out_points(funding_tx_hash, state_output_index, vault_output_index)?;
     let funding_capacity: u64 = funding_state_output.capacity().unpack();
     let state_capacity = funding_capacity
-        .checked_sub(VAULT_ACTIVATION_FEE)
+        .checked_sub(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("StateCell cannot fund vault activation"))?;
     let state_output = funding_state_output
         .clone()
@@ -12305,9 +12422,8 @@ fn activate_factory_vault_binding(
     funding_tx_hash: &str,
     funding_factory_output: &CellOutput,
     factory_header: &[u8; FACTORY_STATE_HEADER_LEN],
-    secp_dep: &CellDep,
+    state_lock_contract: &ResolvedContract,
     factory_contract: &ResolvedContract,
-    owner_key: &Privkey,
     factory_output_index: u32,
     vault_output_index: u32,
     mine_blocks: u64,
@@ -12320,7 +12436,7 @@ fn activate_factory_vault_binding(
         funding_out_points(funding_tx_hash, factory_output_index, vault_output_index)?;
     let funding_capacity: u64 = funding_factory_output.capacity().unpack();
     let factory_capacity = funding_capacity
-        .checked_sub(VAULT_ACTIVATION_FEE)
+        .checked_sub(STATE_CARRIER_ACTIVATION_FEE)
         .ok_or_else(|| anyhow!("FactoryStateCell cannot fund vault activation"))?;
     let factory_output = funding_factory_output
         .clone()
@@ -12334,16 +12450,15 @@ fn activate_factory_vault_binding(
         &tx_hash_bytes,
         vault_output_index,
     );
-    let unsigned = TransactionBuilder::default()
+    let tx = TransactionBuilder::default()
         .cell_dep(direct_cell_dep(vault_out_point))
-        .cell_dep(secp_dep.clone())
+        .cell_dep(state_lock_contract.cell_dep.clone())
         .cell_dep(factory_contract.cell_dep.clone())
         .input(CellInput::new(factory_out_point, 0))
         .output(factory_output.clone())
         .output_data(Bytes::copy_from_slice(&activated_header).pack())
         .build();
-    let signed = sign_single_secp_input(unsigned, owner_key)?;
-    let sent = send_and_mine(rpc, signed, mine_blocks)?;
+    let sent = send_and_mine(rpc, tx, mine_blocks)?;
     Ok((sent, factory_output, activated_header))
 }
 
@@ -13248,6 +13363,7 @@ fn morph_script_error_name(code: i16) -> Option<&'static str> {
         value if value == ScriptError::SponsorPolicyUnsupported as i16 => {
             Some("SponsorPolicyUnsupported")
         }
+        value if value == ScriptError::StateCarrierMismatch as i16 => Some("StateCarrierMismatch"),
         _ => None,
     }
 }
@@ -13334,6 +13450,79 @@ mod tests {
         let lock_from_pubkey = secp256k1_lock_from_pubkey(&pubkey).unwrap();
 
         assert_eq!(lock_from_pubkey, lock_from_key);
+    }
+
+    #[test]
+    fn reduced_exit_witness_needs_only_counterparty_public_key() {
+        let alice = k256_signing_key(&private_key_from_scalar(1)).unwrap();
+        let bob = k256_signing_key(&private_key_from_scalar(2)).unwrap();
+        let alice_pubkey = k256_pubkey(&alice);
+        let bob_pubkey = k256_pubkey(&bob);
+        let descriptor = bilateral_ckb_descriptor([3u8; 32], 60, [4u8; 32], 40);
+        let state_header = [0u8; STATE_HEADER_LEN];
+        let reserve_claim = ReducedExitReserveClaim {
+            release_quantity: 10,
+            before_quantity: 50,
+            after_quantity: 40,
+            asset_type: None,
+            ckb_before_quantity: 100,
+            ckb_after_quantity: 100,
+        };
+
+        let from_keys = reduced_exit_witness_bytes(
+            &alice,
+            &bob,
+            reserve_claim,
+            1,
+            2,
+            &[5u8; 32],
+            &[6u8; 32],
+            &[7u8; 32],
+            &state_header,
+            &descriptor,
+        )
+        .unwrap();
+        let from_public_keys = reduced_exit_witness_bytes_from_pubkeys(
+            &alice_pubkey,
+            &bob_pubkey,
+            reserve_claim,
+            1,
+            2,
+            &[5u8; 32],
+            &[6u8; 32],
+            &[7u8; 32],
+            &state_header,
+            &descriptor,
+        )
+        .unwrap();
+
+        assert_eq!(from_public_keys, from_keys);
+    }
+
+    #[test]
+    fn factory_fee_signature_does_not_gate_the_factory_state_witness() {
+        let key = parse_privkey(&private_key_from_scalar(1)).unwrap();
+        let tx = TransactionBuilder::default()
+            .input(CellInput::new(OutPoint::default(), 0))
+            .input(CellInput::new(OutPoint::default(), 0))
+            .build();
+        let input_type = Bytes::from(vec![7u8; 32]);
+
+        let signed = sign_factory_update_transaction(tx, &key, input_type.clone()).unwrap();
+        let factory_witness =
+            WitnessArgs::from_slice(signed.witnesses().get(0).unwrap().raw_data().as_ref())
+                .unwrap();
+        let fee_witness =
+            WitnessArgs::from_slice(signed.witnesses().get(1).unwrap().raw_data().as_ref())
+                .unwrap();
+
+        assert!(factory_witness.lock().to_opt().is_none());
+        assert_eq!(
+            factory_witness.input_type().to_opt().unwrap().raw_data(),
+            input_type
+        );
+        assert_eq!(fee_witness.lock().to_opt().unwrap().raw_data().len(), 65);
+        assert!(fee_witness.input_type().to_opt().is_none());
     }
 
     #[test]

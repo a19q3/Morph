@@ -60,6 +60,8 @@ Implemented locally:
   updates, and splices, carried by `WitnessEnvelope`;
 - two-stage bilateral/Factory Vault activation that binds enforceable state to
   an exact CKB OutPoint and rejects byte-identical clone substitution;
+- type-bound FactoryState locking and exact State/Factory carrier-capacity
+  conservation, so fee-payer signatures do not become Factory authority;
 - devnet smoke and stateful acceptance reports that bind scenarios to real
   transactions, cycle estimates, and expected negative-path failures;
 - experimental Morph-owned RGB++/x402 Agent, native bilateral

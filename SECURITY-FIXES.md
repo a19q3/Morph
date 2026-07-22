@@ -17,6 +17,50 @@ revalidation, operational readiness sign-off, and value-limit policy.
 
 Implementation safety-boundary baseline: `8944bf7`.
 
+## Post-baseline sovereign Factory hardening (2026-07-22)
+
+- Issue: the devnet transaction layer placed FactoryStateCells under an
+  operator secp lock. Participant/reduced proof acceptance was therefore not
+  sufficient to spend the cell without the fee payer's private key.
+- Fix: newly created FactoryStateCells use `morph-state-lock` with the exact
+  FactoryType hash as lock args. Factory protocol evidence remains in
+  `input_type`; the operator secp signature signs only a distinct fee-input
+  lock group. Update, full/reduced splice, exit, and activation paths validate
+  the type-bound lock before building a transaction. Reduced exit can use the
+  non-signing counterparty's compressed public key instead of their private
+  key.
+- Tests: `factory_fee_signature_does_not_gate_the_factory_state_witness`,
+  `reduced_exit_witness_needs_only_counterparty_public_key`, and
+  `factory_type_and_vault_accept_reduced_exit_reserve_release` using the real
+  StateLock.
+- Migration limitation: legacy owner-locked devnet factories must be recreated;
+  this is not an in-place mainnet migration profile.
+
+## Exact State/Factory carrier conservation (2026-07-22)
+
+- Issue: the State and Factory type scripts rejected outputs below occupied
+  capacity but did not require the remaining carrier capacity to stay in the
+  successor. A valid protocol witness could therefore accompany a carrier
+  drain.
+- Fix: ordinary updates preserve capacity exactly. Deterministic Vault binding
+  consumes exactly `STATE_CARRIER_ACTIVATION_FEE = 10_000` shannons, while
+  splice/exit creates the next unbound carrier with exactly that reserve added.
+- Negative tests:
+  `state_type_rejects_signed_supersede_carrier_drain`,
+  `factory_type_rejects_signed_factory_update_carrier_drain`,
+  `state_type_rejects_vault_activation_carrier_drain`,
+  `factory_type_rejects_vault_activation_carrier_drain`,
+  `state_type_rejects_splice_without_carrier_activation_reserve`, and
+  `factory_type_rejects_splice_without_carrier_activation_reserve`.
+
+## Bilateral backend commit deadline (2026-07-22)
+
+- Issue: payment preparation rejected expired intents, but commit did not bind
+  a commit time and could accept a previously prepared intent after expiry.
+- Fix: `ChannelBackend::commit_payment` requires `committed_at_unix` and accepts
+  only `prepared_at_unix <= committed_at_unix < expires_at_unix`.
+- Negative test: `commit_rejects_times_outside_the_prepared_intent_window`.
+
 ## Authentic StateCell authority
 
 - Issue: Vault and sponsor paths must not treat bytes that decode as a

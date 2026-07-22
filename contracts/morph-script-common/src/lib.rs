@@ -103,6 +103,9 @@ pub const FACTORY_REDUCED_SPLICE_WITNESS_LEN: usize = 2
 
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
+/// Capacity reserved on an unbound State/FactoryState carrier for the
+/// canonical one-transaction Vault OutPoint activation.
+pub const STATE_CARRIER_ACTIVATION_FEE: u64 = 10_000;
 pub const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B: u16 = 1;
 pub const BILATERAL_SIGNATURE_WITNESS_VERSION: u16 = 1;
 pub const BILATERAL_SIGNATURE_THRESHOLD: u8 = 2;
@@ -274,6 +277,7 @@ pub enum ScriptError {
     VaultOutPointUnbound = 49,
     VaultOutPointMismatch = 50,
     VaultActivationInvalid = 51,
+    StateCarrierMismatch = 52,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;

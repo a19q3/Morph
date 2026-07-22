@@ -37,16 +37,17 @@ use morph_script_common::{
     SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
     SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
     SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN,
-    STATE_HEADER_LEN, SpliceAssetDeltas, SpliceHeader, SpliceStateTransitionWitness,
-    SpliceVaultDescriptor, StateHeader, StateHeaderInput, VAULT_ASSET_KIND_CKB,
-    VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
-    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256, encode_state_header,
-    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
-    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
-    vault_outpoint_commitment, witness_envelope_body_commitment,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, SpliceAssetDeltas, SpliceHeader,
+    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader, StateHeaderInput,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, blake2b256, encode_state_header, factory_local_exit_digest,
+    factory_participants_commitment, participants_commitment, relative_block_since,
+    settlement_descriptor_commitment, vault_cell_commitment, vault_outpoint_commitment,
+    witness_envelope_body_commitment,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -3058,6 +3059,7 @@ fn state_vault_activation_tx(
     committed_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
     actual_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
     drift_output_lock: bool,
+    drift_carrier_capacity: bool,
 ) -> (Context, TransactionView) {
     let mut context = Context::default();
     let state_type = deploy_contract(
@@ -3106,7 +3108,11 @@ fn state_vault_activation_tx(
         .input(CellInput::new(state_out_point, 0))
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY - 1)
+                .capacity(
+                    CELL_CAPACITY
+                        - STATE_CARRIER_ACTIVATION_FEE
+                        - u64::from(drift_carrier_capacity),
+                )
                 .lock(output_lock)
                 .type_(Some(state_type).pack())
                 .build(),
@@ -3121,7 +3127,8 @@ fn state_vault_activation_tx(
 #[test]
 fn state_type_accepts_exact_sibling_vault_activation() {
     let vault_out_point = fixture_vault_out_point();
-    let (context, tx) = state_vault_activation_tx(vault_out_point.clone(), vault_out_point, false);
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false);
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("exact sibling VaultCell activation should verify");
@@ -3130,8 +3137,12 @@ fn state_type_accepts_exact_sibling_vault_activation() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn state_type_rejects_byte_identical_clone_vault_activation() {
-    let (context, tx) =
-        state_vault_activation_tx(fixture_vault_out_point(), test_out_point(88, 1), false);
+    let (context, tx) = state_vault_activation_tx(
+        fixture_vault_out_point(),
+        test_out_point(88, 1),
+        false,
+        false,
+    );
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -3139,7 +3150,17 @@ fn state_type_rejects_byte_identical_clone_vault_activation() {
 #[test]
 fn state_type_rejects_vault_activation_lock_drift() {
     let vault_out_point = fixture_vault_out_point();
-    let (context, tx) = state_vault_activation_tx(vault_out_point.clone(), vault_out_point, true);
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_vault_activation_carrier_drain() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -3364,6 +3385,7 @@ fn factory_vault_activation_tx(
     actual_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
     drift_output_lock: bool,
     prefix_dummy_dep: bool,
+    drift_carrier_capacity: bool,
 ) -> (Context, TransactionView) {
     let mut context = Context::default();
     let owner_lock = deploy_always_success(&mut context);
@@ -3427,7 +3449,11 @@ fn factory_vault_activation_tx(
         .input(CellInput::new(factory_out_point, 0))
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY - 1)
+                .capacity(
+                    CELL_CAPACITY
+                        - STATE_CARRIER_ACTIVATION_FEE
+                        - u64::from(drift_carrier_capacity),
+                )
                 .lock(output_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3442,8 +3468,13 @@ fn factory_vault_activation_tx(
 #[test]
 fn factory_type_accepts_exact_sibling_vault_activation() {
     let vault_out_point = fixture_vault_out_point();
-    let (context, tx) =
-        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false);
+    let (context, tx) = factory_vault_activation_tx(
+        vault_out_point.clone(),
+        vault_out_point,
+        false,
+        false,
+        false,
+    );
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("exact sibling FactoryVaultCell activation should verify");
@@ -3457,6 +3488,7 @@ fn factory_type_rejects_byte_identical_clone_vault_activation() {
         test_out_point(88, 1),
         false,
         false,
+        false,
     );
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
@@ -3466,7 +3498,7 @@ fn factory_type_rejects_byte_identical_clone_vault_activation() {
 fn factory_type_rejects_vault_activation_lock_drift() {
     let vault_out_point = fixture_vault_out_point();
     let (context, tx) =
-        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false);
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false, false);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -3475,13 +3507,36 @@ fn factory_type_rejects_vault_activation_lock_drift() {
 fn factory_type_rejects_noncanonical_vault_activation_dep_position() {
     let vault_out_point = fixture_vault_out_point();
     let (context, tx) =
-        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true);
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_vault_activation_carrier_drain() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false, true);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn factory_type_accepts_signed_factory_update() {
+    let (context, tx) = signed_factory_update_tx(CELL_CAPACITY);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_signed_factory_update_carrier_drain() {
+    let (context, tx) = signed_factory_update_tx(CELL_CAPACITY - 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn signed_factory_update_tx(output_capacity: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
@@ -3500,7 +3555,7 @@ fn factory_type_accepts_signed_factory_update() {
         .build();
 
     let output = CellOutput::new_builder()
-        .capacity(CELL_CAPACITY)
+        .capacity(output_capacity)
         .lock(lock)
         .type_(Some(factory_type).pack())
         .build();
@@ -3514,10 +3569,7 @@ fn factory_type_accepts_signed_factory_update() {
         ))
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("factory update should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -3567,6 +3619,13 @@ fn factory_type_and_vault_accept_factory_splice_in() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_splice_without_carrier_activation_reserve() {
+    let (context, tx) = factory_splice_ckb_tx_with_carrier(false, 0);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -3954,6 +4013,13 @@ fn factory_type_rejects_invalid_participant_signature() {
 }
 
 fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
+    factory_splice_ckb_tx_with_carrier(tamper_capacity, STATE_CARRIER_ACTIVATION_FEE)
+}
+
+fn factory_splice_ckb_tx_with_carrier(
+    tamper_capacity: bool,
+    carrier_activation_reserve: u64,
+) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let external_input_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
@@ -4014,7 +4080,7 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
     } else {
         new_reserve
     };
-    let change_capacity = CELL_CAPACITY - splice_amount;
+    let change_capacity = CELL_CAPACITY - splice_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -4025,7 +4091,7 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + carrier_activation_reserve)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4125,7 +4191,7 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
     } else {
         new_reserve
     };
-    let change_capacity = CELL_CAPACITY - splice_amount;
+    let change_capacity = CELL_CAPACITY - splice_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -4136,7 +4202,7 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4273,7 +4339,8 @@ fn factory_xudt_splice_tx(
         FactoryXudtSpliceCapacityTamper::OutputCapacity => descriptor_ckb_amount - 1,
         _ => descriptor_ckb_amount,
     };
-    let change_capacity = input_capacity + external_input_capacity - output_capacity;
+    let change_capacity =
+        input_capacity + external_input_capacity - output_capacity - STATE_CARRIER_ACTIVATION_FEE;
     let witness_kind = if reduced {
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
     } else {
@@ -4289,7 +4356,7 @@ fn factory_xudt_splice_tx(
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4406,7 +4473,8 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
         xudt_amount_data(xudt_splice_amount),
     );
 
-    let change_capacity = old_ckb_amount + CELL_CAPACITY - new_ckb_amount;
+    let change_capacity =
+        old_ckb_amount + CELL_CAPACITY - new_ckb_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -4417,7 +4485,7 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4456,13 +4524,14 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
 #[test]
 fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let mut context = Context::default();
-    let factory_lock = deploy_always_success(&mut context);
     let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
 
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
     let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let factory_lock =
+        deploy_contract(&mut context, "morph-state-lock", factory_type_hash.to_vec());
     let mut factory_vault_args = FACTORY_ID.to_vec();
     factory_vault_args.extend_from_slice(&factory_type_hash);
     let factory_vault_lock =
@@ -4580,7 +4649,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -5157,7 +5226,7 @@ fn factory_reduced_xudt_exit_tx(
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -5341,7 +5410,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock.clone())
                 .type_(Some(factory_type.clone()).pack())
                 .build(),
@@ -5873,7 +5942,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -6105,6 +6174,20 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn state_type_accepts_newer_settling_state() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("newer state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_supersede_carrier_drain() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY - 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn signed_state_supersede_tx(output_capacity: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
@@ -6123,7 +6206,7 @@ fn state_type_accepts_newer_settling_state() {
         .build();
 
     let output = CellOutput::new_builder()
-        .capacity(CELL_CAPACITY)
+        .capacity(output_capacity)
         .lock(lock)
         .type_(Some(state_type).pack())
         .build();
@@ -6134,10 +6217,7 @@ fn state_type_accepts_newer_settling_state() {
         .witness(witness_with_input_type(sig_witness))
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("newer state should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -7104,7 +7184,7 @@ fn state_and_vault_accept_splice_out_bridge() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(new_state_lock)
                 .type_(Some(new_state_type).pack())
                 .build(),
@@ -7137,6 +7217,20 @@ fn state_and_vault_accept_splice_out_bridge() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn state_and_vault_accept_splice_in_bridge() {
+    let (context, tx) = state_and_vault_splice_in_tx(STATE_CARRIER_ACTIVATION_FEE);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("state and vault splice-in bridge should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_splice_without_carrier_activation_reserve() {
+    let (context, tx) = state_and_vault_splice_in_tx(0);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn state_and_vault_splice_in_tx(carrier_activation_reserve: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let external_funding_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![8]));
     let finalise_since = relative_since(0);
@@ -7239,7 +7333,7 @@ fn state_and_vault_accept_splice_in_bridge() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + carrier_activation_reserve)
                 .lock(new_state_lock)
                 .type_(Some(new_state_type).pack())
                 .build(),
@@ -7257,10 +7351,7 @@ fn state_and_vault_accept_splice_in_bridge() {
         .witness(empty_witness())
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("state and vault splice-in bridge should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]

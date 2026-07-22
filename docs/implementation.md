@@ -181,9 +181,21 @@ sponsor-lock consensus rule.
 conservative full-participant signatures, local-exit evidence, reduced-rights
 proofs, sparse-Merkle updates, reduced exits, factory splices, and
 reduced-splice bodies.
+New FactoryStateCells use `morph-state-lock` bound to the exact FactoryType
+script hash. The operator key funds fees through an independent secp input; it
+does not control or co-authorise the FactoryStateCell. Reduced reserve-claim
+exit construction needs the exiting participant's private key and the other
+participant's compressed public key, not the other participant's secret.
 Value-bearing factory materialisation consumes and recreates the parent Factory
 State Cell with updated roots; read-only `unchanged_reference` materialisation
 is not part of the current conservative contract profile.
+
+State and FactoryState carrier capacity is a protocol boundary. Ordinary
+updates preserve it exactly. An unbound carrier reserves 10,000 shannons for
+the deterministic Vault-OutPoint activation transaction; activation consumes
+exactly that reserve, while splice and Factory exit create the next unbound
+carrier with exactly the same reserve added. This prevents a valid state proof
+from being reused as authority to drain unrelated carrier capacity.
 
 `morph-factory-vault-lock` owns factory reserve conservation. It ensures a
 factory exit or splice changes the FactoryVaultCell exactly as the factory

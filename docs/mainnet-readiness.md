@@ -26,9 +26,13 @@ is necessary evidence, but it is not enough for mainnet.
 | Independent protocol review | External review of state, vault, sponsor, splice, and factory rules. | Open. |
 | Independent script review | Review of no-std CKB parsing, cell selection, since handling, and error paths. | Open. |
 | Exact Vault provenance | Activation/rotation binds every bilateral and Factory Vault to its exact CKB OutPoint; clone/substitution negatives pass. | Implemented and locally verified; independent review/migration policy remain open. |
+| Factory state sovereignty | FactoryState uses the type-bound Morph StateLock; participant/reduced proofs, rather than a fee payer's secp lock, authorise state transitions. | Implemented for newly created factories; legacy owner-locked devnet factories must be recreated and an explicit release migration policy remains open. |
+| State-carrier conservation | Ordinary State/Factory updates preserve carrier capacity exactly; activation consumes exactly 10,000 shannons; splice/exit successors reserve exactly that amount. | Implemented and covered by CKB-VM negative tests; independent review remains open. |
+| Timed payment commit | The bilateral backend rejects commits before preparation and at/after the signed intent expiry. | Implemented in the host boundary; pending conditional-payment force-close remains open. |
 | Morph-backed routed edge | A provider-neutral edge and minimal Fiber hook prove real routed/MPP traffic against live Morph materialisation and failure callbacks. | Open; current real Fiber route is not Morph-backed. |
 | RGB++ proof and reorg pipeline | Bitcoin proof, CKB binding/leap, confirmation, quarantine, and rollback evidence for admitted RGB++ assets. | Open. |
 | Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Open. |
+| Supply-chain warning closure | Remove or formally review current upstream warnings (`memmap2` through dev-only `ckb-testtool`, unmaintained `proc-macro-error2`, and yanked lockfile entries). | Open; policy gates pass, but warnings remain. |
 | Mainnet-like fee evidence | Repeated runs under realistic fee pressure and transaction-size budgets. | Open. |
 | Reorg and delay evidence | Watchtower and publication behaviour under delayed observations and chain reorg scenarios. | Open. |
 | Multi-operator watchtower evidence | At least two independent operators following documented procedures. | Open. |
@@ -59,6 +63,10 @@ Local evidence covers:
   activation, preservation, rotation, and clone-substitution negatives;
 - bounded reduced-rights, sparse-Merkle, reduced-exit, factory-splice, and
   reduced-splice proof bodies carried by `WitnessEnvelope`;
+- type-bound FactoryState locking, with fee signatures isolated to independent
+  fee inputs and reduced exit constructible from the counterparty public key;
+- exact State/Factory carrier-capacity deltas across ordinary update,
+  activation, splice, and exit paths;
 - expected failure paths for malformed or attack-shaped transactions.
 
 ## What Local Evidence Does Not Prove
@@ -72,6 +80,8 @@ Local devnet evidence does not prove:
 - reproducibility of release artefacts in a separate environment;
 - correctness under independent review;
 - independent validation of the implemented exact-OutPoint activation profile;
+- migration of legacy owner-locked devnet FactoryState cells (they cannot be
+  upgraded in place because lock continuity correctly rejects the change);
 - real Morph-backed external-edge operation inside a routing provider;
 - production RGB++ SPV/leap/reorg handling;
 - safe value limits for real users.

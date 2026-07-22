@@ -50,6 +50,39 @@ CKB-VM/devnet evidence. It covered:
 | Medium | Agent payments have encrypted state, scoped credentials, policy caps, strict Fiber terminal-status checks, real routing, x402, and fair exchange. Operational ingress, HA/restart, revocation distribution, and abuse/load evidence remain incomplete. | Open. |
 | Release blocker | Independent protocol/script review, reproducible release artefacts, value limits, and multi-operator operations remain open. | Open. |
 
+## 2026-07-22 hardening addendum
+
+A follow-up review found three boundaries that were weaker than the intended
+sovereign model even though the participant proofs themselves were valid:
+
+| Boundary | Problem | Remediation |
+| --- | --- | --- |
+| FactoryState lock authority | Devnet FactoryStateCells were locked directly by the operator/fee-payer secp key. A valid Factory proof therefore still depended on that unrelated key agreeing to spend. | New factories use `morph-state-lock` bound to the exact FactoryType hash. Factory witnesses carry only protocol authorisation; the secp signature is isolated on an independent fee input. Update, splice, exit, and activation builders reject any other FactoryState lock. |
+| Carrier capacity | Scripts checked only occupied capacity, so a correctly signed ordinary state transition could reduce the State/FactoryState carrier and redirect the difference. | Ordinary updates now preserve carrier capacity exactly. Vault activation consumes exactly 10,000 shannons, and splice/exit successors add exactly that activation reserve. Six CKB-VM negatives cover bilateral and Factory update, activation, and splice drain attempts. |
+| Intent expiry | `prepare_payment` checked expiry, but `commit_payment` did not receive a trusted commit time. A prepared intent could be committed after its deadline. | `ChannelBackend::commit_payment` now takes `committed_at_unix` and rejects times before preparation or at/after expiry without consuming the preparation. |
+
+The reduced Factory exit CLI was also decoupled from the non-signing
+counterparty's secret: `--authorisation reduced-reserve-claim` accepts the
+counterparty's compressed public key. Full-participant exit continues to
+require both participant signatures.
+
+This change intentionally does not add Morph-native multi-hop. Morph remains
+the enforceable Factory/channel and RGB++ liquidity authority; Fiber remains a
+replaceable routing provider behind the minimal external-edge adapter.
+
+Compatibility note: an already-created owner-locked devnet FactoryStateCell
+cannot be converted in place because the old lock must authorise its own spend
+and the type script correctly enforces lock continuity. Recreate it under the
+new profile. This repository still makes no mainnet migration or real-assets
+claim.
+
+Verification for the addendum: `make ci AUDIT='cargo audit --no-fetch'`
+passes, including formatting, clippy, cargo-deny, host/property tests, fixtures,
+SDK/UI builds, RISC-V contract builds, and 106 CKB-VM cases (one fixture-only
+test remains intentionally filtered). `cargo check --workspace --all-features`
+also passes. A new full cross-stack run must be generated from the committed
+tree before treating earlier Fiber/Morph evidence as evidence for this diff.
+
 ## Changes made
 
 ### Signed FactoryVault materialisation
