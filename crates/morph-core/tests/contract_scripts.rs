@@ -6190,6 +6190,13 @@ fn state_type_rejects_signed_supersede_carrier_drain() {
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_supersede_carrier_top_up() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY + 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
 fn signed_state_supersede_tx(output_capacity: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);

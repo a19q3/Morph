@@ -1155,6 +1155,51 @@ fn accepts_valid_state_supersession() {
 }
 
 #[test]
+fn rejects_state_transition_with_unbound_partition_carrier() {
+    let (old, new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    for cell in ctx
+        .partition
+        .inputs
+        .iter_mut()
+        .chain(ctx.partition.outputs.iter_mut())
+    {
+        if matches!(cell.class, CellClass::StateCarrier) {
+            cell.capacity = 9_000;
+        }
+    }
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_with_changed_carrier_capacity() {
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.capacity -= 1;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_with_changed_carrier_metadata() {
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.occupied_capacity -= 1;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_from_non_live_host_phase() {
+    let (mut old, new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    old.header.phase = Phase::Closed;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::HeaderContextChanged);
+}
+
+#[test]
 fn accepts_signed_settlement_descriptor_update() {
     let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);

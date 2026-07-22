@@ -792,8 +792,20 @@ mod tests {
                     xudt_types: BTreeSet::new(),
                 },
                 partition: PartitionedTransaction {
-                    inputs: vec![ClassifiedCell::business_ckb(10_000, 1_000, 9_000)],
-                    outputs: vec![ClassifiedCell::business_ckb(10_000, 1_000, 9_000)],
+                    inputs: vec![
+                        ClassifiedCell::business_ckb(10_000, 1_000, 9_000),
+                        ClassifiedCell::state_carrier(
+                            backend.current_state.capacity,
+                            backend.current_state.occupied_capacity,
+                        ),
+                    ],
+                    outputs: vec![
+                        ClassifiedCell::business_ckb(10_000, 1_000, 9_000),
+                        ClassifiedCell::state_carrier(
+                            backend.current_state.capacity,
+                            backend.current_state.occupied_capacity,
+                        ),
+                    ],
                     tx_fee: 0,
                     authorised_reserve_refund: 0,
                 },

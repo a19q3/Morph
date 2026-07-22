@@ -157,6 +157,9 @@ pub fn validate_state_transition(
     if !old.capacity_sufficient() || !new.capacity_sufficient() {
         return Err(MorphError::StateCapacityInsufficient);
     }
+    if !matches!(old.header.phase, Phase::Active | Phase::Settling) {
+        return Err(MorphError::HeaderContextChanged);
+    }
     if new.header.state_number <= old.header.state_number {
         return Err(MorphError::NonMonotonicStateNumber);
     }
@@ -173,7 +176,17 @@ pub fn validate_state_transition(
     if ctx.referenced_funding_anchor != new.header.funding_anchor {
         return Err(MorphError::FundingAnchorMismatch);
     }
-    validate_partition_conservation(&ctx.partition, &ctx.asset_registry)?;
+    let totals = validate_partition_conservation(&ctx.partition, &ctx.asset_registry)?;
+    // Carrier capacity is not part of the signed StateHeader. Bind the
+    // transaction model to these exact cells and mirror the State type's
+    // ordinary-supersession rule that the carrier is recreated unchanged.
+    if old.capacity != new.capacity
+        || old.occupied_capacity != new.occupied_capacity
+        || totals.state_carrier_in != old.capacity
+        || totals.state_carrier_out != new.capacity
+    {
+        return Err(MorphError::StateCarrierNotConserved);
+    }
     Ok(())
 }
 
