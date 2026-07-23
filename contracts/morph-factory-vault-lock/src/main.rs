@@ -1,14 +1,17 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
 #[cfg(target_arch = "riscv64")]
+use ckb_std::ckb_types::prelude::*;
+#[cfg(target_arch = "riscv64")]
 use ckb_std::error::SysError;
 #[cfg(target_arch = "riscv64")]
 use ckb_std::high_level::{
-    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_cell_type_hash, load_script,
-    load_script_hash, load_witness_args,
+    load_cell_capacity, load_cell_data, load_cell_lock_hash, load_cell_type_hash,
+    load_input_out_point, load_script, load_script_hash, load_witness_args,
 };
 #[cfg(target_arch = "riscv64")]
 use ckb_std::{default_alloc, entry};
@@ -18,10 +21,11 @@ use morph_script_common::{
     BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
     FactoryLocalExitWitness, FactoryReducedExitWitness, FactoryReducedSpliceWitness,
     FactorySpliceWitness, FactoryStateHeader, FactoryVaultDelta, FactoryVaultDeltas,
-    FactoryVaultDescriptor, Result, ScriptError, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
-    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
-    WitnessEnvelope, read_u128, verify_factory_reduced_splice_update, verify_factory_splice_update,
+    FactoryVaultDescriptor, Result, ScriptError, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope, read_u128, vault_cell_commitment,
+    vault_outpoint_commitment, verify_factory_reduced_splice_update, verify_factory_splice_update,
     verify_factory_state_signatures, verify_reduced_factory_exit_update,
 };
 
@@ -67,9 +71,12 @@ fn main() -> Result<()> {
         find_unique_factory_state_data(Source::Output, factory_id, factory_type_hash)?;
     let old_header = FactoryStateHeader::parse(&old_header_data)?;
     let new_header = FactoryStateHeader::parse(&new_header_data)?;
+    old_header.validate_profile()?;
+    new_header.validate_profile()?;
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }
+    validate_factory_vault_materialisation_roots(&old_header, &new_header)?;
     match envelope.kind() {
         WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
             let witness = FactoryLocalExitWitness::parse(input_type_raw)?;
@@ -129,6 +136,60 @@ fn main() -> Result<()> {
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_vault_materialisation_roots(
+    old_header: &FactoryStateHeader,
+    new_header: &FactoryStateHeader,
+) -> Result<()> {
+    if old_header.vault_outpoint_commitment() == UNBOUND_VAULT_OUTPOINT_COMMITMENT
+        || new_header.vault_outpoint_commitment() != UNBOUND_VAULT_OUTPOINT_COMMITMENT
+    {
+        return Err(ScriptError::VaultActivationInvalid);
+    }
+    let current_lock_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
+
+    let input_capacity = single_group_capacity(Source::GroupInput)?;
+    let input_type =
+        load_cell_type_hash(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_data = load_cell_data(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_commitment = vault_cell_commitment(
+        current_lock_hash.as_slice(),
+        input_capacity,
+        input_type.as_ref().map(|hash| hash.as_slice()),
+        input_data.as_slice(),
+    );
+    if input_commitment.as_slice() != old_header.vault_materialisation_root() {
+        return Err(ScriptError::FactoryReserveMismatch);
+    }
+    let input_outpoint =
+        load_input_out_point(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
+    let input_output_index: u32 = input_outpoint.index().unpack();
+    let input_locator =
+        vault_outpoint_commitment(input_outpoint.tx_hash().as_slice(), input_output_index);
+    if input_locator.as_slice() != old_header.vault_outpoint_commitment() {
+        return Err(ScriptError::VaultOutPointMismatch);
+    }
+
+    let output_index = single_output_index_by_lock_hash(current_lock_hash.as_slice())?;
+    let output_capacity =
+        load_cell_capacity(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_type =
+        load_cell_type_hash(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_data =
+        load_cell_data(output_index, Source::Output).map_err(|_| ScriptError::Encoding)?;
+    let output_commitment = vault_cell_commitment(
+        current_lock_hash.as_slice(),
+        output_capacity,
+        output_type.as_ref().map(|hash| hash.as_slice()),
+        output_data.as_slice(),
+    );
+    if output_commitment.as_slice() != new_header.vault_materialisation_root() {
+        return Err(ScriptError::FactoryReserveMismatch);
+    }
+
     Ok(())
 }
 
@@ -556,6 +617,7 @@ mod tests {
         raw[172..204].fill(6);
         raw[204..236].fill(7);
         raw[236..238].copy_from_slice(&1u16.to_le_bytes());
+        raw[238..270].fill(8);
         raw
     }
 }

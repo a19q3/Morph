@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;

@@ -20,6 +20,7 @@ const LEGACY_INVOICE_CHECKSUM_LEN: usize = 8;
 const MAX_INVOICE_DESCRIPTION_LEN: usize = 280;
 const MAX_CKB_INVOICE_AMOUNT: Amount = u64::MAX as Amount;
 const MAX_PEER_ALIAS_LEN: usize = 80;
+pub const CURRENT_FACTORY_PARTICIPANT_COUNT: usize = 2;
 const BECH32M_CHECKSUM_CONST: u32 = 0x2bc8_30a3;
 const BECH32_CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -105,6 +106,8 @@ pub enum NodeError {
     FactoryNotFound,
     #[error("factory must include the local node")]
     FactoryMissingLocalParticipant,
+    #[error("current factory profile requires exactly two participants")]
+    FactoryParticipantCountUnsupported,
     #[error("factory child counterparty is not a factory participant")]
     FactoryChildCounterpartyNotParticipant,
     #[error("factory update number must advance")]
@@ -835,10 +838,11 @@ impl MorphNodeState {
 
     pub fn open_factory(&mut self, factory: MorphFactoryRecord) -> NodeResult<()> {
         validate_bytes32_nonzero(&factory.factory_id, NodeError::ZeroIdentifier)?;
-        if factory.participant_node_ids.is_empty()
-            || factory.participant_node_ids.iter().any(is_zero_bytes32)
-        {
+        if factory.participant_node_ids.iter().any(is_zero_bytes32) {
             return Err(NodeError::ZeroNodeId);
+        }
+        if factory.participant_node_ids.len() != CURRENT_FACTORY_PARTICIPANT_COUNT {
+            return Err(NodeError::FactoryParticipantCountUnsupported);
         }
         if !factory.participant_node_ids.contains(&self.node_id) {
             return Err(NodeError::FactoryMissingLocalParticipant);

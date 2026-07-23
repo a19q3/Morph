@@ -184,6 +184,10 @@ pub struct StoredFactorySplicePackage {
     pub vault_delta_commitment: String,
     pub non_interference_digest: String,
     pub participants_commitment: String,
+    pub old_vault_materialisation_root: String,
+    pub new_vault_materialisation_root: String,
+    pub old_vault_outpoint_commitment: String,
+    pub new_vault_outpoint_commitment: String,
     pub signing_digest: String,
     pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
     pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
@@ -211,6 +215,10 @@ pub struct StoredFactoryReducedSplicePackage {
     pub vault_delta_commitment: String,
     pub non_interference_digest: String,
     pub participants_commitment: String,
+    pub old_vault_materialisation_root: String,
+    pub new_vault_materialisation_root: String,
+    pub old_vault_outpoint_commitment: String,
+    pub new_vault_outpoint_commitment: String,
     pub signing_digest: String,
     pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
     pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
@@ -1174,6 +1182,18 @@ impl StoredFactorySplicePackage {
             )),
             non_interference_digest: update_package.non_interference_digest.clone(),
             participants_commitment: hex_prefixed(&participants_commitment),
+            old_vault_materialisation_root: hex_prefixed(
+                &transition.header.old_vault_materialisation_root,
+            ),
+            new_vault_materialisation_root: hex_prefixed(
+                &transition.header.new_vault_materialisation_root,
+            ),
+            old_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.old_vault_outpoint_commitment,
+            ),
+            new_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.new_vault_outpoint_commitment,
+            ),
             signing_digest: String::new(),
             old_vault: transition
                 .old_vault
@@ -1439,6 +1459,12 @@ impl StoredFactorySplicePackage {
         self.vault_delta_commitment = canonical_hex32(&self.vault_delta_commitment)?;
         self.non_interference_digest = canonical_hex32(&self.non_interference_digest)?;
         self.participants_commitment = canonical_hex32(&self.participants_commitment)?;
+        self.old_vault_materialisation_root =
+            canonical_hex32(&self.old_vault_materialisation_root)?;
+        self.new_vault_materialisation_root =
+            canonical_hex32(&self.new_vault_materialisation_root)?;
+        self.old_vault_outpoint_commitment = canonical_hex32(&self.old_vault_outpoint_commitment)?;
+        self.new_vault_outpoint_commitment = canonical_hex32(&self.new_vault_outpoint_commitment)?;
         if !self.signing_digest.is_empty() {
             self.signing_digest = canonical_hex32(&self.signing_digest)?;
         }
@@ -1485,6 +1511,10 @@ impl StoredFactorySplicePackage {
             vault_delta_commitment: hex32_bytes(&self.vault_delta_commitment)?,
             non_interference_digest: hex32_bytes(&self.non_interference_digest)?,
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
+            old_vault_materialisation_root: hex32_bytes(&self.old_vault_materialisation_root)?,
+            new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
+            old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
+            new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
         })
     }
 }
@@ -1557,6 +1587,18 @@ impl StoredFactoryReducedSplicePackage {
             )),
             non_interference_digest: hex_prefixed(&contract_non_interference_digest),
             participants_commitment: hex_prefixed(&participants_commitment),
+            old_vault_materialisation_root: hex_prefixed(
+                &transition.header.old_vault_materialisation_root,
+            ),
+            new_vault_materialisation_root: hex_prefixed(
+                &transition.header.new_vault_materialisation_root,
+            ),
+            old_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.old_vault_outpoint_commitment,
+            ),
+            new_vault_outpoint_commitment: hex_prefixed(
+                &transition.header.new_vault_outpoint_commitment,
+            ),
             signing_digest: String::new(),
             old_vault: transition
                 .old_vault
@@ -1850,6 +1892,12 @@ impl StoredFactoryReducedSplicePackage {
         self.vault_delta_commitment = canonical_hex32(&self.vault_delta_commitment)?;
         self.non_interference_digest = canonical_hex32(&self.non_interference_digest)?;
         self.participants_commitment = canonical_hex32(&self.participants_commitment)?;
+        self.old_vault_materialisation_root =
+            canonical_hex32(&self.old_vault_materialisation_root)?;
+        self.new_vault_materialisation_root =
+            canonical_hex32(&self.new_vault_materialisation_root)?;
+        self.old_vault_outpoint_commitment = canonical_hex32(&self.old_vault_outpoint_commitment)?;
+        self.new_vault_outpoint_commitment = canonical_hex32(&self.new_vault_outpoint_commitment)?;
         if !self.signing_digest.is_empty() {
             self.signing_digest = canonical_hex32(&self.signing_digest)?;
         }
@@ -1892,6 +1940,10 @@ impl StoredFactoryReducedSplicePackage {
             vault_delta_commitment: hex32_bytes(&self.vault_delta_commitment)?,
             non_interference_digest: hex32_bytes(&self.non_interference_digest)?,
             participants_commitment: hex32_bytes(&self.participants_commitment)?,
+            old_vault_materialisation_root: hex32_bytes(&self.old_vault_materialisation_root)?,
+            new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
+            old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
+            new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
         })
     }
 }
@@ -2273,6 +2325,10 @@ pub fn fixture_factory_splice_package_with_kind(
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: bytes32(0),
         participants_commitment: bytes32(0),
+        old_vault_materialisation_root: bytes32(93),
+        new_vault_materialisation_root: bytes32(94),
+        old_vault_outpoint_commitment: bytes32(95),
+        new_vault_outpoint_commitment: [0; 32],
     };
     let update_package = StoredFactoryUpdatePackage::from_update(
         header.factory_id,
@@ -3032,6 +3088,10 @@ fn factory_splice_header_wire_bytes(
     raw[213..245].copy_from_slice(&header.vault_delta_commitment);
     raw[245..277].copy_from_slice(&header.non_interference_digest);
     raw[277..309].copy_from_slice(&header.participants_commitment);
+    raw[309..341].copy_from_slice(&header.old_vault_materialisation_root);
+    raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
+    raw[373..405].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[405..437].copy_from_slice(&header.new_vault_outpoint_commitment);
     raw
 }
 
@@ -3743,6 +3803,8 @@ mod tests {
             &factory_participants,
             &hex32_bytes(&summary.old_access_manifest_root).unwrap(),
             &[0u8; 32],
+            &hex32_bytes(&package.old_vault_materialisation_root).unwrap(),
+            &hex32_bytes(&package.old_vault_outpoint_commitment).unwrap(),
         );
         let new_header_raw = factory_state_header_wire_bytes_for_test(
             &hex32_bytes(&summary.factory_id).unwrap(),
@@ -3751,6 +3813,8 @@ mod tests {
             &factory_participants,
             &hex32_bytes(&summary.new_access_manifest_root).unwrap(),
             &hex32_bytes(&summary.non_interference_digest).unwrap(),
+            &hex32_bytes(&package.new_vault_materialisation_root).unwrap(),
+            &hex32_bytes(&package.new_vault_outpoint_commitment).unwrap(),
         );
         let old_header = morph_script_common::FactoryStateHeader::parse(&old_header_raw).unwrap();
         let new_header = morph_script_common::FactoryStateHeader::parse(&new_header_raw).unwrap();
@@ -3781,6 +3845,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn factory_state_header_wire_bytes_for_test(
         factory_id: &Bytes32,
         update_number: u64,
@@ -3788,6 +3853,8 @@ mod tests {
         participants_commitment: &Bytes32,
         access_manifest_root: &Bytes32,
         non_interference_digest: &Bytes32,
+        vault_materialisation_root: &Bytes32,
+        vault_outpoint_commitment: &Bytes32,
     ) -> [u8; morph_script_common::FACTORY_STATE_HEADER_LEN] {
         let mut raw = [0u8; morph_script_common::FACTORY_STATE_HEADER_LEN];
         put_u16(&mut raw, 0, 1);
@@ -3805,6 +3872,8 @@ mod tests {
         raw[172..204].copy_from_slice(non_interference_digest);
         raw[204..236].fill(8);
         put_u16(&mut raw, 236, 1);
+        raw[238..270].copy_from_slice(vault_materialisation_root);
+        raw[270..302].copy_from_slice(vault_outpoint_commitment);
         raw
     }
 

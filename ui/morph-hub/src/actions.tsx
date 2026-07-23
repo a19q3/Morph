@@ -21,6 +21,7 @@ import {
   assertRemotePubkey,
   assetLabel,
   formatAmount,
+  hasHubScope,
   normaliseAsset,
   parsePubkeyList,
   shortHex,
@@ -101,9 +102,11 @@ function ConfirmActionDialog({
 export function PeerActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
   const [pubkey, setPubkey] = useState('');
   const [alias, setAlias] = useState('');
+  const canWrite = hasHubScope(state.security, 'write');
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Connect peer', () => connectPeer(assertRemotePubkey(pubkey, state.pubkey, 'Peer pubkey'), requiredText(alias, 'Alias')));
   };
 
@@ -113,7 +116,8 @@ export function PeerActions({ state, runAction, busy }: { state: NodeState; runA
       <form onSubmit={submit} className="form-grid">
         <ValidatedInput label="Peer pubkey" className="mono" testId="peer-pubkey" value={pubkey} onChange={setPubkey} validate={value => { assertRemotePubkey(value, state.pubkey, 'Peer pubkey'); }} />
         <ValidatedInput label="Alias" testId="peer-alias" value={alias} onChange={setAlias} maxLength={MAX_PEER_ALIAS_LEN} validate={value => { requiredText(value, 'Alias'); }} />
-        <button data-testid="peer-connect" disabled={busy}><Users size={15} /> Connect peer</button>
+        <button data-testid="peer-connect" disabled={busy || !canWrite}><Users size={15} /> Connect peer</button>
+        {!canWrite && <small className="inline-error">The current API token needs the write scope.</small>}
       </form>
 
       <div className="form-section">
@@ -172,7 +176,9 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
   const [copyStatus, setCopyStatus] = useState('');
   const activeChannels = sortChannelsForOperator(state.channels, state.events).filter(channel => channel.phase === 'active');
   const latestActiveChannel = activeChannels[0];
-  const canCreateInvoices = state.security.invoice_signing_enabled;
+  const canWrite = hasHubScope(state.security, 'write');
+  const canSign = hasHubScope(state.security, 'sign');
+  const canCreateInvoices = state.security.invoice_signing_enabled && canSign;
   const settleableInvoices = sortInvoicesNewestFirst(state.invoices.filter(invoice => invoice.status === 'open' || invoice.status === 'received'));
   const latestSettleableInvoice = newestInvoice(
     settleableInvoices
@@ -199,6 +205,7 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
 
   const submitCreate = (event: FormEvent) => {
     event.preventDefault();
+    if (!canCreateInvoices) return;
     void runAction('Create invoice', async () => {
       const expiry = Number(assertPositiveInteger(expirySecs, 'Expiry seconds'));
       if (expiry > maxInvoiceExpirySecs) {
@@ -219,6 +226,7 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
 
   const submitDecode = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     const encodedInvoice = requiredText(decodeText, 'Encoded invoice');
     void runAction('Receive invoice', async () => {
       const previousInvoiceIds = new Set(state.invoices.map(invoice => invoice.invoice_id));
@@ -233,6 +241,7 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
 
   const submitSettle = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Settle invoice', () => {
       const invoiceId = assertHex32(settleInvoiceId, 'Invoice id');
       const paymentPreimage = assertHex32(settlePreimage, 'Payment preimage');
@@ -327,7 +336,11 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
         <AssetSelect value={asset} onChange={setAsset} />
         <button data-testid="invoice-create" disabled={busy || !canCreateInvoices}><Plus size={15} /> Create invoice</button>
         {!canCreateInvoices && (
-          <small className="inline-error">Restart Hub with MORPH_HUB_INVOICE_PRIVATE_KEY or --invoice-private-key to create signed invoices.</small>
+          <small className="inline-error">
+            {!canSign
+              ? 'The current API token needs the sign scope.'
+              : 'Restart Hub with MORPH_HUB_INVOICE_PRIVATE_KEY or --invoice-private-key to create signed invoices.'}
+          </small>
         )}
       </form>
 
@@ -335,7 +348,7 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
         <h3>Receive from text</h3>
         <form onSubmit={submitDecode} className="form-grid">
           <label>Encoded invoice<textarea className="mono" data-testid="invoice-decode-text" value={decodeText} onChange={event => setDecodeText(event.target.value)} /></label>
-          <button data-testid="invoice-decode" disabled={busy}><ReceiptText size={15} /> Receive invoice</button>
+          <button data-testid="invoice-decode" disabled={busy || !canWrite}><ReceiptText size={15} /> Receive invoice</button>
         </form>
       </div>
 
@@ -351,9 +364,11 @@ export function InvoiceActions({ state, runAction, busy }: { state: NodeState; r
             </select>
           </label>
           <ValidatedInput label="Payment preimage" className="mono" testId="invoice-settle-preimage" value={settlePreimage} onChange={setSettlePreimage} validate={value => { assertHex32(value, 'Payment preimage'); }} />
-          <button data-testid="invoice-settle" disabled={busy || !settleInvoiceId}><BadgeCheck size={15} /> Settle</button>
+          <button data-testid="invoice-settle" disabled={busy || !settleInvoiceId || !canWrite}><BadgeCheck size={15} /> Settle</button>
         </form>
       </div>
+
+      {!canWrite && <small className="inline-error">Receiving and settling invoices need the write scope.</small>}
 
       {latestSettleableInvoice && (
         <button className="copy-button" data-testid="invoice-copy-latest" onClick={copyLatestInvoice} disabled={busy}>
@@ -468,6 +483,11 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
   const [publishChannelId, setPublishChannelId] = useState('');
   const [finaliseChannelId, setFinaliseChannelId] = useState('');
   const [pendingFinaliseChannel, setPendingFinaliseChannel] = useState<ChannelRecord | null>(null);
+  const [pendingPublication, setPendingPublication] = useState<{
+    channel: ChannelRecord;
+    fundingContextId: Hex32;
+    stateNumber: number;
+  } | null>(null);
   const [spliceEpoch, setSpliceEpoch] = useState('');
   const [spliceContextId, setSpliceContextId] = useState('');
   const [publishContextId, setPublishContextId] = useState('');
@@ -479,9 +499,11 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
   const selectedSpliceChannel = activeChannels.find(channel => channel.channel_id === spliceChannelId);
   const selectedPublishChannel = publishableChannels.find(channel => channel.channel_id === publishChannelId);
   const selectedFinaliseChannel = settlingChannels.find(channel => channel.channel_id === finaliseChannelId);
+  const canWrite = hasHubScope(state.security, 'write');
 
   const submitSplice = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Record splice', () => {
       const id = assertHex32(spliceChannelId, 'Channel id');
       return postAction(`/api/channels/${id}/splice`, {
@@ -493,18 +515,17 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
 
   const submitPublish = (event: FormEvent) => {
     event.preventDefault();
-    void runAction('Update tracked state', () => {
-      const id = assertHex32(publishChannelId, 'Channel id');
-      return postAction(`/api/channels/${id}/publish`, {
-        funding_context_id: assertHex32(publishContextId, 'Funding context id'),
-        state_number: Number(assertPositiveInteger(publishStateNumber, 'State number')),
-      });
+    if (!canWrite || !selectedPublishChannel) return;
+    setPendingPublication({
+      channel: selectedPublishChannel,
+      fundingContextId: assertHex32(publishContextId, 'Funding context id'),
+      stateNumber: Number(assertPositiveInteger(publishStateNumber, 'State number')),
     });
   };
 
   const submitFinalise = (event: FormEvent) => {
     event.preventDefault();
-    if (selectedFinaliseChannel) setPendingFinaliseChannel(selectedFinaliseChannel);
+    if (canWrite && selectedFinaliseChannel) setPendingFinaliseChannel(selectedFinaliseChannel);
   };
 
   const useSelectedSpliceDefaults = () => {
@@ -523,14 +544,15 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
     <div className="drawer-section">
       <h2>Node Layer</h2>
       <p className="inline-note">Hub channel controls update local off-chain records; they do not build or broadcast CKB transactions.</p>
+      {!canWrite && <small className="inline-error">The current API token needs the write scope.</small>}
       <ActionSubTabs<ChannelActionTab>
         active={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'open', label: 'Open', Icon: GitBranch },
-          { key: 'splice', label: 'Splice', Icon: Split, disabled: activeChannels.length === 0 },
-          { key: 'publish', label: 'Update', Icon: RadioTower, disabled: publishableChannels.length === 0 },
-          { key: 'finalise', label: 'Finalise', Icon: BadgeCheck, disabled: settlingChannels.length === 0 },
+          { key: 'open', label: 'Open', Icon: GitBranch, disabled: !canWrite },
+          { key: 'splice', label: 'Splice', Icon: Split, disabled: !canWrite || activeChannels.length === 0 },
+          { key: 'publish', label: 'Publish', Icon: RadioTower, disabled: !canWrite || publishableChannels.length === 0 },
+          { key: 'finalise', label: 'Finalise', Icon: BadgeCheck, disabled: !canWrite || settlingChannels.length === 0 },
         ]}
       />
       {activeTab === 'open' && (
@@ -544,6 +566,7 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
           submitTestId="channel-open"
           testPrefix="channel"
           submitIcon={<GitBranch size={15} />}
+          disabled={!canWrite}
           onSubmit={body => postAction('/api/channels', body)}
         />
       )}
@@ -559,12 +582,12 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
           </div>
           <ValidatedInput label="New funding epoch" className="mono" testId="channel-splice-epoch" value={spliceEpoch} onChange={setSpliceEpoch} validate={value => { assertPositiveInteger(value, 'New funding epoch'); }} />
           <ValidatedInput label="New funding context id" className="mono" testId="channel-splice-context-id" value={spliceContextId} onChange={setSpliceContextId} validate={value => { assertHex32(value, 'New funding context id'); }} />
-          <button data-testid="channel-splice" disabled={busy || activeChannels.length === 0}><Split size={15} /> Record splice</button>
+          <button data-testid="channel-splice" disabled={busy || !canWrite || activeChannels.length === 0}><Split size={15} /> Record splice</button>
         </form>
       </div>}
 
       {activeTab === 'publish' && <div className="form-section">
-        <h3>Update tracked state</h3>
+        <h3>Record publication · enter settling</h3>
         <form onSubmit={submitPublish} className="form-grid">
           <ChannelSelect testId="channel-publish-select" label="Trackable channel" channels={publishableChannels} value={publishChannelId} onChange={setPublishChannelId} />
           <div className="field-action-row">
@@ -574,7 +597,7 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
           </div>
           <ValidatedInput label="Funding context id" className="mono" testId="channel-publish-context-id" value={publishContextId} onChange={setPublishContextId} validate={value => { assertHex32(value, 'Funding context id'); }} />
           <ValidatedInput label="State number" className="mono" testId="channel-publish-state-number" value={publishStateNumber} onChange={setPublishStateNumber} validate={value => { assertPositiveInteger(value, 'State number'); }} />
-          <button data-testid="channel-publish" disabled={busy || publishableChannels.length === 0}><RadioTower size={15} /> Update state</button>
+          <button data-testid="channel-publish" disabled={busy || !canWrite || publishableChannels.length === 0}><RadioTower size={15} /> Record publication</button>
         </form>
       </div>}
 
@@ -582,7 +605,7 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
         <h3>Finalise</h3>
         <form onSubmit={submitFinalise} className="form-grid">
           <ChannelSelect testId="channel-finalise-select" label="Settling channel" channels={settlingChannels} value={finaliseChannelId} onChange={setFinaliseChannelId} />
-          <button data-testid="channel-finalise" disabled={busy || !selectedFinaliseChannel}><BadgeCheck size={15} /> Finalise channel</button>
+          <button data-testid="channel-finalise" disabled={busy || !canWrite || !selectedFinaliseChannel}><BadgeCheck size={15} /> Finalise channel</button>
         </form>
       </div>}
       {pendingFinaliseChannel && (
@@ -595,6 +618,23 @@ export function ChannelActions({ state, runAction, busy }: { state: NodeState; r
           onConfirm={() => {
             const id = pendingFinaliseChannel.channel_id;
             void runAction('Finalise channel', () => postAction(`/api/channels/${id}/finalise`)).then(() => setPendingFinaliseChannel(null));
+          }}
+        />
+      )}
+      {pendingPublication && (
+        <ConfirmActionDialog
+          title={`Record state #${pendingPublication.stateNumber} publication?`}
+          detail={`This writes a local publication record for ${shortHex(pendingPublication.channel.channel_id)} and ${pendingPublication.channel.phase === 'active' ? 'moves the channel into settling' : 'keeps the channel in settling'}. It does not broadcast a CKB transaction.`}
+          confirmLabel="Enter settling"
+          confirmTestId="confirm-state-publication"
+          busy={busy}
+          onCancel={() => setPendingPublication(null)}
+          onConfirm={() => {
+            const pending = pendingPublication;
+            void runAction('Record state publication', () => postAction(`/api/channels/${pending.channel.channel_id}/publish`, {
+              funding_context_id: pending.fundingContextId,
+              state_number: pending.stateNumber,
+            })).then(() => setPendingPublication(null));
           }}
         />
       )}
@@ -624,6 +664,7 @@ export function FactoryActions({
   const [materialisePrefill, setMaterialisePrefill] = useState<ChannelFormPrefill | null>(null);
   const orderedFactories = sortFactoriesForOperator(state.factories, state.events);
   const selectedFactory = orderedFactories.find(factory => factory.factory_id === selectedFactoryId);
+  const canWrite = hasHubScope(state.security, 'write');
 
   useEffect(() => {
     if (!target) return;
@@ -649,9 +690,10 @@ export function FactoryActions({
 
   const submitOpen = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Open factory', () => {
       const customPubkeys = customParticipantPubkeys.trim()
-        ? parsePubkeyList(customParticipantPubkeys, 'Custom participant pubkeys')
+        ? parsePubkeyList(customParticipantPubkeys, 'Custom counterparty pubkey')
         : [];
       const participant_pubkeys = uniqueStrings([
         state.pubkey,
@@ -659,6 +701,9 @@ export function FactoryActions({
         ...customPubkeys,
       ]);
       assertIncludesPubkey(participant_pubkeys, state.pubkey, 'Participant pubkeys');
+      if (participant_pubkeys.length !== 2) {
+        throw new Error('Current Factory profile requires exactly two participant pubkeys');
+      }
       return postAction('/api/factories', {
         factory_id: assertHex32(factoryId, 'Factory id'),
         participant_pubkeys,
@@ -670,6 +715,7 @@ export function FactoryActions({
 
   const submitAdvance = (event: FormEvent) => {
     event.preventDefault();
+    if (!canWrite) return;
     void runAction('Advance factory', () => {
       const id = assertHex32(selectedFactoryId, 'Factory id');
       return postAction(`/api/factories/${id}/advance`, {
@@ -681,8 +727,8 @@ export function FactoryActions({
   const toggleParticipant = (pubkey: string) => {
     setSelectedParticipantPubkeys(current => (
       current.includes(pubkey)
-        ? current.filter(item => item !== pubkey)
-        : [...current, pubkey]
+        ? []
+        : [pubkey]
     ));
   };
 
@@ -698,13 +744,15 @@ export function FactoryActions({
   return (
     <div className="drawer-section">
       <h2>Factory Layer</h2>
+      <p className="inline-note">Hub Factory controls record the two-party local projection. Factory-right proofs and reserve transactions are not built here.</p>
+      {!canWrite && <small className="inline-error">The current API token needs the write scope.</small>}
       <ActionSubTabs<FactoryActionTab>
         active={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'open', label: 'Open', Icon: Factory },
-          { key: 'advance', label: 'Advance', Icon: RefreshCw, disabled: orderedFactories.length === 0 },
-          { key: 'materialise', label: 'Child', Icon: Network, disabled: orderedFactories.length === 0 },
+          { key: 'open', label: 'Open', Icon: Factory, disabled: !canWrite },
+          { key: 'advance', label: 'Advance', Icon: RefreshCw, disabled: !canWrite || orderedFactories.length === 0 },
+          { key: 'materialise', label: 'Child', Icon: Network, disabled: !canWrite || orderedFactories.length === 0 },
         ]}
       />
       {activeTab === 'open' && <form onSubmit={submitOpen} className="form-grid">
@@ -724,7 +772,7 @@ export function FactoryActions({
           validate={value => { assertHex32(value, 'Factory id'); }}
         />
         <label>
-          Participants
+          Counterparty (current two-party Factory profile)
           <div className="participant-picker" data-testid="factory-participants">
             <span className="participant-chip selected" title={state.pubkey}>
               Local {shortHex(state.pubkey)}
@@ -748,16 +796,20 @@ export function FactoryActions({
           </div>
         </label>
         <ValidatedTextarea
-          label="Custom participant pubkeys"
+          label="Custom counterparty pubkey"
           className="mono compact"
           testId="factory-participants-custom"
           value={customParticipantPubkeys}
           onChange={setCustomParticipantPubkeys}
-          validate={value => { if (value.trim()) parsePubkeyList(value, 'Custom participant pubkeys'); }}
+          validate={value => {
+            if (!value.trim()) return;
+            const pubkeys = parsePubkeyList(value, 'Custom counterparty pubkey');
+            if (pubkeys.length !== 1) throw new Error('Enter exactly one counterparty pubkey');
+          }}
         />
         <ValidatedInput label="Reserve" className="mono" testId="factory-reserve" value={reserve} onChange={setReserve} validate={value => { assertPositiveInteger(value, 'Reserve'); }} />
         <AssetSelect value={factoryAsset} onChange={setFactoryAsset} />
-        <button data-testid="factory-open" disabled={busy}><Factory size={15} /> Open factory</button>
+        <button data-testid="factory-open" disabled={busy || !canWrite}><Factory size={15} /> Open factory</button>
       </form>}
 
       {activeTab === 'advance' && <div className="form-section">
@@ -770,7 +822,7 @@ export function FactoryActions({
             </button>
           </div>
           <ValidatedInput label="New update number" className="mono" testId="factory-new-update-number" value={newUpdateNumber} onChange={setNewUpdateNumber} validate={value => { assertPositiveInteger(value, 'New update number'); }} />
-          <button data-testid="factory-advance" disabled={busy || orderedFactories.length === 0}><RefreshCw size={15} /> Advance</button>
+          <button data-testid="factory-advance" disabled={busy || !canWrite || orderedFactories.length === 0}><RefreshCw size={15} /> Advance</button>
         </form>
       </div>}
 
@@ -787,7 +839,7 @@ export function FactoryActions({
           testPrefix="factory-child"
           submitIcon={<Network size={15} />}
           prefill={materialisePrefill}
-          disabled={!selectedFactoryId || orderedFactories.length === 0}
+          disabled={!canWrite || !selectedFactoryId || orderedFactories.length === 0}
           peers={state.peers}
           beforeFields={(
             <FactorySelect testId="factory-materialise-select" factories={orderedFactories} value={selectedFactoryId} onChange={setSelectedFactoryId} />
@@ -867,6 +919,7 @@ function ChannelOpenForm({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (disabled) return;
     void runAction(actionLabel, () => onSubmit(channelBody({
       channelId: draft.channelId,
       counterpartyPubkey: draft.counterpartyPubkey,
@@ -922,8 +975,11 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
   const [stateFileBusy, setStateFileBusy] = useState(false);
   const [restoreAcknowledged, setRestoreAcknowledged] = useState(false);
   const [restoreCandidate, setRestoreCandidate] = useState<{ payload: unknown; preview: RestorePreview } | null>(null);
+  const canRestore = hasHubScope(state.security, 'restore');
+  const restoreAvailable = state.security.state_restore_enabled && canRestore;
 
   const exportState = async () => {
+    if (!canRestore) return;
     setStateFileBusy(true);
     setStateFileStatus('');
     try {
@@ -938,6 +994,7 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
   };
 
   const requestRestore = async () => {
+    if (!restoreAvailable) return;
     setStateFileStatus('');
     setRestoreCandidate(null);
     setStateFileBusy(true);
@@ -972,7 +1029,7 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
         <strong>{state.state_path || 'not loaded'}</strong>
         <small>{state.security.state_restore_enabled ? 'Empty bootstrap restore is enabled for this API process' : 'Restore is disabled by default'}</small>
       </div>
-      <button className="copy-button" data-testid="state-load-json" onClick={exportState} disabled={busy || stateFileBusy}><FileJson size={15} /> Load state JSON</button>
+      <button className="copy-button" data-testid="state-load-json" onClick={exportState} disabled={busy || stateFileBusy || !canRestore}><FileJson size={15} /> Load state JSON</button>
       {stateFileStatus && <small className={stateFileStatus === 'loaded' ? 'inline-ok' : 'inline-error'}>{stateFileStatus}</small>}
       <textarea className="mono" data-testid="state-json" value={raw} onChange={event => setRaw(event.target.value)} />
       <label className="check-row">
@@ -980,7 +1037,7 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
           type="checkbox"
           checked={restoreAcknowledged}
           onChange={event => setRestoreAcknowledged(event.target.checked)}
-          disabled={!state.security.state_restore_enabled}
+          disabled={!restoreAvailable}
         />
         <span>I understand this only restores an empty bootstrap state. Operational records are rejected until chain-anchored restore is implemented.</span>
       </label>
@@ -988,11 +1045,12 @@ export function StateActions({ state, runAction, busy }: { state: NodeState; run
         className="danger-button"
         data-testid="state-restore-json"
         onClick={() => { void requestRestore(); }}
-        disabled={busy || stateFileBusy || !raw.trim() || !state.security.state_restore_enabled || !restoreAcknowledged}
+        disabled={busy || stateFileBusy || !raw.trim() || !restoreAvailable || !restoreAcknowledged}
       >
         <Upload size={15} /> Restore state file
       </button>
-      {!state.security.state_restore_enabled && (
+      {!canRestore && <small className="inline-error">The current API token needs the restore scope.</small>}
+      {canRestore && !state.security.state_restore_enabled && (
         <small className="inline-error">Restart with --allow-state-restore to enable this write path.</small>
       )}
       {restoreCandidate != null && (

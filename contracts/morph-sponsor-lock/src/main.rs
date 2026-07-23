@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -39,18 +40,25 @@ fn main() -> Result<()> {
     let policy = SponsorPolicy::parse(args.as_ref())?;
     validate_sponsored_state(&policy)?;
 
-    let sponsor_in = sum_group_capacity(Source::GroupInput)?;
+    let sponsor_in = sum_capacity(Source::GroupInput)?;
     let sponsor_out = sum_clean_outputs_by_lock_hash(policy.change_lock())?;
-    let fee = sponsor_in
+    let sponsor_fee = sponsor_in
         .checked_sub(sponsor_out)
         .ok_or(ScriptError::CapacityUnderflow)?;
+    let transaction_fee = sum_capacity(Source::Input)?
+        .checked_sub(sum_capacity(Source::Output)?)
+        .ok_or(ScriptError::CapacityUnderflow)?;
 
-    if fee > policy.max_fee_per_tx() {
+    if sponsor_fee != transaction_fee {
+        return Err(ScriptError::SponsorFeeMismatch);
+    }
+
+    if transaction_fee > policy.max_fee_per_tx() {
         return Err(ScriptError::SponsorFeeTooHigh);
     }
     if policy
         .already_spent()
-        .checked_add(fee)
+        .checked_add(transaction_fee)
         .ok_or(ScriptError::SponsorBudgetExceeded)?
         > policy.max_total_fee()
     {
@@ -68,6 +76,7 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
             Ok(data) => {
                 if let Ok(header) = StateHeader::parse(&data) {
                     if header.channel_id() == policy.channel_id() {
+                        header.validate_profile()?;
                         if sponsored_state.is_some() {
                             return Err(ScriptError::StateCellAmbiguous);
                         }
@@ -117,6 +126,7 @@ fn ensure_publication_backed_by_state_type_input(
                     let data =
                         load_cell_data(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
                     let header = StateHeader::parse(&data)?;
+                    header.validate_profile()?;
                     if header.funding_anchor() != output_funding_anchor {
                         return Err(ScriptError::FundingAnchorMismatch);
                     }
@@ -133,7 +143,7 @@ fn ensure_publication_backed_by_state_type_input(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn sum_group_capacity(source: Source) -> Result<u64> {
+fn sum_capacity(source: Source) -> Result<u64> {
     let mut sum = 0u64;
     let mut index = 0;
     loop {

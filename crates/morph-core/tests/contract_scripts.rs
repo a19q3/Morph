@@ -2,7 +2,7 @@ use ckb_testtool::builtin::ALWAYS_SUCCESS;
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
     core::{ScriptHashType, TransactionBuilder, TransactionView},
-    packed::{CellInput, CellOutput, WitnessArgs},
+    packed::{CellDep, CellInput, CellOutput, WitnessArgs},
     prelude::*,
 };
 use ckb_testtool::context::Context;
@@ -37,15 +37,16 @@ use morph_script_common::{
     SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
     SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
     SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN,
-    STATE_HEADER_LEN, SpliceAssetDeltas, SpliceHeader, SpliceStateTransitionWitness,
-    SpliceVaultDescriptor, StateHeader, StateHeaderInput, VAULT_ASSET_KIND_CKB,
-    VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
-    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256, encode_state_header,
-    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
-    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, SpliceAssetDeltas, SpliceHeader,
+    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader, StateHeaderInput,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, blake2b256, encode_state_header, factory_local_exit_digest,
+    factory_participants_commitment, participants_commitment, relative_block_since,
+    settlement_descriptor_commitment, vault_cell_commitment, vault_outpoint_commitment,
     witness_envelope_body_commitment,
 };
 use std::fs;
@@ -60,6 +61,32 @@ const NEW_FUNDING_ANCHOR: [u8; 32] = [10u8; 32];
 const FACTORY_ID: [u8; 32] = [7u8; 32];
 const ALICE_XUDT_AMOUNT: u128 = 70;
 const BOB_XUDT_AMOUNT: u128 = 30;
+
+fn test_out_point(tx_hash_byte: u8, index: u32) -> ckb_testtool::ckb_types::packed::OutPoint {
+    ckb_testtool::ckb_types::packed::OutPoint::new_builder()
+        .tx_hash([tx_hash_byte; BYTE32_LEN].pack())
+        .index(index)
+        .build()
+}
+
+fn fixture_vault_out_point() -> ckb_testtool::ckb_types::packed::OutPoint {
+    test_out_point(77, 1)
+}
+
+fn fixture_vault_outpoint_commitment() -> [u8; BYTE32_LEN] {
+    let out_point = fixture_vault_out_point();
+    vault_outpoint_commitment(out_point.tx_hash().as_slice(), 1)
+}
+
+fn create_bound_vault_cell(
+    context: &mut Context,
+    output: CellOutput,
+    data: Bytes,
+) -> ckb_testtool::ckb_types::packed::OutPoint {
+    let out_point = fixture_vault_out_point();
+    context.create_cell_with_out_point(out_point.clone(), output, data);
+    out_point
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -157,6 +184,29 @@ fn vault_args(
 
 fn set_state_vault_materialisation_root(raw: &mut [u8], commitment: [u8; 32]) {
     raw[248..280].copy_from_slice(&commitment);
+}
+
+fn set_state_vault_outpoint(raw: &mut [u8], out_point: &ckb_testtool::ckb_types::packed::OutPoint) {
+    let index: u32 = out_point.index().unpack();
+    raw[314..346].copy_from_slice(&vault_outpoint_commitment(
+        out_point.tx_hash().as_slice(),
+        index,
+    ));
+}
+
+fn set_factory_vault_materialisation_root(raw: &mut [u8], commitment: [u8; 32]) {
+    raw[238..270].copy_from_slice(&commitment);
+}
+
+fn set_factory_vault_outpoint(
+    raw: &mut [u8],
+    out_point: &ckb_testtool::ckb_types::packed::OutPoint,
+) {
+    let index: u32 = out_point.index().unpack();
+    raw[270..302].copy_from_slice(&vault_outpoint_commitment(
+        out_point.tx_hash().as_slice(),
+        index,
+    ));
 }
 
 fn vault_commitment(
@@ -276,9 +326,24 @@ fn header_raw_with_anchor(
         settlement_descriptor_commitment: [7; BYTE32_LEN],
         descriptor_version: 1,
         vault_materialisation_root: [8; BYTE32_LEN],
+        vault_outpoint_commitment: if state_number == 0 {
+            [0; BYTE32_LEN]
+        } else {
+            fixture_vault_outpoint_commitment()
+        },
         challenge_policy_commitment: [9; BYTE32_LEN],
         state_layout_version: 2,
     })
+}
+
+fn factory_child_header_raw_with_anchor(
+    state_number: u64,
+    phase: u8,
+    funding_anchor: [u8; 32],
+) -> [u8; STATE_HEADER_LEN] {
+    let mut raw = header_raw_with_anchor(state_number, phase, funding_anchor);
+    raw[148] = 2;
+    raw
 }
 
 fn factory_header_raw(update_number: u64) -> [u8; FACTORY_STATE_HEADER_LEN] {
@@ -301,6 +366,10 @@ fn factory_header_raw_with_id(
     raw[172..204].fill(7);
     raw[204..236].fill(8);
     put_u16(&mut raw, 236, 1);
+    raw[238..270].fill(9);
+    if update_number != 0 {
+        raw[270..302].copy_from_slice(&fixture_vault_outpoint_commitment());
+    }
     raw
 }
 
@@ -350,6 +419,43 @@ fn signed_state_pair(
     )
 }
 
+fn signed_initial_state_header(
+    funding_anchor: [u8; BYTE32_LEN],
+    vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes) {
+    signed_initial_state_header_with_mutation(funding_anchor, vault_materialisation_root, |_| {})
+}
+
+fn signed_initial_state_header_with_mutation(
+    funding_anchor: [u8; BYTE32_LEN],
+    vault_materialisation_root: [u8; BYTE32_LEN],
+    mutate: impl FnOnce(&mut [u8; STATE_HEADER_LEN]),
+) -> (Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = participants_commitment(2, &[&entries[0].0, &entries[1].0]);
+    let mut header_raw = header_raw_with_anchor(0, PHASE_ACTIVE, funding_anchor);
+    header_raw[150..182].copy_from_slice(&commitment);
+    header_raw[248..280].copy_from_slice(&vault_materialisation_root);
+    mutate(&mut header_raw);
+    let digest = StateHeader::parse(&header_raw).unwrap().signing_digest();
+    let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION);
+    witness[2] = BILATERAL_SIGNATURE_THRESHOLD;
+    witness[3] = BILATERAL_SIGNATURE_COUNT;
+    for (index, (pubkey, key)) in entries.iter().enumerate() {
+        let offset = 4 + index * (COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + COMPRESSED_SECP256K1_PUBKEY_LEN].copy_from_slice(pubkey);
+        witness[offset + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+    (header_raw.to_vec().into(), witness.to_vec().into())
+}
+
 fn signed_state_pair_with_new_descriptor(
     old_number: u64,
     old_phase: u8,
@@ -357,6 +463,44 @@ fn signed_state_pair_with_new_descriptor(
     new_phase: u8,
     descriptor_commitment: [u8; BYTE32_LEN],
     descriptor_version: u16,
+) -> (Bytes, Bytes, Bytes) {
+    signed_state_pair_with_updates(
+        old_number,
+        old_phase,
+        new_number,
+        new_phase,
+        descriptor_commitment,
+        descriptor_version,
+        [8; BYTE32_LEN],
+    )
+}
+
+fn signed_state_pair_with_new_materialisation_root(
+    old_number: u64,
+    old_phase: u8,
+    new_number: u64,
+    new_phase: u8,
+    vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
+    signed_state_pair_with_updates(
+        old_number,
+        old_phase,
+        new_number,
+        new_phase,
+        [7; BYTE32_LEN],
+        1,
+        vault_materialisation_root,
+    )
+}
+
+fn signed_state_pair_with_updates(
+    old_number: u64,
+    old_phase: u8,
+    new_number: u64,
+    new_phase: u8,
+    descriptor_commitment: [u8; BYTE32_LEN],
+    descriptor_version: u16,
+    vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -370,6 +514,7 @@ fn signed_state_pair_with_new_descriptor(
     new[150..182].copy_from_slice(&commitment);
     new[214..246].copy_from_slice(&descriptor_commitment);
     put_u16(&mut new, 246, descriptor_version);
+    new[248..280].copy_from_slice(&vault_materialisation_root);
 
     let header = StateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
@@ -571,6 +716,7 @@ fn signed_splice_ckb_bundle(
     old_state[108..140].copy_from_slice(&old_vault.commitment().unwrap());
     old_state[150..182].copy_from_slice(&participants);
     let mut new_state = header_raw_with_anchor(state_number, PHASE_ACTIVE, new_anchor);
+    new_state[314..346].fill(0);
     put_u64(&mut new_state, 68, 1);
     new_state[108..140].copy_from_slice(&new_vault.commitment().unwrap());
     new_state[150..182].copy_from_slice(&participants);
@@ -634,6 +780,8 @@ fn splice_header_bytes(
     raw[293..325].copy_from_slice(vault_materialisation_root);
     raw[325..357].copy_from_slice(commitments.3);
     raw[357..389].fill(9);
+    raw[389..421].copy_from_slice(&fixture_vault_outpoint_commitment());
+    raw[421..453].fill(0);
     raw
 }
 
@@ -724,6 +872,20 @@ fn splice_state_transition_witness_bytes(
 }
 
 fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes) {
+    signed_factory_pair_with_vault_roots(
+        old_number,
+        new_number,
+        [9u8; BYTE32_LEN],
+        [9u8; BYTE32_LEN],
+    )
+}
+
+fn signed_factory_pair_with_vault_roots(
+    old_number: u64,
+    new_number: u64,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
     let mut entries = [
@@ -741,11 +903,13 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
     );
     let mut old = factory_header_raw(old_number);
     old[108..140].copy_from_slice(&commitment);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let mut new = factory_header_raw(new_number);
     new[108..140].copy_from_slice(&commitment);
     new[76..108].fill(9);
     new[140..172].fill(10);
     new[172..204].fill(11);
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
 
     let header = FactoryStateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
@@ -769,6 +933,48 @@ fn signed_factory_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes
         new.to_vec().into(),
         witness.to_vec().into(),
     )
+}
+
+fn signed_initial_factory_header(
+    factory_id: [u8; BYTE32_LEN],
+    vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0), key0),
+        ([2u8; BYTE32_LEN], pubkey(&key1), key1),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let commitment = factory_participants_commitment(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let mut header_raw = factory_header_raw_with_id(0, factory_id);
+    header_raw[108..140].copy_from_slice(&commitment);
+    set_factory_vault_materialisation_root(&mut header_raw, vault_materialisation_root);
+    let digest = FactoryStateHeader::parse(&header_raw)
+        .unwrap()
+        .signing_digest();
+    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
+    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
+    witness[2] = FACTORY_SIGNATURE_THRESHOLD;
+    witness[3] = FACTORY_SIGNATURE_COUNT;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+    (header_raw.to_vec().into(), witness.to_vec().into())
 }
 
 fn factory_splice_signature_witness(
@@ -899,6 +1105,8 @@ fn signed_factory_splice_pair(
     new_amount: u128,
     external_input: u128,
     withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -919,12 +1127,15 @@ fn signed_factory_splice_pair(
 
     let mut old = factory_header_raw(1);
     old[108..140].copy_from_slice(&factory_participants);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
     let mut new = factory_header_raw(2);
+    new[270..302].fill(0);
     new[76..108].fill(9);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].fill(10);
     new[172..204].fill(11);
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let new_header = FactoryStateHeader::parse(&new).unwrap();
 
     let old_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, old_amount);
@@ -964,6 +1175,10 @@ fn signed_factory_splice_pair(
     header[213..245].copy_from_slice(&vault_delta_commitment);
     header[245..277].copy_from_slice(new_header.non_interference_digest());
     header[277..309].copy_from_slice(&splice_participants);
+    header[309..341].copy_from_slice(&old_vault_materialisation_root);
+    header[341..373].copy_from_slice(&new_vault_materialisation_root);
+    header[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
+    header[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
     let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     let signatures =
         factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
@@ -988,6 +1203,7 @@ fn signed_factory_splice_pair(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signed_factory_xudt_splice_pair(
     ckb_amount: u128,
     old_xudt_amount: u128,
@@ -995,6 +1211,8 @@ fn signed_factory_xudt_splice_pair(
     xudt_type_hash: [u8; BYTE32_LEN],
     external_input: u128,
     withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -1015,12 +1233,15 @@ fn signed_factory_xudt_splice_pair(
 
     let mut old = factory_header_raw(1);
     old[108..140].copy_from_slice(&factory_participants);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
     let mut new = factory_header_raw(2);
+    new[270..302].fill(0);
     new[76..108].fill(9);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].fill(10);
     new[172..204].fill(11);
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let new_header = FactoryStateHeader::parse(&new).unwrap();
 
     let ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, ckb_amount);
@@ -1066,6 +1287,10 @@ fn signed_factory_xudt_splice_pair(
     header[213..245].copy_from_slice(&vault_delta_commitment);
     header[245..277].copy_from_slice(new_header.non_interference_digest());
     header[277..309].copy_from_slice(&splice_participants);
+    header[309..341].copy_from_slice(&old_vault_materialisation_root);
+    header[341..373].copy_from_slice(&new_vault_materialisation_root);
+    header[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
+    header[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
     let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     let signatures =
         factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
@@ -1090,6 +1315,7 @@ fn signed_factory_xudt_splice_pair(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signed_factory_dual_asset_splice_pair(
     old_ckb_amount: u128,
     new_ckb_amount: u128,
@@ -1098,6 +1324,8 @@ fn signed_factory_dual_asset_splice_pair(
     xudt_type_hash: [u8; BYTE32_LEN],
     ckb_external_input: u128,
     xudt_external_input: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -1118,12 +1346,15 @@ fn signed_factory_dual_asset_splice_pair(
 
     let mut old = factory_header_raw(1);
     old[108..140].copy_from_slice(&factory_participants);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
     let mut new = factory_header_raw(2);
+    new[270..302].fill(0);
     new[76..108].fill(9);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].fill(10);
     new[172..204].fill(11);
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let new_header = FactoryStateHeader::parse(&new).unwrap();
 
     let old_ckb_asset = factory_vault_asset_bytes(VAULT_ASSET_KIND_CKB, old_ckb_amount);
@@ -1172,6 +1403,10 @@ fn signed_factory_dual_asset_splice_pair(
     header[213..245].copy_from_slice(&vault_delta_commitment);
     header[245..277].copy_from_slice(new_header.non_interference_digest());
     header[277..309].copy_from_slice(&splice_participants);
+    header[309..341].copy_from_slice(&old_vault_materialisation_root);
+    header[341..373].copy_from_slice(&new_vault_materialisation_root);
+    header[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
+    header[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
     let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     let signatures =
         factory_splice_signature_witness(&key0, &key1, &splice_header.signing_digest());
@@ -1201,6 +1436,8 @@ fn signed_factory_reduced_splice_pair(
     new_amount: u128,
     external_input: u128,
     withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -1251,12 +1488,15 @@ fn signed_factory_reduced_splice_pair(
     let mut old = factory_header_raw(1);
     old[76..108].copy_from_slice(&before_root);
     old[108..140].copy_from_slice(&factory_participants);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(2);
+    new[270..302].fill(0);
     new[76..108].copy_from_slice(&after_root);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].copy_from_slice(old_header.access_manifest_root());
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let preliminary_new = FactoryStateHeader::parse(&new).unwrap();
     let digest = merkle
         .non_interference_digest(&old_header, &preliminary_new)
@@ -1301,6 +1541,10 @@ fn signed_factory_reduced_splice_pair(
     header[213..245].copy_from_slice(&vault_delta_commitment);
     header[245..277].copy_from_slice(new_header.non_interference_digest());
     header[277..309].copy_from_slice(&splice_participants);
+    header[309..341].copy_from_slice(&old_vault_materialisation_root);
+    header[341..373].copy_from_slice(&new_vault_materialisation_root);
+    header[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
+    header[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
     let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     sign_merkle_update_witness(
         &mut merkle_witness,
@@ -1330,6 +1574,7 @@ fn signed_factory_reduced_splice_pair(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signed_factory_reduced_xudt_splice_pair(
     ckb_amount: u128,
     old_xudt_amount: u128,
@@ -1337,6 +1582,8 @@ fn signed_factory_reduced_xudt_splice_pair(
     xudt_type_hash: [u8; BYTE32_LEN],
     external_input: u128,
     withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
@@ -1389,12 +1636,15 @@ fn signed_factory_reduced_xudt_splice_pair(
     let mut old = factory_header_raw(1);
     old[76..108].copy_from_slice(&before_root);
     old[108..140].copy_from_slice(&factory_participants);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(2);
+    new[270..302].fill(0);
     new[76..108].copy_from_slice(&after_root);
     new[108..140].copy_from_slice(&factory_participants);
     new[140..172].copy_from_slice(old_header.access_manifest_root());
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let preliminary_new = FactoryStateHeader::parse(&new).unwrap();
     let digest = merkle
         .non_interference_digest(&old_header, &preliminary_new)
@@ -1445,6 +1695,10 @@ fn signed_factory_reduced_xudt_splice_pair(
     header[213..245].copy_from_slice(&vault_delta_commitment);
     header[245..277].copy_from_slice(new_header.non_interference_digest());
     header[277..309].copy_from_slice(&splice_participants);
+    header[309..341].copy_from_slice(&old_vault_materialisation_root);
+    header[341..373].copy_from_slice(&new_vault_materialisation_root);
+    header[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
+    header[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
     let splice_header = FactorySpliceHeader::parse(&header).unwrap();
     sign_merkle_update_witness(
         &mut merkle_witness,
@@ -2059,13 +2313,18 @@ fn sign_reduced_exit_witness(
     }
 }
 
-fn reduced_exit_old_factory_data(old_number: u64, reserve_claim_before_quantity: u128) -> Bytes {
+fn reduced_exit_old_factory_data(
+    old_number: u64,
+    reserve_claim_before_quantity: u128,
+    vault_materialisation_root: [u8; BYTE32_LEN],
+) -> Bytes {
     reduced_exit_old_factory_data_with_reserve_asset(
         old_number,
         reserve_claim_before_quantity,
         None,
         100,
         100,
+        vault_materialisation_root,
     )
 }
 
@@ -2075,6 +2334,7 @@ fn reduced_exit_old_factory_data_with_reserve_asset(
     reserve_asset_type: Option<[u8; BYTE32_LEN]>,
     ckb_reserve_claim_before_quantity: u128,
     ckb_reserve_claim_after_quantity: u128,
+    vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> Bytes {
     let descriptor = descriptor_bytes([1u8; 32], 1, [2u8; 32], 2);
     let child_state = header_raw(0, PHASE_ACTIVE);
@@ -2111,6 +2371,7 @@ fn reduced_exit_old_factory_data_with_reserve_asset(
     old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
     old[108..140].copy_from_slice(&participants_commitment);
     old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
+    set_factory_vault_materialisation_root(&mut old, vault_materialisation_root);
     old.to_vec().into()
 }
 
@@ -2128,6 +2389,8 @@ fn signed_reduced_factory_exit_pair(
     state_lock_hash: [u8; 32],
     state_header: &[u8],
     descriptor: &[u8],
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     signed_reduced_factory_exit_pair_with_reserve_asset(
         old_number,
@@ -2145,6 +2408,8 @@ fn signed_reduced_factory_exit_pair(
         None,
         100,
         100,
+        old_vault_materialisation_root,
+        new_vault_materialisation_root,
     )
 }
 
@@ -2165,6 +2430,8 @@ fn signed_reduced_factory_exit_pair_with_reserve_asset(
     reserve_asset_type: Option<[u8; BYTE32_LEN]>,
     ckb_reserve_claim_before_quantity: u128,
     ckb_reserve_claim_after_quantity: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes, Bytes) {
     let (mut witness_raw, key0, key1) = reduced_exit_witness_raw_with_reserve_asset(
         release_quantity,
@@ -2199,12 +2466,15 @@ fn signed_reduced_factory_exit_pair_with_reserve_asset(
     old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
     old[108..140].copy_from_slice(&participants_commitment);
     old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let old_header = FactoryStateHeader::parse(&old).unwrap();
 
     let mut new = factory_header_raw(new_number);
+    new[270..302].fill(0);
     new[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
     new[108..140].copy_from_slice(&participants_commitment);
     new[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
     let preliminary_new_header = FactoryStateHeader::parse(&new).unwrap();
     let digest = witness
         .non_interference_digest(&old_header, &preliminary_new_header)
@@ -2226,6 +2496,22 @@ fn signed_factory_pair_with_exit_digest(
     new_number: u64,
     exit_digest: [u8; 32],
 ) -> (Bytes, Bytes, Bytes) {
+    signed_factory_pair_with_exit_digest_and_vault_roots(
+        old_number,
+        new_number,
+        exit_digest,
+        [9u8; BYTE32_LEN],
+        [9u8; BYTE32_LEN],
+    )
+}
+
+fn signed_factory_pair_with_exit_digest_and_vault_roots(
+    old_number: u64,
+    new_number: u64,
+    exit_digest: [u8; 32],
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
     let mut entries = [
@@ -2243,11 +2529,14 @@ fn signed_factory_pair_with_exit_digest(
     );
     let mut old = factory_header_raw(old_number);
     old[108..140].copy_from_slice(&commitment);
+    set_factory_vault_materialisation_root(&mut old, old_vault_materialisation_root);
     let mut new = factory_header_raw(new_number);
+    new[270..302].fill(0);
     new[108..140].copy_from_slice(&commitment);
     new[76..108].fill(9);
     new[140..172].fill(10);
     new[172..204].copy_from_slice(&exit_digest);
+    set_factory_vault_materialisation_root(&mut new, new_vault_materialisation_root);
 
     let header = FactoryStateHeader::parse(&new).unwrap();
     let digest = header.signing_digest();
@@ -2399,6 +2688,7 @@ enum VaultCkbSettlementTamper {
     NonEmptyData,
     TypedOutput,
     SplitOutput,
+    DescriptorVersionMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2582,7 +2872,166 @@ fn state_lock_rejects_untyped_input() {
 fn state_type_accepts_canonical_initial_state() {
     let mut context = Context::default();
     let funding_lock = deploy_always_success(&mut context);
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
 
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(2 * CELL_CAPACITY)
+            .lock(funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_materialisation_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, signature_witness) =
+        signed_initial_state_header(funding_anchor, vault_materialisation_root);
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(signature_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("canonical initial state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_unknown_protocol_profile() {
+    let mut context = Context::default();
+    let funding_lock = deploy_always_success(&mut context);
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(2 * CELL_CAPACITY)
+            .lock(funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_materialisation_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, signature_witness) = signed_initial_state_header_with_mutation(
+        funding_anchor,
+        vault_materialisation_root,
+        |raw| put_u16(raw, 0, 2),
+    );
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(signature_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_unsigned_initial_state() {
+    let mut context = Context::default();
+    let funding_lock = deploy_always_success(&mut context);
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(2 * CELL_CAPACITY)
+            .lock(funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_materialisation_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, _) = signed_initial_state_header(funding_anchor, vault_materialisation_root);
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_initial_state_without_committed_vault() {
+    let mut context = Context::default();
+    let funding_lock = deploy_always_success(&mut context);
+    let absent_vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
     let funding_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
@@ -2603,24 +3052,184 @@ fn state_type_accepts_canonical_initial_state() {
         &mut context,
         Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
     );
-    let initial_data =
-        Bytes::from(header_raw_with_anchor(0, PHASE_ACTIVE, funding_anchor).to_vec());
-
-    let output = CellOutput::new_builder()
+    let absent_vault_root = vault_commitment(&absent_vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, signature_witness) =
+        signed_initial_state_header(funding_anchor, absent_vault_root);
+    let state_output = CellOutput::new_builder()
         .capacity(CELL_CAPACITY)
         .lock(state_lock)
         .type_(Some(state_type).pack())
         .build();
     let tx = TransactionBuilder::default()
         .input(input)
-        .output(output)
+        .output(state_output)
         .output_data(initial_data.pack())
+        .witness(witness_with_input_type(signature_witness))
         .build();
     let tx = context.complete_tx(tx);
 
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_initial_state_with_ambiguous_committed_vault() {
+    let mut context = Context::default();
+    let funding_lock = deploy_always_success(&mut context);
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(3 * CELL_CAPACITY)
+            .lock(funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, signature_witness) = signed_initial_state_header(funding_anchor, vault_root);
+    let state_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(state_output)
+        .output(vault_output.clone())
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(signature_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn state_vault_activation_tx(
+    committed_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
+    actual_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
+    drift_output_lock: bool,
+    drift_carrier_capacity: bool,
+) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(FUNDING_ANCHOR, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock.clone())
+        .build();
+    let vault_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let mut old_data = header_raw(0, PHASE_ACTIVE);
+    set_state_vault_materialisation_root(&mut old_data, vault_root);
+    old_data[314..346].fill(0);
+    let mut new_data = old_data;
+    set_state_vault_outpoint(&mut new_data, &committed_vault_out_point);
+
+    let state_out_point = test_out_point(77, 0);
+    context.create_cell_with_out_point(
+        state_out_point.clone(),
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        Bytes::copy_from_slice(&old_data),
+    );
+    context.create_cell_with_out_point(actual_vault_out_point.clone(), vault_output, Bytes::new());
+    let output_lock = if drift_output_lock {
+        deploy_always_success_with_args(&mut context, Bytes::from(vec![10]))
+    } else {
+        state_lock
+    };
+    let tx = TransactionBuilder::default()
+        .cell_dep(
+            CellDep::new_builder()
+                .out_point(actual_vault_out_point)
+                .build(),
+        )
+        .input(CellInput::new(state_out_point, 0))
+        .output(
+            CellOutput::new_builder()
+                .capacity(
+                    CELL_CAPACITY
+                        - STATE_CARRIER_ACTIVATION_FEE
+                        - u64::from(drift_carrier_capacity),
+                )
+                .lock(output_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output_data(Bytes::copy_from_slice(&new_data).pack())
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_accepts_exact_sibling_vault_activation() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false);
     context
         .verify_tx(&tx, MAX_CYCLES)
-        .expect("canonical initial state should verify");
+        .expect("exact sibling VaultCell activation should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_byte_identical_clone_vault_activation() {
+    let (context, tx) = state_vault_activation_tx(
+        fixture_vault_out_point(),
+        test_out_point(88, 1),
+        false,
+        false,
+    );
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_vault_activation_lock_drift() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_vault_activation_carrier_drain() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        state_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -2685,8 +3294,61 @@ fn factory_type_accepts_canonical_initial_factory_state() {
         .build();
     let factory_id = derived_factory_id(&input, 0);
     let factory_type = deploy_contract(&mut context, "morph-factory-type", factory_id.to_vec());
-    let initial_data = Bytes::from(factory_header_raw_with_id(0, factory_id).to_vec());
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = factory_id.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+    let factory_state_capacity = CELL_CAPACITY / 2;
+    let factory_vault_capacity = CELL_CAPACITY - factory_state_capacity;
+    let vault_root = vault_commitment(&factory_vault_lock, factory_vault_capacity, None, &[]);
+    let (initial_data, signature_witness) = signed_initial_factory_header(factory_id, vault_root);
 
+    let output = CellOutput::new_builder()
+        .capacity(factory_state_capacity)
+        .lock(lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(factory_vault_capacity)
+        .lock(factory_vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+            signature_witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("canonical initial factory state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_unsigned_initial_factory_state() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let factory_id = derived_factory_id(&input, 0);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", factory_id.to_vec());
+    let (initial_data, _) = signed_initial_factory_header(factory_id, [9u8; BYTE32_LEN]);
     let output = CellOutput::new_builder()
         .capacity(CELL_CAPACITY)
         .lock(lock)
@@ -2699,14 +3361,250 @@ fn factory_type_accepts_canonical_initial_factory_state() {
         .build();
     let tx = context.complete_tx(tx);
 
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn factory_creation_tx(
+    vault_output_count: usize,
+    commit_actual_vault: bool,
+) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let owner_lock = deploy_always_success(&mut context);
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(owner_lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let factory_id = derived_factory_id(&input, 0);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", factory_id.to_vec());
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = factory_id.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+
+    let factory_state_capacity = CELL_CAPACITY / 2;
+    let vault_capacity = if vault_output_count == 0 {
+        0
+    } else {
+        (CELL_CAPACITY - factory_state_capacity) / vault_output_count as u64
+    };
+    let vault_root = if commit_actual_vault && vault_output_count > 0 {
+        vault_commitment(&factory_vault_lock, vault_capacity, None, &[])
+    } else {
+        [0xabu8; BYTE32_LEN]
+    };
+    let (initial_data, signature_witness) = signed_initial_factory_header(factory_id, vault_root);
+    let factory_output = CellOutput::new_builder()
+        .capacity(factory_state_capacity)
+        .lock(owner_lock)
+        .type_(Some(factory_type).pack())
+        .build();
+    let mut builder = TransactionBuilder::default()
+        .input(input)
+        .output(factory_output)
+        .output_data(initial_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+            signature_witness,
+        ));
+    for _ in 0..vault_output_count {
+        builder = builder
+            .output(
+                CellOutput::new_builder()
+                    .capacity(vault_capacity)
+                    .lock(factory_vault_lock.clone())
+                    .build(),
+            )
+            .output_data(Bytes::new().pack());
+    }
+    let tx = context.complete_tx(builder.build());
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_initial_state_without_committed_factory_vault() {
+    let (context, tx) = factory_creation_tx(0, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_initial_state_with_wrong_factory_vault_commitment() {
+    let (context, tx) = factory_creation_tx(1, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_initial_state_with_ambiguous_factory_vaults() {
+    let (context, tx) = factory_creation_tx(2, true);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn factory_vault_activation_tx(
+    committed_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
+    actual_vault_out_point: ckb_testtool::ckb_types::packed::OutPoint,
+    drift_output_lock: bool,
+    prefix_dummy_dep: bool,
+    drift_carrier_capacity: bool,
+) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let owner_lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = FACTORY_ID.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_always_success_with_args(&mut context, Bytes::from(factory_vault_args));
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(factory_vault_lock.clone())
+        .build();
+    let vault_root = vault_commitment(&factory_vault_lock, CELL_CAPACITY, None, &[]);
+    let mut old_data = factory_header_raw(0);
+    set_factory_vault_materialisation_root(&mut old_data, vault_root);
+    old_data[270..302].fill(0);
+    let mut new_data = old_data;
+    set_factory_vault_outpoint(&mut new_data, &committed_vault_out_point);
+
+    let factory_out_point = test_out_point(77, 0);
+    context.create_cell_with_out_point(
+        factory_out_point.clone(),
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(owner_lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        Bytes::copy_from_slice(&old_data),
+    );
+    context.create_cell_with_out_point(actual_vault_out_point.clone(), vault_output, Bytes::new());
+    let output_lock = if drift_output_lock {
+        deploy_always_success_with_args(&mut context, Bytes::from(vec![10]))
+    } else {
+        owner_lock
+    };
+    let dummy_dep = if prefix_dummy_dep {
+        let dummy_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![11]));
+        Some(
+            context.create_cell(
+                CellOutput::new_builder()
+                    .capacity(CELL_CAPACITY)
+                    .lock(dummy_lock)
+                    .build(),
+                Bytes::new(),
+            ),
+        )
+    } else {
+        None
+    };
+    let mut builder = TransactionBuilder::default();
+    if let Some(dummy_dep) = dummy_dep {
+        builder = builder.cell_dep(CellDep::new_builder().out_point(dummy_dep).build());
+    }
+    let tx = builder
+        .cell_dep(
+            CellDep::new_builder()
+                .out_point(actual_vault_out_point)
+                .build(),
+        )
+        .input(CellInput::new(factory_out_point, 0))
+        .output(
+            CellOutput::new_builder()
+                .capacity(
+                    CELL_CAPACITY
+                        - STATE_CARRIER_ACTIVATION_FEE
+                        - u64::from(drift_carrier_capacity),
+                )
+                .lock(output_lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(Bytes::copy_from_slice(&new_data).pack())
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_exact_sibling_vault_activation() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) = factory_vault_activation_tx(
+        vault_out_point.clone(),
+        vault_out_point,
+        false,
+        false,
+        false,
+    );
     context
         .verify_tx(&tx, MAX_CYCLES)
-        .expect("canonical initial factory state should verify");
+        .expect("exact sibling FactoryVaultCell activation should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_byte_identical_clone_vault_activation() {
+    let (context, tx) = factory_vault_activation_tx(
+        fixture_vault_out_point(),
+        test_out_point(88, 1),
+        false,
+        false,
+        false,
+    );
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_vault_activation_lock_drift() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, true, false, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_noncanonical_vault_activation_dep_position() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, true, false);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_vault_activation_carrier_drain() {
+    let vault_out_point = fixture_vault_out_point();
+    let (context, tx) =
+        factory_vault_activation_tx(vault_out_point.clone(), vault_out_point, false, false, true);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn factory_type_accepts_signed_factory_update() {
+    let (context, tx) = signed_factory_update_tx(CELL_CAPACITY);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_signed_factory_update_carrier_drain() {
+    let (context, tx) = signed_factory_update_tx(CELL_CAPACITY - 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn signed_factory_update_tx(output_capacity: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
@@ -2725,7 +3623,7 @@ fn factory_type_accepts_signed_factory_update() {
         .build();
 
     let output = CellOutput::new_builder()
-        .capacity(CELL_CAPACITY)
+        .capacity(output_capacity)
         .lock(lock)
         .type_(Some(factory_type).pack())
         .build();
@@ -2739,10 +3637,46 @@ fn factory_type_accepts_signed_factory_update() {
         ))
         .build();
     let tx = context.complete_tx(tx);
+    (context, tx)
+}
 
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("factory update should verify");
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_signed_ordinary_update_with_factory_vault_root_drift() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, sig_witness) =
+        signed_factory_pair_with_vault_roots(1, 2, [9u8; BYTE32_LEN], [10u8; BYTE32_LEN]);
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+            sig_witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -2753,6 +3687,13 @@ fn factory_type_and_vault_accept_factory_splice_in() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_splice_without_carrier_activation_reserve() {
+    let (context, tx) = factory_splice_ckb_tx_with_carrier(false, 0);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -3140,6 +4081,13 @@ fn factory_type_rejects_invalid_participant_signature() {
 }
 
 fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
+    factory_splice_ckb_tx_with_carrier(tamper_capacity, STATE_CARRIER_ACTIVATION_FEE)
+}
+
+fn factory_splice_ckb_tx_with_carrier(
+    tamper_capacity: bool,
+    carrier_activation_reserve: u64,
+) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let external_input_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
@@ -3154,11 +4102,15 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
     let old_reserve = 200_000_000_000u64;
     let splice_amount = 20_000_000_000u64;
     let new_reserve = old_reserve + splice_amount;
+    let old_vault_root = vault_commitment(&factory_vault_lock, old_reserve, None, &[]);
+    let new_vault_root = vault_commitment(&factory_vault_lock, new_reserve, None, &[]);
     let (old_factory_data, new_factory_data, splice_witness) = signed_factory_splice_pair(
         old_reserve as u128,
         new_reserve as u128,
         splice_amount as u128,
         0,
+        old_vault_root,
+        new_vault_root,
     );
 
     let factory_input_out_point = context.create_cell(
@@ -3172,7 +4124,8 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(old_reserve)
             .lock(factory_vault_lock.clone())
@@ -3195,7 +4148,7 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
     } else {
         new_reserve
     };
-    let change_capacity = CELL_CAPACITY - splice_amount;
+    let change_capacity = CELL_CAPACITY - splice_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -3206,7 +4159,7 @@ fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + carrier_activation_reserve)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3255,11 +4208,15 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
     let old_reserve = 200_000_000_000u64;
     let splice_amount = 20_000_000_000u64;
     let new_reserve = old_reserve + splice_amount;
+    let old_vault_root = vault_commitment(&factory_vault_lock, old_reserve, None, &[]);
+    let new_vault_root = vault_commitment(&factory_vault_lock, new_reserve, None, &[]);
     let (old_factory_data, new_factory_data, splice_witness) = signed_factory_reduced_splice_pair(
         old_reserve as u128,
         new_reserve as u128,
         splice_amount as u128,
         0,
+        old_vault_root,
+        new_vault_root,
     );
     let mut splice_witness = splice_witness.to_vec();
     if tamper == ReducedFactorySpliceTamper::SparseMerkleSibling {
@@ -3278,7 +4235,8 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(old_reserve)
             .lock(factory_vault_lock.clone())
@@ -3301,7 +4259,7 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
     } else {
         new_reserve
     };
-    let change_capacity = CELL_CAPACITY - splice_amount;
+    let change_capacity = CELL_CAPACITY - splice_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -3312,7 +4270,7 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3372,6 +4330,18 @@ fn factory_xudt_splice_tx(
     let old_xudt_amount = 100u128;
     let splice_xudt_amount = 40u128;
     let new_xudt_amount = old_xudt_amount + splice_xudt_amount;
+    let old_vault_root = vault_commitment(
+        &factory_vault_lock,
+        descriptor_ckb_amount,
+        Some(xudt_type_hash),
+        &xudt_amount_data(old_xudt_amount),
+    );
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        descriptor_ckb_amount,
+        Some(xudt_type_hash),
+        &xudt_amount_data(new_xudt_amount),
+    );
     let (old_factory_data, new_factory_data, splice_witness) = if reduced {
         signed_factory_reduced_xudt_splice_pair(
             descriptor_ckb_amount as u128,
@@ -3380,6 +4350,8 @@ fn factory_xudt_splice_tx(
             xudt_type_hash,
             splice_xudt_amount,
             0,
+            old_vault_root,
+            new_vault_root,
         )
     } else {
         signed_factory_xudt_splice_pair(
@@ -3389,6 +4361,8 @@ fn factory_xudt_splice_tx(
             xudt_type_hash,
             splice_xudt_amount,
             0,
+            old_vault_root,
+            new_vault_root,
         )
     };
 
@@ -3407,7 +4381,8 @@ fn factory_xudt_splice_tx(
         FactoryXudtSpliceCapacityTamper::InputCapacity => descriptor_ckb_amount - 1,
         _ => descriptor_ckb_amount,
     };
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(input_capacity)
             .lock(factory_vault_lock.clone())
@@ -3432,7 +4407,8 @@ fn factory_xudt_splice_tx(
         FactoryXudtSpliceCapacityTamper::OutputCapacity => descriptor_ckb_amount - 1,
         _ => descriptor_ckb_amount,
     };
-    let change_capacity = input_capacity + external_input_capacity - output_capacity;
+    let change_capacity =
+        input_capacity + external_input_capacity - output_capacity - STATE_CARRIER_ACTIVATION_FEE;
     let witness_kind = if reduced {
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
     } else {
@@ -3448,7 +4424,7 @@ fn factory_xudt_splice_tx(
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3508,6 +4484,18 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
     let old_xudt_amount = 100u128;
     let xudt_splice_amount = 40u128;
     let new_xudt_amount = old_xudt_amount + xudt_splice_amount;
+    let old_vault_root = vault_commitment(
+        &factory_vault_lock,
+        old_ckb_amount,
+        Some(xudt_type_hash),
+        &xudt_amount_data(old_xudt_amount),
+    );
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        new_ckb_amount,
+        Some(xudt_type_hash),
+        &xudt_amount_data(new_xudt_amount),
+    );
     let (old_factory_data, new_factory_data, splice_witness) =
         signed_factory_dual_asset_splice_pair(
             old_ckb_amount as u128,
@@ -3517,6 +4505,8 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
             xudt_type_hash,
             ckb_splice_amount as u128,
             xudt_splice_amount,
+            old_vault_root,
+            new_vault_root,
         );
 
     let factory_input_out_point = context.create_cell(
@@ -3530,7 +4520,8 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(old_ckb_amount)
             .lock(factory_vault_lock.clone())
@@ -3550,7 +4541,8 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
         xudt_amount_data(xudt_splice_amount),
     );
 
-    let change_capacity = old_ckb_amount + CELL_CAPACITY - new_ckb_amount;
+    let change_capacity =
+        old_ckb_amount + CELL_CAPACITY - new_ckb_amount - STATE_CARRIER_ACTIVATION_FEE;
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -3561,7 +4553,7 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3600,13 +4592,14 @@ fn factory_dual_asset_splice_tx() -> (Context, TransactionView) {
 #[test]
 fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let mut context = Context::default();
-    let factory_lock = deploy_always_success(&mut context);
     let reserve_owner_lock = deploy_always_success(&mut context);
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
 
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
     let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
+    let factory_lock =
+        deploy_contract(&mut context, "morph-state-lock", factory_type_hash.to_vec());
     let mut factory_vault_args = FACTORY_ID.to_vec();
     factory_vault_args.extend_from_slice(&factory_type_hash);
     let factory_vault_lock =
@@ -3614,7 +4607,18 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
 
     let released_capacity = ALICE_CAPACITY + BOB_CAPACITY;
     let reserve_claim_before_quantity = released_capacity as u128;
-    let old_factory_data = reduced_exit_old_factory_data(1, reserve_claim_before_quantity);
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let factory_vault_change_capacity = factory_vault_input_capacity - released_capacity;
+    let old_vault_root =
+        vault_commitment(&factory_vault_lock, factory_vault_input_capacity, None, &[]);
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_change_capacity,
+        None,
+        &[],
+    );
+    let old_factory_data =
+        reduced_exit_old_factory_data(1, reserve_claim_before_quantity, old_vault_root);
 
     let factory_input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -3627,9 +4631,10 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
-            .capacity(300_000_000_000u64)
+            .capacity(factory_vault_input_capacity)
             .lock(factory_vault_lock.clone())
             .build(),
         Bytes::new(),
@@ -3669,7 +4674,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_vault_materialisation_root(
         &mut child_state,
@@ -3697,6 +4702,8 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         state_lock_hash,
         &child_state,
         &descriptor,
+        old_vault_root,
+        new_vault_root,
     );
     assert_eq!(old_factory_data, expected_old_data);
 
@@ -3710,7 +4717,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -3730,7 +4737,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(200_000_000_000u64)
+                .capacity(factory_vault_change_capacity)
                 .lock(factory_vault_lock)
                 .build(),
         )
@@ -3774,12 +4781,23 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let released_capacity = ALICE_CAPACITY + BOB_CAPACITY;
     let reserve_asset_type = [7u8; BYTE32_LEN];
     let reserve_claim_before_quantity = released_capacity as u128;
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let factory_vault_change_capacity = factory_vault_input_capacity - released_capacity;
+    let old_vault_root =
+        vault_commitment(&factory_vault_lock, factory_vault_input_capacity, None, &[]);
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_change_capacity,
+        None,
+        &[],
+    );
     let old_factory_data = reduced_exit_old_factory_data_with_reserve_asset(
         1,
         reserve_claim_before_quantity,
         Some(reserve_asset_type),
         100,
         100,
+        old_vault_root,
     );
 
     let factory_input_out_point = context.create_cell(
@@ -3793,9 +4811,10 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
-            .capacity(300_000_000_000u64)
+            .capacity(factory_vault_input_capacity)
             .lock(factory_vault_lock.clone())
             .build(),
         Bytes::new(),
@@ -3835,7 +4854,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_vault_materialisation_root(
         &mut child_state,
@@ -3867,6 +4886,8 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
             Some(reserve_asset_type),
             100,
             100,
+            old_vault_root,
+            new_vault_root,
         );
     assert_eq!(old_factory_data, expected_old_data);
 
@@ -3900,7 +4921,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(200_000_000_000u64)
+                .capacity(factory_vault_change_capacity)
                 .lock(factory_vault_lock)
                 .build(),
         )
@@ -4098,12 +5119,36 @@ fn factory_reduced_xudt_exit_tx(
         _ => child_vault_capacity_for_claim,
     };
     let ckb_reserve_claim_after_quantity = 0;
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let expected_factory_vault_change_capacity =
+        factory_vault_input_capacity - (ALICE_CAPACITY + BOB_CAPACITY);
+    let old_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_input_capacity,
+        Some(xudt_type_hash),
+        &xudt_amount_data(reserve_claim_before_quantity),
+    );
+    let (expected_change_type, expected_change_data) = if factory_vault_xudt_surplus > 0 {
+        (
+            Some(xudt_type_hash),
+            xudt_amount_data(factory_vault_xudt_surplus),
+        )
+    } else {
+        (None, Bytes::new())
+    };
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        expected_factory_vault_change_capacity,
+        expected_change_type,
+        expected_change_data.as_ref(),
+    );
     let old_factory_data = reduced_exit_old_factory_data_with_reserve_asset(
         1,
         reserve_claim_before_quantity,
         Some(reserve_asset_type),
         ckb_reserve_claim_before_quantity,
         ckb_reserve_claim_after_quantity,
+        old_vault_root,
     );
 
     let factory_input_out_point = context.create_cell(
@@ -4117,8 +5162,8 @@ fn factory_reduced_xudt_exit_tx(
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_capacity = 300_000_000_000u64;
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(factory_vault_input_capacity)
             .lock(factory_vault_lock.clone())
@@ -4157,7 +5202,7 @@ fn factory_reduced_xudt_exit_tx(
 
     let child_vault_capacity = ALICE_CAPACITY + BOB_CAPACITY;
     let child_vault_data = xudt_amount_data(released_xudt_amount);
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     put_u16(&mut child_state, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     set_state_vault_materialisation_root(
@@ -4195,6 +5240,8 @@ fn factory_reduced_xudt_exit_tx(
             Some(reserve_asset_type),
             ckb_reserve_claim_before_quantity,
             ckb_reserve_claim_after_quantity,
+            old_vault_root,
+            new_vault_root,
         );
     assert_eq!(old_factory_data, expected_old_data);
 
@@ -4247,7 +5294,7 @@ fn factory_reduced_xudt_exit_tx(
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4306,6 +5353,16 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     factory_vault_args.extend_from_slice(&factory_type_hash);
     let factory_vault_lock =
         deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let factory_vault_change_capacity = 200_000_000_000u64;
+    let old_vault_root =
+        vault_commitment(&factory_vault_lock, factory_vault_input_capacity, None, &[]);
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_change_capacity,
+        None,
+        &[],
+    );
 
     let descriptor = descriptor_bytes(
         alice_lock.calc_script_hash().unpack(),
@@ -4313,7 +5370,13 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         bob_lock.calc_script_hash().unpack(),
         BOB_CAPACITY,
     );
-    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest(1, 2, [0u8; 32]);
+    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest_and_vault_roots(
+        1,
+        2,
+        [0u8; 32],
+        old_vault_root,
+        new_vault_root,
+    );
 
     let factory_input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -4326,9 +5389,10 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
-            .capacity(300_000_000_000u64)
+            .capacity(factory_vault_input_capacity)
             .lock(factory_vault_lock.clone())
             .build(),
         Bytes::new(),
@@ -4362,7 +5426,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     );
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_vault_materialisation_root(
         &mut child_state,
@@ -4386,7 +5450,13 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         &child_state,
         &descriptor,
     );
-    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest(1, 2, exit_digest);
+    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest_and_vault_roots(
+        1,
+        2,
+        exit_digest,
+        old_vault_root,
+        new_vault_root,
+    );
     let exit_witness = factory_local_exit_witness(
         &factory_sig,
         state_output_index,
@@ -4408,7 +5478,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock.clone())
                 .type_(Some(factory_type.clone()).pack())
                 .build(),
@@ -4428,7 +5498,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(200_000_000_000u64)
+                .capacity(factory_vault_change_capacity)
                 .lock(factory_vault_lock.clone())
                 .build(),
         )
@@ -4555,7 +5625,8 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(300_000_000_000u64)
             .lock(factory_vault_lock.clone())
@@ -4592,7 +5663,7 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     );
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     set_state_vault_materialisation_root(
         &mut child_state,
@@ -4766,7 +5837,60 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         BOB_CAPACITY,
         BOB_XUDT_AMOUNT,
     );
-    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest(1, 2, [0u8; 32]);
+    let partial_release = matches!(
+        tamper,
+        FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch
+            | FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
+    );
+    let factory_vault_input_type = match tamper {
+        FactoryXudtExitTamper::FactoryVaultInputTypeMismatch => wrong_xudt_type.clone(),
+        _ => xudt_type.clone(),
+    };
+    let factory_vault_input_amount =
+        ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT + if partial_release { 1 } else { 0 };
+    let factory_vault_change_type = match tamper {
+        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply
+        | FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint
+        | FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => Some(xudt_type.clone()),
+        FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
+        | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
+        | FactoryXudtExitTamper::None => None,
+    };
+    let factory_vault_change_data = match tamper {
+        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply => xudt_amount_data(1),
+        FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => {
+            xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT)
+        }
+        FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => xudt_amount_data(2),
+        FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
+        | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
+        | FactoryXudtExitTamper::None => Bytes::new(),
+    };
+    let factory_vault_input_capacity = 300_000_000_000u64;
+    let factory_vault_change_capacity = 200_000_000_000u64;
+    let input_type_hash: [u8; BYTE32_LEN] = factory_vault_input_type.calc_script_hash().unpack();
+    let change_type_hash = factory_vault_change_type
+        .as_ref()
+        .map(|script| script.calc_script_hash().unpack());
+    let old_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_input_capacity,
+        Some(input_type_hash),
+        &xudt_amount_data(factory_vault_input_amount),
+    );
+    let new_vault_root = vault_commitment(
+        &factory_vault_lock,
+        factory_vault_change_capacity,
+        change_type_hash,
+        factory_vault_change_data.as_ref(),
+    );
+    let (old_factory_data, _, _) = signed_factory_pair_with_exit_digest_and_vault_roots(
+        1,
+        2,
+        [0u8; 32],
+        old_vault_root,
+        new_vault_root,
+    );
 
     let factory_input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -4779,20 +5903,10 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     let factory_input = CellInput::new_builder()
         .previous_output(factory_input_out_point)
         .build();
-    let partial_release = matches!(
-        tamper,
-        FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch
-            | FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
-    );
-    let factory_vault_input_type = match tamper {
-        FactoryXudtExitTamper::FactoryVaultInputTypeMismatch => wrong_xudt_type.clone(),
-        _ => xudt_type.clone(),
-    };
-    let factory_vault_input_amount =
-        ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT + if partial_release { 1 } else { 0 };
-    let factory_vault_input_out_point = context.create_cell(
+    let factory_vault_input_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
-            .capacity(300_000_000_000u64)
+            .capacity(factory_vault_input_capacity)
             .lock(factory_vault_lock.clone())
             .type_(Some(factory_vault_input_type).pack())
             .build(),
@@ -4827,7 +5941,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     );
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
 
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
     put_u16(&mut child_state, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
     let child_vault_data = xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT);
@@ -4858,7 +5972,13 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         &child_state,
         &descriptor,
     );
-    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest(1, 2, exit_digest);
+    let (_, new_data, factory_sig) = signed_factory_pair_with_exit_digest_and_vault_roots(
+        1,
+        2,
+        exit_digest,
+        old_vault_root,
+        new_vault_root,
+    );
     let exit_witness = factory_local_exit_witness(
         &factory_sig,
         state_output_index,
@@ -4880,25 +6000,6 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         }
         _ => ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT,
     };
-    let factory_vault_change_type = match tamper {
-        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply
-        | FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint
-        | FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => Some(xudt_type),
-        FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
-        | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
-        | FactoryXudtExitTamper::None => None,
-    };
-    let factory_vault_change_data = match tamper {
-        FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply => xudt_amount_data(1),
-        FactoryXudtExitTamper::ChildTypeMismatchWithAuthorisedMint => {
-            xudt_amount_data(ALICE_XUDT_AMOUNT + BOB_XUDT_AMOUNT)
-        }
-        FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => xudt_amount_data(2),
-        FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
-        | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
-        | FactoryXudtExitTamper::None => Bytes::new(),
-    };
-
     let tx = TransactionBuilder::default()
         .input(factory_input)
         .input(reserve_input)
@@ -4909,7 +6010,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(factory_lock)
                 .type_(Some(factory_type).pack())
                 .build(),
@@ -4930,7 +6031,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         )
         .output(
             CellOutput::new_builder()
-                .capacity(200_000_000_000u64)
+                .capacity(factory_vault_change_capacity)
                 .lock(factory_vault_lock)
                 .type_(factory_vault_change_type.pack())
                 .build(),
@@ -4985,7 +6086,7 @@ fn factory_type_rejects_local_exit_digest_mismatch() {
     let state_lock_hash: [u8; 32] = state_lock.calc_script_hash().unpack();
     let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
 
     let correct_digest = factory_local_exit_digest(
@@ -5079,7 +6180,7 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
     let wrong_state_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![4]));
     let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![3]));
     let vault_lock_hash: [u8; 32] = vault_lock.calc_script_hash().unpack();
-    let mut child_state = header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
+    let mut child_state = factory_child_header_raw_with_anchor(0, PHASE_ACTIVE, child_anchor);
     child_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
 
     let exit_digest = factory_local_exit_digest(
@@ -5141,6 +6242,27 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn state_type_accepts_newer_settling_state() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("newer state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_supersede_carrier_drain() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY - 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_supersede_carrier_top_up() {
+    let (context, tx) = signed_state_supersede_tx(CELL_CAPACITY + 1);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn signed_state_supersede_tx(output_capacity: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
@@ -5159,7 +6281,7 @@ fn state_type_accepts_newer_settling_state() {
         .build();
 
     let output = CellOutput::new_builder()
-        .capacity(CELL_CAPACITY)
+        .capacity(output_capacity)
         .lock(lock)
         .type_(Some(state_type).pack())
         .build();
@@ -5170,10 +6292,7 @@ fn state_type_accepts_newer_settling_state() {
         .witness(witness_with_input_type(sig_witness))
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("newer state should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -5215,7 +6334,7 @@ fn state_type_rejects_supersede_output_lock_drift() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
-fn state_type_rejects_signed_descriptor_update() {
+fn state_type_accepts_signed_descriptor_update() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
@@ -5255,9 +6374,53 @@ fn state_type_rejects_signed_descriptor_update() {
         .build();
     let tx = context.complete_tx(tx);
 
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("a participant-signed settlement update must be valid state progress");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_materialisation_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let (old_data, new_data, sig_witness) = signed_state_pair_with_new_materialisation_root(
+        1,
+        PHASE_ACTIVE,
+        2,
+        PHASE_SETTLING,
+        [42; BYTE32_LEN],
+    );
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let input = CellInput::new_builder()
+        .previous_output(input_out_point)
+        .build();
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output_data(new_data.pack())
+        .witness(witness_with_input_type(sig_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
     assert!(
         context.verify_tx(&tx, MAX_CYCLES).is_err(),
-        "signed descriptor update must not bypass preserved state context"
+        "ordinary state progress must not retarget the materialised vault"
     );
 }
 
@@ -5362,7 +6525,6 @@ fn vault_lock_accepts_finalise_with_current_state() {
         &mut state_data,
         vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
     );
-
     let state_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
@@ -5371,7 +6533,8 @@ fn vault_lock_accepts_finalise_with_current_state() {
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -5452,7 +6615,8 @@ fn vault_lock_rejects_descriptor_output_mismatch() {
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -5523,6 +6687,9 @@ fn ckb_vault_finalise_tx_with_tamper(
         &mut state_data,
         vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
     );
+    if tamper == VaultCkbSettlementTamper::DescriptorVersionMismatch {
+        put_u16(&mut state_data, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
+    }
 
     let state_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -5532,7 +6699,8 @@ fn ckb_vault_finalise_tx_with_tamper(
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -5611,6 +6779,22 @@ fn ckb_vault_finalise_tx_with_tamper(
                 Bytes::new(),
             ));
         }
+        VaultCkbSettlementTamper::DescriptorVersionMismatch => {
+            outputs.push((
+                CellOutput::new_builder()
+                    .capacity(ALICE_CAPACITY)
+                    .lock(alice_lock)
+                    .build(),
+                Bytes::new(),
+            ));
+            outputs.push((
+                CellOutput::new_builder()
+                    .capacity(BOB_CAPACITY)
+                    .lock(bob_lock)
+                    .build(),
+                Bytes::new(),
+            ));
+        }
     }
 
     for (output, data) in outputs {
@@ -5642,6 +6826,14 @@ fn vault_lock_rejects_ckb_settlement_output_with_type() {
 #[test]
 fn vault_lock_rejects_split_settlement_outputs_for_same_lock() {
     let (context, tx) = ckb_vault_finalise_tx_with_tamper(VaultCkbSettlementTamper::SplitOutput);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_descriptor_version_mismatch() {
+    let (context, tx) =
+        ckb_vault_finalise_tx_with_tamper(VaultCkbSettlementTamper::DescriptorVersionMismatch);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -5682,7 +6874,8 @@ fn vault_lock_rejects_fake_state_header_without_state_type() {
             .build(),
         Bytes::from(fake_state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -5774,7 +6967,8 @@ fn vault_lock_rejects_state_type_since_args_mismatch() {
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -5853,7 +7047,8 @@ fn vault_lock_rejects_raw_absolute_since() {
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -6068,7 +7263,8 @@ fn state_and_vault_accept_splice_out_bridge() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6089,7 +7285,7 @@ fn state_and_vault_accept_splice_out_bridge() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + STATE_CARRIER_ACTIVATION_FEE)
                 .lock(new_state_lock)
                 .type_(Some(new_state_type).pack())
                 .build(),
@@ -6122,6 +7318,20 @@ fn state_and_vault_accept_splice_out_bridge() {
 #[ignore = "requires `make build-contracts`"]
 #[test]
 fn state_and_vault_accept_splice_in_bridge() {
+    let (context, tx) = state_and_vault_splice_in_tx(STATE_CARRIER_ACTIVATION_FEE);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("state and vault splice-in bridge should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_splice_without_carrier_activation_reserve() {
+    let (context, tx) = state_and_vault_splice_in_tx(0);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn state_and_vault_splice_in_tx(carrier_activation_reserve: u64) -> (Context, TransactionView) {
     let mut context = Context::default();
     let external_funding_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![8]));
     let finalise_since = relative_since(0);
@@ -6190,7 +7400,8 @@ fn state_and_vault_accept_splice_in_bridge() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6223,7 +7434,7 @@ fn state_and_vault_accept_splice_in_bridge() {
         )
         .output(
             CellOutput::new_builder()
-                .capacity(CELL_CAPACITY)
+                .capacity(CELL_CAPACITY + carrier_activation_reserve)
                 .lock(new_state_lock)
                 .type_(Some(new_state_type).pack())
                 .build(),
@@ -6241,10 +7452,7 @@ fn state_and_vault_accept_splice_in_bridge() {
         .witness(empty_witness())
         .build();
     let tx = context.complete_tx(tx);
-
-    context
-        .verify_tx(&tx, MAX_CYCLES)
-        .expect("state and vault splice-in bridge should verify");
+    (context, tx)
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -6322,7 +7530,8 @@ fn state_type_rejects_splice_new_state_lock_drift() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6438,7 +7647,8 @@ fn state_and_vault_reject_splice_wrong_channel_header() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6549,7 +7759,8 @@ fn vault_lock_rejects_splice_new_vault_capacity_mismatch() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6670,7 +7881,8 @@ fn vault_lock_rejects_splice_new_state_payload_mismatch() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -6789,7 +8001,8 @@ fn vault_lock_rejects_splice_split_new_vault_outputs() {
             .build(),
         old_state_data,
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(old_vault_lock)
@@ -7025,7 +8238,8 @@ fn vault_lock_accepts_xudt_finalise_with_descriptor_amounts() {
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -7131,7 +8345,8 @@ fn xudt_vault_finalise_tx_with_tamper(
             .build(),
         Bytes::from(state_data.to_vec()),
     );
-    let vault_out_point = context.create_cell(
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
             .lock(vault_lock)
@@ -7270,6 +8485,86 @@ fn sponsor_lock_accepts_bounded_fee_with_wallet_change() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("bounded sponsor fee should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn sponsor_lock_rejects_third_party_capacity_diversion() {
+    const DIVERTED_CAPACITY: u64 = 10_000_000_000;
+    const ACTUAL_FEE: u64 = 100;
+
+    let mut context = Context::default();
+    let wallet_lock = deploy_always_success(&mut context);
+    let attacker_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![99]));
+    let state_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![7]));
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(0));
+    let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
+    let (old_state_data, new_state_data, sig_witness) = signed_state_pair(1, 1, 2, PHASE_SETTLING);
+    let change_hash = wallet_lock.calc_script_hash();
+    let sponsor_lock = deploy_contract(
+        &mut context,
+        "morph-sponsor-lock",
+        sponsor_policy(
+            change_hash.as_slice().try_into().unwrap(),
+            &state_type_hash,
+            DIVERTED_CAPACITY + ACTUAL_FEE,
+        ),
+    );
+
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock.clone())
+            .type_(Some(state_type.clone()).pack())
+            .build(),
+        old_state_data,
+    );
+    let sponsor_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(sponsor_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(sponsor_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(state_lock)
+                .type_(Some(state_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY - DIVERTED_CAPACITY - ACTUAL_FEE)
+                .lock(wallet_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(DIVERTED_CAPACITY)
+                .lock(attacker_lock)
+                .build(),
+        )
+        .output_data(new_state_data.pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(sig_witness))
+        .witness(empty_witness())
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

@@ -49,7 +49,8 @@ state, but they cannot rewrite vault settlement or drain participant assets.
 | `StateHeader` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set commitment, state number, phase, and settlement descriptor commitment. |
 | `BilateralSignatureWitness` | script-common | Two sorted participant public keys and signatures over the state digest. |
 | `SpliceStateTransitionWitness` | script-common, CLI | Bounded body proving an old funding anchor can move to a new funding anchor. |
-| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, and reserve context. |
+| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, reserve context, and the exact materialised FactoryVault commitment. |
+| `FactorySpliceHeader` | core, script-common, CLI | Signed Factory splice bridge binding rights-root progress, reserve deltas, and the old/new materialised FactoryVault Cells. |
 | `FactoryRight` | script-common, core, CLI | Fixed-layout representation of a participant right such as balance or reserve claim. |
 | `WitnessEnvelope` | script-common, CLI, factory scripts | Factory authorisation envelope: kind, flags, body length, and body digest. |
 | `SponsorPolicy` | script-common, CLI | Script-level sponsor fee policy. |
@@ -73,8 +74,12 @@ The current public mode surface is intentionally narrow. Host code names the
 implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
 wire profile uses mode bytes `1` and `2`. These correspond to the paper's
 current `bilateral_plaintext` profile and the implemented factory
-commitment/proof profile. Bilateral commitment mode is reserved and is not
-emitted by current package or devnet flows.
+commitment/proof profile. Directly funded initial states use mode `1` and must
+carry bilateral consent. Child states materialised by a Factory exit use mode
+`2` and must carry an exact local/reduced-exit envelope; the mode is preserved
+when the child later advances under its bilateral participant signatures.
+Bilateral commitment mode is reserved and is not emitted by current package or
+devnet flows.
 
 The host `Phase` enum is wider than the on-chain State type phase byte. Current
 State scripts accept only `Active` and `Settling`; `Funding` and `Closed` are
@@ -82,29 +87,45 @@ local lifecycle labels used by the host node and Hub after opening and after
 finalisation. Factory progression is tracked by `FactoryStateHeader.update_number`,
 not by a `Phase::FactoryActive` value.
 
-Initial funding approval is split across layers. The scripts enforce canonical
-anchor derivation, active phase, state number zero, lock/type binding, and
-capacity shape. Participant approval of the initial descriptor, asset registry,
-and challenge policy is handled by wallet, host, and package policy rather than
-by a separate script-checked initial-configuration signature object.
+Initial funding approval is enforced on chain. In addition to canonical anchor
+derivation, active phase, state number zero, lock/type binding, and capacity
+shape, the funding input carries a bilateral signature witness over the complete
+initial `StateHeader`. This binds the descriptor, asset registry, challenge
+policy, participants, and materialised Vault before the channel exists. The
+State type also requires exactly one transaction output whose lock, type,
+capacity, and data hash to `vault_materialisation_root`; missing or ambiguous
+Vault materialisation is rejected. Creation leaves
+`vault_outpoint_commitment` zero because the funding transaction hash is not
+known until the transaction is committed.
 
-**Accepted risk.** Because the initial `participants_commitment`,
-`settlement_descriptor_commitment`, `asset_registry_commitment`, and
-`challenge_policy_commitment` are not participant-signed at script level, a
-malicious funder (or wallet compromise at funding time) can plant a channel
-whose committed descriptor / registry / challenge-policy the counterparty never
-agreed to. Mitigations are entirely off chain:
+Initial Factory creation follows the same rule: the canonical factory-id input
+carries a full Factory signature envelope over update zero. Reduced or local
+proof kinds cannot be used to authorise creation. The signed
+`FactoryStateHeader.vault_materialisation_root` commits the unique FactoryVault
+output's lock hash, capacity, optional type hash, and data. Ordinary Factory
+updates must preserve this root; local/reduced exits and full/reduced splices
+must materialise old and new FactoryVault Cells matching the signed roots. The
+Factory type and Factory vault lock enforce the binding independently.
+Splice-created successor channels continue to use the separately signed splice
+bridge instead of a second redundant initial-state signature.
 
-- the funding tx must be reviewed by every participant before it is confirmed;
-- the host / wallet must reject a funding tx whose commitments do not match the
-  mutually-derived initial configuration;
-- watchtowers and package validators must treat the initial on-chain
-  commitment as authoritative only after at least one participant has
-  co-signed the resulting initial package.
+The content root is paired with an exact provenance locator. After funding or
+any reserve-changing transition, an activation transaction consumes only the
+unbound State/Factory Cell, preserves every other header field and its lock,
+and sets:
 
-Any deployment that cannot enforce these off-chain reviews must add an explicit
-initial-configuration signature object checked by the state-type script before
-mainnet.
+```text
+vault_outpoint_commitment =
+  H("CKB_MORPH_VAULT_OUTPOINT_V1", vault_tx_hash, u32_le(vault_index))
+```
+
+The referenced Vault must be the first raw/direct CellDep and its resolved
+content must match `vault_materialisation_root`. Requiring a direct canonical
+position avoids confusing a DepGroup member with the named Vault. Later
+updates preserve the locator; finalise, splice and Factory exits must consume
+that exact OutPoint. Reserve-changing successors return to the unbound state
+and must be activated before further use. Byte-identical clone Cells therefore
+cannot substitute for the committed bilateral or Factory Vault.
 
 ## Script Boundary
 
@@ -160,13 +181,33 @@ sponsor-lock consensus rule.
 conservative full-participant signatures, local-exit evidence, reduced-rights
 proofs, sparse-Merkle updates, reduced exits, factory splices, and
 reduced-splice bodies.
+New FactoryStateCells use `morph-state-lock` bound to the exact FactoryType
+script hash. The operator key funds fees through an independent secp input; it
+does not control or co-authorise the FactoryStateCell. Reduced reserve-claim
+exit construction needs the exiting participant's private key and the other
+participant's compressed public key, not the other participant's secret.
 Value-bearing factory materialisation consumes and recreates the parent Factory
 State Cell with updated roots; read-only `unchanged_reference` materialisation
 is not part of the current conservative contract profile.
 
+State and FactoryState carrier capacity is a protocol boundary. Ordinary
+updates preserve it exactly. An unbound carrier reserves 10,000 shannons for
+the deterministic Vault-OutPoint activation transaction; activation consumes
+exactly that reserve, while splice and Factory exit create the next unbound
+carrier with exactly the same reserve added. This prevents a valid state proof
+from being reused as authority to drain unrelated carrier capacity.
+
 `morph-factory-vault-lock` owns factory reserve conservation. It ensures a
 factory exit or splice changes the FactoryVaultCell exactly as the factory
 evidence permits.
+
+The current executable Factory signature profile is deliberately bilateral:
+exactly two participant identifiers/public keys sign conservative updates.
+Rights trees can contain many typed rights, but they do not make the signer set
+dynamic. Host and Hub records reject any other participant count so they cannot
+display a Factory that the deployed scripts cannot authorise. Larger signer
+sets remain a future wire-profile upgrade; this limitation does not remove the
+Factory shared-reserve or child-materialisation model.
 
 ### Factory Local Exit Lifecycle
 
@@ -186,12 +227,12 @@ lock hash, and vault shape. `morph-factory-type` then requires the output State
 Cell bytes to equal that committed header, while the child State type enforces
 the participant signature set for later state progression.
 
-Ordinary supersede may advance state number, phase, and profile-specific payload
-commitment, but preserves the settlement descriptor commitment and descriptor
-version as channel context. Splice has a separate
+Ordinary supersede may advance state number, phase, and the participant-signed
+settlement descriptor commitment, but preserves the descriptor version and
+materialised Vault root as funding context. Splice has a separate
 `state_context_matches_splice_next` rule for the old/new funding-anchor bridge
-and applies the same descriptor stability while additionally binding the
-successor payload to the signed splice header.
+and is the only transition that may replace the materialised Vault root, while
+additionally binding the successor payload to the signed splice header.
 
 ## Resolution And Packages
 
@@ -289,10 +330,10 @@ attack-shaped variants.
 | Reserve release mismatch | reduced-exit host, script, and devnet smoke coverage. |
 | Witness envelope tamper | `WitnessEnvelope` parser and factory script negative tests. |
 
-The executable audit matrix is in [audit-matrix.md](audit-matrix.md). The
-paper-to-implementation alignment audit is tracked in
-[paper-implementation-audit.md](paper-implementation-audit.md). Devnet assertion
-gates are described in [devnet.md](devnet.md).
+The current base-model security verdict, remediated findings, and verification
+evidence are in
+[base-model-audit-2026-07-23.md](base-model-audit-2026-07-23.md). Devnet
+assertion gates are described in [devnet.md](devnet.md).
 
 ## Where To Inspect The Code
 

@@ -1,7 +1,7 @@
 {
   "schema": "morph.devnet_smoke_budget",
   "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. The schema suffixes do not denote the active protocol baseline; factory witnesses are interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current witness-envelope implementation line.",
-  "max_total_cycles": 1200000000,
+  "max_total_cycles": 1600000000,
   "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
   "max_tx_bytes": 500000,
@@ -27,25 +27,25 @@
     {
       "check": "factory-reduced-exit-smoke",
       "path": "$.exit",
-      "max_cycles": 10000000,
-      "max_bytes": 9600
+      "max_cycles": 11000000,
+      "max_bytes": 10000
     },
     {
       "check": "factory-reduced-xudt-exit-smoke",
       "path": "$.exit",
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {
       "check": "factory-reduced-xudt-exit-full-smoke",
       "path": "$.exit",
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {
       "check": "factory-reduced-xudt-exit-one-sided-smoke",
       "path": "$.exit",
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {
@@ -140,8 +140,8 @@
       "proof_kind": "factory_reduced_exit_ckb_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 3600,
-      "max_cycles": 10000000,
-      "max_bytes": 9600
+      "max_cycles": 11000000,
+      "max_bytes": 10000
     },
     {
       "check": "factory-reduced-xudt-exit-smoke",
@@ -149,7 +149,7 @@
       "proof_kind": "factory_reduced_exit_xudt_change_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {
@@ -158,7 +158,7 @@
       "proof_kind": "factory_reduced_exit_xudt_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {
@@ -167,7 +167,7 @@
       "proof_kind": "factory_reduced_exit_xudt_one_sided_reserve_claim",
       "proof_siblings": 0,
       "max_witness_len": 4000,
-      "max_cycles": 10000000,
+      "max_cycles": 11000000,
       "max_bytes": 11000
     },
     {

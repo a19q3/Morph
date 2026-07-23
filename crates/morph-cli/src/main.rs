@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read};
@@ -84,6 +86,13 @@ enum CkbSpliceKindArg {
 enum SpliceAssetArg {
     Ckb,
     Xudt,
+}
+
+#[cfg(feature = "devnet")]
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FactoryExitAuthorisationArg {
+    FullParticipants,
+    ReducedReserveClaim,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -636,7 +645,7 @@ enum DevnetCommand {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Secp256k1 private key that controls the FactoryStateCell and fee input.
+        /// Secp256k1 private key that pays the independent fee input.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
         /// Devnet Alice factory signing key.
@@ -812,7 +821,7 @@ enum DevnetCommand {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
+        /// Secp256k1 private key that pays independent transaction fees.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
@@ -842,7 +851,7 @@ enum DevnetCommand {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Secp256k1 private key that controls the FactoryStateCell and pays fees.
+        /// Secp256k1 private key that pays independent transaction fees.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
@@ -1718,15 +1727,26 @@ enum DevnetCommand {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
         contracts_dir: std::path::PathBuf,
-        /// Secp256k1 private key that controls the FactoryStateCell and fee input.
+        /// Secp256k1 private key that pays the independent fee input.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
         /// Devnet Alice factory/channel signing key.
         #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
         alice_private_key: String,
-        /// Devnet Bob factory/channel signing key.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
+        /// Bob's factory/channel signing key. Required for full-participant authorisation.
+        #[arg(
+            long,
+            env = "MORPH_BOB_PRIVATE_KEY",
+            hide_env_values = true,
+            conflicts_with = "bob_public_key"
+        )]
+        bob_private_key: Option<String>,
+        /// Bob's compressed 33-byte public key. Sufficient for reduced-reserve-claim authorisation.
+        #[arg(long, conflicts_with = "bob_private_key")]
+        bob_public_key: Option<String>,
+        /// Factory exit authorisation path.
+        #[arg(long, value_enum, default_value = "full-participants")]
+        authorisation: FactoryExitAuthorisationArg,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -5436,6 +5456,8 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             alice_private_key,
             bob_private_key,
+            bob_public_key,
+            authorisation,
             factory_out_point,
             factory_vault_out_point,
             update_number,
@@ -5457,6 +5479,7 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     private_key,
                     alice_private_key,
                     bob_private_key,
+                    bob_public_key,
                     factory_out_point,
                     factory_vault_out_point,
                     update_number,
@@ -5470,7 +5493,14 @@ fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     finalise_since,
                     mine_blocks,
                     tamper: FactoryExitChannelTamper::None,
-                    authorisation: FactoryExitAuthorisation::FullParticipants,
+                    authorisation: match authorisation {
+                        FactoryExitAuthorisationArg::FullParticipants => {
+                            FactoryExitAuthorisation::FullParticipants
+                        }
+                        FactoryExitAuthorisationArg::ReducedReserveClaim => {
+                            FactoryExitAuthorisation::ReducedReserveClaim
+                        }
+                    },
                 },
             )?;
             if json {
@@ -7657,12 +7687,15 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         mode: Mode::BilateralPlain,
         phase,
         participants_commitment: bytes32(4),
-        asset_registry_commitment: bytes32(5),
+        asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+            xudt_types: BTreeSet::from([bytes32(42)]),
+        }),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 1,
+        state_layout_version: 2,
     }
 }
 

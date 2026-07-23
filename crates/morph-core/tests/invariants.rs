@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::*;
+use morph_script_common::STATE_CARRIER_ACTIVATION_FEE;
 use proptest::prelude::*;
 
 fn header(n: u64, phase: Phase) -> StateHeader {
@@ -18,12 +19,13 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         mode: Mode::BilateralPlain,
         phase,
         participants_commitment: bytes32(4),
-        asset_registry_commitment: bytes32(5),
+        asset_registry_commitment: asset_registry_commitment(&registry()),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 1,
+        state_layout_version: 2,
     }
 }
 
@@ -40,10 +42,11 @@ fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
         mode: Mode::BilateralPlain,
         phase,
         participants_commitment: bytes32(4),
-        asset_registry_commitment: bytes32(5),
+        asset_registry_commitment: asset_registry_commitment(&registry()),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
+        vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
         state_layout_version: 2,
     }
@@ -223,6 +226,28 @@ fn good_partition() -> PartitionedTransaction {
     }
 }
 
+#[test]
+fn asset_registry_commitment_is_canonical_and_complete() {
+    let first = AssetRegistry {
+        xudt_types: BTreeSet::from([bytes32(42), bytes32(7)]),
+    };
+    let second = AssetRegistry {
+        xudt_types: [bytes32(7), bytes32(42)].into_iter().collect(),
+    };
+    let changed = AssetRegistry {
+        xudt_types: BTreeSet::from([bytes32(42)]),
+    };
+
+    assert_eq!(
+        asset_registry_commitment(&first),
+        asset_registry_commitment(&second)
+    );
+    assert_ne!(
+        asset_registry_commitment(&first),
+        asset_registry_commitment(&changed)
+    );
+}
+
 fn vault_descriptor(funding_anchor: Bytes32, ckb: Amount, xudt: Option<Amount>) -> VaultDescriptor {
     let mut assets = vec![VaultAssetAmount {
         asset: VaultAsset::Ckb,
@@ -324,6 +349,8 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         participants_commitment: current_state.header.participants_commitment,
         vault_materialisation_root: current_state.header.vault_materialisation_root,
         new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
+        old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
+        new_vault_outpoint_commitment: [0; 32],
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
@@ -333,6 +360,8 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
     next_state.header.funding_anchor = header.new_funding_anchor;
     next_state.header.vault_set_commitment = header.new_vault_commitment;
     next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
+    next_state.header.vault_outpoint_commitment = header.new_vault_outpoint_commitment;
+    next_state.capacity += STATE_CARRIER_ACTIVATION_FEE;
     SpliceTransition {
         current_state,
         next_state,
@@ -508,6 +537,10 @@ fn factory_splice_transition(
         vault_delta_commitment: factory_vault_delta_commitment(&deltas),
         non_interference_digest: blake2b256(b"factory splice fixture"),
         participants_commitment: bytes32(0),
+        old_vault_materialisation_root: bytes32(93),
+        new_vault_materialisation_root: bytes32(94),
+        old_vault_outpoint_commitment: bytes32(95),
+        new_vault_outpoint_commitment: [0; 32],
     };
     let witness = factory_splice_witness_for(&mut header);
     FactorySpliceTransition {
@@ -654,10 +687,10 @@ fn state_header_context_rejects_preserved_field_changes() {
 }
 
 #[test]
-fn state_header_context_allows_progress_payload_changes() {
+fn state_header_context_allows_signed_settlement_progress() {
     let old = header_with_epoch(1, Phase::Active, 3);
     let mut new = header_with_epoch(9, Phase::Settling, 3);
-    new.vault_materialisation_root = bytes32(9);
+    new.settlement_descriptor_commitment = bytes32(9);
 
     assert!(old.same_context_except_progress(&new));
 }
@@ -684,8 +717,8 @@ proptest! {
             7 => new.mode = Mode::FactoryProof,
             8 => new.participants_commitment = bytes32(marker),
             9 => new.asset_registry_commitment = bytes32(marker),
-            10 => new.settlement_descriptor_commitment = bytes32(marker),
-            11 => new.descriptor_version = old.descriptor_version + 1,
+            10 => new.descriptor_version = old.descriptor_version + 1,
+            11 => new.vault_materialisation_root = bytes32(marker),
             12 => new.challenge_policy_commitment = bytes32(marker),
             13 => new.state_layout_version = old.state_layout_version + 1,
             _ => unreachable!(),
@@ -695,12 +728,12 @@ proptest! {
     }
 
     #[test]
-    fn prop_state_header_context_allows_profile_payload_changes(marker in 64u8..=240) {
+    fn prop_state_header_context_allows_signed_settlement_progress(marker in 64u8..=240) {
         let old = header_with_epoch(1, Phase::Active, 3);
         let mut new = old.clone();
         new.state_number = 9;
         new.phase = Phase::Settling;
-        new.vault_materialisation_root = bytes32(marker);
+        new.settlement_descriptor_commitment = bytes32(marker);
 
         prop_assert!(old.same_context_except_progress(&new));
     }
@@ -831,6 +864,23 @@ fn splice_rejects_tampered_asset_delta_commitment() {
 }
 
 #[test]
+fn splice_rejects_wire_incompatible_asset_order() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.old_vault.assets.reverse();
+    splice.new_vault.assets.reverse();
+    splice.deltas.reverse();
+    splice.header.old_vault_commitment = vault_descriptor_commitment(&splice.old_vault);
+    splice.header.new_vault_commitment = vault_descriptor_commitment(&splice.new_vault);
+    splice.header.asset_delta_commitment = splice_asset_delta_commitment(&splice.deltas);
+    splice.current_state.header.vault_set_commitment = splice.header.old_vault_commitment;
+    splice.next_state.header.vault_set_commitment = splice.header.new_vault_commitment;
+    splice.witness = splice_witness_for(&mut splice.header);
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceAssetDeltaInvalid);
+}
+
+#[test]
 fn splice_rejects_same_supply_wrong_xudt_recipient_amount() {
     let mut splice = splice_transition(SpliceKind::In);
     splice.deltas[1].new_amount = 59;
@@ -864,9 +914,21 @@ fn splice_rejects_remaining_settlement_shortfall() {
 fn splice_rejects_unregistered_xudt_asset() {
     let mut splice = splice_transition(SpliceKind::In);
     splice.asset_registry.xudt_types.clear();
+    let commitment = asset_registry_commitment(&splice.asset_registry);
+    splice.current_state.header.asset_registry_commitment = commitment;
+    splice.next_state.header.asset_registry_commitment = commitment;
 
     let err = validate_splice_transition(&splice).unwrap_err();
     assert_eq!(err, MorphError::UnregisteredXudtType);
+}
+
+#[test]
+fn splice_rejects_noncanonical_carrier_capacity() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.next_state.capacity -= 1;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceCarrierCapacityMismatch);
 }
 
 #[test]
@@ -886,6 +948,35 @@ fn state_authorization_rejects_unsupported_signature_scheme() {
 
     let err = validate_state_authorization(&header, &authorization).unwrap_err();
     assert_eq!(err, MorphError::UnsupportedSignatureScheme);
+}
+
+#[test]
+fn state_authorization_rejects_chain_incompatible_one_of_one_profile() {
+    let key = signing_key(1);
+    let pubkey = pubkey(&key);
+    let mut header = header(2, Phase::Settling);
+    header.participants_commitment = participants_commitment(1, &[pubkey.as_slice()]);
+    let digest = header.signing_digest();
+    let authorization = StateAuthorization {
+        threshold: 1,
+        signatures: vec![ParticipantSignature {
+            pubkey_sec1: pubkey,
+            signature: signature(&key, &digest),
+        }],
+    };
+
+    let err = validate_state_authorization(&header, &authorization).unwrap_err();
+    assert_eq!(err, MorphError::ParticipantSetMismatch);
+}
+
+#[test]
+fn state_authorization_rejects_unknown_protocol_profile() {
+    let mut header = header(2, Phase::Settling);
+    header.protocol_version = 2;
+    let authorization = authorization_for(&mut header);
+
+    let err = validate_state_authorization(&header, &authorization).unwrap_err();
+    assert_eq!(err, MorphError::UnsupportedProtocolProfile);
 }
 
 #[test]
@@ -1146,20 +1237,82 @@ fn accepts_valid_state_supersession() {
 }
 
 #[test]
-fn rejects_signed_settlement_descriptor_update_as_context_change() {
-    let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
-    new.header.settlement_descriptor_commitment = bytes32(77);
-    new.header.descriptor_version = 2;
-    ctx.authorization = authorization_for(&mut new.header);
+fn rejects_state_transition_with_uncommitted_asset_registry() {
+    let (old, new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    ctx.asset_registry.xudt_types.clear();
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::AssetRegistryCommitmentMismatch);
+}
+
+#[test]
+fn rejects_state_transition_with_unbound_partition_carrier() {
+    let (old, new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    for cell in ctx
+        .partition
+        .inputs
+        .iter_mut()
+        .chain(ctx.partition.outputs.iter_mut())
+    {
+        if matches!(cell.class, CellClass::StateCarrier) {
+            cell.capacity = 9_000;
+        }
+    }
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_with_changed_carrier_capacity() {
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.capacity -= 1;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_with_changed_carrier_metadata() {
+    let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.occupied_capacity -= 1;
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::StateCarrierNotConserved);
+}
+
+#[test]
+fn rejects_state_transition_from_non_live_host_phase() {
+    let (mut old, new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    old.header.phase = Phase::Closed;
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::HeaderContextChanged);
 }
 
 #[test]
-fn rejects_unsigned_settlement_descriptor_update_as_context_change() {
+fn accepts_signed_settlement_descriptor_update() {
+    let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.header.settlement_descriptor_commitment = bytes32(77);
+    ctx.authorization = authorization_for(&mut new.header);
+
+    validate_state_transition(&old, &new, &ctx).unwrap();
+}
+
+#[test]
+fn rejects_unsigned_settlement_descriptor_update() {
     let (old, mut new, ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
     new.header.settlement_descriptor_commitment = bytes32(77);
+
+    let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
+    assert_eq!(err, MorphError::InvalidStateSignatures);
+}
+
+#[test]
+fn rejects_signed_vault_materialisation_update_as_context_change() {
+    let (old, mut new, mut ctx) = signed_cells(1, Phase::Active, 2, Phase::Settling);
+    new.header.vault_materialisation_root = bytes32(77);
+    ctx.authorization = authorization_for(&mut new.header);
 
     let err = validate_state_transition(&old, &new, &ctx).unwrap_err();
     assert_eq!(err, MorphError::HeaderContextChanged);
@@ -1232,7 +1385,25 @@ fn rejects_business_ckb_confusion() {
     tx.outputs[1].business_ckb += 1;
 
     let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::InvalidCellClassification);
+}
+
+#[test]
+fn rejects_ckb_leakage_from_xudt_cells() {
+    let mut tx = good_partition();
+    tx.outputs[2] = ClassifiedCell::xudt(bytes32(42), 999, 700, 10);
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
     assert_eq!(err, MorphError::BusinessCkbNotConserved);
+}
+
+#[test]
+fn rejects_hidden_business_value_in_sponsor_classification() {
+    let mut tx = good_partition();
+    tx.outputs[4].business_ckb = 1;
+
+    let err = validate_partition_conservation(&tx, &registry()).unwrap_err();
+    assert_eq!(err, MorphError::InvalidCellClassification);
 }
 
 #[test]

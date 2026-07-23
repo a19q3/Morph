@@ -8,6 +8,7 @@ export type RpcStatus = 'connected' | 'degraded' | 'offline' | 'not_configured';
 export type ProvenanceSource = 'hub_state_file' | 'watchtower_alert_file';
 export type ChainStatus = 'not_chain_verified' | 'watchtower_alert';
 export type WatchAlertSeverity = 'info' | 'warning';
+export type HubScope = 'read' | 'write' | 'restore' | 'sign';
 export type WatchAlertEvent =
   | 'older_state_detected'
   | 'publication_submitted'
@@ -52,7 +53,7 @@ export interface RecordProvenance {
 export interface HubSecurity {
   auth_required: boolean;
   auth_mode: 'scoped_bearer' | 'explicit_unauthenticated_loopback';
-  auth_scopes: Array<'read' | 'write' | 'restore' | 'sign'>;
+  auth_scopes: HubScope[];
   single_operator: boolean;
   state_restore_enabled: boolean;
   invoice_signing_enabled: boolean;
@@ -64,6 +65,21 @@ export interface HubSecurity {
   max_invoice_expiry_secs: number;
 }
 
+export interface HubModel {
+  profile: string;
+  hub_role: 'local_operator_projection';
+  factory_authority: 'factory_state_and_vault';
+  channel_authority: 'state_and_vault';
+  routing_role: 'external_optional_provider';
+  agent_role: 'application_sidecar';
+  factory_participant_count: number;
+  chain_actions_enabled: boolean;
+  factory_rights_exposed: boolean;
+  provider_edges_exposed: boolean;
+  rgbpp_evidence_exposed: boolean;
+  agent_receipts_exposed: boolean;
+}
+
 export interface PeerRecord {
   pubkey: Pubkey;
   node_id: Hex32;
@@ -73,6 +89,7 @@ export interface PeerRecord {
 
 export interface ChannelRecord {
   channel_id: Hex32;
+  factory_id?: Hex32 | null;
   counterparty_pubkey: Pubkey;
   counterparty_node_id: Hex32;
   funding_epoch: number;
@@ -168,6 +185,7 @@ export interface NodeState {
   state_path: string;
   rpc: RpcHealth;
   security: HubSecurity;
+  model: HubModel;
   provenance: RecordProvenance;
   watchtower: WatchtowerState;
   peers: PeerRecord[];
@@ -199,6 +217,20 @@ export const emptyState: NodeState = {
     max_concurrent_event_streams: 0,
     mutation_rate_limit_per_minute: 0,
     max_invoice_expiry_secs: 604800,
+  },
+  model: {
+    profile: 'sovereign-devnet-v1',
+    hub_role: 'local_operator_projection',
+    factory_authority: 'factory_state_and_vault',
+    channel_authority: 'state_and_vault',
+    routing_role: 'external_optional_provider',
+    agent_role: 'application_sidecar',
+    factory_participant_count: 2,
+    chain_actions_enabled: false,
+    factory_rights_exposed: false,
+    provider_edges_exposed: false,
+    rgbpp_evidence_exposed: false,
+    agent_receipts_exposed: false,
   },
   provenance: {
     source: 'hub_state_file',
@@ -243,6 +275,10 @@ export function formatBalance(balance?: Balance): string {
   if (!balance) return '0 CKB';
   const total = BigInt(balance.local) + BigInt(balance.remote) + BigInt(balance.pending);
   return formatAmount(total, balance.asset);
+}
+
+export function hasHubScope(security: HubSecurity, scope: HubScope): boolean {
+  return security.auth_mode === 'explicit_unauthenticated_loopback' || security.auth_scopes.includes(scope);
 }
 
 export function shortHex(value?: string): string {

@@ -1648,6 +1648,7 @@ pub fn fixture_factory_local_exit_package() -> Result<StoredFactoryLocalExitPack
     factory_header[172..204].copy_from_slice(&exit_digest);
     factory_header[204..236].copy_from_slice(&[54u8; BYTE32_LEN]);
     put_u16(&mut factory_header, 236, 1);
+    factory_header[238..270].copy_from_slice(&[55u8; BYTE32_LEN]);
 
     let factory_signature = signed_factory_witness(&factory_header, &factory_entries)?;
     let local_exit_witness = factory_local_exit_witness_bytes(
@@ -1852,6 +1853,7 @@ pub fn funding_context_id_for_header(header: &StateHeader<'_>) -> String {
         header.channel_id(),
         header.funding_anchor(),
         header.vault_set_commitment(),
+        header.vault_outpoint_commitment(),
     ))
 }
 
@@ -1914,6 +1916,10 @@ fn validate_reduced_rights_pair(
         "factory reduced-rights package changes immutable factory context"
     );
     ensure!(
+        old_header.vault_materialisation_root() == new_header.vault_materialisation_root(),
+        "factory reduced-rights package changes the FactoryVault materialisation"
+    );
+    ensure!(
         new_header.update_number() > old_header.update_number(),
         "factory reduced-rights package must advance the update number"
     );
@@ -1937,6 +1943,10 @@ fn validate_merkle_update_pair(
         "factory Merkle package changes immutable factory context"
     );
     ensure!(
+        old_header.vault_materialisation_root() == new_header.vault_materialisation_root(),
+        "factory Merkle package changes the FactoryVault materialisation"
+    );
+    ensure!(
         new_header.update_number() > old_header.update_number(),
         "factory Merkle package must advance the update number"
     );
@@ -1957,6 +1967,7 @@ fn factory_headers_equal(left: &FactoryStateHeader<'_>, right: &FactoryStateHead
         && left.non_interference_digest() == right.non_interference_digest()
         && left.challenge_policy_commitment() == right.challenge_policy_commitment()
         && left.state_layout_version() == right.state_layout_version()
+        && left.vault_materialisation_root() == right.vault_materialisation_root()
 }
 
 fn validate_factory_local_exit_pair(
@@ -2092,6 +2103,7 @@ fn factory_header_fixture(update_number: u64, factory_id: [u8; BYTE32_LEN]) -> V
     put_u64(&mut header, 68, update_number);
     header[204..236].copy_from_slice(&[12u8; BYTE32_LEN]);
     put_u16(&mut header, 236, 1);
+    header[238..270].copy_from_slice(&[13u8; BYTE32_LEN]);
     header
 }
 
@@ -2706,6 +2718,7 @@ mod tests {
         header[172..204].copy_from_slice(&[11u8; BYTE32_LEN]);
         header[204..236].copy_from_slice(&[12u8; BYTE32_LEN]);
         put_u16(&mut header, 236, 1);
+        header[238..270].fill(13);
 
         let parsed = FactoryStateHeader::parse(&header).unwrap();
         let digest = parsed.signing_digest();

@@ -19,6 +19,7 @@ FIBER_NODE1_RPC_URL="${FIBER_NODE1_RPC_URL:-http://127.0.0.1:21714}"
 FIBER_NODE2_RPC_URL="${FIBER_NODE2_RPC_URL:-http://127.0.0.1:21715}"
 FIBER_NODE3_RPC_URL="${FIBER_NODE3_RPC_URL:-http://127.0.0.1:21716}"
 FIBER_COEXISTENCE_SUITE="${FIBER_COEXISTENCE_SUITE:-e2e/external-funding-open}"
+FIBER_AGENT_ROUTER_SUITE="e2e/router-pay"
 FIBER_PERIOD_CHECK_EXPIRY_SUITE="${FIBER_PERIOD_CHECK_EXPIRY_SUITE:-e2e/period-check/force-close-expiry}"
 DEFAULT_FIBER_BRUNO_SUITES="e2e/open-use-close-a-channel e2e/3-nodes-transfer e2e/router-pay e2e/reestablish e2e/shutdown-force e2e/hold-invoice-cancel-failure $FIBER_PERIOD_CHECK_EXPIRY_SUITE e2e/udt e2e/udt-router-pay e2e/watchtower/force-close-after-open-channel e2e/watchtower/force-close-with-pending-tlcs e2e/watchtower/force-close-after-multiple-payments e2e/watchtower/force-close-remote-with-pending-tlcs-and-stop-watchtower"
 FIBER_BRUNO_SUITES="${FIBER_BRUNO_SUITES:-$DEFAULT_FIBER_BRUNO_SUITES}"
@@ -26,12 +27,19 @@ FIBER_FUNDING_TX_VERIFICATION_CASES="${FIBER_FUNDING_TX_VERIFICATION_CASES:-remo
 FIBER_ACCEPTANCE_TCP_PORTS="${FIBER_ACCEPTANCE_TCP_PORTS:-8114 8115 21714 21715 21716 8343 8344 8345 8346}"
 BRUNO_CLI_SPEC="${BRUNO_CLI_SPEC:-@usebruno/cli@1.20.0}"
 BUILD_MORPH_CONTRACTS="${BUILD_MORPH_CONTRACTS:-1}"
-RUN_FIBER_RESTART_REGRESSION="${RUN_FIBER_RESTART_REGRESSION:-1}"
+RUN_FIBER_RESTART_REGRESSION="1"
 FIBER_STACK_START_ATTEMPTS="${FIBER_STACK_START_ATTEMPTS:-3}"
+# ckb-librocksdb-sys 8.5.4 relies on transitive fixed-width integer includes;
+# modern GCC/Clang require the standard header to be explicit.
+FIBER_CXXFLAGS="${FIBER_CXXFLAGS:--include cstdint}"
 FIBER_STACK_EXTRA_BRU_ARGS=""
+MORPH_FIBER_DEPLOYER_KEY_FILE="${MORPH_FIBER_DEPLOYER_KEY_FILE:-$FIBER_DIR/tests/nodes/deployer/ckb/plain_key}"
+MORPH_FIBER_ALICE_KEY_FILE="${MORPH_FIBER_ALICE_KEY_FILE:-$FIBER_DIR/tests/nodes/1/ckb/plain_key}"
+MORPH_FIBER_BOB_KEY_FILE="${MORPH_FIBER_BOB_KEY_FILE:-$FIBER_DIR/tests/nodes/2/ckb/plain_key}"
 
 CKB_BIN="${CKB_BIN:-}"
 CKB_CLI_BIN="${CKB_CLI_BIN:-}"
+NC_BIN=""
 FIBER_STACK_PID=""
 FIBER_STACK_STARTED=0
 
@@ -82,7 +90,8 @@ write_repo_state() {
     --arg morph_dir "$ROOT_DIR" \
     --arg morph_branch "$(git_value "$ROOT_DIR" branch --show-current)" \
     --arg morph_head "$(git_value "$ROOT_DIR" rev-parse --short HEAD)" \
-    --arg morph_status "$(git_value "$ROOT_DIR" status --porcelain)" \
+    --arg morph_status "$(git_value "$ROOT_DIR" status --porcelain --untracked-files=no)" \
+    --arg morph_worktree_status "$(git_value "$ROOT_DIR" status --porcelain)" \
     --arg fiber_dir "$FIBER_DIR" \
     --arg fiber_branch "$(git_value "$FIBER_DIR" branch --show-current)" \
     --arg fiber_head "$(git_value "$FIBER_DIR" rev-parse --short HEAD)" \
@@ -97,7 +106,13 @@ write_repo_state() {
     --arg ckb_cli_status "$(git_value "$CKB_CLI_SOURCE_DIR" status --porcelain)" \
     '{
       schema: "morph.fiber_morph_repo_state",
-      morph: { dir: $morph_dir, branch: $morph_branch, head: $morph_head, status: $morph_status },
+      morph: {
+        dir: $morph_dir,
+        branch: $morph_branch,
+        head: $morph_head,
+        status: $morph_status,
+        worktree_status: $morph_worktree_status
+      },
       fiber: { dir: $fiber_dir, branch: $fiber_branch, head: $fiber_head, status: $fiber_status },
       ckb: { dir: $ckb_dir, branch: $ckb_branch, head: $ckb_head, status: $ckb_status },
       ckb_cli: { dir: $ckb_cli_dir, branch: $ckb_cli_branch, head: $ckb_cli_head, status: $ckb_cli_status }
@@ -107,9 +122,9 @@ write_repo_state() {
 
 assert_clean_for_production() {
   local morph_status
-  morph_status="$(git -C "$ROOT_DIR" status --porcelain)"
+  morph_status="$(git -C "$ROOT_DIR" status --porcelain --untracked-files=no)"
   if [ -n "$morph_status" ]; then
-    fail "Morph worktree is dirty; production acceptance requires a clean tree because devnet-stateful-assert enforces freshness"
+    fail "Morph tracked worktree is dirty; production acceptance requires committed tracked inputs because devnet-stateful-assert enforces freshness"
   fi
   local fiber_status
   fiber_status="$(git -C "$FIBER_DIR" status --porcelain --untracked-files=no)"
@@ -168,14 +183,26 @@ resolve_ckb_cli_bin() {
   [ -x "$CKB_CLI_BIN" ] || fail "ckb-cli build did not produce $CKB_CLI_BIN"
 }
 
+resolve_nc_bin() {
+  if command -v nc >/dev/null 2>&1; then
+    NC_BIN="$(command -v nc)"
+    return
+  fi
+  NC_BIN="$ROOT_DIR/scripts/nc-z-shim.sh"
+  [ -x "$NC_BIN" ] || fail "netcat is unavailable and the local nc -z shim is not executable: $NC_BIN"
+}
+
 prepare_tool_path() {
   resolve_ckb_bin
   resolve_ckb_cli_bin
+  resolve_nc_bin
   ln -sf "$CKB_BIN" "$TOOL_BIN_DIR/ckb"
   ln -sf "$CKB_CLI_BIN" "$TOOL_BIN_DIR/ckb-cli"
+  ln -sf "$NC_BIN" "$TOOL_BIN_DIR/nc"
   export PATH="$TOOL_BIN_DIR:$PATH"
   log "ckb -> $CKB_BIN"
   log "ckb-cli -> $CKB_CLI_BIN"
+  log "nc -> $NC_BIN"
 }
 
 write_manifest() {
@@ -190,19 +217,37 @@ ckb_source_dir=$CKB_SOURCE_DIR
 ckb_cli_source_dir=$CKB_CLI_SOURCE_DIR
 ckb_bin=$CKB_BIN
 ckb_cli_bin=$CKB_CLI_BIN
+nc_bin=$NC_BIN
 fiber_ckb_rpc_url=$FIBER_CKB_RPC_URL
 fiber_node1_rpc_url=$FIBER_NODE1_RPC_URL
 fiber_node2_rpc_url=$FIBER_NODE2_RPC_URL
 fiber_node3_rpc_url=$FIBER_NODE3_RPC_URL
 fiber_test_env=$FIBER_TEST_ENV
 fiber_coexistence_suite=$FIBER_COEXISTENCE_SUITE
+fiber_agent_router_suite=$FIBER_AGENT_ROUTER_SUITE
 fiber_bruno_suites=$FIBER_BRUNO_SUITES
 fiber_funding_tx_verification_cases=$FIBER_FUNDING_TX_VERIFICATION_CASES
 fiber_acceptance_tcp_ports=$FIBER_ACCEPTANCE_TCP_PORTS
 build_morph_contracts=$BUILD_MORPH_CONTRACTS
 run_fiber_restart_regression=$RUN_FIBER_RESTART_REGRESSION
 fiber_stack_start_attempts=$FIBER_STACK_START_ATTEMPTS
+fiber_cxxflags=$FIBER_CXXFLAGS
+morph_fiber_deployer_key_file=$MORPH_FIBER_DEPLOYER_KEY_FILE
+morph_fiber_alice_key_file=$MORPH_FIBER_ALICE_KEY_FILE
+morph_fiber_bob_key_file=$MORPH_FIBER_BOB_KEY_FILE
 EOF
+}
+
+require_devnet_fixture_key_file() {
+  local path="$1"
+  local label="$2"
+  [ -f "$path" ] || fail "missing $label devnet fixture key file: $path"
+  grep -Eq '^(0x)?[0-9a-fA-F]{64}$' "$path" ||
+    fail "$label devnet fixture key file must contain exactly one secp256k1 key: $path"
+}
+
+read_devnet_fixture_key() {
+  tr -d '\r\n' <"$1"
 }
 
 rpc_ready() {
@@ -293,19 +338,24 @@ kill_tree() {
 }
 
 acceptance_port_listener_pids() {
-  command -v lsof >/dev/null 2>&1 || return 0
+  local port
+  if command -v lsof >/dev/null 2>&1; then
+    local args=()
+    for port in $FIBER_ACCEPTANCE_TCP_PORTS; do
+      args+=("-iTCP:$port")
+    done
+    lsof -nP "${args[@]}" -sTCP:LISTEN -t 2>/dev/null | sort -u
+    return
+  fi
 
-  local port args=()
-  for port in $FIBER_ACCEPTANCE_TCP_PORTS; do
-    args+=("-iTCP:$port")
-  done
-
-  lsof -nP "${args[@]}" -sTCP:LISTEN -t 2>/dev/null | sort -u
+  if command -v ss >/dev/null 2>&1; then
+    for port in $FIBER_ACCEPTANCE_TCP_PORTS; do
+      ss -H -ltnp "sport = :$port" 2>/dev/null
+    done | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | sort -u
+  fi
 }
 
 wait_for_acceptance_ports_free() {
-  command -v lsof >/dev/null 2>&1 || return 0
-
   local deadline=$((SECONDS + 30))
   local pids
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -320,8 +370,6 @@ wait_for_acceptance_ports_free() {
 }
 
 stop_acceptance_port_listeners() {
-  command -v lsof >/dev/null 2>&1 || return 0
-
   local pids pid
   pids="$(acceptance_port_listener_pids || true)"
   if [ -z "$pids" ]; then
@@ -375,7 +423,8 @@ start_fiber_stack_once() {
     printf '\n=== Fiber stack attempt %s/%s for %s at %s ===\n' \
       "$attempt" "$FIBER_STACK_START_ATTEMPTS" "$testcase" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     cd "$FIBER_DIR"
-    REMOVE_OLD_STATE=y \
+    CXXFLAGS="$FIBER_CXXFLAGS" \
+      REMOVE_OLD_STATE=y \
     TEST_ENV="$FIBER_TEST_ENV" \
     EXTRA_BRU_ARGS="$FIBER_STACK_EXTRA_BRU_ARGS" \
     PATH="$TOOL_BIN_DIR:$PATH" \
@@ -606,6 +655,10 @@ build_morph_contracts() {
 
 run_morph_stateful_on_fiber_ckb() {
   local scenario_dir="$OUT_DIR/morph-stateful/scenarios"
+  local deployer_key alice_key bob_key
+  deployer_key="$(read_devnet_fixture_key "$MORPH_FIBER_DEPLOYER_KEY_FILE")"
+  alice_key="$(read_devnet_fixture_key "$MORPH_FIBER_ALICE_KEY_FILE")"
+  bob_key="$(read_devnet_fixture_key "$MORPH_FIBER_BOB_KEY_FILE")"
   mkdir -p "$scenario_dir"
   build_morph_contracts
   log "running Morph strict stateful channel/factory matrix on Fiber CKB devnet"
@@ -614,6 +667,9 @@ run_morph_stateful_on_fiber_ckb() {
     MORPH_CKB_RPC="$FIBER_CKB_RPC_URL" \
     CKB_BIN="$CKB_BIN" \
     CKB_SOURCE_DIR="$CKB_SOURCE_DIR" \
+    MORPH_DEVNET_PRIVATE_KEY="$deployer_key" \
+    MORPH_ALICE_PRIVATE_KEY="$alice_key" \
+    MORPH_BOB_PRIVATE_KEY="$bob_key" \
     OUT_DIR="$scenario_dir" \
     LATEST_LINK="$OUT_DIR/morph-stateful/latest" \
     MORPH_DEVNET_AUDIT_PROFILE="docs/devnet-audit-profile.example.json" \
@@ -654,11 +710,33 @@ run_coexistence_gate() {
   fi
   run_fiber_restart_regression
   stop_fiber_stack
+  run_morph_agent_fiber_gate
+}
+
+run_morph_agent_fiber_gate() {
+  local suite="$FIBER_AGENT_ROUTER_SUITE"
+  local label="${suite//\//_}"
+  start_fiber_stack "$suite" "$LOG_DIR/fiber-stack-morph-agent-$label.log"
+  run_bruno_suite "$suite"
+  log "running Morph Agent x402 and fair-exchange flows over Fiber's three-node route"
+  FIBER_CKB_RPC_URL="$FIBER_CKB_RPC_URL" \
+  FIBER_NODE1_RPC_URL="$FIBER_NODE1_RPC_URL" \
+  FIBER_NODE2_RPC_URL="$FIBER_NODE2_RPC_URL" \
+  FIBER_NODE3_RPC_URL="$FIBER_NODE3_RPC_URL" \
+  OUT_DIR="$OUT_DIR/morph-agent-fiber-e2e" \
+    "$ROOT_DIR/scripts/morph-agent-fiber-devnet-e2e.sh" \
+    >"$LOG_DIR/morph-agent-fiber-e2e.log" 2>&1
+  stop_fiber_stack
 }
 
 run_extended_fiber_suites() {
   local suite
   for suite in $FIBER_BRUNO_SUITES; do
+    if [ "$suite" = "$FIBER_AGENT_ROUTER_SUITE" ] &&
+      [ -s "$OUT_DIR/fiber-bruno-${suite//\//_}.json" ]; then
+      log "Fiber Bruno suite $suite already passed as the Morph Agent routing substrate"
+      continue
+    fi
     if [ "$suite" = "$FIBER_PERIOD_CHECK_EXPIRY_SUITE" ]; then
       run_period_check_expiry_suite
       continue
@@ -693,58 +771,76 @@ write_acceptance_matrix() {
     --arg mode "$MODE" \
     --arg morph_stateful "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
     --arg fiber_external "$OUT_DIR/fiber-bruno-${FIBER_COEXISTENCE_SUITE//\//_}.json" \
+    --arg fiber_agent_router "$OUT_DIR/fiber-bruno-${FIBER_AGENT_ROUTER_SUITE//\//_}.json" \
+    --arg morph_agent_result "$OUT_DIR/morph-agent-fiber-e2e/result.json" \
+    --arg morph_agent_manifest "$OUT_DIR/morph-agent-fiber-e2e/manifest.json" \
     --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     '{
       schema: "morph.fiber_morph_devnet_acceptance_matrix",
       mode: $mode,
-      gates: [
-        {
-          id: "same_ckb_devnet_coexistence",
-          required: true,
-          evidence: [
-            "Fiber three-node devnet started on CKB RPC",
-            $morph_stateful,
-            $fiber_external
+      gates:
+        (
+          (if $mode == "coexistence" or $mode == "full" then [
+            {
+              id: "same_ckb_devnet_coexistence",
+              required: true,
+              evidence: [
+                "Fiber three-node devnet started on CKB RPC",
+                $morph_stateful,
+                $fiber_external
+              ]
+            },
+            {
+              id: "morph_channel_factory_matrix",
+              required: true,
+              evidence: [
+                "Morph devnet-stateful-assert on Fiber CKB RPC",
+                "factory_lifecycle_matrix",
+                "factory_splice_then_exit",
+                "extreme_state_value_cases",
+                "negative_attack_matrix"
+              ]
+            },
+            {
+              id: "fiber_channel_external_funding",
+              required: true,
+              evidence: [
+                "Fiber Bruno external-funding-open",
+                "required restart regression before submit_signed_funding_tx"
+              ]
+            },
+            {
+              id: "morph_agent_fiber_multihop",
+              required: true,
+              evidence: [
+                $fiber_agent_router,
+                $morph_agent_result,
+                $morph_agent_manifest,
+                "x402 credential settlement and hash-locked fair exchange over Fiber node1 -> node2 -> node3"
+              ]
+            }
+          ] else [] end)
+          + (if $mode == "fiber" or $mode == "full" then [
+            {
+              id: "fiber_security_and_recovery_matrix",
+              required: true,
+              evidence: [
+                "Fiber router-pay, reestablish, force-close, expiry, UDT, watchtower, hold-invoice, and funding-tx verification Bruno suites",
+                "Funding tx verification cases: remove_change, modify_change, fund_from_peer, missing_inputs"
+              ]
+            }
+          ] else [] end)
+          + [
+            {
+              id: "business_flow_and_security_audit",
+              required: true,
+              evidence: [
+                $business_flow_audit,
+                "only business flows and security families executed by this mode"
+              ]
+            }
           ]
-        },
-        {
-          id: "morph_channel_factory_matrix",
-          required: true,
-          evidence: [
-            "Morph devnet-stateful-assert on Fiber CKB RPC",
-            "factory_lifecycle_matrix",
-            "factory_splice_then_exit",
-            "extreme_state_value_cases",
-            "negative_attack_matrix"
-          ]
-        },
-        {
-          id: "fiber_channel_external_funding",
-          required: true,
-          evidence: [
-            "Fiber Bruno external-funding-open",
-            "optional restart regression before submit_signed_funding_tx"
-          ]
-        },
-        {
-          id: "fiber_security_and_recovery_matrix",
-          required: true,
-          evidence: [
-            "Fiber router-pay, reestablish, force-close, expiry, UDT, watchtower, hold-invoice, and funding-tx verification Bruno suites",
-            "Funding tx verification cases: remove_change, modify_change, fund_from_peer, missing_inputs"
-          ]
-        },
-        {
-          id: "business_flow_and_security_audit",
-          required: true,
-          evidence: [
-            $business_flow_audit,
-            "named Morph scenarios",
-            "named Morph security families",
-            "named Fiber business suites"
-          ]
-        }
-      ]
+        )
     }' >"$path"
   log "acceptance matrix -> $path"
 }
@@ -761,6 +857,7 @@ EOF
     --arg matrix "$OUT_DIR/acceptance-matrix.json" \
     --arg mode "$MODE" \
     --arg morph_stateful_summary_check "$OUT_DIR/morph-stateful/scenarios/summary-check.json" \
+    --arg morph_agent_fiber_result "$OUT_DIR/morph-agent-fiber-e2e/result.json" \
     --arg business_flow_audit "$OUT_DIR/business-flow-audit.json" \
     --arg status "passed" \
     '{
@@ -771,6 +868,7 @@ EOF
       repo_state:$repo_state,
       acceptance_matrix:$matrix,
       morph_stateful_summary_check:$morph_stateful_summary_check,
+      morph_agent_fiber_result:$morph_agent_fiber_result,
       business_flow_audit:$business_flow_audit
     }' \
     >"$OUT_DIR/summary.json"
@@ -783,15 +881,21 @@ preflight() {
   require_tool cargo
   require_tool jq
   require_tool curl
-  require_tool nc
+  require_tool grep
   require_tool node
   require_tool npm
+  if ! command -v lsof >/dev/null 2>&1 && ! command -v ss >/dev/null 2>&1; then
+    fail "missing required TCP listener inspector: install lsof or iproute2/ss"
+  fi
   clone_repo_if_missing "$FIBER_DIR" "https://github.com/nervosnetwork/fiber.git"
   clone_repo_if_missing "$CKB_SOURCE_DIR" "https://github.com/nervosnetwork/ckb.git"
   clone_repo_if_missing "$CKB_CLI_SOURCE_DIR" "https://github.com/nervosnetwork/ckb-cli.git"
   [ -f "$FIBER_DIR/Cargo.toml" ] || fail "Fiber checkout missing Cargo.toml: $FIBER_DIR"
   [ -f "$CKB_SOURCE_DIR/Cargo.toml" ] || fail "CKB checkout missing Cargo.toml: $CKB_SOURCE_DIR"
   [ -f "$CKB_CLI_SOURCE_DIR/Cargo.toml" ] || fail "ckb-cli checkout missing Cargo.toml: $CKB_CLI_SOURCE_DIR"
+  require_devnet_fixture_key_file "$MORPH_FIBER_DEPLOYER_KEY_FILE" "deployer"
+  require_devnet_fixture_key_file "$MORPH_FIBER_ALICE_KEY_FILE" "Alice"
+  require_devnet_fixture_key_file "$MORPH_FIBER_BOB_KEY_FILE" "Bob"
   prepare_tool_path
   write_manifest
   write_repo_state

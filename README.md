@@ -58,8 +58,17 @@ Implemented locally:
 - factory local exits that materialise child bilateral channels;
 - reduced factory paths for bounded rights updates, exits, sparse-Merkle
   updates, and splices, carried by `WitnessEnvelope`;
+- two-stage bilateral/Factory Vault activation that binds enforceable state to
+  an exact CKB OutPoint and rejects byte-identical clone substitution;
+- type-bound FactoryState locking and exact State/Factory carrier-capacity
+  conservation, so fee-payer signatures do not become Factory authority;
 - devnet smoke and stateful acceptance reports that bind scenarios to real
-  transactions, cycle estimates, and expected negative-path failures.
+  transactions, cycle estimates, and expected negative-path failures;
+- experimental Morph-owned RGB++/x402 Agent, native bilateral
+  `ChannelBackend`, Factory-right edge registry, and isolated Fiber-hook
+  adapter. The Agent x402/credential/fair-exchange flow is exercised over a
+  real three-node Fiber devnet route; a real Fiber external-edge hook routing
+  a Morph-backed channel is not yet implemented.
 
 Still not claimed:
 
@@ -308,6 +317,11 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [Roadmap](docs/roadmap.md): milestone status and deferred work.
 - [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
   production or real-assets claim.
+- [RGB++ / Agent / Fiber integration plan](docs/rgbpp-agent-fiber-integration-plan.md):
+  the sovereign Factory-to-channel-to-provider-edge design and its release
+  gate.
+- [Base-model audit](docs/base-model-audit-2026-07-23.md): current security
+  verdict, remediated findings, verification evidence, and release blockers.
 - [English tutorial](docs/morph-channel-tutorial.md): a gentler introduction
   with diagrams.
 - [Chinese tutorial](docs/morph-channel-tutorial.zh.md): Chinese-language

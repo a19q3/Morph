@@ -421,7 +421,7 @@ cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$
 STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
 VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIR/open.json")"
 CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_DIR/open.json")"
-OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_DIR/open.json")"
+OPEN_BLOCK="$(jq -r '.activation_block_number' "$WATCH_DIR/open.json")"
 
 log "watch-auto-sponsor-package -> $WATCH_DIR/package.json"
 cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
@@ -505,7 +505,7 @@ WATCH_DIRECT_STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .ou
 WATCH_DIRECT_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIRECT_DIR/open.json")"
 WATCH_DIRECT_SPONSOR_OUT_POINT="$(jq -r '.cells[] | select(.role == "sponsor") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_DIRECT_DIR/open.json")"
 WATCH_DIRECT_CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_DIRECT_DIR/open.json")"
-WATCH_DIRECT_OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_DIRECT_DIR/open.json")"
+WATCH_DIRECT_OPEN_BLOCK="$(jq -r '.activation_block_number' "$WATCH_DIRECT_DIR/open.json")"
 log "watch-direct-sponsor-package -> $WATCH_DIRECT_DIR/package.json"
 cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$WATCH_DIRECT_STATE_OUT_POINT" \
@@ -540,7 +540,7 @@ cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$
 WATCH_LOOP_STATE_OUT_POINT="$(jq -r '.cells[] | select(.role == "state") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_LOOP_DIR/open.json")"
 WATCH_LOOP_VAULT_OUT_POINT="$(jq -r '.cells[] | select(.role == "vault") | .out_point.tx_hash + ":" + (.out_point.index | tostring)' "$WATCH_LOOP_DIR/open.json")"
 WATCH_LOOP_CHANNEL_ID="$(jq -r '.channel_id' "$WATCH_LOOP_DIR/open.json")"
-WATCH_LOOP_OPEN_BLOCK="$(jq -r '.block_number' "$WATCH_LOOP_DIR/open.json")"
+WATCH_LOOP_OPEN_BLOCK="$(jq -r '.activation_block_number' "$WATCH_LOOP_DIR/open.json")"
 log "watch-config-loop-package -> $WATCH_LOOP_DIR/package.json"
 cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$RPC_URL" save-state-package \
   --state-out-point "$WATCH_LOOP_STATE_OUT_POINT" \
@@ -619,7 +619,7 @@ cargo run -q -p morph-cli --features devnet -- devnet --devnet-only --rpc-url "$
   --vault-out-point "$WATCH_SPLICE_VAULT_OUT_POINT" \
   --splice-package "$WATCH_SPLICE_PACKAGE_PATH" \
   --json >"$WATCH_SPLICE_DIR/apply.json"
-WATCH_SPLICE_APPLY_BLOCK="$(jq -r '.block_number' "$WATCH_SPLICE_DIR/apply.json")"
+WATCH_SPLICE_APPLY_BLOCK="$(jq -r '.activation_block_number' "$WATCH_SPLICE_DIR/apply.json")"
 WATCH_SPLICE_SCANNED_TO_BLOCK="$((WATCH_SPLICE_APPLY_BLOCK - 1))"
 WATCH_SPLICE_CURSOR="$WATCH_SPLICE_DIR/cursor.json"
 WATCH_SPLICE_UPDATED_MS="$(($(date +%s) * 1000))"

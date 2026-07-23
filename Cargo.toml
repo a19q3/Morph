@@ -3,6 +3,8 @@ resolver = "2"
 members = [
   "crates/morph-core",
   "crates/morph-cli",
+  "crates/morph-agent",
+  "crates/morph-fiber-adapter",
   "contracts/morph-script-common",
   "contracts/morph-state-lock",
   "contracts/morph-state-type",
@@ -22,6 +24,10 @@ rust-version = "1.92.0"
 
 [workspace.dependencies]
 anyhow = "1.0"
+aes-gcm = "0.10"
+axum = "0.8"
+base64 = "0.22"
+biscuit-auth = "6.0.0"
 blake2b-rs = "0.2"
 ckb-crypto = "1.1.0"
 ckb-jsonrpc-types = "1.1.1"
@@ -38,6 +44,9 @@ ckb-testtool = "1.1.1"
 ckb-hash = { version = "1.1.0", default-features = false, features = ["ckb-contract"] }
 k256 = { version = "0.13.4", default-features = false, features = ["ecdsa", "arithmetic"] }
 proptest = "1"
+rand = "0.8"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 
 [profile.release]
 codegen-units = 1

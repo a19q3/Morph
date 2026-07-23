@@ -1074,6 +1074,163 @@ a {
 }
 
 /* ============================================================
+   Sovereign model boundary
+   ============================================================ */
+.model-boundary-panel {
+  margin-top: 14px;
+  padding: 18px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent-soft) 74%, transparent), transparent 36%),
+    var(--surface);
+}
+
+.model-boundary-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.model-boundary-head .eyebrow {
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.authority-path {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.authority-path article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 5px 9px;
+  align-content: center;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface) 90%, var(--accent-soft));
+}
+
+.authority-path article svg {
+  grid-row: 1 / span 2;
+  color: var(--accent);
+}
+
+.authority-path article span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.authority-path article strong {
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.authority-arrow {
+  align-self: center;
+  color: var(--text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.model-boundary-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin-top: 10px;
+  padding: 11px 12px;
+  border-left: 3px solid var(--warn);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  color: var(--warn);
+  background: var(--warn-bg);
+}
+
+.model-boundary-note div {
+  display: grid;
+  gap: 3px;
+}
+
+.model-boundary-note strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.model-boundary-note span {
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.model-surface-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.model-surface-grid article {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.model-surface-grid article.exposed {
+  border-color: var(--accent-soft-2);
+  background: var(--accent-soft);
+}
+
+.model-surface-grid article > svg {
+  color: var(--text-3);
+}
+
+.model-surface-grid article.exposed > svg {
+  color: var(--ok);
+}
+
+.model-surface-grid article div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.model-surface-grid strong {
+  font-size: 11px;
+}
+
+.model-surface-grid span {
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.model-surface-grid small {
+  color: var(--warn);
+  font-size: 9.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.model-surface-grid .exposed small {
+  color: var(--ok);
+}
+
+/* ============================================================
    Operator search
    ============================================================ */
 .operator-search {
@@ -2526,6 +2683,21 @@ button:disabled {
 
   .app-shell.drawer-collapsed .toast-stack {
     right: 18px;
+  }
+}
+
+@media (max-width: 760px) {
+  .authority-path {
+    grid-template-columns: 1fr;
+  }
+
+  .authority-arrow {
+    justify-self: center;
+    transform: rotate(90deg);
+  }
+
+  .model-surface-grid {
+    grid-template-columns: 1fr;
   }
 }
 

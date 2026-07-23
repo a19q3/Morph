@@ -19,7 +19,7 @@ evidence to trust.
 | Need | Command | Expected result |
 | --- | --- | --- |
 | Check local dependencies only | `make fiber-morph-devnet-preflight` | Creates a run directory with `status=preflight-passed`. |
-| Prove Morph and Fiber coexist on one CKB devnet | `make fiber-morph-devnet-acceptance` | Runs Morph stateful scenarios and Fiber external funding on the same Fiber CKB node. |
+| Prove Morph/Fiber coexistence and Agent multi-hop | `make fiber-morph-devnet-acceptance` | Runs Morph stateful scenarios, Fiber external funding, and Morph Agent x402/fair-exchange over a real three-node Fiber route. |
 | Prove the full Morph plus Fiber matrix | `make fiber-morph-devnet-acceptance-full` | Runs coexistence, strict Fiber Bruno suites, funding-tx verification, and the combined audit. |
 | Recheck existing evidence | `make fiber-morph-devnet-audit FIBER_MORPH_ACCEPTANCE_RUN=target/fiber-morph-devnet-acceptance/<run-id>` | Rebuilds `business-flow-audit.json` from an existing run. |
 | Debug only the Fiber strict matrix | `FIBER_MORPH_ACCEPTANCE_MODE=fiber scripts/fiber-morph-devnet-acceptance.sh` | Runs Fiber suites without the Morph stateful matrix. |
@@ -48,9 +48,25 @@ Required tools:
 - Rust and Cargo
 - `jq`
 - `curl`
-- `nc`
 - Node.js and `npm`
+- either `lsof` or `ss` (from iproute2) for deterministic failed-stack cleanup
 - CKB and ckb-cli build prerequisites
+
+Fiber's devnet helpers use `nc -z` for loopback readiness probes. When netcat
+is not installed, the Morph runner automatically exposes its restricted
+loopback-only `scripts/nc-z-shim.sh` in the per-run tool directory.
+
+The runner also supplies `FIBER_CXXFLAGS=-include cstdint` by default. This is
+a build-only compatibility flag for Fiber's locked `ckb-librocksdb-sys 8.5.4`
+on modern C++ compilers; it is recorded in the acceptance manifest and does
+not patch the Fiber checkout.
+
+For the same-chain Morph transaction matrix, the runner explicitly reads
+Fiber's public devnet fixture keys for the funded deployer and the two Morph
+channel signers. This removes dependence on secret variables inherited from
+an operator shell. Only fixture file paths are recorded; key material is never
+printed. Override `MORPH_FIBER_{DEPLOYER,ALICE,BOB}_KEY_FILE` when using a
+different disposable devnet.
 
 Run:
 
@@ -77,9 +93,12 @@ The full gate performs these phases:
 4. Runs Morph's strict stateful scenario matrix against Fiber's CKB RPC.
 5. Runs Fiber external funding on the same CKB devnet.
 6. Runs the Fiber external-funding restart regression.
-7. Starts fresh Fiber devnets for the strict Fiber Bruno suite set.
-8. Runs the four Fiber funding-transaction verification cases.
-9. Writes the acceptance matrix, summary, and business-flow audit.
+7. Starts a fresh Fiber `router-pay` topology and runs its Bruno suite.
+8. Runs Morph Agent x402/credential and fair-exchange payments from Fiber
+   node1 through node2 to node3.
+9. Starts fresh Fiber devnets for the remaining strict Fiber Bruno suite set.
+10. Runs the four Fiber funding-transaction verification cases.
+11. Writes the acceptance matrix, summary, and business-flow audit.
 
 A successful run ends with:
 
@@ -122,6 +141,13 @@ the expected files and log markers are present.
 The Morph stateful assertion also enforces minimum evidence floors, including
 committed transactions, factory splices, factory local exits, watchtower alerts,
 referenced artefacts, and exact expected failures.
+
+### Morph Agent Business Flows
+
+| Flow | User story | Security point |
+| --- | --- | --- |
+| x402 over Fiber multi-hop | A signed payer challenge is paid from node1 through node2 to node3, then yields a terminal Morph receipt and reusable Biscuit credential. | `Created`/`Inflight` are never treated as settlement; payer/payee identity and the paid resource remain bound. |
+| Fair exchange over Fiber multi-hop | An encrypted Agent result is paid across the same route and decrypted with the released hash preimage. | The key and plaintext remain unavailable until terminal paid evidence, and the result hash/AAD bind the exchange. |
 
 ### Fiber Business Flows
 
@@ -178,6 +204,11 @@ Fiber families:
 - `fiber_typed_asset_channel_binding`
 - `fiber_periodic_expiry_recovery`
 
+Morph Agent families:
+
+- `morph_agent_terminal_payment_identity_binding`
+- `morph_agent_credential_hashlock_release`
+
 For release evidence, every listed family must be present in
 `business-flow-audit.json`, and the top-level run summary must say
 `"status": "passed"`.
@@ -200,6 +231,8 @@ Then inspect subsystem evidence:
 target/fiber-morph-devnet-acceptance/<run-id>/morph-stateful/scenarios/summary.json
 target/fiber-morph-devnet-acceptance/<run-id>/morph-stateful/scenarios/summary-check.json
 target/fiber-morph-devnet-acceptance/<run-id>/logs/morph-stateful-on-fiber-ckb.log
+target/fiber-morph-devnet-acceptance/<run-id>/morph-agent-fiber-e2e/result.json
+target/fiber-morph-devnet-acceptance/<run-id>/morph-agent-fiber-e2e/manifest.json
 target/fiber-morph-devnet-acceptance/<run-id>/fiber-bruno-*.json
 target/fiber-morph-devnet-acceptance/<run-id>/logs/fiber-bruno-*.log
 ```
@@ -215,10 +248,12 @@ jq '.minimum_evidence' target/fiber-morph-devnet-acceptance/<run-id>/business-fl
 
 For a full run, expect:
 
-- 29 business flows
-- 20 security families
+- 31 business flows
+- 22 security families
 - 19 required Fiber business flows
 - 9 required Fiber security families
+- 2 required Morph Agent business flows
+- 2 required Morph Agent security families
 - 4 Fiber funding-transaction verification cases
 
 ## Failure Handling
@@ -244,6 +279,7 @@ Common causes:
 | Missing CKB or ckb-cli binary | Sibling checkout is absent or not built. | Run preflight, then build the reported dependency. |
 | Morph freshness failure | Artefacts were generated from a different Morph commit. | Rerun the gate from a clean current commit. |
 | Missing Fiber result file | A strict Fiber suite or funding case was skipped. | Use the default `FIBER_BRUNO_SUITES` and `FIBER_FUNDING_TX_VERIFICATION_CASES`. |
+| Missing Morph Agent result | The Agent process, terminal payment polling, or three-node `router-pay` substrate failed. | Inspect `logs/morph-agent-fiber-e2e.log`, both Agent logs, and the router-pay Bruno log. |
 | Missing Fiber log marker | The Bruno suite did not produce the required behavioural evidence. | Inspect the suite log and update the test or marker deliberately. |
 | `external-funding-open` balance/readiness failure | Current Fiber Bruno balance deltas can be stale even when open/sign/submit/close/inspect requests succeed. | The coexistence harness accepts only the known stale shape and still requires the critical request markers. |
 
@@ -278,12 +314,14 @@ following are true:
 - `make fiber-morph-devnet-acceptance-full` exits successfully.
 - `manifest.txt` contains `status=passed`.
 - `summary.json` contains `"status": "passed"` and `"mode": "full"`.
-- `business-flow-audit.json` contains the expected 29 business flows and 20
+- `business-flow-audit.json` contains the expected 31 business flows and 22
   security families.
 - Morph `summary-check.json` passes all stateful, budget, factory, xUDT,
   watchtower, and negative-path floors.
 - Every strict Fiber suite and funding-transaction verification case has both a
   passing JSON result and the required log evidence.
+- Morph Agent evidence contains both terminal three-node payments, matching
+  identities/network IDs, and a manifest with `secrets_recorded=false`.
 
 This is a local devnet acceptance gate. It proves the committed same-devnet
 business-flow and security matrix, not mainnet readiness or cross-repository

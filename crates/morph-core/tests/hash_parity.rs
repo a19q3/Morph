@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use morph_core::{
-    FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptor, Mode, Phase,
-    SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, VaultAsset, VaultAssetAmount,
-    factory_vault_delta_commitment, factory_vault_descriptor_commitment, participants_commitment,
-    splice_asset_delta_commitment, vault_descriptor_commitment,
+    AssetRegistry, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta,
+    FactoryVaultDescriptor, Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader,
+    VaultAsset, VaultAssetAmount, asset_registry_commitment, factory_vault_delta_commitment,
+    factory_vault_descriptor_commitment, participants_commitment, splice_asset_delta_commitment,
+    vault_descriptor_commitment,
 };
 use morph_script_common as wire;
 
@@ -68,6 +71,20 @@ fn participants_commitment_matches_script_common() {
 }
 
 #[test]
+fn asset_registry_commitment_matches_script_common() {
+    let registry = AssetRegistry {
+        xudt_types: BTreeSet::from([bytes32(7), bytes32(42)]),
+    };
+    let hashes = [bytes32(7), bytes32(42)];
+    let hash_refs = [hashes[0].as_slice(), hashes[1].as_slice()];
+
+    assert_eq!(
+        asset_registry_commitment(&registry),
+        wire::asset_registry_commitment(&hash_refs).unwrap()
+    );
+}
+
+#[test]
 fn state_header_signing_digest_matches_script_common() {
     let header = StateHeader {
         protocol_version: 1,
@@ -85,6 +102,7 @@ fn state_header_signing_digest_matches_script_common() {
         settlement_descriptor_commitment: bytes32(9),
         descriptor_version: 10,
         vault_materialisation_root: bytes32(11),
+        vault_outpoint_commitment: bytes32(14),
         challenge_policy_commitment: bytes32(12),
         state_layout_version: 13,
     };
@@ -104,6 +122,7 @@ fn state_header_signing_digest_matches_script_common() {
         settlement_descriptor_commitment: header.settlement_descriptor_commitment,
         descriptor_version: header.descriptor_version,
         vault_materialisation_root: header.vault_materialisation_root,
+        vault_outpoint_commitment: header.vault_outpoint_commitment,
         challenge_policy_commitment: header.challenge_policy_commitment,
         state_layout_version: header.state_layout_version,
     });
@@ -132,6 +151,8 @@ fn splice_header_signing_digest_matches_script_common() {
         participants_commitment: bytes32(12),
         vault_materialisation_root: bytes32(14),
         new_vault_materialisation_root: bytes32(15),
+        old_vault_outpoint_commitment: bytes32(16),
+        new_vault_outpoint_commitment: bytes32(17),
         challenge_policy_commitment: bytes32(13),
     };
     let mut raw = [0u8; wire::SPLICE_HEADER_LEN];
@@ -153,6 +174,8 @@ fn splice_header_signing_digest_matches_script_common() {
     raw[293..325].copy_from_slice(&header.vault_materialisation_root);
     raw[325..357].copy_from_slice(&header.new_vault_materialisation_root);
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
+    raw[389..421].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[421..453].copy_from_slice(&header.new_vault_outpoint_commitment);
     let wire_header = wire::SpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());
@@ -175,6 +198,10 @@ fn factory_splice_header_signing_digest_matches_script_common() {
         vault_delta_commitment: bytes32(9),
         non_interference_digest: bytes32(10),
         participants_commitment: bytes32(11),
+        old_vault_materialisation_root: bytes32(12),
+        new_vault_materialisation_root: bytes32(13),
+        old_vault_outpoint_commitment: bytes32(14),
+        new_vault_outpoint_commitment: bytes32(15),
     };
     let mut raw = [0u8; wire::FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
@@ -191,6 +218,10 @@ fn factory_splice_header_signing_digest_matches_script_common() {
     raw[213..245].copy_from_slice(&header.vault_delta_commitment);
     raw[245..277].copy_from_slice(&header.non_interference_digest);
     raw[277..309].copy_from_slice(&header.participants_commitment);
+    raw[309..341].copy_from_slice(&header.old_vault_materialisation_root);
+    raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
+    raw[373..405].copy_from_slice(&header.old_vault_outpoint_commitment);
+    raw[405..437].copy_from_slice(&header.new_vault_outpoint_commitment);
     let wire_header = wire::FactorySpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());

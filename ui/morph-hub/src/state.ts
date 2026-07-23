@@ -9,6 +9,7 @@ import {
   WatchtowerAlertRecord,
   assetLabel,
 } from './domain';
+import { ApiRequestError } from './api';
 
 export type TimeFilter = 'all' | '1h' | '24h' | '7d';
 export type LiveMode = 'starting' | 'sse' | 'sse-reconnecting' | 'polling' | 'polling-auth' | 'offline';
@@ -36,6 +37,7 @@ export function filterRecords<T>(records: T[], tokens: string[], searchText: (re
 export function channelSearchText(channel: ChannelRecord): string[] {
   return [
     channel.channel_id,
+    channel.factory_id ?? '',
     channel.counterparty_pubkey,
     channel.counterparty_node_id,
     channel.phase,
@@ -272,7 +274,10 @@ export function compactMessage(message: string, maxLength: number): string {
 
 export function formatActionError(label: string, err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  return `${label} failed: ${message}`;
+  const retry = err instanceof ApiRequestError && err.retryAfterSeconds != null
+    ? ` Try again in ${err.retryAfterSeconds} seconds.`
+    : '';
+  return `${label} failed: ${message}${retry}`;
 }
 
 export function liveTone(mode: LiveMode): 'good' | 'neutral' | 'warn' | 'bad' {

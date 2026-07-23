@@ -2,17 +2,19 @@ CARGO ?= cargo
 CONTRACT_CARGO ?= $(CARGO)
 AUDIT ?= cargo audit
 DENY ?= cargo deny
-# Current CKB dependencies pull transitive informational advisories for
-# paste (unmaintained) and rand 0.7 (unsound). Keep vulnerability failures
-# enabled while avoiding noisy warning trees until upstream CKB crates move.
-# Track the rand waiver with `cargo tree -i rand@0.7.3`; remove
-# RUSTSEC-2026-0097 when ckb-vm/ckb-resource no longer pull rand 0.7.
-# RUSTSEC-2026-0097 is the current rand advisory; RUSTSEC-2020-0097 is for xcb.
-AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097
+# Explicit, reviewable upstream waivers. `audit` denies every other warning.
+# - paste and rand 0.7 arrive through the pinned CKB 1.1 dependency family.
+#   Morph defines no custom logger that calls rand, so the documented rand
+#   re-entrancy trigger is absent.
+# - memmap2 0.5 is confined to ckb-testtool -> cacache in the test graph.
+# - proc-macro-error2 is compile-time-only through biscuit-auth's required
+#   datalog macro feature.
+# Remove each waiver as soon as its upstream dependency path is upgraded.
+AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0186 --ignore RUSTSEC-2026-0173
 
-.PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
+.PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 
-ci: fmt-check lint supply-chain test fixture-checks contract-tests
+ci: fmt-check lint supply-chain test fixture-checks sdk-check hub-ui-check contract-tests
 
 full-test: test fixture-checks contract-tests
 
@@ -29,7 +31,7 @@ fmt-check:
 	$(CARGO) fmt --all -- --check
 
 audit:
-	$(AUDIT) $(AUDIT_IGNORE)
+	$(AUDIT) --deny warnings $(AUDIT_IGNORE)
 
 deny:
 	$(DENY) check
@@ -69,6 +71,12 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-config target/fixture-checks/watch-config.json --json > target/fixture-checks/watch-config-summary.json
+
+sdk-check:
+	cd sdk/typescript && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run check && npm test
+
+hub-ui-check:
+	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build
 
 build-contracts:
 	$(CONTRACT_CARGO) build --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt

@@ -374,6 +374,7 @@ struct HubView {
     state_path: String,
     rpc: RpcView,
     security: HubSecurityView,
+    model: HubModelView,
     provenance: RecordProvenanceView,
     watchtower: WatchtowerView,
     peers: Vec<PeerView>,
@@ -384,6 +385,22 @@ struct HubView {
     required_flows: Vec<&'static str>,
     completed_flows: Vec<&'static str>,
     missing_flows: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct HubModelView {
+    profile: &'static str,
+    hub_role: &'static str,
+    factory_authority: &'static str,
+    channel_authority: &'static str,
+    routing_role: &'static str,
+    agent_role: &'static str,
+    factory_participant_count: usize,
+    chain_actions_enabled: bool,
+    factory_rights_exposed: bool,
+    provider_edges_exposed: bool,
+    rgbpp_evidence_exposed: bool,
+    agent_receipts_exposed: bool,
 }
 
 #[derive(Serialize)]
@@ -461,6 +478,7 @@ struct PeerView {
 #[derive(Serialize)]
 struct ChannelView {
     channel_id: String,
+    factory_id: Option<String>,
     counterparty_pubkey: String,
     counterparty_node_id: String,
     funding_epoch: u64,
@@ -536,6 +554,23 @@ fn local_state_provenance() -> RecordProvenanceView {
         chain_status: "not_chain_verified",
         label: "Local only",
         message: "Recorded in the Morph Hub state file only; this is not CKB devnet confirmation.",
+    }
+}
+
+fn hub_model_view() -> HubModelView {
+    HubModelView {
+        profile: "sovereign-devnet-v1",
+        hub_role: "local_operator_projection",
+        factory_authority: "factory_state_and_vault",
+        channel_authority: "state_and_vault",
+        routing_role: "external_optional_provider",
+        agent_role: "application_sidecar",
+        factory_participant_count: CURRENT_FACTORY_PARTICIPANT_COUNT,
+        chain_actions_enabled: false,
+        factory_rights_exposed: false,
+        provider_edges_exposed: false,
+        rgbpp_evidence_exposed: false,
+        agent_receipts_exposed: false,
     }
 }
 
@@ -992,6 +1027,18 @@ impl HubStore {
         security: HubSecurityView,
         watchtower: WatchtowerView,
     ) -> Result<HubView> {
+        let child_factories = self
+            .state
+            .node
+            .factories
+            .values()
+            .flat_map(|factory| {
+                factory
+                    .materialised_child_channels
+                    .iter()
+                    .map(move |channel_id| (*channel_id, factory.factory_id))
+            })
+            .collect::<BTreeMap<_, _>>();
         Ok(HubView {
             pubkey: self.state.pubkey.clone(),
             node_id: hex_prefixed(&self.state.node.node_id),
@@ -999,6 +1046,7 @@ impl HubStore {
             state_path: self.path.display().to_string(),
             rpc,
             security,
+            model: hub_model_view(),
             provenance: local_state_provenance(),
             watchtower,
             peers: self
@@ -1013,7 +1061,13 @@ impl HubStore {
                 .node
                 .channels
                 .values()
-                .map(|channel| channel_view(channel, &self.state.peer_pubkeys))
+                .map(|channel| {
+                    channel_view(
+                        channel,
+                        child_factories.get(&channel.channel_id).copied(),
+                        &self.state.peer_pubkeys,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
             invoices: self
                 .state
@@ -1291,10 +1345,10 @@ impl HubServer {
         if let Some(response) = self.auth_failure_response(&request, required_scope, request_id) {
             return Ok(response);
         }
-        if matches!(request.method.as_str(), "POST" | "PUT") {
-            if let Some(response) = self.rate_limit_failure_response(request_id) {
-                return Ok(response);
-            }
+        if matches!(request.method.as_str(), "POST" | "PUT")
+            && let Some(response) = self.rate_limit_failure_response(request_id)
+        {
+            return Ok(response);
         }
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/api/health") | ("GET", "/api/state") => self.state_response(),
@@ -1866,7 +1920,10 @@ impl HubServer {
                 403,
                 "Forbidden",
                 "insufficient_auth_scope",
-                "Morph Hub auth token does not include the required scope for this endpoint",
+                format!(
+                    "Morph Hub auth token needs the {} scope for this endpoint",
+                    auth_scope_label(required_scope)
+                ),
                 request_id,
             )
         })
@@ -1887,12 +1944,20 @@ impl HubServer {
             limiter.mutating_requests = 0;
         }
         if limiter.mutating_requests >= MAX_MUTATIONS_PER_WINDOW {
-            return Some(api_error_response(
-                429,
-                "Too Many Requests",
-                "rate_limited",
-                "too many Morph Hub mutating requests; retry after the rate limit window resets",
-                request_id,
+            let retry_after = MUTATION_RATE_LIMIT_WINDOW
+                .saturating_sub(limiter.window_started.elapsed())
+                .as_secs()
+                .max(1);
+            return Some(with_header(
+                api_error_response(
+                    429,
+                    "Too Many Requests",
+                    "rate_limited",
+                    "too many Morph Hub mutating requests; retry after the rate limit window resets",
+                    request_id,
+                ),
+                "Retry-After",
+                retry_after.to_string(),
             ));
         }
         limiter.mutating_requests += 1;
@@ -2041,14 +2106,13 @@ impl HubServer {
             .as_ref()
             .and_then(|metadata| metadata.modified().ok());
         let len = metadata.as_ref().map_or(0, fs::Metadata::len);
-        if let Ok(cache) = self.watch_alert_cache.lock() {
-            if cache.path.as_deref() == Some(path)
-                && cache.modified == modified
-                && cache.len == len
-                && cache.value.is_some()
-            {
-                return cache.value.clone().unwrap();
-            }
+        if let Ok(cache) = self.watch_alert_cache.lock()
+            && cache.path.as_deref() == Some(path)
+            && cache.modified == modified
+            && cache.len == len
+            && let Some(value) = &cache.value
+        {
+            return value.clone();
         }
 
         let value = load_watchtower_alerts(path);
@@ -2879,10 +2943,12 @@ fn peer_view(peer: &MorphPeer, peer_pubkeys: &BTreeMap<Bytes32, String>) -> Resu
 
 fn channel_view(
     channel: &MorphChannelRecord,
+    factory_id: Option<Bytes32>,
     peer_pubkeys: &BTreeMap<Bytes32, String>,
 ) -> Result<ChannelView> {
     Ok(ChannelView {
         channel_id: hex_prefixed(&channel.channel_id),
+        factory_id: factory_id.map(|id| hex_prefixed(&id)),
         counterparty_pubkey: pubkey_for_node_id(&channel.counterparty_node_id, peer_pubkeys)?
             .to_string(),
         counterparty_node_id: hex_prefixed(&channel.counterparty_node_id),
@@ -3649,6 +3715,8 @@ mod tests {
             [("authorization", "Bearer secret-token")],
         );
         assert_eq!(response.status, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("restore scope"));
 
         let response = route_json_with_headers(
             &server,
@@ -3658,6 +3726,8 @@ mod tests {
             [("authorization", "Bearer secret-token")],
         );
         assert_eq!(response.status, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("write scope"));
     }
 
     #[test]
@@ -3677,6 +3747,10 @@ mod tests {
         assert_eq!(response.status, 429);
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["code"].as_str(), Some("rate_limited"));
+        assert!(response.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("retry-after")
+                && value.parse::<u64>().is_ok_and(|seconds| seconds >= 1)
+        }));
     }
 
     #[test]
@@ -4148,6 +4222,33 @@ mod tests {
         assert_eq!(
             body["factories"][0]["materialised_child_channels"][0].as_str(),
             Some(child_id.as_str())
+        );
+        let child = body["channels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|channel| channel["channel_id"].as_str() == Some(child_id.as_str()))
+            .expect("materialised child should be projected as a channel");
+        assert_eq!(child["factory_id"].as_str(), Some(factory_id.as_str()));
+        assert_eq!(
+            body["model"]["profile"].as_str(),
+            Some("sovereign-devnet-v1")
+        );
+        assert_eq!(
+            body["model"]["hub_role"].as_str(),
+            Some("local_operator_projection")
+        );
+        assert_eq!(
+            body["model"]["factory_participant_count"].as_u64(),
+            Some(CURRENT_FACTORY_PARTICIPANT_COUNT as u64)
+        );
+        assert_eq!(
+            body["model"]["chain_actions_enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            body["model"]["provider_edges_exposed"].as_bool(),
+            Some(false)
         );
         assert!(
             body["completed_flows"]

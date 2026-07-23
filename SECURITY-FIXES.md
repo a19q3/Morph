@@ -17,6 +17,50 @@ revalidation, operational readiness sign-off, and value-limit policy.
 
 Implementation safety-boundary baseline: `8944bf7`.
 
+## Post-baseline sovereign Factory hardening (2026-07-22)
+
+- Issue: the devnet transaction layer placed FactoryStateCells under an
+  operator secp lock. Participant/reduced proof acceptance was therefore not
+  sufficient to spend the cell without the fee payer's private key.
+- Fix: newly created FactoryStateCells use `morph-state-lock` with the exact
+  FactoryType hash as lock args. Factory protocol evidence remains in
+  `input_type`; the operator secp signature signs only a distinct fee-input
+  lock group. Update, full/reduced splice, exit, and activation paths validate
+  the type-bound lock before building a transaction. Reduced exit can use the
+  non-signing counterparty's compressed public key instead of their private
+  key.
+- Tests: `factory_fee_signature_does_not_gate_the_factory_state_witness`,
+  `reduced_exit_witness_needs_only_counterparty_public_key`, and
+  `factory_type_and_vault_accept_reduced_exit_reserve_release` using the real
+  StateLock.
+- Migration limitation: legacy owner-locked devnet factories must be recreated;
+  this is not an in-place mainnet migration profile.
+
+## Exact State/Factory carrier conservation (2026-07-22)
+
+- Issue: the State and Factory type scripts rejected outputs below occupied
+  capacity but did not require the remaining carrier capacity to stay in the
+  successor. A valid protocol witness could therefore accompany a carrier
+  drain.
+- Fix: ordinary updates preserve capacity exactly. Deterministic Vault binding
+  consumes exactly `STATE_CARRIER_ACTIVATION_FEE = 10_000` shannons, while
+  splice/exit creates the next unbound carrier with exactly that reserve added.
+- Negative tests:
+  `state_type_rejects_signed_supersede_carrier_drain`,
+  `factory_type_rejects_signed_factory_update_carrier_drain`,
+  `state_type_rejects_vault_activation_carrier_drain`,
+  `factory_type_rejects_vault_activation_carrier_drain`,
+  `state_type_rejects_splice_without_carrier_activation_reserve`, and
+  `factory_type_rejects_splice_without_carrier_activation_reserve`.
+
+## Bilateral backend commit deadline (2026-07-22)
+
+- Issue: payment preparation rejected expired intents, but commit did not bind
+  a commit time and could accept a previously prepared intent after expiry.
+- Fix: `ChannelBackend::commit_payment` requires `committed_at_unix` and accepts
+  only `prepared_at_unix <= committed_at_unix < expires_at_unix`.
+- Negative test: `commit_rejects_times_outside_the_prepared_intent_window`.
+
 ## Authentic StateCell authority
 
 - Issue: Vault and sponsor paths must not treat bytes that decode as a
@@ -52,13 +96,53 @@ Implementation safety-boundary baseline: `8944bf7`.
   the current state evidence while leaving value locked.
 - Attack model: a standalone settling close or active splice retire consumes
   the StateCell but leaves the VaultCell without usable current-state evidence.
-- Fix: StateType finalise and active splice-retire paths require an input whose
-  VaultCell commitment matches `StateHeader.payload_commitment`.
+- Fix: StateType finalise and active splice-retire paths require the exact
+  VaultCell input named by `StateHeader.vault_outpoint_commitment`, and also
+  require its content to match `vault_materialisation_root`.
 - Negative tests:
   `state_type_rejects_standalone_settling_close_without_matching_vault`,
   `state_type_rejects_standalone_active_splice_retire_without_matching_vault`.
-- Remaining limitation: this uses the current current vault commitment shape; any
-  future multi-vault set must update the commitment and tests together.
+- Remaining limitation: any future multi-vault set must version the locator
+  commitment and tests together.
+
+## FactoryVault materialisation authority
+
+- Issue: the original `FactoryStateHeader` committed rights and reserve-policy
+  roots, but not the actual shared-pool Cell. Factory creation signatures and
+  ordinary updates therefore did not bind the FactoryVault lock, capacity,
+  type, or data, and Factory splice signatures bound descriptors/deltas without
+  binding their concrete old/new Cell materialisations.
+- Attack model: a host or transaction builder substitutes a different reserve
+  Cell while presenting otherwise valid Factory rights, exit, or splice
+  evidence; a bridge cannot derive the current pool materialisation from the
+  canonical Factory state alone.
+- Fix: `FactoryStateHeader` includes
+  `vault_materialisation_root = H(lock_hash, capacity, type_hash, data)`.
+  Creation emits an unbound State/Factory plus exactly one matching Vault. A
+  separate activation transaction must preserve every signed field and bind
+  `vault_outpoint_commitment = H("CKB_MORPH_VAULT_OUTPOINT_V1", tx_hash,
+  u32_le(index))` to the exact live Vault presented as the first direct
+  CellDep. Ordinary signature, reduced-rights, and sparse-Merkle updates must
+  preserve both commitments. Local/reduced exits and full/reduced splices
+  require the exact old Vault input, emit an unbound reserve-changing
+  successor, and reactivate it before later use. `FactorySpliceHeader` signs
+  both old/new content roots and OutPoint locators. The Factory type and vault
+  lock check these boundaries independently.
+- Negative tests:
+  `factory_type_rejects_initial_state_without_committed_factory_vault`,
+  `factory_type_rejects_initial_state_with_wrong_factory_vault_commitment`,
+  `factory_type_rejects_initial_state_with_ambiguous_factory_vaults`,
+  `factory_type_rejects_signed_ordinary_update_with_factory_vault_root_drift`,
+  `state_type_rejects_byte_identical_clone_vault_activation`,
+  `factory_type_rejects_byte_identical_clone_vault_activation`,
+  `state_type_rejects_vault_activation_lock_drift`,
+  `factory_type_rejects_vault_activation_lock_drift`,
+  `factory_type_rejects_noncanonical_vault_activation_dep`,
+  plus the existing Factory splice/exit capacity, type, and amount mismatch
+  families.
+- Remaining limitation: this closes the known clone/substitution path in the
+  implemented single-Vault profile, but still requires independent review and
+  an explicit migration/version policy before mainnet deployment.
 
 ## Merkle locality is not mint authority
 

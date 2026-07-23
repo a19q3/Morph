@@ -59,12 +59,14 @@ import {
   formatBalance,
   formatTime,
   formatTimeMs,
+  hasHubScope,
   assetLabel,
   parsePubkeyList,
   shortHex,
 } from './domain';
 import { ChannelTable, EventPanel, FactoryPanel, InvoicePanel, PeerPanel, WatchtowerPanel } from './records';
 import { ChannelActions, FactoryActions, InvoiceActions, PeerActions, StateActions } from './actions';
+import { ModelBoundaryPanel } from './model';
 import {
   balanceTotal,
   channelSearchText,
@@ -146,6 +148,27 @@ const SIDE_PANEL_PREVIEW_LIMIT = 5;
 const EVENT_PREVIEW_LIMIT = 10;
 const DRAWER_COLLAPSED_STORAGE_KEY = 'morph-hub.drawer-collapsed';
 
+function formatAssetPortfolio(balances: Balance[]): string {
+  const totals = new Map<string, { asset: Asset; amount: bigint }>();
+  for (const balance of balances) {
+    const key = balance.asset.kind === 'ckb' ? 'ckb' : `xudt:${balance.asset.type_hash ?? 'unknown'}`;
+    const current = totals.get(key);
+    totals.set(key, {
+      asset: balance.asset,
+      amount: (current?.amount ?? 0n) + balanceTotal(balance),
+    });
+  }
+  if (totals.size === 0) return 'No local records';
+  return [...totals.values()]
+    .sort((left, right) => (left.asset.kind === 'ckb' ? -1 : 1) - (right.asset.kind === 'ckb' ? -1 : 1))
+    .map(({ asset, amount }) => (
+      asset.kind === 'ckb'
+        ? formatAmount(amount, asset)
+        : `${formatAmount(amount, asset)} · ${shortHex(asset.type_hash)}`
+    ))
+    .join(' / ');
+}
+
 const invoiceExpiryPresets = [
   { label: '1h', value: '3600' },
   { label: '6h', value: '21600' },
@@ -167,12 +190,12 @@ const flowItems: Record<FlowKey, { label: string; detail: string; action: string
   'invoice-received': { label: 'Receive an invoice', detail: 'Incoming invoice is decoded and stored', action: 'Open invoices', panel: 'invoice', Icon: ReceiptText },
   'invoice-settled': { label: 'Settle an invoice', detail: 'Payment preimage has closed the invoice', action: 'Open invoices', panel: 'invoice', Icon: BadgeCheck },
   'channel-opened': { label: 'Open a channel', detail: 'Active bilateral channel is tracked', action: 'Open channels', panel: 'channel', Icon: GitBranch },
-  'state-published': { label: 'Update tracked state', detail: 'Local state moved into settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
+  'state-published': { label: 'Record state publication', detail: 'Local channel projection entered settlement', action: 'Open channels', panel: 'channel', Icon: RadioTower },
   'channel-finalised': { label: 'Finalise a channel', detail: 'Settling channel is closed', action: 'Open channels', panel: 'channel', Icon: BadgeCheck },
   'channel-spliced': { label: 'Record a splice', detail: 'Funding context advanced locally', action: 'Open channels', panel: 'channel', Icon: Split },
   'factory-opened': { label: 'Open a factory', detail: 'Shared factory reserve is tracked', action: 'Open factories', panel: 'factory', Icon: Factory },
   'factory-advanced': { label: 'Advance a factory', detail: 'Factory update number moved forward', action: 'Open factories', panel: 'factory', Icon: RefreshCw },
-  'factory-child': { label: 'Materialise child channel', detail: 'Factory reserve created a channel', action: 'Open factories', panel: 'factory', Icon: Network },
+  'factory-child': { label: 'Record materialised child', detail: 'Local Factory record links a child channel', action: 'Open factories', panel: 'factory', Icon: Network },
 };
 
 const sectionIds = {
@@ -387,16 +410,14 @@ export function App() {
   };
 
   const totals = useMemo(() => {
-    const vaultValue = state.channels.reduce((sum, channel) => sum + balanceTotal(channel.balances[0]), 0n);
     const sponsorBudget = state.channels.reduce((sum, channel) => sum + BigInt(channel.sponsor_budget), 0n);
     const settlingStates = state.channels.filter(channel => channel.phase === 'settling').length;
-    const factoryReserve = state.factories.reduce(
-      (sum, factory) => sum + factory.reserve_balances.reduce((inner, balance) => inner + balanceTotal(balance), 0n),
-      0n
-    );
-    return { vaultValue, sponsorBudget, settlingStates, factoryReserve };
+    const channelValue = formatAssetPortfolio(state.channels.flatMap(channel => channel.balances));
+    const factoryReserve = formatAssetPortfolio(state.factories.flatMap(factory => factory.reserve_balances));
+    return { channelValue, sponsorBudget, settlingStates, factoryReserve };
   }, [state.channels, state.factories]);
   const evidence = useMemo(() => evidenceSummary(state), [state]);
+  const canWrite = hasHubScope(state.security, 'write');
 
   const flowDataLoaded = state.required_flows.length > 0;
   const completedCount = state.completed_flows.length;
@@ -686,15 +707,17 @@ export function App() {
         </div>
 
         <section className="metric-grid">
-          <Metric label="Vault value" value={formatAmount(totals.vaultValue, { kind: 'ckb' })} icon={<Landmark size={16} />} />
+          <Metric label="Recorded channel value" value={totals.channelValue} icon={<Landmark size={16} />} />
           <Metric label="Sponsor budget" value={formatAmount(totals.sponsorBudget, { kind: 'ckb' })} icon={<WalletCards size={16} />} />
           <Metric label="Settling states" value={String(totals.settlingStates)} icon={<AlertTriangle size={16} />} tone={totals.settlingStates ? 'warn' : 'base'} />
-          <Metric label="Factory reserve" value={formatAmount(totals.factoryReserve, { kind: 'ckb' })} icon={<Factory size={16} />} />
+          <Metric label="Recorded factory reserve" value={totals.factoryReserve} icon={<Factory size={16} />} />
         </section>
 
         <FlowPanel state={state} onOpenAction={selectAction} busy={busy} />
 
         <AcceptancePanel state={state} evidence={evidence} flowDataLoaded={flowDataLoaded} liveMode={liveMode} />
+
+        <ModelBoundaryPanel model={state.model ?? emptyState.model} />
 
         <OperationSearch
           query={recordQuery}
@@ -713,6 +736,7 @@ export function App() {
               searchActive={searchActive}
               runAction={runAction}
               busy={busy}
+              canWrite={canWrite}
               onOpenAction={() => selectAction('channel')}
             />
           </div>
@@ -729,6 +753,7 @@ export function App() {
               searchActive={searchActive}
               runAction={runAction}
               busy={busy}
+              canWrite={canWrite}
               onOpenAction={() => selectAction('factory')}
               onMaterialise={openFactoryMaterialise}
             />
