@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Morph-owned implementation of the Agent/Fiber integration described in
 //! Fiber issue #1255. It talks to an unmodified Fiber node through JSON-RPC.
 

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Core Morph Channel protocol objects and validation invariants.
 //!
 //! This crate is deliberately host-side Rust for now. It provides executable
@@ -17,9 +19,9 @@ pub use agent::*;
 pub use backend::*;
 pub use bridge::*;
 pub use hash::{
-    SigningBytes, blake2b256, factory_vault_delta_commitment, factory_vault_descriptor_commitment,
-    funding_context_id, participants_commitment, splice_asset_delta_commitment,
-    vault_descriptor_commitment, vault_outpoint_commitment,
+    SigningBytes, asset_registry_commitment, blake2b256, factory_vault_delta_commitment,
+    factory_vault_descriptor_commitment, funding_context_id, participants_commitment,
+    splice_asset_delta_commitment, vault_descriptor_commitment, vault_outpoint_commitment,
 };
 pub use node::*;
 pub use rgbpp::*;

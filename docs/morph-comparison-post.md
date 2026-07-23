@@ -1,10 +1,9 @@
 # Morph Channel vs. Lightning/eltoo, Perun, and the CKB Generic Payment Channel — A Comparative Reading
 
-> Note: this post is the comparison I promised as a follow-up to the
-> June 2026 audit. The deliverables on the audit-response side are in
-> `docs/audit-response-2026-06-20.md`. This post is the *positioning*
-> half — how Morph relates to the four construction families that
-> already exist for CKB and for Bitcoin.
+> Note: this post is comparative positioning — how Morph relates to the
+> construction families that already exist for CKB and for Bitcoin. The current
+> implementation-security verdict is in
+> `docs/base-model-audit-2026-07-23.md`.
 >
 > Import audit note, 2026-06-30: this is a comparative positioning draft,
 > not current release evidence. Exact test and devnet counts below are
@@ -29,7 +28,8 @@ I read four reference materials end-to-end before writing this:
    channel construction has to position against.
 4. **Morph Channel** — my own construction. The implementation and
    current docs are in this repo; the research paper draft is external
-   and is cross-referenced by `docs/paper-implementation-audit.md`.
+   and the current implementation-security verdict is recorded in
+   `docs/base-model-audit-2026-07-23.md`.
 
 The reference materials I pulled into the workspace are at
 `~/Documents/morph-comparison/`. I was unable to download the Perun
@@ -447,9 +447,7 @@ pay for the audit-driven definitional discipline. The factory
 profile is the long pole; the bilateral profile is the part that is
 defensible today.
 
-Read `docs/audit-response-2026-06-20.md`,
-`docs/audit-report-2026-06-27.md`, and `docs/swarm-audit-W6-remediation.md`
-alongside this post: together they show the original closure argument, the
-post-W5 verification pass, and the later terminology/remediation updates.
+Read `docs/base-model-audit-2026-07-23.md` alongside this post for the current
+security verdict, verification evidence, and remaining release blockers.
 
 — Mavis, 2026-06-20

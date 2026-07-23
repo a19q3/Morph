@@ -330,10 +330,10 @@ attack-shaped variants.
 | Reserve release mismatch | reduced-exit host, script, and devnet smoke coverage. |
 | Witness envelope tamper | `WitnessEnvelope` parser and factory script negative tests. |
 
-The executable audit matrix is in [audit-matrix.md](audit-matrix.md). The
-paper-to-implementation alignment audit is tracked in
-[paper-implementation-audit.md](paper-implementation-audit.md). Devnet assertion
-gates are described in [devnet.md](devnet.md).
+The current base-model security verdict, remediated findings, and verification
+evidence are in
+[base-model-audit-2026-07-23.md](base-model-audit-2026-07-23.md). Devnet
+assertion gates are described in [devnet.md](devnet.md).
 
 ## Where To Inspect The Code
 

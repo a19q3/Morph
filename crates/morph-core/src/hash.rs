@@ -1,9 +1,9 @@
 use blake2b_rs::Blake2bBuilder;
 
 use crate::types::{
-    Bytes32, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptor,
-    Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, VaultAsset,
-    VaultDescriptor,
+    AssetRegistry, Bytes32, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta,
+    FactoryVaultDescriptor, Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader,
+    VaultAsset, VaultDescriptor,
 };
 
 pub const STATE_DOMAIN: &[u8] = b"CKB_MORPH_CHANNEL_STATE";
@@ -44,6 +44,20 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
     }
     hasher.finalize(&mut out);
     out
+}
+
+/// Commits to the complete, canonically ordered xUDT allow-list.
+///
+/// `AssetRegistry` uses a `BTreeSet`, so equal registries have one encoding
+/// regardless of insertion order.
+pub fn asset_registry_commitment(registry: &AssetRegistry) -> Bytes32 {
+    let type_hashes = registry
+        .xudt_types
+        .iter()
+        .map(|type_hash| type_hash.as_slice())
+        .collect::<Vec<_>>();
+    morph_script_common::asset_registry_commitment(&type_hashes)
+        .expect("BTreeSet<Bytes32> is always strictly ordered and fixed-width")
 }
 
 pub fn funding_context_id(

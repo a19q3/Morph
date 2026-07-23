@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Isolated Morph -> Fiber adapter and minimal external-edge hook contract.
 //!
 //! Fiber's current `graph_channels` RPC is read-only and external funding still

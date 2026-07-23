@@ -320,8 +320,8 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [RGB++ / Agent / Fiber integration plan](docs/rgbpp-agent-fiber-integration-plan.md):
   the sovereign Factory-to-channel-to-provider-edge design and its release
   gate.
-- [RGB++ / Agent boundary audit](docs/rgbpp-agent-audit-2026-07-21.md): fixed
-  security findings, evidence collected, and remaining release blockers.
+- [Base-model audit](docs/base-model-audit-2026-07-23.md): current security
+  verdict, remediated findings, verification evidence, and release blockers.
 - [English tutorial](docs/morph-channel-tutorial.md): a gentler introduction
   with diagrams.
 - [Chinese tutorial](docs/morph-channel-tutorial.zh.md): Chinese-language

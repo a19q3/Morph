@@ -29,8 +29,9 @@ use morph_core::types::{
 };
 use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
 use morph_core::{
-    factory_vault_delta_commitment, participants_commitment as core_participants_commitment,
-    splice_asset_delta_commitment, vault_descriptor_commitment, vault_outpoint_commitment,
+    asset_registry_commitment, factory_vault_delta_commitment,
+    participants_commitment as core_participants_commitment, splice_asset_delta_commitment,
+    vault_descriptor_commitment, vault_outpoint_commitment,
 };
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
@@ -47,9 +48,10 @@ use morph_script_common::{
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
     FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD,
     FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH,
-    FACTORY_STATE_HEADER_LEN, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
-    FactoryStateHeader, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
-    SPONSOR_POLICY_LEN, STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN,
+    FACTORY_STATE_HEADER_LEN, FACTORY_STATE_LAYOUT_VERSION, FactoryMerkleUpdateWitness,
+    FactoryReducedExitWitness, FactoryStateHeader, MORPH_PROTOCOL_VERSION, PHASE_ACTIVE,
+    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPONSOR_POLICY_LEN,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, STATE_LAYOUT_VERSION,
     STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
     SponsorPolicy as WireSponsorPolicy, StateHeader as WireStateHeader, StateHeaderInput,
     WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
@@ -1833,6 +1835,9 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         funding_anchor,
         vault_set_commitment,
         participants_commitment,
+        asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+            xudt_types: BTreeSet::new(),
+        }),
         settlement_descriptor_commitment: descriptor_commitment,
         descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
         challenge_policy_commitment,
@@ -5823,6 +5828,12 @@ pub fn factory_exit_channel(
         funding_anchor,
         vault_set_commitment,
         participants_commitment,
+        asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+            xudt_types: child_xudt
+                .iter()
+                .map(|(_, type_hash, _, _, _, _)| *type_hash)
+                .collect(),
+        }),
         settlement_descriptor_commitment: descriptor_commitment,
         descriptor_version,
         challenge_policy_commitment,
@@ -6369,6 +6380,9 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         funding_anchor,
         vault_set_commitment,
         participants_commitment,
+        asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+            xudt_types: BTreeSet::from([xudt_type_hash]),
+        }),
         settlement_descriptor_commitment: descriptor_commitment,
         descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
         challenge_policy_commitment,
@@ -13008,6 +13022,7 @@ struct InitialStateHeader {
     funding_anchor: [u8; 32],
     vault_set_commitment: [u8; 32],
     participants_commitment: [u8; 32],
+    asset_registry_commitment: [u8; 32],
     settlement_descriptor_commitment: [u8; 32],
     descriptor_version: u16,
     challenge_policy_commitment: [u8; 32],
@@ -13027,7 +13042,7 @@ struct FactoryHeaderInput {
 
 fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
     encode_state_header(&StateHeaderInput {
-        protocol_version: 1,
+        protocol_version: MORPH_PROTOCOL_VERSION,
         chain_id: input.chain_id,
         signature_scheme_id: SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
         channel_id: input.channel_id,
@@ -13038,19 +13053,19 @@ fn initial_state_header(input: InitialStateHeader) -> [u8; STATE_HEADER_LEN] {
         mode: STATE_MODE_BILATERAL_PLAINTEXT,
         phase: PHASE_ACTIVE,
         participants_commitment: input.participants_commitment,
-        asset_registry_commitment: script_blake2b256(&[b"CKB_MORPH_EMPTY_ASSET_REGISTRY"]),
+        asset_registry_commitment: input.asset_registry_commitment,
         settlement_descriptor_commitment: input.settlement_descriptor_commitment,
         descriptor_version: input.descriptor_version,
         vault_materialisation_root: script_blake2b256(&[b"CKB_MORPH_EMPTY_BILATERAL_PAYLOAD"]),
         vault_outpoint_commitment: [0; BYTE32_LEN],
         challenge_policy_commitment: input.challenge_policy_commitment,
-        state_layout_version: 2,
+        state_layout_version: STATE_LAYOUT_VERSION,
     })
 }
 
 fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_LEN] {
     let mut raw = [0u8; FACTORY_STATE_HEADER_LEN];
-    put_u16(&mut raw, 0, 1);
+    put_u16(&mut raw, 0, MORPH_PROTOCOL_VERSION);
     raw[2..34].copy_from_slice(&input.chain_id);
     put_u16(&mut raw, 34, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B);
     raw[36..68].copy_from_slice(&input.factory_id);
@@ -13060,7 +13075,7 @@ fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_
     raw[140..172].copy_from_slice(&input.access_manifest_root);
     raw[172..204].copy_from_slice(&input.non_interference_digest);
     raw[204..236].copy_from_slice(&input.challenge_policy_commitment);
-    put_u16(&mut raw, 236, 1);
+    put_u16(&mut raw, 236, FACTORY_STATE_LAYOUT_VERSION);
     raw[238..270].copy_from_slice(&input.vault_materialisation_root);
     raw[270..302].fill(0);
     raw
@@ -13611,6 +13626,9 @@ mod tests {
                 2,
                 &[&participant_pubkeys[0], &participant_pubkeys[1]],
             ),
+            asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+                xudt_types: BTreeSet::new(),
+            }),
             settlement_descriptor_commitment: [0x14; BYTE32_LEN],
             descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
             challenge_policy_commitment: [0x15; BYTE32_LEN],
@@ -13742,6 +13760,9 @@ mod tests {
             funding_anchor,
             vault_set_commitment: [0x99; BYTE32_LEN],
             participants_commitment: [0x66; BYTE32_LEN],
+            asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+                xudt_types: BTreeSet::new(),
+            }),
             settlement_descriptor_commitment: [0x77; BYTE32_LEN],
             descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
             challenge_policy_commitment: [0x88; BYTE32_LEN],

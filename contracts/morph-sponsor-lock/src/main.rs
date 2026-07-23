@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -75,6 +76,7 @@ fn validate_sponsored_state(policy: &SponsorPolicy) -> Result<()> {
             Ok(data) => {
                 if let Ok(header) = StateHeader::parse(&data) {
                     if header.channel_id() == policy.channel_id() {
+                        header.validate_profile()?;
                         if sponsored_state.is_some() {
                             return Err(ScriptError::StateCellAmbiguous);
                         }
@@ -124,6 +126,7 @@ fn ensure_publication_backed_by_state_type_input(
                     let data =
                         load_cell_data(index, Source::Input).map_err(|_| ScriptError::Encoding)?;
                     let header = StateHeader::parse(&data)?;
+                    header.validate_profile()?;
                     if header.funding_anchor() != output_funding_anchor {
                         return Err(ScriptError::FundingAnchorMismatch);
                     }

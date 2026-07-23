@@ -1,4 +1,5 @@
 #![no_std]
+#![forbid(unsafe_code)]
 
 use ckb_hash::new_blake2b;
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
@@ -103,6 +104,9 @@ pub const FACTORY_REDUCED_SPLICE_WITNESS_LEN: usize = 2
 
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
+pub const MORPH_PROTOCOL_VERSION: u16 = 1;
+pub const STATE_LAYOUT_VERSION: u16 = 2;
+pub const FACTORY_STATE_LAYOUT_VERSION: u16 = 1;
 /// Capacity reserved on an unbound State/FactoryState carrier for the
 /// canonical one-transaction Vault OutPoint activation.
 pub const STATE_CARRIER_ACTIVATION_FEE: u64 = 10_000;
@@ -139,6 +143,7 @@ pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT: u16 = 4;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT: u16 = 5;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_SPLICE: u16 = 6;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE: u16 = 7;
+pub const ASSET_REGISTRY_DOMAIN: &[u8] = b"CKB_MORPH_ASSET_REGISTRY_V1";
 
 #[derive(Clone, Copy)]
 pub struct WitnessEnvelopeKindSpec {
@@ -279,6 +284,7 @@ pub enum ScriptError {
     VaultActivationInvalid = 51,
     StateCarrierMismatch = 52,
     SponsorFeeMismatch = 53,
+    UnsupportedProtocolProfile = 54,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -415,6 +421,24 @@ impl<'a> StateHeader<'a> {
 
     pub fn vault_is_bound(&self) -> bool {
         self.vault_outpoint_commitment() != UNBOUND_VAULT_OUTPOINT_COMMITMENT
+    }
+
+    pub fn validate_profile(&self) -> Result<()> {
+        if self.protocol_version() != MORPH_PROTOCOL_VERSION
+            || self.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B
+            || self.state_layout_version() != STATE_LAYOUT_VERSION
+            || !matches!(
+                self.mode(),
+                STATE_MODE_BILATERAL_PLAINTEXT | STATE_MODE_FACTORY_PROOF
+            )
+            || !matches!(
+                self.descriptor_version(),
+                BILATERAL_CKB_DESCRIPTOR_VERSION | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+            )
+        {
+            return Err(ScriptError::UnsupportedProtocolProfile);
+        }
+        Ok(())
     }
 
     pub fn is_vault_activation_to(&self, next: &Self) -> bool {
@@ -609,6 +633,16 @@ impl<'a> FactoryStateHeader<'a> {
         self.vault_outpoint_commitment() != UNBOUND_VAULT_OUTPOINT_COMMITMENT
     }
 
+    pub fn validate_profile(&self) -> Result<()> {
+        if self.protocol_version() != MORPH_PROTOCOL_VERSION
+            || self.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B
+            || self.state_layout_version() != FACTORY_STATE_LAYOUT_VERSION
+        {
+            return Err(ScriptError::UnsupportedProtocolProfile);
+        }
+        Ok(())
+    }
+
     pub fn is_vault_activation_to(&self, next: &Self) -> bool {
         !self.vault_is_bound() && next.vault_is_bound() && self.raw[..270] == next.raw[..270]
     }
@@ -799,6 +833,7 @@ pub fn verify_bilateral_state_signatures(
     header: &StateHeader,
     witness: &BilateralSignatureWitness,
 ) -> Result<()> {
+    header.validate_profile()?;
     if header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(ScriptError::ParticipantWitnessEncoding);
     }
@@ -908,6 +943,8 @@ pub fn verify_splice_state_transition(
     new_vault: &SpliceVaultDescriptor,
     deltas: &SpliceAssetDeltas,
 ) -> Result<()> {
+    current_state.validate_profile()?;
+    next_state.validate_profile()?;
     if current_state.phase() != PHASE_ACTIVE || next_state.phase() != PHASE_ACTIVE {
         return Err(ScriptError::SpliceProofMismatch);
     }
@@ -2455,6 +2492,7 @@ pub fn verify_factory_state_signatures(
     header: &FactoryStateHeader,
     witness: &FactorySignatureWitness,
 ) -> Result<()> {
+    header.validate_profile()?;
     if header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(ScriptError::ParticipantWitnessEncoding);
     }
@@ -2975,6 +3013,8 @@ pub fn verify_factory_splice_update(
     new_header: &FactoryStateHeader,
     witness: &FactorySpliceWitness,
 ) -> Result<()> {
+    old_header.validate_profile()?;
+    new_header.validate_profile()?;
     let splice_header = witness.header()?;
     let signatures = witness.factory_signature()?;
     let old_vault = witness.old_vault()?;
@@ -3009,6 +3049,8 @@ pub fn verify_factory_reduced_splice_update(
     new_header: &FactoryStateHeader,
     witness: &FactoryReducedSpliceWitness,
 ) -> Result<()> {
+    old_header.validate_profile()?;
+    new_header.validate_profile()?;
     let splice_header = witness.header()?;
     let merkle_update = witness.merkle_update()?;
     let old_vault = witness.old_vault()?;
@@ -3892,6 +3934,26 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> [u8; 32] {
     let mut out = [0u8; 32];
     hasher.finalize(&mut out);
     out
+}
+
+pub fn asset_registry_commitment(type_hashes: &[&[u8]]) -> Result<[u8; 32]> {
+    if type_hashes
+        .iter()
+        .any(|type_hash| type_hash.len() != BYTE32_LEN)
+        || !type_hashes.windows(2).all(|window| window[0] < window[1])
+    {
+        return Err(ScriptError::Encoding);
+    }
+    let count = (type_hashes.len() as u64).to_le_bytes();
+    let mut hasher = new_blake2b();
+    hasher.update(ASSET_REGISTRY_DOMAIN);
+    hasher.update(&count);
+    for type_hash in type_hashes {
+        hasher.update(type_hash);
+    }
+    let mut out = [0u8; 32];
+    hasher.finalize(&mut out);
+    Ok(out)
 }
 
 pub fn factory_participants_commitment(threshold: u8, entries: &[(&[u8], &[u8])]) -> [u8; 32] {
@@ -5404,6 +5466,62 @@ mod tests {
     }
 
     #[test]
+    fn state_header_profile_rejects_unknown_versions_and_modes() {
+        let valid = header_bytes(42, PHASE_SETTLING, 3);
+        StateHeader::parse(&valid)
+            .unwrap()
+            .validate_profile()
+            .unwrap();
+
+        let mutations: [fn(&mut [u8; STATE_HEADER_LEN]); 4] = [
+            |raw: &mut [u8; STATE_HEADER_LEN]| put_u16(raw, 0, MORPH_PROTOCOL_VERSION + 1),
+            |raw: &mut [u8; STATE_HEADER_LEN]| put_u16(raw, 312, STATE_LAYOUT_VERSION + 1),
+            |raw: &mut [u8; STATE_HEADER_LEN]| raw[148] = 99,
+            |raw: &mut [u8; STATE_HEADER_LEN]| put_u16(raw, 246, 99),
+        ];
+        for mutate in mutations {
+            let mut raw = valid;
+            mutate(&mut raw);
+            assert_eq!(
+                StateHeader::parse(&raw)
+                    .unwrap()
+                    .validate_profile()
+                    .unwrap_err(),
+                ScriptError::UnsupportedProtocolProfile
+            );
+        }
+    }
+
+    #[test]
+    fn factory_state_header_profile_rejects_unknown_versions() {
+        let valid = factory_header_bytes(1);
+        FactoryStateHeader::parse(&valid)
+            .unwrap()
+            .validate_profile()
+            .unwrap();
+
+        let mut wrong_protocol = valid;
+        put_u16(&mut wrong_protocol, 0, MORPH_PROTOCOL_VERSION + 1);
+        assert_eq!(
+            FactoryStateHeader::parse(&wrong_protocol)
+                .unwrap()
+                .validate_profile()
+                .unwrap_err(),
+            ScriptError::UnsupportedProtocolProfile
+        );
+
+        let mut wrong_layout = valid;
+        put_u16(&mut wrong_layout, 236, FACTORY_STATE_LAYOUT_VERSION + 1);
+        assert_eq!(
+            FactoryStateHeader::parse(&wrong_layout)
+                .unwrap()
+                .validate_profile()
+                .unwrap_err(),
+            ScriptError::UnsupportedProtocolProfile
+        );
+    }
+
+    #[test]
     fn state_header_context_binds_epoch_and_vault_set() {
         let old_raw = header_bytes(1, 1, 7);
         let mut new_raw = header_bytes(9, PHASE_SETTLING, 7);
@@ -6271,6 +6389,14 @@ mod tests {
         next_raw[248..280].copy_from_slice(&new_vault.commitment().unwrap());
         mutate_next(&mut next_raw);
         let next = StateHeader::parse(&next_raw).unwrap();
+        let expected = if matches!(
+            field_name,
+            "protocol_version" | "signature_scheme_id" | "state_layout_version"
+        ) {
+            ScriptError::UnsupportedProtocolProfile
+        } else {
+            ScriptError::SpliceProofMismatch
+        };
 
         assert_eq!(
             verify_splice_state_transition(
@@ -6283,7 +6409,7 @@ mod tests {
                 &deltas,
             )
             .unwrap_err(),
-            ScriptError::SpliceProofMismatch,
+            expected,
             "{field_name}"
         );
     }
@@ -6828,7 +6954,7 @@ mod tests {
 
         assert_eq!(
             verify_factory_splice_update(&old_header, &new_header, &witness).unwrap_err(),
-            ScriptError::FactorySpliceProofEncoding
+            ScriptError::UnsupportedProtocolProfile
         );
     }
 
@@ -7004,7 +7130,7 @@ mod tests {
 
         assert_eq!(
             verify_factory_reduced_splice_update(&old_header, &new_header, &witness).unwrap_err(),
-            ScriptError::FactorySpliceProofEncoding
+            ScriptError::UnsupportedProtocolProfile
         );
     }
 

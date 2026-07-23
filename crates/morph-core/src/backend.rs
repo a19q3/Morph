@@ -17,7 +17,7 @@ use crate::agent::{
 use crate::validation::{MorphError, validate_state_authorization, validate_state_transition};
 use crate::{
     AssetRegistry, Bytes32, Phase, StateAuthorization, StateCell, StateTransitionContext,
-    blake2b256,
+    asset_registry_commitment, blake2b256,
 };
 
 const PREPARED_PAYMENT_DOMAIN: &[u8] = b"CKB_MORPH_PREPARED_PAYMENT_V1";
@@ -110,6 +110,11 @@ impl MorphBilateralChannelBackend {
             return Err(BackendError::InvalidChannel);
         }
         validate_state_authorization(&current_state.header, &current_authorization)?;
+        if current_state.header.asset_registry_commitment
+            != asset_registry_commitment(&asset_registry)
+        {
+            return Err(BackendError::AssetRegistryMismatch);
+        }
         validate_participant_identities(&current_authorization, &participants)?;
         validate_descriptor_commitment(&current_state, &current_settlement_descriptor)?;
         validate_descriptor_locks(&current_settlement_descriptor, &participants)?;
@@ -712,7 +717,9 @@ mod tests {
                 mode: Mode::BilateralPlain,
                 phase: Phase::Active,
                 participants_commitment,
-                asset_registry_commitment: [7; 32],
+                asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+                    xudt_types: BTreeSet::new(),
+                }),
                 settlement_descriptor_commitment: settlement_descriptor_commitment(&descriptor),
                 descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
                 vault_materialisation_root: [8; 32],
@@ -962,6 +969,26 @@ mod tests {
                 BTreeSet::new(),
             ),
             Err(BackendError::WrongSettlementParticipants)
+        );
+    }
+
+    #[test]
+    fn channel_asset_registry_must_match_the_signed_header() {
+        let (backend, _, participants) = fixture();
+        let registry = AssetRegistry {
+            xudt_types: BTreeSet::from([[42; 32]]),
+        };
+
+        assert_eq!(
+            MorphBilateralChannelBackend::new(
+                backend.current_state.clone(),
+                backend.current_authorization.clone(),
+                backend.current_settlement_descriptor.clone(),
+                participants,
+                registry,
+                BTreeSet::new(),
+            ),
+            Err(BackendError::AssetRegistryMismatch)
         );
     }
 }

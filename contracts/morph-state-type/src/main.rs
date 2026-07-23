@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -67,6 +68,7 @@ fn main() -> Result<()> {
         (None, Some(new_data)) => validate_create(&script, &new_data, expected_funding_anchor)?,
         (Some(old_data), Some(new_data)) => {
             let old_header = StateHeader::parse(&old_data)?;
+            old_header.validate_profile()?;
             if old_header.funding_anchor() != expected_funding_anchor {
                 return Err(ScriptError::FundingAnchorMismatch);
             }
@@ -74,6 +76,7 @@ fn main() -> Result<()> {
         }
         (Some(old_data), None) => {
             let old_header = StateHeader::parse(&old_data)?;
+            old_header.validate_profile()?;
             if old_header.funding_anchor() != expected_funding_anchor {
                 return Err(ScriptError::FundingAnchorMismatch);
             }
@@ -96,6 +99,7 @@ fn validate_create(
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
     let new_header = StateHeader::parse(new_data)?;
+    new_header.validate_profile()?;
 
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);
@@ -154,6 +158,7 @@ fn validate_splice_create(
         splice_header.old_funding_anchor(),
     )?;
     let old_header = StateHeader::parse(&old_data)?;
+    old_header.validate_profile()?;
     validate_state_lock_continuity(old_index, Source::Input, 0, Source::GroupOutput)?;
     verify_splice_state_transition_bundle(&old_header, new_header, &witness)?;
     validate_splice_carrier_capacity(old_index)
@@ -185,6 +190,7 @@ fn validate_splice_retire(
         splice_header.new_funding_anchor(),
     )?;
     let new_header = StateHeader::parse(&new_data)?;
+    new_header.validate_profile()?;
     validate_state_lock_continuity(0, Source::GroupInput, new_index, Source::Output)?;
     verify_splice_state_transition_bundle(old_header, &new_header, &witness)
 }
@@ -224,6 +230,7 @@ fn validate_supersede(
     expected_funding_anchor: &[u8],
 ) -> Result<()> {
     let new_header = StateHeader::parse(new_data)?;
+    new_header.validate_profile()?;
 
     if new_header.funding_anchor() != expected_funding_anchor {
         return Err(ScriptError::FundingAnchorMismatch);

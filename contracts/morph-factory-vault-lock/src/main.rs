@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -70,6 +71,8 @@ fn main() -> Result<()> {
         find_unique_factory_state_data(Source::Output, factory_id, factory_type_hash)?;
     let old_header = FactoryStateHeader::parse(&old_header_data)?;
     let new_header = FactoryStateHeader::parse(&new_header_data)?;
+    old_header.validate_profile()?;
+    new_header.validate_profile()?;
     if new_header.update_number() <= old_header.update_number() {
         return Err(ScriptError::NonMonotonicStateNumber);
     }

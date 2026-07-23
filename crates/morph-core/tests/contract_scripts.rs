@@ -423,6 +423,14 @@ fn signed_initial_state_header(
     funding_anchor: [u8; BYTE32_LEN],
     vault_materialisation_root: [u8; BYTE32_LEN],
 ) -> (Bytes, Bytes) {
+    signed_initial_state_header_with_mutation(funding_anchor, vault_materialisation_root, |_| {})
+}
+
+fn signed_initial_state_header_with_mutation(
+    funding_anchor: [u8; BYTE32_LEN],
+    vault_materialisation_root: [u8; BYTE32_LEN],
+    mutate: impl FnOnce(&mut [u8; STATE_HEADER_LEN]),
+) -> (Bytes, Bytes) {
     let key0 = signing_key(1);
     let key1 = signing_key(2);
     let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
@@ -432,6 +440,7 @@ fn signed_initial_state_header(
     let mut header_raw = header_raw_with_anchor(0, PHASE_ACTIVE, funding_anchor);
     header_raw[150..182].copy_from_slice(&commitment);
     header_raw[248..280].copy_from_slice(&vault_materialisation_root);
+    mutate(&mut header_raw);
     let digest = StateHeader::parse(&header_raw).unwrap().signing_digest();
     let mut witness = [0u8; BILATERAL_SIGNATURE_WITNESS_LEN];
     put_u16(&mut witness, 0, BILATERAL_SIGNATURE_WITNESS_VERSION);
@@ -2679,6 +2688,7 @@ enum VaultCkbSettlementTamper {
     NonEmptyData,
     TypedOutput,
     SplitOutput,
+    DescriptorVersionMismatch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2910,6 +2920,61 @@ fn state_type_accepts_canonical_initial_state() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("canonical initial state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn state_type_rejects_signed_unknown_protocol_profile() {
+    let mut context = Context::default();
+    let funding_lock = deploy_always_success(&mut context);
+    let vault_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(2 * CELL_CAPACITY)
+            .lock(funding_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let funding_anchor = derived_funding_anchor(&input, 0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        state_args_with_anchor(funding_anchor, 0),
+    );
+    let state_lock = deploy_always_success_with_args(
+        &mut context,
+        Bytes::from(state_type.calc_script_hash().as_slice().to_vec()),
+    );
+    let vault_materialisation_root = vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]);
+    let (initial_data, signature_witness) = signed_initial_state_header_with_mutation(
+        funding_anchor,
+        vault_materialisation_root,
+        |raw| put_u16(raw, 0, 2),
+    );
+
+    let output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(state_lock)
+        .type_(Some(state_type).pack())
+        .build();
+    let vault_output = CellOutput::new_builder()
+        .capacity(CELL_CAPACITY)
+        .lock(vault_lock)
+        .build();
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output)
+        .output(vault_output)
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(signature_witness))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -6460,7 +6525,6 @@ fn vault_lock_accepts_finalise_with_current_state() {
         &mut state_data,
         vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
     );
-
     let state_out_point = context.create_cell(
         CellOutput::new_builder()
             .capacity(CELL_CAPACITY)
@@ -6623,6 +6687,9 @@ fn ckb_vault_finalise_tx_with_tamper(
         &mut state_data,
         vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
     );
+    if tamper == VaultCkbSettlementTamper::DescriptorVersionMismatch {
+        put_u16(&mut state_data, 246, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION);
+    }
 
     let state_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -6712,6 +6779,22 @@ fn ckb_vault_finalise_tx_with_tamper(
                 Bytes::new(),
             ));
         }
+        VaultCkbSettlementTamper::DescriptorVersionMismatch => {
+            outputs.push((
+                CellOutput::new_builder()
+                    .capacity(ALICE_CAPACITY)
+                    .lock(alice_lock)
+                    .build(),
+                Bytes::new(),
+            ));
+            outputs.push((
+                CellOutput::new_builder()
+                    .capacity(BOB_CAPACITY)
+                    .lock(bob_lock)
+                    .build(),
+                Bytes::new(),
+            ));
+        }
     }
 
     for (output, data) in outputs {
@@ -6743,6 +6826,14 @@ fn vault_lock_rejects_ckb_settlement_output_with_type() {
 #[test]
 fn vault_lock_rejects_split_settlement_outputs_for_same_lock() {
     let (context, tx) = ckb_vault_finalise_tx_with_tamper(VaultCkbSettlementTamper::SplitOutput);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_descriptor_version_mismatch() {
+    let (context, tx) =
+        ckb_vault_finalise_tx_with_tamper(VaultCkbSettlementTamper::DescriptorVersionMismatch);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 

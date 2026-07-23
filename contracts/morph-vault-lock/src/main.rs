@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -69,6 +70,7 @@ fn main() -> Result<()> {
         state_lock_hash_type,
     )?;
     let header = StateHeader::parse(&state_data)?;
+    header.validate_profile()?;
     validate_current_vault_commitment(
         header.vault_materialisation_root(),
         header.vault_outpoint_commitment(),
@@ -101,7 +103,9 @@ fn main() -> Result<()> {
     match descriptor_raw.len() {
         BILATERAL_CKB_DESCRIPTOR_LEN => {
             let descriptor = BilateralCkbSettlementDescriptor::parse(descriptor_raw.as_ref())?;
-            if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+            if header.descriptor_version() != morph_script_common::BILATERAL_CKB_DESCRIPTOR_VERSION
+                || header.settlement_descriptor_commitment() != descriptor.commitment().as_slice()
+            {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
             let vault_capacity = sum_group_capacity(Source::GroupInput)?;
@@ -112,7 +116,10 @@ fn main() -> Result<()> {
         }
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => {
             let descriptor = BilateralCkbXudtSettlementDescriptor::parse(descriptor_raw.as_ref())?;
-            if header.settlement_descriptor_commitment() != descriptor.commitment().as_slice() {
+            if header.descriptor_version()
+                != morph_script_common::BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                || header.settlement_descriptor_commitment() != descriptor.commitment().as_slice()
+            {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
             let vault_capacity = sum_group_capacity(Source::GroupInput)?;

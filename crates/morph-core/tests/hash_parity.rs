@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use morph_core::{
-    FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta, FactoryVaultDescriptor, Mode, Phase,
-    SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader, VaultAsset, VaultAssetAmount,
-    factory_vault_delta_commitment, factory_vault_descriptor_commitment, participants_commitment,
-    splice_asset_delta_commitment, vault_descriptor_commitment,
+    AssetRegistry, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta,
+    FactoryVaultDescriptor, Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader,
+    VaultAsset, VaultAssetAmount, asset_registry_commitment, factory_vault_delta_commitment,
+    factory_vault_descriptor_commitment, participants_commitment, splice_asset_delta_commitment,
+    vault_descriptor_commitment,
 };
 use morph_script_common as wire;
 
@@ -64,6 +67,20 @@ fn participants_commitment_matches_script_common() {
     assert_eq!(
         participants_commitment(2, &pubkeys),
         wire::participants_commitment(2, &pubkeys)
+    );
+}
+
+#[test]
+fn asset_registry_commitment_matches_script_common() {
+    let registry = AssetRegistry {
+        xudt_types: BTreeSet::from([bytes32(7), bytes32(42)]),
+    };
+    let hashes = [bytes32(7), bytes32(42)];
+    let hash_refs = [hashes[0].as_slice(), hashes[1].as_slice()];
+
+    assert_eq!(
+        asset_registry_commitment(&registry),
+        wire::asset_registry_commitment(&hash_refs).unwrap()
     );
 }
 

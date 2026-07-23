@@ -2,10 +2,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
+use morph_script_common::{
+    BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
+    BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, COMPRESSED_SECP256K1_PUBKEY_LEN,
+    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD,
+    FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD, MORPH_PROTOCOL_VERSION,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_LAYOUT_VERSION,
+};
 use thiserror::Error;
 
 use crate::hash::{
-    blake2b256, factory_vault_delta_commitment, participants_commitment,
+    asset_registry_commitment, blake2b256, factory_vault_delta_commitment, participants_commitment,
     splice_asset_delta_commitment, vault_descriptor_commitment,
 };
 use crate::types::*;
@@ -15,7 +23,6 @@ const FACTORY_RIGHT_LEAF_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_LEAF";
 const FACTORY_RIGHT_NODE_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_NODE";
 const FACTORY_RIGHT_EMPTY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY";
 const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
-const SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B: u16 = 1;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MorphError {
@@ -31,14 +38,20 @@ pub enum MorphError {
     InvalidStateSignatures,
     #[error("state signature scheme is unsupported")]
     UnsupportedSignatureScheme,
+    #[error("state uses an unsupported protocol, layout, mode, or descriptor profile")]
+    UnsupportedProtocolProfile,
     #[error("participant set does not match signed state header")]
     ParticipantSetMismatch,
     #[error("participant signature encoding is invalid")]
     ParticipantSignatureEncoding,
     #[error("referenced funding anchor does not match signed state header")]
     FundingAnchorMismatch,
+    #[error("asset registry does not match the signed state header")]
+    AssetRegistryCommitmentMismatch,
     #[error("output capacity is below occupied capacity")]
     OutputBelowOccupiedCapacity,
+    #[error("classified cell fields are inconsistent with its declared class")]
+    InvalidCellClassification,
     #[error("unrelated cell participates in channel semantics")]
     UnrelatedCellUsed,
     #[error("channel reserve is not conserved")]
@@ -107,6 +120,8 @@ pub enum MorphError {
     SpliceBaseStateMismatch,
     #[error("post-splice state does not match the splice successor context")]
     SpliceNextStateMismatch,
+    #[error("post-splice State Cell carrier capacity does not match the chain rule")]
+    SpliceCarrierCapacityMismatch,
     #[error("splice funding epoch must advance")]
     SpliceEpochNotAdvanced,
     #[error("splice vault commitment mismatch")]
@@ -154,6 +169,8 @@ pub fn validate_state_transition(
     new: &StateCell,
     ctx: &StateTransitionContext,
 ) -> Result<()> {
+    validate_state_profile(&old.header)?;
+    validate_state_profile(&new.header)?;
     if !old.capacity_sufficient() || !new.capacity_sufficient() {
         return Err(MorphError::StateCapacityInsufficient);
     }
@@ -172,6 +189,8 @@ pub fn validate_state_transition(
         return Err(MorphError::VaultOutPointBindingInvalid);
     }
     require_same_header_context(&old.header, &new.header)?;
+    validate_asset_registry_binding(&old.header, &ctx.asset_registry)?;
+    validate_asset_registry_binding(&new.header, &ctx.asset_registry)?;
     validate_state_authorization(&new.header, &ctx.authorization)?;
     if ctx.referenced_funding_anchor != new.header.funding_anchor {
         return Err(MorphError::FundingAnchorMismatch);
@@ -194,11 +213,16 @@ pub fn validate_state_authorization(
     header: &StateHeader,
     authorization: &StateAuthorization,
 ) -> Result<()> {
+    validate_state_profile(header)?;
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::UnsupportedSignatureScheme);
     }
-    if authorization.threshold == 0
-        || authorization.signatures.len() < authorization.threshold as usize
+    if authorization.threshold != BILATERAL_SIGNATURE_THRESHOLD
+        || authorization.signatures.len() != BILATERAL_SIGNATURE_COUNT as usize
+        || authorization
+            .signatures
+            .iter()
+            .any(|signature| signature.pubkey_sec1.len() != COMPRESSED_SECP256K1_PUBKEY_LEN)
     {
         return Err(MorphError::ParticipantSetMismatch);
     }
@@ -236,11 +260,22 @@ pub fn validate_state_authorization(
 
 pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     let current = &splice.current_state.header;
+    validate_state_profile(current)?;
+    validate_state_profile(&splice.next_state.header)?;
     if !splice.current_state.capacity_sufficient() {
         return Err(MorphError::StateCapacityInsufficient);
     }
     if !splice.next_state.capacity_sufficient() {
         return Err(MorphError::StateCapacityInsufficient);
+    }
+    if splice
+        .current_state
+        .capacity
+        .checked_add(STATE_CARRIER_ACTIVATION_FEE)
+        != Some(splice.next_state.capacity)
+        || splice.current_state.occupied_capacity != splice.next_state.occupied_capacity
+    {
+        return Err(MorphError::SpliceCarrierCapacityMismatch);
     }
     if current.phase != Phase::Active {
         return Err(MorphError::SpliceStateNotActive);
@@ -269,6 +304,8 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     if !state_context_matches_splice_next(current, &splice.next_state.header, &splice.header) {
         return Err(MorphError::SpliceNextStateMismatch);
     }
+    validate_asset_registry_binding(current, &splice.asset_registry)?;
+    validate_asset_registry_binding(&splice.next_state.header, &splice.asset_registry)?;
     if splice.header.new_funding_epoch <= splice.header.old_funding_epoch
         || splice.header.new_funding_anchor == splice.header.old_funding_anchor
     {
@@ -283,6 +320,14 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     }
     if splice_asset_delta_commitment(&splice.deltas) != splice.header.asset_delta_commitment {
         return Err(MorphError::SpliceDeltaCommitmentMismatch);
+    }
+    if !wire_asset_amounts_are_canonical(&splice.old_vault.assets, false)
+        || !wire_asset_amounts_are_canonical(&splice.new_vault.assets, false)
+        || !wire_asset_amounts_are_canonical(&splice.withdrawals, true)
+        || !wire_asset_amounts_are_canonical(&splice.remaining_settlement, true)
+        || !wire_splice_deltas_are_canonical(&splice.deltas)
+    {
+        return Err(MorphError::SpliceAssetDeltaInvalid);
     }
 
     validate_splice_authorization(&splice.header, &splice.witness)?;
@@ -362,10 +407,19 @@ fn state_context_matches_splice_next(
 }
 
 pub fn validate_splice_authorization(header: &SpliceHeader, witness: &SpliceWitness) -> Result<()> {
+    if header.protocol_version != MORPH_PROTOCOL_VERSION {
+        return Err(MorphError::UnsupportedProtocolProfile);
+    }
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::SpliceUnsupportedSignatureScheme);
     }
-    if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
+    if witness.threshold != SPLICE_SIGNATURE_THRESHOLD
+        || witness.signatures.len() != SPLICE_SIGNATURE_COUNT as usize
+        || witness
+            .signatures
+            .iter()
+            .any(|signature| signature.pubkey_sec1.len() != COMPRESSED_SECP256K1_PUBKEY_LEN)
+    {
         return Err(MorphError::SpliceParticipantSetMismatch);
     }
 
@@ -579,6 +633,12 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
     if factory_vault_delta_commitment(&splice.deltas) != splice.header.vault_delta_commitment {
         return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
     }
+    if !wire_asset_amounts_are_canonical(&splice.old_vault.assets, false)
+        || !wire_asset_amounts_are_canonical(&splice.new_vault.assets, false)
+        || !wire_factory_deltas_are_canonical(&splice.deltas)
+    {
+        return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+    }
     if splice.update.touched_participants.len() != 1
         || splice.update.authorised_participants.len() != 1
     {
@@ -677,6 +737,12 @@ pub fn validate_factory_reduced_splice_transition(
     if factory_vault_delta_commitment(&splice.deltas) != splice.header.vault_delta_commitment {
         return Err(MorphError::FactorySpliceDeltaCommitmentMismatch);
     }
+    if !wire_asset_amounts_are_canonical(&splice.old_vault.assets, false)
+        || !wire_asset_amounts_are_canonical(&splice.new_vault.assets, false)
+        || !wire_factory_deltas_are_canonical(&splice.deltas)
+    {
+        return Err(MorphError::FactorySpliceAssetDeltaInvalid);
+    }
 
     let old_assets = vault_amount_map(&splice.old_vault.assets)?;
     let new_assets = vault_amount_map(&splice.new_vault.assets)?;
@@ -740,12 +806,23 @@ pub fn validate_factory_reduced_splice_authorization(
     update: &FactorySingleRightMerkleUpdate,
     witness: &FactoryReducedSpliceWitness,
 ) -> Result<()> {
+    if header.protocol_version != MORPH_PROTOCOL_VERSION {
+        return Err(MorphError::UnsupportedProtocolProfile);
+    }
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if witness.participant_threshold == 0
-        || witness.participant_keys.len() < witness.participant_threshold as usize
+    if witness.participant_threshold != FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD
+        || witness.participant_keys.len() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
         || witness.signatures.is_empty()
+        || witness
+            .participant_keys
+            .iter()
+            .any(|key| key.pubkey_sec1.len() != COMPRESSED_SECP256K1_PUBKEY_LEN)
+        || witness
+            .signatures
+            .iter()
+            .any(|signature| signature.pubkey_sec1.len() != COMPRESSED_SECP256K1_PUBKEY_LEN)
     {
         return Err(MorphError::FactorySpliceParticipantSetMismatch);
     }
@@ -805,10 +882,19 @@ pub fn validate_factory_splice_authorization(
     header: &FactorySpliceHeader,
     witness: &SpliceWitness,
 ) -> Result<()> {
+    if header.protocol_version != MORPH_PROTOCOL_VERSION {
+        return Err(MorphError::UnsupportedProtocolProfile);
+    }
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if witness.threshold == 0 || witness.signatures.len() < witness.threshold as usize {
+    if witness.threshold != FACTORY_SIGNATURE_THRESHOLD
+        || witness.signatures.len() != FACTORY_SIGNATURE_COUNT as usize
+        || witness
+            .signatures
+            .iter()
+            .any(|signature| signature.pubkey_sec1.len() != COMPRESSED_SECP256K1_PUBKEY_LEN)
+    {
         return Err(MorphError::FactorySpliceParticipantSetMismatch);
     }
 
@@ -925,6 +1011,11 @@ pub fn factory_right_leaf_hash(right: &FactoryRight) -> Bytes32 {
 }
 
 pub fn validate_vault_spend(spend: &VaultSpend) -> Result<()> {
+    validate_state_profile(&spend.state_cell.header)?;
+    if spend.state_cell.header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(MorphError::UnsupportedSignatureScheme);
+    }
+    validate_asset_registry_binding(&spend.state_cell.header, &spend.asset_registry)?;
     match spend.operation {
         ChannelOperation::Finalise | ChannelOperation::Splice | ChannelOperation::Materialise => {}
         ChannelOperation::Fund | ChannelOperation::Publish | ChannelOperation::Supersede => {
@@ -963,11 +1054,7 @@ pub fn validate_partition_conservation(
         }
     }
     for cell in tx.inputs.iter().chain(tx.outputs.iter()) {
-        if matches!(cell.class, CellClass::Unrelated)
-            && (cell.read_by_channel_script || cell.contributes_to_conservation)
-        {
-            return Err(MorphError::UnrelatedCellUsed);
-        }
+        validate_classified_cell(cell)?;
     }
 
     let mut totals = PartitionTotals {
@@ -1452,6 +1539,105 @@ fn reserve_claim_asset(asset_type: &Option<Bytes32>) -> VaultAsset {
     }
 }
 
+fn validate_state_profile(header: &StateHeader) -> Result<()> {
+    if header.protocol_version != MORPH_PROTOCOL_VERSION
+        || header.state_layout_version != STATE_LAYOUT_VERSION
+        || !matches!(header.mode, Mode::BilateralPlain | Mode::FactoryProof)
+        || !matches!(
+            header.descriptor_version,
+            BILATERAL_CKB_DESCRIPTOR_VERSION | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+        )
+    {
+        return Err(MorphError::UnsupportedProtocolProfile);
+    }
+    Ok(())
+}
+
+fn validate_asset_registry_binding(header: &StateHeader, registry: &AssetRegistry) -> Result<()> {
+    if header.asset_registry_commitment != asset_registry_commitment(registry) {
+        return Err(MorphError::AssetRegistryCommitmentMismatch);
+    }
+    Ok(())
+}
+
+fn validate_classified_cell(cell: &ClassifiedCell) -> Result<()> {
+    if cell.capacity < cell.occupied_capacity {
+        return Err(MorphError::InvalidCellClassification);
+    }
+
+    let no_business_assets =
+        cell.business_ckb == 0 && cell.xudt_amount == 0 && !cell.carries_registered_xudt;
+    let shape_is_valid = match cell.class {
+        CellClass::ChannelReserve => {
+            no_business_assets
+                && cell.uses_channel_vault_lock
+                && cell.read_by_channel_script
+                && cell.contributes_to_conservation
+        }
+        CellClass::BusinessCkb => {
+            cell.business_ckb == cell.capacity - cell.occupied_capacity
+                && cell.xudt_amount == 0
+                && !cell.carries_registered_xudt
+                && cell.uses_channel_vault_lock
+                && cell.read_by_channel_script
+                && cell.contributes_to_conservation
+        }
+        CellClass::BusinessXudt(_) => {
+            cell.business_ckb == cell.capacity - cell.occupied_capacity
+                && cell.carries_registered_xudt
+                && cell.uses_channel_vault_lock
+                && cell.read_by_channel_script
+                && cell.contributes_to_conservation
+        }
+        CellClass::StateCarrier => {
+            no_business_assets
+                && !cell.uses_channel_vault_lock
+                && cell.read_by_channel_script
+                && cell.contributes_to_conservation
+        }
+        CellClass::Sponsor => {
+            if cell.carries_registered_xudt || cell.uses_channel_vault_lock {
+                return Err(MorphError::SponsorChangeContaminated);
+            }
+            no_business_assets && !cell.read_by_channel_script && !cell.contributes_to_conservation
+        }
+        CellClass::Unrelated => {
+            if cell.read_by_channel_script || cell.contributes_to_conservation {
+                return Err(MorphError::UnrelatedCellUsed);
+            }
+            no_business_assets && !cell.uses_channel_vault_lock
+        }
+    };
+    if !shape_is_valid {
+        return Err(MorphError::InvalidCellClassification);
+    }
+    Ok(())
+}
+
+fn wire_asset_amounts_are_canonical(amounts: &[VaultAssetAmount], allow_empty: bool) -> bool {
+    (allow_empty || !amounts.is_empty())
+        && amounts.len() <= 2
+        && amounts
+            .windows(2)
+            .all(|window| window[0].asset < window[1].asset)
+}
+
+fn wire_splice_deltas_are_canonical(deltas: &[SpliceAssetDelta]) -> bool {
+    !deltas.is_empty()
+        && deltas.len() <= 2
+        && deltas
+            .windows(2)
+            .all(|window| window[0].asset < window[1].asset)
+}
+
+fn wire_factory_deltas_are_canonical(deltas: &[FactoryVaultDelta]) -> bool {
+    !deltas.is_empty()
+        && deltas.len() <= 2
+        && deltas
+            .windows(2)
+            .all(|window| window[0].asset < window[1].asset)
+}
+
 fn require_same_header_context(old: &StateHeader, new: &StateHeader) -> Result<()> {
     if old.same_context_except_progress(new) {
         Ok(())
@@ -1497,6 +1683,17 @@ fn fold_cells(
             CellClass::BusinessXudt(asset_type) => {
                 if !registry.contains(asset_type) {
                     return Err(MorphError::UnregisteredXudtType);
+                }
+                if input {
+                    totals.business_ckb_in = totals
+                        .business_ckb_in
+                        .checked_add(cell.business_ckb)
+                        .ok_or(MorphError::BusinessCkbNotConserved)?;
+                } else {
+                    totals.business_ckb_out = totals
+                        .business_ckb_out
+                        .checked_add(cell.business_ckb)
+                        .ok_or(MorphError::BusinessCkbNotConserved)?;
                 }
                 let target = if input {
                     &mut totals.xudt_in

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, Read};
@@ -7685,13 +7687,15 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         mode: Mode::BilateralPlain,
         phase,
         participants_commitment: bytes32(4),
-        asset_registry_commitment: bytes32(5),
+        asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+            xudt_types: BTreeSet::from([bytes32(42)]),
+        }),
         settlement_descriptor_commitment: bytes32(6),
         descriptor_version: 1,
         vault_materialisation_root: bytes32(7),
         vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 1,
+        state_layout_version: 2,
     }
 }
 

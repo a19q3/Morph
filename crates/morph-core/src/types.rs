@@ -371,7 +371,7 @@ impl ClassifiedCell {
             class: CellClass::BusinessXudt(asset_type),
             capacity,
             occupied_capacity,
-            business_ckb: 0,
+            business_ckb: capacity.saturating_sub(occupied_capacity),
             xudt_amount: amount,
             carries_registered_xudt: true,
             uses_channel_vault_lock: true,
@@ -454,6 +454,11 @@ pub struct StateTransitionContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Host-side evidence summary for a Vault spend.
+///
+/// The boolean fields are assertions produced by transaction/witness
+/// verification at the integration boundary. This object does not replace the
+/// authoritative CKB lock-script checks.
 pub struct VaultSpend {
     pub operation: ChannelOperation,
     pub state_cell: StateCell,

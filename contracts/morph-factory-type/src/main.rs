@@ -1,5 +1,6 @@
 #![cfg_attr(target_arch = "riscv64", no_std)]
 #![cfg_attr(target_arch = "riscv64", no_main)]
+#![forbid(unsafe_code)]
 
 #[cfg(target_arch = "riscv64")]
 use ckb_std::ckb_constants::Source;
@@ -66,6 +67,7 @@ fn main() -> Result<()> {
         (None, Some(new_data)) => validate_create(&new_data, expected_factory_id)?,
         (Some(old_data), Some(new_data)) => {
             let old_header = FactoryStateHeader::parse(&old_data)?;
+            old_header.validate_profile()?;
             if old_header.factory_id() != expected_factory_id {
                 return Err(ScriptError::FactoryIdMismatch);
             }
@@ -80,6 +82,7 @@ fn main() -> Result<()> {
 #[cfg(target_arch = "riscv64")]
 fn validate_create(new_data: &[u8], expected_factory_id: &[u8]) -> Result<()> {
     let new_header = FactoryStateHeader::parse(new_data)?;
+    new_header.validate_profile()?;
     if new_header.factory_id() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
@@ -127,6 +130,7 @@ fn validate_update(
     expected_factory_id: &[u8],
 ) -> Result<()> {
     let new_header = FactoryStateHeader::parse(new_data)?;
+    new_header.validate_profile()?;
     if new_header.factory_id() != expected_factory_id {
         return Err(ScriptError::FactoryIdMismatch);
     }
@@ -452,6 +456,7 @@ fn validate_exit_materialisation(
     }
 
     let exit_header = StateHeader::parse(exit_state_header)?;
+    exit_header.validate_profile()?;
     if exit_header.state_number() != 0 || exit_header.phase() != PHASE_ACTIVE {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }

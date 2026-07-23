@@ -11,20 +11,20 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, SigningKey};
 use morph_core::{
-    Amount, Bytes32, Mode, ParticipantSignature, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind,
-    SpliceTransition, SpliceWitness, StateCell, StateHeader, VaultAsset, VaultAssetAmount,
-    VaultDescriptor, bytes32, funding_context_id, participants_commitment,
-    splice_asset_delta_commitment, validate_splice_transition, vault_descriptor_commitment,
-    vault_outpoint_commitment,
+    Amount, AssetRegistry, Bytes32, Mode, ParticipantSignature, Phase, SpliceAssetDelta,
+    SpliceHeader, SpliceKind, SpliceTransition, SpliceWitness, StateCell, StateHeader, VaultAsset,
+    VaultAssetAmount, VaultDescriptor, asset_registry_commitment, bytes32, funding_context_id,
+    participants_commitment, splice_asset_delta_commitment, validate_splice_transition,
+    vault_descriptor_commitment, vault_outpoint_commitment,
 };
 use morph_script_common::{
     COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, SPLICE_ASSET_DELTA_LEN,
     SPLICE_ASSET_DELTAS_LEN, SPLICE_HEADER_LEN, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
     SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
     SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
-    SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, STATE_HEADER_LEN,
-    SpliceStateTransitionWitness, StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
-    encode_state_header,
+    SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, STATE_CARRIER_ACTIVATION_FEE,
+    STATE_HEADER_LEN, STATE_LAYOUT_VERSION, SpliceStateTransitionWitness, StateHeaderInput,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, encode_state_header,
 };
 use serde::{Deserialize, Serialize};
 
@@ -537,6 +537,10 @@ impl StoredSplicePackage {
         next_state.header.vault_set_commitment = header.new_vault_commitment;
         next_state.header.vault_materialisation_root = header.new_vault_materialisation_root;
         next_state.header.vault_outpoint_commitment = header.new_vault_outpoint_commitment;
+        next_state.capacity = next_state
+            .capacity
+            .checked_add(STATE_CARRIER_ACTIVATION_FEE)
+            .ok_or_else(|| anyhow!("post-splice State Cell capacity overflow"))?;
         Ok(SpliceTransition {
             current_state,
             next_state,
@@ -854,19 +858,32 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
             mode: Mode::BilateralPlain,
             phase: Phase::Active,
             participants_commitment,
-            asset_registry_commitment: bytes32(4),
+            asset_registry_commitment: asset_registry_commitment(&AssetRegistry {
+                xudt_types: BTreeSet::new(),
+            }),
             settlement_descriptor_commitment: bytes32(5),
             descriptor_version: 1,
             vault_materialisation_root: bytes32(6),
             vault_outpoint_commitment: vault_outpoint_commitment(&bytes32(91), 1),
             challenge_policy_commitment: bytes32(8),
-            state_layout_version: 1,
+            state_layout_version: STATE_LAYOUT_VERSION,
         },
         capacity: 10_000,
         occupied_capacity: 1_000,
     };
     let (kind_label, header_kind, old_vault, new_vault, deltas, withdrawals, remaining_settlement) =
         fixture_splice_parts(kind);
+    current_state.header.asset_registry_commitment = asset_registry_commitment(&AssetRegistry {
+        xudt_types: old_vault
+            .assets
+            .iter()
+            .chain(&new_vault.assets)
+            .filter_map(|amount| match &amount.asset {
+                VaultAsset::Ckb => None,
+                VaultAsset::Xudt(type_hash) => Some(*type_hash),
+            })
+            .collect(),
+    });
     current_state.header.vault_set_commitment = vault_descriptor_commitment(&old_vault);
     let header = SpliceHeader {
         protocol_version: 1,
@@ -1300,7 +1317,7 @@ fn state_header_wire_bytes(header: &StateHeader) -> Result<[u8; STATE_HEADER_LEN
         vault_materialisation_root: header.vault_materialisation_root,
         vault_outpoint_commitment: header.vault_outpoint_commitment,
         challenge_policy_commitment: header.challenge_policy_commitment,
-        state_layout_version: 2,
+        state_layout_version: STATE_LAYOUT_VERSION,
     }))
 }
 
