@@ -6,6 +6,8 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
 
 [dependencies]
 ckb-hash.workspace = true

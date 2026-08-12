@@ -37,9 +37,9 @@ use morph_script_common::{
     SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
     SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
     SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN,
-    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, SpliceAssetDeltas, SpliceHeader,
-    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader, StateHeaderInput,
-    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, STATE_MODE_FACTORY_PROOF, SpliceAssetDeltas,
+    SpliceHeader, SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
+    StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
@@ -159,6 +159,17 @@ fn state_args(finalise_since: u64) -> Vec<u8> {
 
 fn state_args_with_anchor(anchor: [u8; 32], finalise_since: u64) -> Vec<u8> {
     let mut args = anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    args
+}
+
+fn factory_state_args_with_anchor(
+    anchor: [u8; 32],
+    factory_type_hash: [u8; 32],
+    finalise_since: u64,
+) -> Vec<u8> {
+    let mut args = anchor.to_vec();
+    args.extend_from_slice(&factory_type_hash);
     args.extend_from_slice(&finalise_since.to_le_bytes());
     args
 }
@@ -2700,6 +2711,7 @@ enum VaultXudtSettlementTamper {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FactoryXudtExitTamper {
     None,
+    StateFactoryTypeHashMismatch,
     ChildAmountMinusOneWithConservedSupply,
     ChildTypeMismatchWithAuthorisedMint,
     FactoryVaultInputTypeMismatch,
@@ -4656,7 +4668,7 @@ fn factory_type_and_vault_accept_reduced_exit_reserve_release() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, relative_since(0)),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -4836,7 +4848,7 @@ fn factory_type_rejects_reduced_exit_typed_claim_for_ckb_release() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, relative_since(0)),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -5188,7 +5200,7 @@ fn factory_reduced_xudt_exit_tx(
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, relative_since(0)),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -5414,7 +5426,7 @@ fn factory_type_and_vault_accept_local_exit_materialisation() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, relative_since(0)),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -5651,7 +5663,7 @@ fn factory_vault_rejects_local_exit_ckb_typed_factory_vault_input() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, relative_since(0)),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -5764,6 +5776,14 @@ fn factory_type_and_vault_accept_local_exit_xudt_materialisation() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn state_type_rejects_factory_exit_without_bound_factory_authority() {
+    let (context, tx) =
+        factory_xudt_local_exit_tx(FactoryXudtExitTamper::StateFactoryTypeHashMismatch);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_rejects_local_exit_xudt_amount_mismatch() {
     let (context, tx) =
         factory_xudt_local_exit_tx(FactoryXudtExitTamper::ChildAmountMinusOneWithConservedSupply);
@@ -5854,6 +5874,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         | FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => Some(xudt_type.clone()),
         FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
         | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
+        | FactoryXudtExitTamper::StateFactoryTypeHashMismatch
         | FactoryXudtExitTamper::None => None,
     };
     let factory_vault_change_data = match tamper {
@@ -5864,6 +5885,7 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
         FactoryXudtExitTamper::FactoryVaultChangeAmountMismatch => xudt_amount_data(2),
         FactoryXudtExitTamper::FactoryVaultChangeMissingOnPartial
         | FactoryXudtExitTamper::FactoryVaultInputTypeMismatch
+        | FactoryXudtExitTamper::StateFactoryTypeHashMismatch
         | FactoryXudtExitTamper::None => Bytes::new(),
     };
     let factory_vault_input_capacity = 300_000_000_000u64;
@@ -5929,7 +5951,15 @@ fn factory_xudt_local_exit_tx(tamper: FactoryXudtExitTamper) -> (Context, Transa
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, relative_since(0)),
+        factory_state_args_with_anchor(
+            child_anchor,
+            if tamper == FactoryXudtExitTamper::StateFactoryTypeHashMismatch {
+                [0xee; 32]
+            } else {
+                factory_type_hash
+            },
+            relative_since(0),
+        ),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -6060,6 +6090,7 @@ fn factory_type_rejects_local_exit_digest_mismatch() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
     let descriptor = descriptor_bytes([1u8; 32], ALICE_CAPACITY, [2u8; 32], BOB_CAPACITY);
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
@@ -6079,7 +6110,7 @@ fn factory_type_rejects_local_exit_digest_mismatch() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, 0),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, 0),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -6153,6 +6184,7 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let factory_type_hash: [u8; 32] = factory_type.calc_script_hash().unpack();
     let descriptor = descriptor_bytes([1u8; 32], ALICE_CAPACITY, [2u8; 32], BOB_CAPACITY);
     let state_output_index = 1u32;
     let vault_output_index = 2u32;
@@ -6172,7 +6204,7 @@ fn factory_type_rejects_local_exit_state_lock_mismatch() {
     let state_type = deploy_contract(
         &mut context,
         "morph-state-type",
-        state_args_with_anchor(child_anchor, 0),
+        factory_state_args_with_anchor(child_anchor, factory_type_hash, 0),
     );
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
@@ -6576,6 +6608,91 @@ fn vault_lock_accepts_finalise_with_current_state() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("vault finalise should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_accepts_factory_materialised_state_finalise() {
+    let mut context = Context::default();
+    let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
+    let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
+    let descriptor = descriptor_bytes(
+        alice_lock.calc_script_hash().unpack(),
+        ALICE_CAPACITY,
+        bob_lock.calc_script_hash().unpack(),
+        BOB_CAPACITY,
+    );
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
+    let finalise_since = relative_since(0);
+    let state_type = deploy_contract(
+        &mut context,
+        "morph-state-type",
+        factory_state_args_with_anchor(FUNDING_ANCHOR, [0x44; 32], finalise_since),
+    );
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
+    let vault_lock = deploy_contract(
+        &mut context,
+        "morph-vault-lock",
+        vault_args(FUNDING_ANCHOR, finalise_since, &state_type, &state_lock),
+    );
+    let mut state_data = header_raw(3, PHASE_SETTLING);
+    state_data[148] = STATE_MODE_FACTORY_PROOF;
+    state_data[214..246].copy_from_slice(&descriptor_commitment);
+    set_state_vault_materialisation_root(
+        &mut state_data,
+        vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
+    );
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock)
+            .type_(Some(state_type).pack())
+            .build(),
+        Bytes::from(state_data.to_vec()),
+    );
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .since(finalise_since)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(ALICE_CAPACITY)
+                .lock(alice_lock)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(BOB_CAPACITY)
+                .lock(bob_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(descriptor))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("factory-materialised vault finalise should verify");
 }
 
 #[ignore = "requires `make build-contracts`"]

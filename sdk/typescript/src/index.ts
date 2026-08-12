@@ -89,12 +89,20 @@ export class MorphAgentError extends Error {
 /** Browser/Node client for the standalone Morph Agent HTTP API. */
 export class MorphAgentClient {
   private readonly baseUrl: URL;
+  private readonly apiBearerToken: string | undefined;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: { apiBearerToken?: string } = {}) {
     this.baseUrl = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
-    if (this.baseUrl.protocol !== "http:" && this.baseUrl.protocol !== "https:") {
-      throw new TypeError("Morph Agent URL must use HTTP or HTTPS");
+    if (
+      this.baseUrl.protocol !== "https:"
+      && !(this.baseUrl.protocol === "http:" && isLoopbackHostname(this.baseUrl.hostname))
+    ) {
+      throw new TypeError("Morph Agent URL must use HTTPS unless it is loopback HTTP");
     }
+    if (options.apiBearerToken !== undefined && options.apiBearerToken.length < 32) {
+      throw new TypeError("Morph Agent API bearer token must contain at least 32 bytes");
+    }
+    this.apiBearerToken = options.apiBearerToken;
   }
 
   supported(): Promise<Record<string, unknown>> {
@@ -126,7 +134,7 @@ export class MorphAgentClient {
   }): Promise<PaymentRequirements> {
     const response = await fetch(new URL("v1/x402/challenge", this.baseUrl), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.headers(true),
       body: JSON.stringify(input),
       redirect: "error",
     });
@@ -205,10 +213,10 @@ export class MorphAgentClient {
 
   private async request<T>(path: string, body?: unknown): Promise<T> {
     const init: RequestInit = body === undefined
-      ? { method: "GET", redirect: "error" }
+      ? { method: "GET", headers: this.headers(false), redirect: "error" }
       : {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: this.headers(true),
         body: JSON.stringify(body),
         redirect: "error",
       };
@@ -222,6 +230,24 @@ export class MorphAgentClient {
     }
     return value as T;
   }
+
+  private headers(json: boolean): Record<string, string> {
+    return {
+      ...(json ? { "content-type": "application/json" } : {}),
+      ...(this.apiBearerToken === undefined
+        ? {}
+        : { authorization: `Bearer ${this.apiBearerToken}` }),
+    };
+  }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host === "[::1]" || host === "::1") return true;
+  const octets = host.split(".");
+  return octets.length === 4
+    && octets[0] === "127"
+    && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255);
 }
 
 export interface X402SettleRequest {

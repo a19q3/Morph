@@ -6,12 +6,13 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
 
 [dependencies]
 ckb-std.workspace = true
-morph-script-common = { path = "../morph-script-common" }
+morph-script-common = { version = "0.1.0", path = "../morph-script-common" }
 
 [[bin]]
 name = "morph-vault-lock"
 path = "src/main.rs"
-

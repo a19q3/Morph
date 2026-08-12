@@ -221,6 +221,15 @@ events; token-protected sessions use authenticated short polling so the bearer
 token is never placed in an event-stream URL. When the API requires a token, the
 UI accepts it at runtime and stores it only in the browser session.
 
+The experimental `morph-agent` also defaults to a local-only trust boundary.
+Plain HTTP is accepted only for loopback Agent, Fiber RPC, callback, and fixed
+Gateway endpoints; remote endpoints must use HTTPS. A non-loopback Agent
+listener additionally requires `--api-bearer-token` or
+`MORPH_AGENT_API_BEARER_TOKEN` with at least 32 bytes. That token protects
+durable challenge/offer creation and the redacted payment index, and is
+supported by both native SDKs. Keep Fiber and Agent bearer tokens out of URLs,
+logs, and shell history.
+
 With a local CKB devnet node running through `scripts/devnet-node.sh`:
 
 ```sh

@@ -6,12 +6,14 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+description.workspace = true
+readme.workspace = true
 
 [dependencies]
 blake2b-rs.workspace = true
 hex.workspace = true
 k256.workspace = true
-morph-script-common = { path = "../../contracts/morph-script-common" }
+morph-script-common = { version = "0.1.0", path = "../../contracts/morph-script-common" }
 serde.workspace = true
 thiserror.workspace = true
 

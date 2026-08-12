@@ -8,6 +8,8 @@ use reqwest::{Client, Url, header};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::http_safety::{is_secure_service_url, read_response_limited};
+
 const MAX_RPC_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Error)]
@@ -41,7 +43,7 @@ pub struct FiberRpcClient {
 impl FiberRpcClient {
     pub fn new(url: &str, bearer_token: Option<String>) -> Result<Self, FiberRpcError> {
         let url = Url::parse(url).map_err(|_| FiberRpcError::InvalidUrl)?;
-        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        if !is_secure_service_url(&url) {
             return Err(FiberRpcError::InvalidUrl);
         }
         let client = Client::builder()
@@ -77,19 +79,10 @@ impl FiberRpcClient {
         if !response.status().is_success() {
             return Err(FiberRpcError::Http(response.status().as_u16()));
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_RPC_RESPONSE_BYTES as u64)
-        {
-            return Err(FiberRpcError::ResponseTooLarge);
-        }
-        let bytes = response
-            .bytes()
+        let bytes = read_response_limited(response, MAX_RPC_RESPONSE_BYTES)
             .await
-            .map_err(|error| FiberRpcError::Transport(error.to_string()))?;
-        if bytes.len() > MAX_RPC_RESPONSE_BYTES {
-            return Err(FiberRpcError::ResponseTooLarge);
-        }
+            .map_err(|error| FiberRpcError::Transport(error.to_string()))?
+            .ok_or(FiberRpcError::ResponseTooLarge)?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| FiberRpcError::MalformedResponse)?;
         if value.get("id") != Some(&json!(id)) || value.get("jsonrpc") != Some(&json!("2.0")) {
@@ -185,5 +178,26 @@ mod tests {
         assert!(!invoice_is_paid(&json!({"status": "Received"})));
         assert!(payment_is_success(&json!({"status": "Success"})));
         assert!(!payment_is_success(&json!({"status": "Inflight"})));
+    }
+
+    #[test]
+    fn client_requires_tls_for_non_loopback_fiber_rpc() {
+        for accepted in [
+            "http://localhost:8227",
+            "http://127.0.0.1:8227",
+            "http://[::1]:8227",
+            "https://fiber.example.com",
+        ] {
+            assert!(FiberRpcClient::new(accepted, None).is_ok(), "{accepted}");
+        }
+        for rejected in ["http://example.com", "http://10.0.0.8:8227"] {
+            assert!(
+                matches!(
+                    FiberRpcClient::new(rejected, None),
+                    Err(FiberRpcError::InvalidUrl)
+                ),
+                "{rejected}"
+            );
+        }
     }
 }

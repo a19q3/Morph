@@ -17,6 +17,50 @@ revalidation, operational readiness sign-off, and value-limit policy.
 
 Implementation safety-boundary baseline: `8944bf7`.
 
+## Factory-materialised State authority binding (2026-08-13)
+
+- Issue: a FactoryProof State creation parsed the Factory exit envelope from
+  input zero but did not bind that carrier to the exact FactoryType script
+  authorised by the child transaction.
+- Fix: FactoryProof StateType args now commit the 32-byte FactoryType script
+  hash between the funding anchor and optional relative `since`. Creation
+  rejects bilateral witnesses with Factory args, rejects Factory witnesses
+  without those args, and requires input zero's Type Script hash to match the
+  committed FactoryType identity before accepting the materialised child.
+- Negative test:
+  `state_type_rejects_factory_exit_without_bound_factory_authority`.
+- Compatibility: bilateral StateType args remain 32 or 40 bytes. Factory child
+  args are 64 or 72 bytes and therefore intentionally produce new StateType
+  script hashes; pre-fix devnet factory children must be recreated.
+
+## Agent and remote HTTP boundaries (2026-08-13)
+
+- Issue: Agent/Fiber/Gateway/hook clients admitted remote cleartext HTTP,
+  response limits were applied only after whole-body buffering, durable public
+  challenge and offer creation was unbounded, and the payment index exposed
+  raw provider metadata.
+- Fix: remote service URLs require HTTPS while loopback HTTP remains available
+  for local devnet. Response readers enforce limits incrementally. Non-loopback
+  Agent listeners require a minimum-length API bearer token; the token gates
+  durable creation and operator-observability routes. Transient records have
+  count and serialized-size reserves, expired records are pruned, creation is
+  rate limited, raw payment metadata is size bounded, and the public response
+  is a redacted projection.
+- Tests: `plaintext_http_is_loopback_only`,
+  `chunked_response_is_rejected_as_soon_as_the_limit_is_crossed`,
+  `outstanding_challenge_quota_rejects_without_corrupting_existing_state`,
+  `payment_index_requires_auth_and_redacts_raw_fiber_metadata`, and the
+  Agent/Fiber/hook TLS constructor tests.
+
+## Watchtower alert egress and file privacy (2026-08-13)
+
+- Issue: a validated webhook could redirect to an unvalidated destination and
+  JSONL alert files inherited ambient process permissions.
+- Fix: webhook redirects are disabled, including for loopback development
+  URLs. On Unix, alert files are created and tightened to mode `0600` on every
+  append.
+- Tests: `webhook_does_not_follow_redirects` and `appends_jsonl_alerts`.
+
 ## Post-baseline sovereign Factory hardening (2026-07-22)
 
 - Issue: the devnet transaction layer placed FactoryStateCells under an

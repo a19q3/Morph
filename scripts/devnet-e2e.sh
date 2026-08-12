@@ -20,6 +20,10 @@ MINE_BLOCKS="${MINE_BLOCKS:-4}"
 BUDGET_PROFILE="${BUDGET_PROFILE:-docs/devnet-smoke-budget.example.json}"
 BUILD_CONTRACTS="${BUILD_CONTRACTS:-1}"
 KEEP_NODE="${KEEP_NODE:-0}"
+FIBER_DIR="${FIBER_DIR:-$ROOT_DIR/../fiber}"
+MORPH_E2E_DEPLOYER_KEY_FILE="${MORPH_E2E_DEPLOYER_KEY_FILE:-$FIBER_DIR/tests/nodes/deployer/ckb/plain_key}"
+MORPH_E2E_ALICE_KEY_FILE="${MORPH_E2E_ALICE_KEY_FILE:-$FIBER_DIR/tests/nodes/1/ckb/plain_key}"
+MORPH_E2E_BOB_KEY_FILE="${MORPH_E2E_BOB_KEY_FILE:-$FIBER_DIR/tests/nodes/2/ckb/plain_key}"
 CKB_NODE_PID=""
 
 log() {
@@ -36,6 +40,26 @@ require_tool() {
   if ! command -v "$name" >/dev/null 2>&1; then
     fail "missing required tool: $name"
   fi
+}
+
+load_devnet_fixture_key() {
+  local variable="$1"
+  local path="$2"
+  local label="$3"
+  local current="${!variable:-}"
+  if [ -n "$current" ]; then
+    [[ "$current" =~ ^(0x)?[0-9a-fA-F]{64}$ ]] ||
+      fail "$variable must contain exactly one 32-byte secp256k1 key"
+    return
+  fi
+  [ -f "$path" ] ||
+    fail "missing $label devnet fixture key: set $variable or provide $path"
+  local loaded
+  loaded="$(tr -d '\r\n' <"$path")"
+  [[ "$loaded" =~ ^(0x)?[0-9a-fA-F]{64}$ ]] ||
+    fail "$label devnet fixture key file must contain exactly one 32-byte secp256k1 key: $path"
+  printf -v "$variable" '%s' "$loaded"
+  export "$variable"
 }
 
 resolve_ckb_bin() {
@@ -114,6 +138,9 @@ trap stop_node EXIT
 
 require_tool jq
 require_tool curl
+load_devnet_fixture_key MORPH_DEVNET_PRIVATE_KEY "$MORPH_E2E_DEPLOYER_KEY_FILE" deployer
+load_devnet_fixture_key MORPH_ALICE_PRIVATE_KEY "$MORPH_E2E_ALICE_KEY_FILE" Alice
+load_devnet_fixture_key MORPH_BOB_PRIVATE_KEY "$MORPH_E2E_BOB_KEY_FILE" Bob
 resolve_ckb_bin
 
 if [ -e "$CKB_DIR" ]; then
@@ -144,6 +171,9 @@ out_dir=$OUT_DIR
 mine_blocks=$MINE_BLOCKS
 budget_profile=$BUDGET_PROFILE
 build_contracts=$BUILD_CONTRACTS
+morph_e2e_deployer_key_file=$MORPH_E2E_DEPLOYER_KEY_FILE
+morph_e2e_alice_key_file=$MORPH_E2E_ALICE_KEY_FILE
+morph_e2e_bob_key_file=$MORPH_E2E_BOB_KEY_FILE
 local_cargo_tests=skipped
 EOF
 

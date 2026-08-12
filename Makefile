@@ -9,8 +9,13 @@ DENY ?= cargo deny
 # - memmap2 0.5 is confined to ckb-testtool -> cacache in the test graph.
 # - proc-macro-error2 is compile-time-only through biscuit-auth's required
 #   datalog macro feature.
+# - lru 0.7 is test-only through ckb-testtool -> ckb-verification. The affected
+#   cache key is CKB Byte32 (no panicking Drop), so the advisory's required
+#   panic-unwind/catch-unwind trigger is absent. ckb-verification 1.2 removes
+#   this line but requires Rust 1.95; remove the waiver when CKB supports the
+#   workspace's pinned Rust release.
 # Remove each waiver as soon as its upstream dependency path is upgraded.
-AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0186 --ignore RUSTSEC-2026-0173
+AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0186 --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2026-0253
 
 .PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 

@@ -27,6 +27,15 @@ jobs:
           components: clippy,rustfmt
           targets: riscv64imac-unknown-none-elf
 
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            sdk/typescript/package-lock.json
+            ui/morph-hub/package-lock.json
+
       - name: Cache cargo build outputs
         uses: Swatinem/rust-cache@v2
 
@@ -47,6 +56,12 @@ jobs:
 
       - name: Run fixture checks
         run: make fixture-checks
+
+      - name: Check TypeScript SDK
+        run: make sdk-check
+
+      - name: Check Morph Hub UI
+        run: make hub-ui-check
 
       - name: Run contract tests
         run: make contract-tests

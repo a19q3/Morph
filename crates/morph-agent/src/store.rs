@@ -22,6 +22,12 @@ use crate::{
 const STORE_MAGIC: &[u8; 8] = b"MORPHAG1";
 const STORE_SCHEMA_VERSION: u32 = 2;
 const MAX_STORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_TRANSIENT_STORE_BYTES: usize = 48 * 1024 * 1024;
+const MAX_OUTSTANDING_CHALLENGES: usize = 2_048;
+const MAX_STORED_OFFERS: usize = 24;
+const MAX_SETTLED_RECEIPTS: usize = 2_048;
+const MAX_TRACKED_PAYMENTS: usize = 256;
+const MAX_TRACKED_PAYMENT_JSON_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -35,6 +41,8 @@ pub enum StoreError {
     LockPoisoned,
     #[error("record already exists with different content")]
     Conflict,
+    #[error("agent store reached a configured record or reserve limit")]
+    CapacityExceeded,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,18 +130,28 @@ impl DurableStore {
     }
 
     pub fn insert_challenge(&self, record: ChallengeRecord) -> Result<(), StoreError> {
-        self.mutate(
-            |state| match state.challenges.get(&record.requirement.requirement_id) {
+        self.mutate(|state| {
+            prune_expired_transient_records(state, record.created_at);
+            match state.challenges.get(&record.requirement.requirement_id) {
                 Some(existing) if existing != &record => Err(StoreError::Conflict),
                 Some(_) => Ok(()),
                 None => {
+                    let outstanding = state
+                        .challenges
+                        .keys()
+                        .filter(|requirement_id| !state.receipts.contains_key(*requirement_id))
+                        .count();
+                    if outstanding >= MAX_OUTSTANDING_CHALLENGES {
+                        return Err(StoreError::CapacityExceeded);
+                    }
                     state
                         .challenges
                         .insert(record.requirement.requirement_id.clone(), record);
+                    ensure_transient_reserve(state)?;
                     Ok(())
                 }
-            },
-        )
+            }
+        })
     }
 
     pub fn challenge(&self, requirement_id: &str) -> Result<Option<ChallengeRecord>, StoreError> {
@@ -141,12 +159,19 @@ impl DurableStore {
     }
 
     pub fn insert_offer(&self, offer: StoredOffer) -> Result<(), StoreError> {
-        self.mutate(|state| match state.offers.get(&offer.envelope.offer_id) {
-            Some(existing) if existing != &offer => Err(StoreError::Conflict),
-            Some(_) => Ok(()),
-            None => {
-                state.offers.insert(offer.envelope.offer_id.clone(), offer);
-                Ok(())
+        self.mutate(|state| {
+            prune_expired_transient_records(state, unix_time_seconds());
+            match state.offers.get(&offer.envelope.offer_id) {
+                Some(existing) if existing != &offer => Err(StoreError::Conflict),
+                Some(_) => Ok(()),
+                None => {
+                    if state.offers.len() >= MAX_STORED_OFFERS {
+                        return Err(StoreError::CapacityExceeded);
+                    }
+                    state.offers.insert(offer.envelope.offer_id.clone(), offer);
+                    ensure_transient_reserve(state)?;
+                    Ok(())
+                }
             }
         })
     }
@@ -156,8 +181,30 @@ impl DurableStore {
     }
 
     pub fn record_payment(&self, payment: TrackedPayment) -> Result<(), StoreError> {
+        if serde_json::to_vec(&payment.fiber_result)
+            .map_err(|_| StoreError::Corrupt)?
+            .len()
+            > MAX_TRACKED_PAYMENT_JSON_BYTES
+        {
+            return Err(StoreError::CapacityExceeded);
+        }
         self.mutate(|state| {
             state.payments.insert(payment.payment_hash.clone(), payment);
+            while state.payments.len() > MAX_TRACKED_PAYMENTS {
+                let oldest = state
+                    .payments
+                    .iter()
+                    .min_by(|left, right| {
+                        left.1
+                            .updated_at
+                            .cmp(&right.1.updated_at)
+                            .then_with(|| left.0.cmp(right.0))
+                    })
+                    .map(|(payment_hash, _)| payment_hash.clone())
+                    .ok_or(StoreError::Corrupt)?;
+                state.payments.remove(&oldest);
+            }
+            ensure_transient_reserve(state)?;
             Ok(())
         })
     }
@@ -202,6 +249,9 @@ impl DurableStore {
             }
             if !state.challenges.contains_key(&receipt.requirement_id) {
                 return Err(StoreError::Conflict);
+            }
+            if state.receipts.len() >= MAX_SETTLED_RECEIPTS {
+                return Err(StoreError::CapacityExceeded);
             }
             state
                 .consumed_requirements
@@ -283,6 +333,51 @@ impl DurableStore {
     }
 }
 
+fn prune_expired_transient_records(state: &mut PersistedState, now: u64) {
+    state.challenges.retain(|requirement_id, challenge| {
+        challenge.requirement.expires_at > now || state.receipts.contains_key(requirement_id)
+    });
+    let receipts = &state.receipts;
+    state.offers.retain(|_, offer| {
+        let credential_expires_at = receipts
+            .get(&offer.envelope.requirement.requirement_id)
+            .map(|receipt| receipt.credential_expires_at);
+        transient_offer_is_live(
+            offer.envelope.requirement.expires_at,
+            credential_expires_at,
+            now,
+        )
+    });
+    state
+        .consumed_requirements
+        .retain(|requirement_id| state.receipts.contains_key(requirement_id));
+}
+
+fn transient_offer_is_live(
+    requirement_expires_at: u64,
+    credential_expires_at: Option<u64>,
+    now: u64,
+) -> bool {
+    requirement_expires_at > now || credential_expires_at.is_some_and(|expiry| expiry > now)
+}
+
+fn ensure_transient_reserve(state: &PersistedState) -> Result<(), StoreError> {
+    let length = serde_json::to_vec(state)
+        .map_err(|_| StoreError::Corrupt)?
+        .len();
+    if length > MAX_TRANSIENT_STORE_BYTES {
+        Err(StoreError::CapacityExceeded)
+    } else {
+        Ok(())
+    }
+}
+
+fn unix_time_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
 fn read_state(path: &Path, key: &[u8; 32]) -> Result<PersistedState, StoreError> {
     let metadata = fs::metadata(path).map_err(io_error)?;
     let header_len = (STORE_MAGIC.len() + AES_GCM_NONCE_LEN) as u64;
@@ -351,6 +446,16 @@ mod tests {
         }
     }
 
+    fn challenge_with_tag(tag: u64, created_at: u64, expires_at: u64) -> ChallengeRecord {
+        let mut record = challenge();
+        record.requirement.requirement_id = format!("0x{tag:064x}");
+        record.requirement.payment_hash = format!("0x{:064x}", tag + 1);
+        record.requirement.nonce = format!("0x{:064x}", tag + 2);
+        record.requirement.expires_at = expires_at;
+        record.created_at = created_at;
+        record
+    }
+
     #[test]
     fn store_is_encrypted_and_survives_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -378,5 +483,76 @@ mod tests {
             DurableStore::open(&path, [8_u8; 32]),
             Err(StoreError::Corrupt)
         ));
+    }
+
+    #[test]
+    fn expired_transient_records_are_pruned_before_capacity_checks() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DurableStore::open(dir.path().join("agent.db"), [9_u8; 32]).unwrap();
+        let expired = challenge_with_tag(1, 10, 20);
+        store.insert_challenge(expired.clone()).unwrap();
+        store
+            .insert_challenge(challenge_with_tag(2, 21, u64::MAX))
+            .unwrap();
+        assert!(
+            store
+                .challenge(&expired.requirement.requirement_id)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn settled_offer_retention_ends_with_its_credential() {
+        assert!(transient_offer_is_live(20, Some(40), 30));
+        assert!(!transient_offer_is_live(20, Some(30), 30));
+        assert!(!transient_offer_is_live(20, None, 30));
+    }
+
+    #[test]
+    fn outstanding_challenge_quota_rejects_without_corrupting_existing_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DurableStore::open(dir.path().join("agent.db"), [9_u8; 32]).unwrap();
+        store
+            .mutate(|state| {
+                for tag in 0..MAX_OUTSTANDING_CHALLENGES as u64 {
+                    let record = challenge_with_tag(tag, 1, u64::MAX);
+                    state
+                        .challenges
+                        .insert(record.requirement.requirement_id.clone(), record);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let rejected = challenge_with_tag(MAX_OUTSTANDING_CHALLENGES as u64 + 10, 1, u64::MAX);
+        assert!(matches!(
+            store.insert_challenge(rejected.clone()),
+            Err(StoreError::CapacityExceeded)
+        ));
+        assert!(
+            store
+                .challenge(&rejected.requirement.requirement_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.challenge(&format!("0x{:064x}", 0)).unwrap().is_some());
+    }
+
+    #[test]
+    fn oversized_raw_payment_metadata_is_not_persisted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DurableStore::open(dir.path().join("agent.db"), [9_u8; 32]).unwrap();
+        let result = store.record_payment(TrackedPayment {
+            payment_hash: format!("0x{}", "12".repeat(32)),
+            requirement_id: format!("0x{}", "13".repeat(32)),
+            direction: PaymentDirection::Incoming,
+            status: "Paid".to_string(),
+            updated_at: 1,
+            fiber_result: serde_json::json!({
+                "oversized": "x".repeat(MAX_TRACKED_PAYMENT_JSON_BYTES)
+            }),
+        });
+        assert!(matches!(result, Err(StoreError::CapacityExceeded)));
+        assert!(store.payments(10).unwrap().is_empty());
     }
 }

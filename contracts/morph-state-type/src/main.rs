@@ -51,21 +51,28 @@ fn main() {}
 fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
-    if args.len() != BYTE32_LEN && args.len() != BYTE32_LEN + 8 {
-        return Err(ScriptError::WrongArgsLength);
-    }
-    let expected_funding_anchor = &args.as_ref()[..BYTE32_LEN];
-    let finalise_since = if args.len() == BYTE32_LEN + 8 {
-        Some(read_u64(args.as_ref(), BYTE32_LEN))
-    } else {
-        None
+    let (expected_factory_type_hash, finalise_since) = match args.len() {
+        len if len == BYTE32_LEN => (None, None),
+        len if len == BYTE32_LEN + 8 => (None, Some(read_u64(args.as_ref(), BYTE32_LEN))),
+        len if len == 2 * BYTE32_LEN => (Some(&args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN]), None),
+        len if len == 2 * BYTE32_LEN + 8 => (
+            Some(&args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN]),
+            Some(read_u64(args.as_ref(), 2 * BYTE32_LEN)),
+        ),
+        _ => return Err(ScriptError::WrongArgsLength),
     };
+    let expected_funding_anchor = &args.as_ref()[..BYTE32_LEN];
 
     match (
         zero_or_one_group_cell_data(Source::GroupInput)?,
         zero_or_one_group_cell_data(Source::GroupOutput)?,
     ) {
-        (None, Some(new_data)) => validate_create(&script, &new_data, expected_funding_anchor)?,
+        (None, Some(new_data)) => validate_create(
+            &script,
+            &new_data,
+            expected_funding_anchor,
+            expected_factory_type_hash,
+        )?,
         (Some(old_data), Some(new_data)) => {
             let old_header = StateHeader::parse(&old_data)?;
             old_header.validate_profile()?;
@@ -97,6 +104,7 @@ fn validate_create(
     current_script: &ckb_std::ckb_types::packed::Script,
     new_data: &[u8],
     expected_funding_anchor: &[u8],
+    expected_factory_type_hash: Option<&[u8]>,
 ) -> Result<()> {
     let new_header = StateHeader::parse(new_data)?;
     new_header.validate_profile()?;
@@ -119,7 +127,7 @@ fn validate_create(
         return Ok(());
     }
     validate_anchor_derivation(expected_funding_anchor)?;
-    validate_initial_authorisation(new_data, &new_header)?;
+    validate_initial_authorisation(new_data, &new_header, expected_factory_type_hash)?;
     find_unique_output_by_vault_commitment(new_header.vault_materialisation_root())?;
     validate_group_output_capacity()
 }
@@ -404,7 +412,11 @@ fn validate_participant_authorisation(header: &StateHeader) -> Result<()> {
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Result<()> {
+fn validate_initial_authorisation(
+    new_data: &[u8],
+    header: &StateHeader,
+    expected_factory_type_hash: Option<&[u8]>,
+) -> Result<()> {
     // A newly-created type-script group has no GroupInput. Input zero carries
     // either direct bilateral consent or the Factory exit that materialises
     // this exact child State output.
@@ -417,6 +429,9 @@ fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Resu
     let raw = input_type.raw_data();
     match header.mode() {
         STATE_MODE_BILATERAL_PLAINTEXT => {
+            if expected_factory_type_hash.is_some() {
+                return Err(ScriptError::HeaderContextChanged);
+            }
             if raw.len() != BILATERAL_SIGNATURE_WITNESS_LEN {
                 return Err(ScriptError::ParticipantWitnessEncoding);
             }
@@ -424,6 +439,8 @@ fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Resu
             verify_bilateral_state_signatures(header, &witness)
         }
         STATE_MODE_FACTORY_PROOF => {
+            let factory_type_hash =
+                expected_factory_type_hash.ok_or(ScriptError::FactoryLocalExitMismatch)?;
             let envelope = WitnessEnvelope::parse(raw.as_ref())?;
             match envelope.kind() {
                 WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
@@ -433,6 +450,7 @@ fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Resu
                         witness.state_type_hash(),
                         witness.exit_state_header(),
                         new_data,
+                        factory_type_hash,
                     )
                 }
                 WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
@@ -442,6 +460,7 @@ fn validate_initial_authorisation(new_data: &[u8], header: &StateHeader) -> Resu
                         witness.state_type_hash(),
                         witness.exit_state_header(),
                         new_data,
+                        factory_type_hash,
                     )
                 }
                 _ => Err(ScriptError::WitnessEnvelopeEncoding),
@@ -457,10 +476,17 @@ fn validate_factory_materialised_state(
     expected_state_type_hash: &[u8],
     committed_header: &[u8],
     new_data: &[u8],
+    expected_factory_type_hash: &[u8],
 ) -> Result<()> {
     let output_index = state_output_index as usize;
     let script_hash = load_script_hash().map_err(|_| ScriptError::Encoding)?;
     if expected_state_type_hash != script_hash.as_slice() || committed_header != new_data {
+        return Err(ScriptError::FactoryLocalExitMismatch);
+    }
+    let input_factory_type_hash = load_cell_type_hash(0, Source::Input)
+        .map_err(|_| ScriptError::FactoryLocalExitMismatch)?
+        .ok_or(ScriptError::FactoryLocalExitMismatch)?;
+    if input_factory_type_hash.as_slice() != expected_factory_type_hash {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
     let output_type_hash =

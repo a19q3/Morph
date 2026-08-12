@@ -3,6 +3,9 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -116,11 +119,21 @@ pub fn append_watchtower_alert(path: &Path, alert: &WatchtowerAlert) -> Result<(
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create alert directory {}", parent.display()))?;
     }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
         .open(path)
         .with_context(|| format!("failed to open watchtower alert file {}", path.display()))?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .with_context(|| {
+            format!(
+                "failed to restrict watchtower alert file permissions {}",
+                path.display()
+            )
+        })?;
     serde_json::to_writer(&mut file, alert)
         .with_context(|| format!("failed to encode watchtower alert {}", path.display()))?;
     file.write_all(b"\n")
@@ -150,6 +163,7 @@ pub fn post_watchtower_alert_webhook_with_secret(
         .with_context(|| "failed to encode watchtower alert for webhook")?;
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("failed to build watchtower webhook HTTP client")?;
     let mut request = client
@@ -175,10 +189,14 @@ pub fn post_watchtower_alert_webhook_with_secret(
 
 fn is_loopback_url(parsed: &url::Url) -> bool {
     parsed.scheme() == "http"
-        && matches!(
-            parsed.host_str(),
-            Some("127.0.0.1") | Some("localhost") | Some("::1")
-        )
+        && parsed.host_str().is_some_and(|host| {
+            host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        })
 }
 
 fn request_body_for_signature(alert: &WatchtowerAlert) -> Result<Vec<u8>> {
@@ -326,6 +344,12 @@ mod tests {
         let decoded: WatchtowerAlert = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(decoded.event, WatchAlertEvent::OlderStateDetected);
 
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
         let _ = fs::remove_file(path);
     }
 
@@ -418,6 +442,39 @@ mod tests {
                 .contains("must use https:// or point at a loopback address"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn webhook_does_not_follow_redirects() {
+        use std::thread;
+
+        let Some(listener) = loopback_listener_or_skip("webhook_does_not_follow_redirects") else {
+            return;
+        };
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _request = read_http_request(stream.try_clone().unwrap());
+            stream
+                .write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/alert\r\nContent-Length: 0\r\n\r\n",
+                )
+                .unwrap();
+        });
+
+        let alert = WatchtowerAlert::new(
+            channel_id(6),
+            WatchAlertSeverity::Warning,
+            WatchAlertEvent::OlderStateDetected,
+            "older state detected".to_string(),
+            2,
+            10,
+            11,
+        )
+        .unwrap();
+        let error = post_watchtower_alert_webhook(&url, &alert).unwrap_err();
+        assert!(error.to_string().contains("HTTP 302 Found"));
+        handle.join().unwrap();
     }
 
     #[test]
