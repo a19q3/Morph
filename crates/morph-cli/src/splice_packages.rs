@@ -835,8 +835,8 @@ pub fn write_splice_package(
 }
 
 pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplicePackage> {
-    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
-    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    let alice = fixture_signing_key(1)?;
+    let bob = fixture_signing_key(2)?;
     let mut entries = [
         (compressed_pubkey(&alice), alice),
         (compressed_pubkey(&bob), bob),
@@ -981,6 +981,11 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
     };
     package.validate()?;
     Ok(package)
+}
+
+fn fixture_signing_key(byte: u8) -> Result<SigningKey> {
+    SigningKey::from_slice(&[byte; 32])
+        .map_err(|err| anyhow!("invalid built-in fixture signing key: {err:?}"))
 }
 
 type FixtureSpliceParts = (

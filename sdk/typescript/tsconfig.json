@@ -7,6 +7,8 @@
     "outDir": "dist",
     "rootDir": "src",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]

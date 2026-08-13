@@ -1783,7 +1783,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         &channel_id,
         sponsor_policy_settings,
         state_type.calc_script_hash().unpack(),
-        change_lock_hash.as_slice().try_into().unwrap(),
+        change_lock_hash.unpack(),
     );
     let sponsor_lock = data1_script(
         sponsor_contract.data_hash.clone(),
@@ -1971,7 +1971,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         sponsor_policy: sponsor_policy_report(
             sponsor_policy_settings,
             state_type.calc_script_hash().unpack(),
-            change_lock_hash.as_slice().try_into().unwrap(),
+            change_lock_hash.unpack(),
         ),
         change_capacity,
         fee: options.fee,
@@ -5711,7 +5711,7 @@ pub fn factory_exit_channel(
         &channel_id,
         sponsor_policy_settings,
         state_type_hash,
-        owner_lock_hash.as_slice().try_into().unwrap(),
+        owner_lock_hash.unpack(),
     );
     let sponsor_lock = data1_script(
         sponsor_contract.data_hash.clone(),
@@ -5853,13 +5853,13 @@ pub fn factory_exit_channel(
         .lock(state_lock)
         .type_(Some(state_type).pack())
         .build();
-    let child_vault_type = child_xudt
-        .as_ref()
-        .map(|(xudt_type, _, _, _, _, _)| xudt_type.clone());
-    let child_vault_data = child_xudt
-        .as_ref()
-        .map(|_| xudt_amount_bytes(child_vault_xudt_amount.expect("child xUDT amount present")))
-        .unwrap_or_default();
+    let (child_vault_type, child_vault_data) = match (&child_xudt, child_vault_xudt_amount) {
+        (Some((xudt_type, _, _, _, _, _)), Some(amount)) => {
+            (Some(xudt_type.clone()), xudt_amount_bytes(amount))
+        }
+        (None, None) => (None, Bytes::new()),
+        _ => return Err(anyhow!("child xUDT type and amount are inconsistent")),
+    };
     let vault_output = CellOutput::new_builder()
         .capacity(options.vault_capacity)
         .lock(vault_lock)
@@ -5886,10 +5886,19 @@ pub fn factory_exit_channel(
                 options.vault_capacity
             )
         })?;
-    let factory_vault_change_xudt_amount =
-        child_xudt.as_ref().map(|(_, _, total_amount, _, _, _)| {
-            total_amount - child_vault_xudt_amount.expect("child xUDT amount present")
-        });
+    let factory_vault_change_xudt_amount = match (&child_xudt, child_vault_xudt_amount) {
+        (Some((_, _, total_amount, _, _, _)), Some(child_amount)) => {
+            Some(total_amount.checked_sub(child_amount).ok_or_else(|| {
+                anyhow!(
+                    "child xUDT amount {} exceeds factory vault amount {}",
+                    child_amount,
+                    total_amount
+                )
+            })?)
+        }
+        (None, None) => None,
+        _ => return Err(anyhow!("child xUDT type and amount are inconsistent")),
+    };
     let factory_vault_change_type = match (&factory_vault_type, factory_vault_change_xudt_amount) {
         (Some(xudt_type), Some(amount)) if amount > 0 => Some(xudt_type.clone()),
         _ => None,
@@ -6192,9 +6201,7 @@ pub fn factory_exit_channel(
         state_activation_block_hash: state_activation.block_hash,
         state_activation_metrics: state_activation.metrics,
         state_activation_mined_blocks: state_activation.mined_blocks,
-        activation_fee: STATE_CARRIER_ACTIVATION_FEE
-            .checked_mul(2)
-            .expect("two activation fees fit in u64"),
+        activation_fee: STATE_CARRIER_ACTIVATION_FEE * 2,
         state_capacity,
         vault_capacity: options.vault_capacity,
         child_xudt_amount: child_xudt
@@ -6315,7 +6322,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         &channel_id,
         sponsor_policy_settings,
         state_type.calc_script_hash().unpack(),
-        owner_lock_hash.as_slice().try_into().unwrap(),
+        owner_lock_hash.unpack(),
     );
     let sponsor_lock = data1_script(
         sponsor_contract.data_hash.clone(),
@@ -6520,7 +6527,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         sponsor_policy: sponsor_policy_report(
             sponsor_policy_settings,
             state_type.calc_script_hash().unpack(),
-            owner_lock_hash.as_slice().try_into().unwrap(),
+            owner_lock_hash.unpack(),
         ),
         change_capacity,
         fee: options.fee,
@@ -7149,11 +7156,17 @@ pub fn save_splice_package(
     let mut new_vault_builder = CellOutput::new_builder()
         .capacity(new_vault_capacity)
         .lock(new_vault_lock);
-    let new_vault_data = if let Some(live_xudt) = &live_xudt {
-        new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
-        xudt_amount_bytes(new_xudt_amount.expect("live xUDT amount present"))
-    } else {
-        Bytes::new()
+    let new_vault_data = match (&live_xudt, new_xudt_amount) {
+        (Some(live_xudt), Some(amount)) => {
+            new_vault_builder = new_vault_builder.type_(Some(live_xudt.type_script.clone()).pack());
+            xudt_amount_bytes(amount)
+        }
+        (None, None) => Bytes::new(),
+        _ => {
+            return Err(anyhow!(
+                "live xUDT type and post-splice amount are inconsistent"
+            ));
+        }
     };
     let new_vault_output = new_vault_builder.build();
     ensure_output_capacity("post-splice vault", &new_vault_output, new_vault_data.len())?;
@@ -7850,7 +7863,7 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
         options.sponsor_max_fee_per_tx,
         options.sponsor_max_total_fee,
     )?;
-    let change_lock_hash_array: [u8; 32] = change_lock_hash.as_slice().try_into().unwrap();
+    let change_lock_hash_array: [u8; 32] = change_lock_hash.unpack();
     let sponsor_policy = sponsor_policy_bytes(
         channel_id,
         sponsor_policy_settings,

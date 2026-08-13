@@ -17,9 +17,9 @@ DENY ?= cargo deny
 # Remove each waiver as soon as its upstream dependency path is upgraded.
 AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0186 --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2026-0253
 
-.PHONY: ci full-test test lint fmt fmt-check audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
+.PHONY: ci full-test test lint fmt fmt-check source-hygiene audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 
-ci: fmt-check lint supply-chain test fixture-checks sdk-check hub-ui-check contract-tests
+ci: fmt-check lint source-hygiene supply-chain test fixture-checks sdk-check hub-ui-check contract-tests
 
 full-test: test fixture-checks contract-tests
 
@@ -34,6 +34,11 @@ fmt:
 
 fmt-check:
 	$(CARGO) fmt --all -- --check
+
+source-hygiene:
+	bash -n scripts/*.sh
+	! grep -n "registry.npmmirror.com" sdk/typescript/package-lock.json ui/morph-hub/package-lock.json
+	$(CARGO) clippy --workspace --all-features --bins --lib -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 
 audit:
 	$(AUDIT) --deny warnings $(AUDIT_IGNORE)

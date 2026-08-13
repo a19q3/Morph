@@ -51,13 +51,15 @@ pub fn participants_commitment(threshold: u8, pubkeys: &[&[u8]]) -> Bytes32 {
 /// `AssetRegistry` uses a `BTreeSet`, so equal registries have one encoding
 /// regardless of insertion order.
 pub fn asset_registry_commitment(registry: &AssetRegistry) -> Bytes32 {
-    let type_hashes = registry
-        .xudt_types
-        .iter()
-        .map(|type_hash| type_hash.as_slice())
-        .collect::<Vec<_>>();
-    morph_script_common::asset_registry_commitment(&type_hashes)
-        .expect("BTreeSet<Bytes32> is always strictly ordered and fixed-width")
+    let mut bytes = Vec::with_capacity(
+        morph_script_common::ASSET_REGISTRY_DOMAIN.len() + 8 + registry.xudt_types.len() * 32,
+    );
+    bytes.extend_from_slice(morph_script_common::ASSET_REGISTRY_DOMAIN);
+    bytes.extend_from_slice(&(registry.xudt_types.len() as u64).to_le_bytes());
+    for type_hash in &registry.xudt_types {
+        bytes.extend_from_slice(type_hash);
+    }
+    blake2b256(&bytes)
 }
 
 pub fn funding_context_id(

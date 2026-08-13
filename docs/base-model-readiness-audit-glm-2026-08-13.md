@@ -315,7 +315,7 @@ envelope is:
   xUDT-asset cap is set. **RGB++ assets are prohibited** until the on-chain
   proof/binding boundary and Bitcoin SPV/leap/reorg watcher are implemented and
   independently validated (currently `rgbpp.rs` is host policy code and
-  `morph-tlc-lock` is an empty unreferenced placeholder). The per-channel / per-factory /
+  no `morph-tlc-lock` contract is tracked). The per-channel / per-factory /
   per-sponsor / total caps are **release-owner-mandated blocking parameters** —
   the repository deliberately defines no real-asset limits.
 - **Required controls:** TLS/HTTPS for all non-loopback endpoints
@@ -500,9 +500,8 @@ pre-production entry blockers (C1–C4); C0 is satisfied.**
 
 #### F-06 — RGB++ on-chain script + SPV/leap/reorg watcher absent
 
-- **Component:** `crates/morph-core/src/rgbpp.rs` (host stub, 314 lines);
-  `contracts/morph-tlc-lock/` (empty `src/`, no Cargo.toml, not a workspace
-  member — unreferenced placeholder).
+- **Component:** `crates/morph-core/src/rgbpp.rs` (host policy boundary, 314
+  lines); no `morph-tlc-lock` contract is tracked.
 - **Issue:** RGB++ evidence checking is host/operator policy only; no on-chain RGB++
   script, no Bitcoin SPV/proof-program integration, no live proof watcher.
 - **Disposition:** Confirmed non-blocker. Honestly documented as Phase E future
@@ -536,9 +535,10 @@ pre-production entry blockers (C1–C4); C0 is satisfied.**
   does not prove database freshness or exactly reproduce `cargo audit`'s five
   explicit waivers. Re-run with network access in the release environment
   (entry condition **C6**).
-- **F-12 — `morph-tlc-lock` empty placeholder:** an empty `src/` directory with
-  no manifest and no workspace membership. Either remove it or add a clear
-  "future work" README so it is not mistaken for implemented code.
+- **F-12 — `morph-tlc-lock` empty placeholder (resolved):** the local empty
+  directory was removed during the 2026-08-14 source-hygiene cleanup. It never
+  contained a tracked file; the remaining integration gap is accurately
+  represented by F-06 rather than a fake contract path.
 
 ---
 
@@ -679,7 +679,7 @@ pre-production entry blockers (C1–C4); C0 is satisfied.**
       "confidence": "High",
       "class": "Confirmed non-blocker",
       "title": "RGB++ on-chain script + SPV/leap/reorg watcher absent (host stub only)",
-      "files": ["crates/morph-core/src/rgbpp.rs", "contracts/morph-tlc-lock/"],
+      "files": ["crates/morph-core/src/rgbpp.rs"],
       "release_blocking": false,
       "scope_requirement": "prohibited_from_preproduction"
     },
@@ -725,10 +725,11 @@ pre-production entry blockers (C1–C4); C0 is satisfied.**
       "id": "F-12",
       "severity": "Informational",
       "confidence": "High",
-      "class": "Hardening opportunity",
-      "title": "morph-tlc-lock is an empty unreferenced placeholder directory",
-      "files": ["contracts/morph-tlc-lock/"],
-      "release_blocking": false
+      "class": "Resolved hygiene finding",
+      "title": "Local untracked morph-tlc-lock placeholder directory was removed",
+      "files": [],
+      "release_blocking": false,
+      "status": "resolved_2026-08-14"
     }
   ],
   "commands": [

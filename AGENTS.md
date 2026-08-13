@@ -14,10 +14,11 @@ Use `make` targets — they orchestrate the right flags.
 
 | Command | What it does |
 | --- | --- |
-| `make ci` | `fmt-check` + `lint` + `supply-chain` + `test` + `fixture-checks` + `contract-tests`. Use this for a full local gate. |
+| `make ci` | `fmt-check` + `lint` + `source-hygiene` + `supply-chain` + `test` + `fixture-checks` + SDK/UI checks + `contract-tests`. Use this for a full local gate. |
 | `make test` | `cargo test --workspace --all-features`. |
 | `make lint` | `cargo clippy --workspace --all-features --all-targets -- -D warnings`. Treat warnings as errors. |
 | `make fmt` / `make fmt-check` | Apply / verify `cargo fmt --all`. |
+| `make source-hygiene` | Syntax-check every shell script, reject npm lockfiles pinned to the unsupported `npmmirror.com` registry, and deny `unwrap`/`expect`/`panic!` in production Rust targets. |
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |

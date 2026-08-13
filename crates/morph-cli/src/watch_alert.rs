@@ -141,11 +141,6 @@ pub fn append_watchtower_alert(path: &Path, alert: &WatchtowerAlert) -> Result<(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn post_watchtower_alert_webhook(url: &str, alert: &WatchtowerAlert) -> Result<()> {
-    post_watchtower_alert_webhook_with_secret(url, alert, None)
-}
-
 pub fn post_watchtower_alert_webhook_with_secret(
     url: &str,
     alert: &WatchtowerAlert,
@@ -204,13 +199,7 @@ fn request_body_for_signature(alert: &WatchtowerAlert) -> Result<Vec<u8>> {
 }
 
 fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
-    use std::fmt::Write;
-    let digest = hmac_sha256(key, message);
-    let mut out = String::with_capacity(2 * digest.len());
-    for byte in digest {
-        write!(&mut out, "{byte:02x}").expect("hex write into String is infallible");
-    }
-    out
+    hex::encode(hmac_sha256(key, message))
 }
 
 fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
@@ -240,9 +229,8 @@ fn hmac_sha256(key: &[u8], message: &[u8]) -> [u8; 32] {
 
 fn sha256(data: &[u8]) -> [u8; 32] {
     use sha2::Digest;
-    use std::io::Write;
     let mut hasher = sha2::Sha256::new();
-    hasher.write_all(data).expect("sha256 write is infallible");
+    hasher.update(data);
     let result = hasher.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&result);
@@ -417,7 +405,7 @@ mod tests {
         )
         .unwrap();
 
-        post_watchtower_alert_webhook(&url, &alert).unwrap();
+        post_watchtower_alert_webhook_with_secret(&url, &alert, None).unwrap();
         let request = handle.join().unwrap();
         assert!(request.starts_with("POST / HTTP/1.1"));
         assert!(request.contains("older_state_detected"));
@@ -436,7 +424,9 @@ mod tests {
             11,
         )
         .unwrap();
-        let err = post_watchtower_alert_webhook("http://example.com/alert", &alert).unwrap_err();
+        let err =
+            post_watchtower_alert_webhook_with_secret("http://example.com/alert", &alert, None)
+                .unwrap_err();
         assert!(
             err.to_string()
                 .contains("must use https:// or point at a loopback address"),
@@ -472,7 +462,7 @@ mod tests {
             11,
         )
         .unwrap();
-        let error = post_watchtower_alert_webhook(&url, &alert).unwrap_err();
+        let error = post_watchtower_alert_webhook_with_secret(&url, &alert, None).unwrap_err();
         assert!(error.to_string().contains("HTTP 302 Found"));
         handle.join().unwrap();
     }

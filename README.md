@@ -323,6 +323,8 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [Devnet guide](docs/devnet.md): local node setup, smoke paths, and reports.
 - [Implementation notes](docs/implementation.md): protocol objects, script
   boundaries, and invariant coverage.
+- [Compatibility and removal gates](docs/compatibility.md): read-only legacy
+  inputs, current emitters, and the evidence required before deleting them.
 - [Roadmap](docs/roadmap.md): milestone status and deferred work.
 - [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
   production or real-assets claim.

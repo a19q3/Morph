@@ -291,6 +291,9 @@ impl MorphInvoice {
     }
 
     pub fn decode(encoded: &str) -> NodeResult<Self> {
+        // Read-only compatibility path. New invoices are always Bech32m; see
+        // docs/compatibility.md for the migration evidence required to remove
+        // legacy hex decoding.
         let payload = match decode_bech32m(INVOICE_HRP, encoded) {
             Ok(payload) => payload,
             Err(_) if legacy_hex_invoice_body(encoded).is_some() => {
@@ -979,7 +982,7 @@ fn validate_invoice_amount(asset: &MorphAsset, amount: Amount) -> NodeResult<()>
 }
 
 fn encode_bech32m(hrp: &str, payload: &[u8]) -> String {
-    let mut values = convert_bits(payload, 8, 5, true).expect("8-to-5 bit conversion cannot fail");
+    let mut values = bytes_to_base32(payload);
     let checksum = bech32m_create_checksum(hrp, &values);
     values.extend_from_slice(&checksum);
 
@@ -990,6 +993,28 @@ fn encode_bech32m(hrp: &str, payload: &[u8]) -> String {
         encoded.push(BECH32_CHARSET[value as usize] as char);
     }
     encoded
+}
+
+fn bytes_to_base32(data: &[u8]) -> Vec<u8> {
+    const TO_BITS: u32 = 5;
+    const MAX_VALUE: u32 = (1 << TO_BITS) - 1;
+    const MAX_ACCUMULATOR: u32 = (1 << (8 + TO_BITS - 1)) - 1;
+
+    let mut accumulator = 0u32;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(TO_BITS as usize));
+    for byte in data {
+        accumulator = ((accumulator << 8) | u32::from(*byte)) & MAX_ACCUMULATOR;
+        bits += 8;
+        while bits >= TO_BITS {
+            bits -= TO_BITS;
+            out.push(((accumulator >> bits) & MAX_VALUE) as u8);
+        }
+    }
+    if bits > 0 {
+        out.push(((accumulator << (TO_BITS - bits)) & MAX_VALUE) as u8);
+    }
+    out
 }
 
 fn decode_bech32m(hrp: &str, encoded: &str) -> NodeResult<Vec<u8>> {

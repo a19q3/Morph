@@ -4,7 +4,6 @@ import {
   BadgeCheck,
   Bell,
   Boxes,
-  Copy,
   Database,
   Factory,
   FileJson,
@@ -14,14 +13,12 @@ import {
   Network,
   PanelRightClose,
   PanelRightOpen,
-  Plus,
   RadioTower,
   ReceiptText,
   RefreshCw,
   Search,
   ShieldCheck,
   Split,
-  Upload,
   Users,
   WalletCards,
   X,
@@ -33,35 +30,13 @@ import { getState, hasApiToken, openEventStream, setApiToken } from './api';
 import {
   Asset,
   Balance,
-  ChannelRecord,
-  EventSeverity,
-  FactoryRecord,
   FlowKey,
   Hex32,
-  HubEvent,
-  InvoiceRecord,
   NodeState,
-  PeerRecord,
-  Pubkey,
   RecordProvenance,
-  WatchtowerAlertRecord,
-  WatchAlertSeverity,
-  assertHex32,
-  assertIncludesPubkey,
-  assertInvoiceAmount,
-  assertNonNegativeInteger,
-  assertPositiveInteger,
-  assertPubkey,
-  assertRemotePubkey,
   emptyState,
-  normaliseAsset,
   formatAmount,
-  formatBalance,
-  formatTime,
-  formatTimeMs,
   hasHubScope,
-  assetLabel,
-  parsePubkeyList,
   shortHex,
 } from './domain';
 import { ChannelTable, EventPanel, FactoryPanel, InvoicePanel, PeerPanel, WatchtowerPanel } from './records';
@@ -70,7 +45,6 @@ import { ModelBoundaryPanel } from './model';
 import {
   balanceTotal,
   channelSearchText,
-  copyTextToClipboard,
   eventSearchText,
   factorySearchText,
   filterRecords,
@@ -95,12 +69,7 @@ import {
 } from './state';
 
 type ActionPanel = 'peer' | 'invoice' | 'channel' | 'factory' | 'state';
-type ChannelActionTab = 'open' | 'splice' | 'publish' | 'finalise';
-type FactoryActionTab = 'open' | 'advance' | 'materialise';
 type ToastTone = 'info' | 'ok' | 'bad';
-type TimeFilter = 'all' | '1h' | '24h' | '7d';
-type EventSeverityFilter = 'all' | EventSeverity;
-type WatchSeverityFilter = 'all' | WatchAlertSeverity;
 type Toast = {
   id: number;
   tone: ToastTone;
@@ -122,30 +91,7 @@ type FactoryActionTarget = {
   intent: 'advance' | 'materialise';
   nonce: number;
 };
-type ChannelFormMode = 'open' | 'materialise';
-type ChannelFormDraft = {
-  channelId: string;
-  counterpartyPubkey: string;
-  counterpartyAlias: string;
-  fundingContextId: string;
-  local: string;
-  remote: string;
-  pending: string;
-  sponsorBudget: string;
-  asset: Asset;
-};
-type ChannelFormPrefill = {
-  nonce: number;
-  draft: Partial<ChannelFormDraft>;
-};
-
 const LIVE_POLL_INTERVAL_MS = 5_000;
-const DEFAULT_INVOICE_EXPIRY_SECS = '3600';
-const DEFAULT_PENDING_CAPACITY = '0';
-const DEFAULT_SPONSOR_BUDGET = '1000000';
-const MAX_PEER_ALIAS_LEN = 80;
-const SIDE_PANEL_PREVIEW_LIMIT = 5;
-const EVENT_PREVIEW_LIMIT = 10;
 const DRAWER_COLLAPSED_STORAGE_KEY = 'morph-hub.drawer-collapsed';
 
 function formatAssetPortfolio(balances: Balance[]): string {
@@ -168,13 +114,6 @@ function formatAssetPortfolio(balances: Balance[]): string {
     ))
     .join(' / ');
 }
-
-const invoiceExpiryPresets = [
-  { label: '1h', value: '3600' },
-  { label: '6h', value: '21600' },
-  { label: '24h', value: '86400' },
-  { label: '7d', value: '604800' },
-];
 
 const actionItems: { key: ActionPanel; label: string; Icon: LucideIcon }[] = [
   { key: 'peer', label: 'Peers', Icon: Users },
@@ -990,14 +929,6 @@ function NodeInfoPill({
   );
 }
 
-function ProvenanceBadge({ provenance }: { provenance: RecordProvenance }) {
-  return (
-    <span className={`provenance-badge ${provenance.chain_status}`} title={provenance.message}>
-      {provenance.label}
-    </span>
-  );
-}
-
 type EvidenceSummary = {
   localOnlyRecords: number;
   watchtowerAlerts: number;
@@ -1294,164 +1225,4 @@ function OperationSearch({
       </div>
     </section>
   );
-}
-
-function RichEmptyState({
-  Icon,
-  title,
-  detail,
-  actionLabel,
-  onAction,
-  disabled,
-}: {
-  Icon: LucideIcon;
-  title: string;
-  detail: string;
-  actionLabel?: string;
-  onAction?: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="empty rich">
-      <Icon size={24} />
-      <strong>{title}</strong>
-      <small>{detail}</small>
-      {actionLabel && onAction && (
-        <button type="button" className="row-action primary" onClick={onAction} disabled={disabled}>
-          <Plus size={12} /> {actionLabel}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  const copyValue = async () => {
-    setFailed(false);
-    try {
-      await copyTextToClipboard(value);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_500);
-    } catch {
-      setFailed(true);
-      window.setTimeout(() => setFailed(false), 2_500);
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      className={`copy-icon ${copied ? 'copied' : ''} ${failed ? 'failed' : ''}`}
-      title={failed ? 'Copy failed' : copied ? 'Copied' : label}
-      aria-label={failed ? 'Copy failed' : copied ? 'Copied' : label}
-      onClick={copyValue}
-    >
-      {copied ? <BadgeCheck size={12} /> : <Copy size={12} />}
-    </button>
-  );
-}
-
-function EvidenceField({
-  label,
-  value,
-  copyValue,
-  mono = false,
-}: {
-  label: string;
-  value?: React.ReactNode;
-  copyValue?: string | null;
-  mono?: boolean;
-}) {
-  const empty = value == null || value === '';
-  return (
-    <div className="evidence-field">
-      <span>{label}</span>
-      <strong className={mono ? 'mono copy-line' : ''}>
-        {empty ? 'not available' : value}
-        {copyValue && <CopyButton value={copyValue} label={`Copy ${label.toLowerCase()}`} />}
-      </strong>
-    </div>
-  );
-}
-
-function ValidatedInput({
-  label,
-  value,
-  onChange,
-  validate,
-  testId,
-  className,
-  maxLength,
-  disabled,
-}: {
-  label: React.ReactNode;
-  value: string;
-  onChange: (value: string) => void;
-  validate: (value: string) => void;
-  testId?: string;
-  className?: string;
-  maxLength?: number;
-  disabled?: boolean;
-}) {
-  const [touched, setTouched] = useState(false);
-  const error = touched ? validationError(value, validate) : '';
-  return (
-    <label>
-      {label}
-      <input
-        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
-        data-testid={testId}
-        value={value}
-        maxLength={maxLength}
-        disabled={disabled}
-        onBlur={() => setTouched(true)}
-        onChange={event => onChange(event.target.value)}
-      />
-      {error && <small className="field-error">{error}</small>}
-    </label>
-  );
-}
-
-function ValidatedTextarea({
-  label,
-  value,
-  onChange,
-  validate,
-  testId,
-  className,
-}: {
-  label: React.ReactNode;
-  value: string;
-  onChange: (value: string) => void;
-  validate: (value: string) => void;
-  testId?: string;
-  className?: string;
-}) {
-  const [touched, setTouched] = useState(false);
-  const error = touched ? validationError(value, validate) : '';
-  return (
-    <label>
-      {label}
-      <textarea
-        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
-        data-testid={testId}
-        value={value}
-        onBlur={() => setTouched(true)}
-        onChange={event => onChange(event.target.value)}
-      />
-      {error && <small className="field-error">{error}</small>}
-    </label>
-  );
-}
-
-function validationError(value: string, validate: (value: string) => void): string {
-  try {
-    validate(value);
-    return '';
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
 }

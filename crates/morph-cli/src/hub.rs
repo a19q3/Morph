@@ -743,10 +743,7 @@ pub fn serve(options: HubServeOptions) -> Result<()> {
     });
 
     println!("morph_hub_listen=http://{}", options.listen);
-    println!(
-        "morph_hub_state={}",
-        server.store.lock().unwrap().path.display()
-    );
+    println!("morph_hub_state={}", server.store_lock()?.path.display());
     println!("morph_hub_ui={}", server.ui_dir.display());
     if let Some(path) = &server.watch_alert_file {
         println!("morph_hub_watch_alert_file={}", path.display());

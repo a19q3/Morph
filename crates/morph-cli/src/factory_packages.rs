@@ -2338,8 +2338,8 @@ pub fn fixture_factory_splice_package_with_kind(
         update.clone(),
     )?;
     header.non_interference_digest = hex32_bytes(&update_package.non_interference_digest)?;
-    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
-    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    let alice = fixture_signing_key(1)?;
+    let bob = fixture_signing_key(2)?;
     let transition = FactorySpliceTransition {
         header,
         witness: SpliceWitness {
@@ -2418,8 +2418,8 @@ pub fn fixture_factory_reduced_splice_package_with_kind(
         deltas: full.deltas,
         asset_registry: full.asset_registry,
     };
-    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
-    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    let alice = fixture_signing_key(1)?;
+    let bob = fixture_signing_key(2)?;
     StoredFactoryReducedSplicePackage::from_transition(
         transition,
         &[(bytes32(1), alice), (bytes32(2), bob)],
@@ -2514,8 +2514,8 @@ pub fn fixture_merkle_update_package() -> Result<StoredFactoryMerkleUpdatePackag
 
 pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
     let update_package = fixture_package()?;
-    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
-    let bob = SigningKey::from_slice(&[2u8; 32]).unwrap();
+    let alice = fixture_signing_key(1)?;
+    let bob = fixture_signing_key(2)?;
     StoredFactoryStatePackage::from_update_package(
         update_package,
         &[(bytes32(1), alice), (bytes32(2), bob)],
@@ -2554,8 +2554,13 @@ fn large_factory_rights() -> Vec<FactoryRight> {
 
 pub fn fixture_reduced_state_package() -> Result<StoredFactoryStatePackage> {
     let update_package = fixture_package()?;
-    let alice = SigningKey::from_slice(&[1u8; 32]).unwrap();
+    let alice = fixture_signing_key(1)?;
     StoredFactoryStatePackage::from_reduced_update_package(update_package, &[(bytes32(1), alice)])
+}
+
+fn fixture_signing_key(byte: u8) -> Result<SigningKey> {
+    SigningKey::from_slice(&[byte; 32])
+        .map_err(|err| anyhow::anyhow!("invalid built-in fixture signing key: {err:?}"))
 }
 
 fn right(

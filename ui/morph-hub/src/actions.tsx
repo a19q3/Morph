@@ -19,7 +19,6 @@ import {
   assertNonNegativeInteger,
   assertPositiveInteger,
   assertRemotePubkey,
-  assetLabel,
   formatAmount,
   hasHubScope,
   normaliseAsset,
