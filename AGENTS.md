@@ -5,7 +5,7 @@ Guidance for LLM/AI agents working in this repository. Focus on non-obvious know
 ## Project Snapshot
 
 - Morph Channel is a CKB-native off-chain channel + factory prototype. Host-side protocol semantics live in `morph-core`; the on-chain boundary is a set of `no_std` CKB scripts built for `riscv64imac-unknown-none-elf`.
-- Workspace members: two Rust crates (`crates/morph-core`, `crates/morph-cli`) and eight contract crates under `contracts/`. Plus a React UI (`ui/morph-hub`) and a small Molecule schema draft (`schemas/morph.mol`).
+- Workspace members: four Rust crates (`crates/morph-core`, `crates/morph-cli`, `crates/morph-agent`, `crates/morph-fiber-adapter`) and eight contract crates under `contracts/`. Plus a TypeScript SDK (`sdk/typescript`), a React UI (`ui/morph-hub`), and a small Molecule schema draft (`schemas/morph.mol`).
 - This is devnet research code. README explicitly disclaims mainnet, real-assets, and production-readiness claims.
 
 ## Build, Test, Lint
