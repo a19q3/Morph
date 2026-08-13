@@ -56,7 +56,7 @@ Local evidence covers:
 - participant signatures over current state;
 - monotonic State Cell progression;
 - authentic State Cell requirements for vault finalisation;
-- sponsor budget and clean-change boundaries;
+- per-cell sponsor budget, exact fee attribution, and clean-change boundaries;
 - CKB and CKB+xUDT settlement descriptors;
 - splice funding-anchor and vault-set transitions;
 - factory full-participant signatures;

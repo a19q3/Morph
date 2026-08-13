@@ -24,10 +24,10 @@ ci: fmt-check lint supply-chain test fixture-checks sdk-check hub-ui-check contr
 full-test: test fixture-checks contract-tests
 
 test:
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace --all-features
 
 lint:
-	$(CARGO) clippy --workspace --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-features --all-targets -- -D warnings
 
 fmt:
 	$(CARGO) fmt --all

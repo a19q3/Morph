@@ -740,7 +740,7 @@ proptest! {
 
     #[test]
     fn prop_state_header_digest_changes_for_single_signed_field(
-        field in 0usize..17,
+        field in 0usize..18,
         marker in 64u8..=240,
     ) {
         let old = header_with_epoch(1, Phase::Active, 3);
@@ -764,6 +764,7 @@ proptest! {
             14 => new.vault_materialisation_root = bytes32(marker),
             15 => new.challenge_policy_commitment = bytes32(marker),
             16 => new.state_layout_version = old.state_layout_version + 1,
+            17 => new.vault_outpoint_commitment = bytes32(marker),
             _ => unreachable!(),
         }
 

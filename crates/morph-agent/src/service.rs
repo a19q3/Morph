@@ -58,6 +58,7 @@ pub const MAX_OUTGOING_PAYMENT_TIMEOUT_SECONDS: u64 = 10 * 60;
 pub const MAX_RESOURCE_BYTES: usize = 2 * 1024;
 pub const MAX_DESCRIPTION_BYTES: usize = 4 * 1024;
 pub const MAX_DURABLE_CREATIONS_PER_MINUTE: usize = 120;
+pub const MAX_API_BEARER_TOKEN_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -204,6 +205,7 @@ impl GatewayUpstream {
 
 pub struct AgentService {
     config: AgentConfig,
+    api_bearer_token_hash: Option<[u8; 32]>,
     fiber: FiberRpcClient,
     store: Arc<DurableStore>,
     credentials: CredentialService,
@@ -290,19 +292,24 @@ impl AgentService {
         if config
             .api_bearer_token
             .as_ref()
-            .is_some_and(|token| token.len() < 32)
+            .is_some_and(|token| !(32..=MAX_API_BEARER_TOKEN_BYTES).contains(&token.len()))
         {
-            return Err(ServiceError::InvalidRequest(
-                "Agent API bearer token must contain at least 32 bytes".to_string(),
-            ));
+            return Err(ServiceError::InvalidRequest(format!(
+                "Agent API bearer token must contain 32 to {MAX_API_BEARER_TOKEN_BYTES} bytes"
+            )));
         }
         let upstream = config
             .upstream_base_url
             .as_deref()
             .map(GatewayUpstream::new)
             .transpose()?;
+        let api_bearer_token_hash = config
+            .api_bearer_token
+            .as_deref()
+            .map(|token| blake2b256(token.as_bytes()));
         Ok(Self {
             config,
+            api_bearer_token_hash,
             fiber,
             store,
             credentials,
@@ -332,7 +339,7 @@ impl AgentService {
     }
 
     fn require_api_bearer(&self, headers: &HeaderMap) -> Result<(), ServiceError> {
-        let Some(expected) = self.config.api_bearer_token.as_deref() else {
+        let Some(expected_hash) = self.api_bearer_token_hash.as_ref() else {
             return Ok(());
         };
         let supplied = headers
@@ -340,7 +347,11 @@ impl AgentService {
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
             .unwrap_or_default();
-        if constant_time_equal(supplied.as_bytes(), expected.as_bytes()) {
+        if supplied.len() > MAX_API_BEARER_TOKEN_BYTES {
+            return Err(ServiceError::Unauthorized);
+        }
+        let supplied_hash = blake2b256(supplied.as_bytes());
+        if constant_time_equal(&supplied_hash, expected_hash) {
             Ok(())
         } else {
             Err(ServiceError::Unauthorized)
@@ -850,6 +861,15 @@ async fn pay(
     if timeout == 0 || timeout > service.config.outgoing_payment_timeout_seconds {
         return Err(ServiceError::Unauthorized);
     }
+    let payment_hash = request.requirements.payment_hash.clone();
+    service.store.record_payment(TrackedPayment {
+        payment_hash: payment_hash.clone(),
+        requirement_id: request.requirements.requirement_id.clone(),
+        direction: PaymentDirection::Outgoing,
+        status: "PendingSubmission".to_string(),
+        updated_at: now,
+        fiber_result: json!({ "status": "PendingSubmission" }),
+    })?;
     let initial_result = service
         .fiber
         .send_payment(json!({
@@ -863,12 +883,11 @@ async fn pay(
             },
         }))
         .await?;
-    let payment_hash = initial_result
+    let reported_payment_hash = initial_result
         .get("payment_hash")
         .and_then(Value::as_str)
-        .ok_or(ServiceError::FiberUnavailable)?
-        .to_string();
-    if payment_hash != request.requirements.payment_hash {
+        .ok_or(ServiceError::FiberUnavailable)?;
+    if reported_payment_hash != payment_hash {
         return Err(ServiceError::FiberUnavailable);
     }
     let initial_status = initial_result
@@ -1270,10 +1289,7 @@ fn validate_resource(resource: &str) -> Result<(), ServiceError> {
     Ok(())
 }
 
-fn constant_time_equal(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
+fn constant_time_equal(left: &[u8; 32], right: &[u8; 32]) -> bool {
     left.iter()
         .zip(right)
         .fold(0_u8, |difference, (left, right)| {
@@ -1466,6 +1482,7 @@ mod tests {
         invoice: Option<Value>,
         invoice_address: Option<String>,
         payment_poll_count: usize,
+        omit_send_payment_hash: bool,
     }
 
     fn payer_id(seed: u8) -> String {
@@ -1501,6 +1518,18 @@ mod tests {
             "10.0.0.8".parse().unwrap(),
             Some(&"m".repeat(32))
         ));
+    }
+
+    #[test]
+    fn bearer_comparison_covers_unequal_lengths_without_accepting_prefixes() {
+        let expected = blake2b256(b"same-token");
+        assert!(constant_time_equal(&expected, &blake2b256(b"same-token")));
+        assert!(!constant_time_equal(&expected, &blake2b256(b"same-toke")));
+        assert!(!constant_time_equal(
+            &expected,
+            &blake2b256(b"same-token-longer")
+        ));
+        assert!(!constant_time_equal(&expected, &blake2b256(b"different!")));
     }
 
     #[test]
@@ -1571,7 +1600,11 @@ mod tests {
                     .and_then(|invoice| invoice.pointer("/data/payment_hash"))
                     .cloned()
                     .unwrap();
-                json!({ "payment_hash": payment_hash, "status": "Created" })
+                if state.omit_send_payment_hash {
+                    json!({ "status": "Created" })
+                } else {
+                    json!({ "payment_hash": payment_hash, "status": "Created" })
+                }
             }
             "get_payment" => {
                 let mut state = state.lock().unwrap();
@@ -1597,10 +1630,21 @@ mod tests {
     async fn test_service(
         upstream_base_url: Option<String>,
     ) -> (Arc<AgentService>, tempfile::TempDir) {
+        let (service, dir, _) = test_service_with_fiber_state(upstream_base_url).await;
+        (service, dir)
+    }
+
+    async fn test_service_with_fiber_state(
+        upstream_base_url: Option<String>,
+    ) -> (
+        Arc<AgentService>,
+        tempfile::TempDir,
+        Arc<Mutex<MockFiberState>>,
+    ) {
         let fiber_state = Arc::new(Mutex::new(MockFiberState::default()));
         let fiber_app = Router::new()
             .route("/", post(mock_fiber_rpc))
-            .with_state(fiber_state);
+            .with_state(fiber_state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -1647,7 +1691,7 @@ mod tests {
             SigningKey::from_slice(&[3; 32]).unwrap(),
         )
         .unwrap();
-        (Arc::new(service), dir)
+        (Arc::new(service), dir, fiber_state)
     }
 
     #[tokio::test]
@@ -1726,7 +1770,9 @@ mod tests {
     #[tokio::test]
     async fn payment_index_requires_auth_and_redacts_raw_fiber_metadata() {
         let (mut service, _dir) = test_service(None).await;
-        Arc::get_mut(&mut service).unwrap().config.api_bearer_token = Some("m".repeat(32));
+        let configured = Arc::get_mut(&mut service).unwrap();
+        configured.config.api_bearer_token = Some("m".repeat(32));
+        configured.api_bearer_token_hash = Some(blake2b256("m".repeat(32).as_bytes()));
         service
             .store
             .record_payment(TrackedPayment {
@@ -1870,6 +1916,55 @@ mod tests {
         let payments = service.store.payments(10).unwrap();
         assert_eq!(payments.len(), 1);
         assert_eq!(payments[0].status, "Success");
+    }
+
+    #[tokio::test]
+    async fn outgoing_wallet_persists_intent_before_fiber_submission() {
+        let (mut service, _dir, fiber_state) = test_service_with_fiber_state(None).await;
+        let requirement = service
+            .make_challenge(
+                &CreateChallengeRequest {
+                    asset: service.config.supported_assets[0].clone(),
+                    amount: "7".to_string(),
+                    payer: payer_id(4),
+                    resource: "/outgoing-pending".to_string(),
+                    operation: "GET".to_string(),
+                    description: None,
+                    expires_in_seconds: Some(300),
+                    rgbpp_proof_commitment: None,
+                },
+                random_byte32(),
+            )
+            .await
+            .unwrap();
+        let payload = PaymentPayload::new_signed(
+            &requirement,
+            None,
+            &SigningKey::from_slice(&[4; 32]).unwrap(),
+        )
+        .unwrap();
+        let configured = Arc::get_mut(&mut service).unwrap();
+        configured.config.outgoing_payer = Some(payer_id(4));
+        configured.config.outgoing_max_fee_amount = Some(5);
+        fiber_state.lock().unwrap().omit_send_payment_hash = true;
+
+        assert!(matches!(
+            pay(
+                State(service.clone()),
+                Json(PayRequest {
+                    requirements: requirement.clone(),
+                    payload,
+                    timeout_seconds: Some(2),
+                    max_fee_amount: Some("5".to_string()),
+                }),
+            )
+            .await,
+            Err(ServiceError::FiberUnavailable)
+        ));
+        let payments = service.store.payments(10).unwrap();
+        assert_eq!(payments.len(), 1);
+        assert_eq!(payments[0].payment_hash, requirement.payment_hash);
+        assert_eq!(payments[0].status, "PendingSubmission");
     }
 
     #[tokio::test]

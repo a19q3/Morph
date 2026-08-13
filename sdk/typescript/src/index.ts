@@ -2,6 +2,8 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
 export type AssetKind = "ckb" | "rgbpp";
 export type BitcoinNetwork = "mainnet" | "testnet" | "signet" | "regtest";
 
@@ -215,13 +217,13 @@ export class MorphAgentClient {
     const init: RequestInit = body === undefined
       ? { method: "GET", headers: this.headers(false), redirect: "error" }
       : {
-        method: "POST",
-        headers: this.headers(true),
-        body: JSON.stringify(body),
-        redirect: "error",
-      };
+          method: "POST",
+          headers: this.headers(true),
+          body: JSON.stringify(body),
+          redirect: "error",
+        };
     const response = await fetch(new URL(path, this.baseUrl), init);
-    const value: unknown = await response.json().catch(() => null);
+    const value = await readJsonResponseLimited(response, MAX_RESPONSE_BYTES);
     if (!response.ok) {
       const message = isRecord(value) && typeof value.error === "string"
         ? value.error
@@ -239,6 +241,43 @@ export class MorphAgentClient {
         : { authorization: `Bearer ${this.apiBearerToken}` }),
     };
   }
+}
+
+async function readJsonResponseLimited(response: Response, maximum: number): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0 || parsedLength > maximum) {
+      throw new Error("Morph Agent response exceeds the maximum size");
+    }
+  }
+
+  if (response.body === null) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximum) {
+        await reader.cancel();
+        throw new Error("Morph Agent response exceeds the maximum size");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
 }
 
 function isLoopbackHostname(hostname: string): boolean {

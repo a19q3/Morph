@@ -60,3 +60,17 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+globalThis.fetch = async () => new Response(
+  new Uint8Array(2 * 1024 * 1024 + 1),
+  { status: 200 },
+);
+try {
+  const client = new MorphAgentClient("https://agent.example.com");
+  await assert.rejects(
+    client.supported(),
+    /response exceeds the maximum size/,
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+}
