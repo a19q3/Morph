@@ -15,9 +15,10 @@ state migration, not an in-place binary replacement.
    descriptor versions, and old/new script hashes.
 6. Rehearse every migration and rollback using no-value devnet cells.
 
-Any change to signer count, proof depth, right count, witness layout, envelope
-format, or `*_LEN` constant is a new protocol profile. The v1.0 fixed-bilateral
-manifest must not be relabelled as N-party compatible.
+Any change to the supported signer-count bounds, proof depth, right count,
+witness layout, envelope format, or `*_LEN` rule is a new protocol profile. The
+v1.0 dynamic-N manifest covers only 2–16 signers and must not be relabelled as
+supporting a wider or threshold-based profile.
 
 ## Legacy Factory Policy
 

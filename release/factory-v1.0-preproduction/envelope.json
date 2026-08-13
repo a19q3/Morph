@@ -1,7 +1,7 @@
 {
   "schema": "morph.preproduction_envelope",
-  "envelope_version": 1,
-  "release_profile": "factory-v1.0-fixed-bilateral",
+  "envelope_version": 2,
+  "release_profile": "factory-v1.0-dynamic-n",
   "effective_date": "2026-08-14",
   "review_by": "2026-09-13",
   "approval_timezone": "Asia/Shanghai",
@@ -13,7 +13,8 @@
   "real_assets_allowed": false,
   "hub_chain_actions_allowed": false,
   "factory": {
-    "participant_count": 2,
+    "min_participant_count": 2,
+    "max_participant_count": 16,
     "max_active_factories": 4,
     "max_children_per_factory": 10,
     "max_capacity_shannons": 1000000000000

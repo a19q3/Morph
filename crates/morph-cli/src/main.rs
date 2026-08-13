@@ -635,7 +635,7 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Open a conservative two-party Morph factory state cell on local devnet.
+    /// Open a conservative 2-16 participant Morph factory state cell on local devnet.
     OpenFactory {
         /// Directory containing the built RISC-V contract binaries.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -649,6 +649,9 @@ enum DevnetCommand {
         /// Devnet Bob factory signing key.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional factory signing key for participant 3 onward. Repeat up to 14 times.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Capacity placed under the FactoryStateCell, in shannons.
         #[arg(long, default_value_t = 50_000_000_000)]
         factory_capacity: u64,
@@ -691,6 +694,9 @@ enum DevnetCommand {
         /// Devnet Bob factory signing key.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional factory signing key for participant 3 onward. Repeat up to 14 times.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -735,6 +741,9 @@ enum DevnetCommand {
         /// Devnet Bob factory signing key.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional factory signing key for participant 3 onward. Repeat up to 14 times.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -765,6 +774,9 @@ enum DevnetCommand {
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced update.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional membership key for participant 3 onward. Only Alice signs this update.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -789,6 +801,9 @@ enum DevnetCommand {
         /// Devnet Bob factory signing key.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional factory signing key for participant 3 onward. Repeat up to 14 times.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -825,6 +840,9 @@ enum DevnetCommand {
         /// Devnet Bob factory key used to prove full factory membership. Bob does not sign the reduced splice.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional membership key for participant 3 onward. Only Alice signs this splice.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -921,6 +939,9 @@ enum DevnetCommand {
         /// Devnet Bob factory key used to prove full membership. Bob does not sign the Merkle update.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Additional membership key for participant 3 onward. Only Alice signs this update.
+        #[arg(long = "participant-private-key", hide_env_values = true)]
+        additional_participant_private_keys: Vec<String>,
         /// Current FactoryStateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         factory_out_point: String,
@@ -1778,6 +1799,19 @@ enum DevnetCommand {
             conflicts_with = "bob_public_key"
         )]
         bob_private_key: Option<String>,
+        /// Additional factory private key for participant 3 onward. Repeat up to 14 times.
+        #[arg(
+            long = "participant-private-key",
+            hide_env_values = true,
+            conflicts_with = "additional_participant_public_keys"
+        )]
+        additional_participant_private_keys: Vec<String>,
+        /// Additional compressed public key for participant 3 onward. Sufficient for reduced-reserve-claim authorisation.
+        #[arg(
+            long = "participant-public-key",
+            conflicts_with = "additional_participant_private_keys"
+        )]
+        additional_participant_public_keys: Vec<String>,
         /// Bob's compressed 33-byte public key. Sufficient for reduced-reserve-claim authorisation.
         #[arg(long, conflicts_with = "bob_private_key")]
         bob_public_key: Option<String>,

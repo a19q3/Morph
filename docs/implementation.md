@@ -184,8 +184,8 @@ reduced-splice bodies.
 New FactoryStateCells use `morph-state-lock` bound to the exact FactoryType
 script hash. The operator key funds fees through an independent secp input; it
 does not control or co-authorise the FactoryStateCell. Reduced reserve-claim
-exit construction needs the exiting participant's private key and the other
-participant's compressed public key, not the other participant's secret.
+exit construction needs the exiting participant's private key and every other
+participant's compressed public key, not their secrets.
 Value-bearing factory materialisation consumes and recreates the parent Factory
 State Cell with updated roots; read-only `unchanged_reference` materialisation
 is not part of the current conservative contract profile.
@@ -201,13 +201,14 @@ from being reused as authority to drain unrelated carrier capacity.
 factory exit or splice changes the FactoryVaultCell exactly as the factory
 evidence permits.
 
-The current executable Factory signature profile is deliberately bilateral:
-exactly two participant identifiers/public keys sign conservative updates.
-Rights trees can contain many typed rights, but they do not make the signer set
-dynamic. Host and Hub records reject any other participant count so they cannot
-display a Factory that the deployed scripts cannot authorise. Larger signer
-sets remain a future wire-profile upgrade; this limitation does not remove the
-Factory shared-reserve or child-materialisation model.
+The current executable Factory signature profile supports 2–16 sorted,
+commitment-bound participant identifiers/public keys. Conservative creation,
+updates, local exits, and full splices require N-of-N signatures. Reduced
+rights, sparse-Merkle, reduced-exit, and reduced-splice paths still commit the
+complete participant set but require exactly one signature from the touched
+participant. Counts outside 2–16, threshold subsets on full paths, duplicate or
+unsorted identifiers, duplicate public keys, and unknown witness shapes fail
+closed. The sparse-Merkle depth and reduced right-count limits remain fixed.
 
 ### Factory Local Exit Lifecycle
 

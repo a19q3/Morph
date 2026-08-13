@@ -700,8 +700,13 @@ export function FactoryActions({
         ...customPubkeys,
       ]);
       assertIncludesPubkey(participant_pubkeys, state.pubkey, 'Participant pubkeys');
-      if (participant_pubkeys.length !== 2) {
-        throw new Error('Current Factory profile requires exactly two participant pubkeys');
+      if (
+        participant_pubkeys.length < state.model.factory_min_participants
+        || participant_pubkeys.length > state.model.factory_max_participants
+      ) {
+        throw new Error(
+          `Current Factory profile requires ${state.model.factory_min_participants}–${state.model.factory_max_participants} unique participant pubkeys`,
+        );
       }
       return postAction('/api/factories', {
         factory_id: assertHex32(factoryId, 'Factory id'),
@@ -726,8 +731,8 @@ export function FactoryActions({
   const toggleParticipant = (pubkey: string) => {
     setSelectedParticipantPubkeys(current => (
       current.includes(pubkey)
-        ? []
-        : [pubkey]
+        ? current.filter(value => value !== pubkey)
+        : [...current, pubkey]
     ));
   };
 
@@ -743,7 +748,7 @@ export function FactoryActions({
   return (
     <div className="drawer-section">
       <h2>Factory Layer</h2>
-      <p className="inline-note">Hub Factory controls record the two-party local projection. Factory-right proofs and reserve transactions are not built here.</p>
+      <p className="inline-note">Hub Factory controls record a 2–16 participant local projection. Factory-right proofs and reserve transactions are not built here.</p>
       {!canWrite && <small className="inline-error">The current API token needs the write scope.</small>}
       <ActionSubTabs<FactoryActionTab>
         active={activeTab}
@@ -771,7 +776,7 @@ export function FactoryActions({
           validate={value => { assertHex32(value, 'Factory id'); }}
         />
         <label>
-          Counterparty (current two-party Factory profile)
+          Participants (select 1–15 counterparties)
           <div className="participant-picker" data-testid="factory-participants">
             <span className="participant-chip selected" title={state.pubkey}>
               Local {shortHex(state.pubkey)}
@@ -795,15 +800,19 @@ export function FactoryActions({
           </div>
         </label>
         <ValidatedTextarea
-          label="Custom counterparty pubkey"
+          label="Custom participant pubkeys"
           className="mono compact"
           testId="factory-participants-custom"
           value={customParticipantPubkeys}
           onChange={setCustomParticipantPubkeys}
           validate={value => {
             if (!value.trim()) return;
-            const pubkeys = parsePubkeyList(value, 'Custom counterparty pubkey');
-            if (pubkeys.length !== 1) throw new Error('Enter exactly one counterparty pubkey');
+            const pubkeys = parsePubkeyList(value, 'Custom participant pubkey');
+            if (pubkeys.length > state.model.factory_max_participants - 1) {
+              throw new Error(
+                `Enter at most ${state.model.factory_max_participants - 1} custom participant pubkeys`,
+              );
+            }
           }}
         />
         <ValidatedInput label="Reserve" className="mono" testId="factory-reserve" value={reserve} onChange={setReserve} validate={value => { assertPositiveInteger(value, 'Reserve'); }} />

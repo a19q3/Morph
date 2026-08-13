@@ -8,7 +8,7 @@ OUTPUT_PARENT="$REPO_ROOT/target"
 
 mkdir -p "$OUTPUT_PARENT"
 STAGING_DIR=$(mktemp -d "$OUTPUT_PARENT/contract-release.XXXXXXXX")
-ARTIFACT_DIR="$STAGING_DIR/factory-v1.0-fixed-bilateral"
+ARTIFACT_DIR="$STAGING_DIR/factory-v1.0-dynamic-n"
 mkdir -p "$ARTIFACT_DIR/contracts"
 
 scripts=(
@@ -46,11 +46,11 @@ install -m 0644 \
     watch-policy.json watch-config.example.json > SHA256SUMS
 )
 
-STAGED_ARCHIVE="$STAGING_DIR/factory-v1.0-fixed-bilateral.tar.gz"
+STAGED_ARCHIVE="$STAGING_DIR/factory-v1.0-dynamic-n.tar.gz"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-  -C "$STAGING_DIR" -cf - factory-v1.0-fixed-bilateral \
+  -C "$STAGING_DIR" -cf - factory-v1.0-dynamic-n \
   | gzip -n > "$STAGED_ARCHIVE"
-ARCHIVE_PATH="$OUTPUT_PARENT/factory-v1.0-fixed-bilateral.tar.gz"
+ARCHIVE_PATH="$OUTPUT_PARENT/factory-v1.0-dynamic-n.tar.gz"
 install -m 0644 "$STAGED_ARCHIVE" "$ARCHIVE_PATH"
 
 echo "contract release directory: $ARTIFACT_DIR"

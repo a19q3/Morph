@@ -3,7 +3,7 @@
 Effective: 2026-08-14. Mandatory review by: 2026-09-13.
 
 This envelope authorises only a controlled, no-real-assets CKB devnet pilot of
-the `factory-v1.0-fixed-bilateral` profile. It does not authorise mainnet,
+the `factory-v1.0-dynamic-n` profile. It does not authorise mainnet,
 public-value testnet trials, externally issued xUDTs, production traffic, or a
 claim that Morph is production-ready.
 
@@ -20,7 +20,7 @@ effective/review window.
 | --- | ---: |
 | Network | Controlled CKB devnet only |
 | Real assets | Prohibited |
-| Factory signing participants | Exactly 2 |
+| Factory signing participants | 2–16; full paths require N-of-N |
 | Concurrent active factories | 4 |
 | Materialised child channels per factory | 10 |
 | Capacity per Factory | 1,000,000,000,000 shannons (10,000 CKB) |
@@ -43,14 +43,16 @@ reviewed manifest.
 This release profile includes conservative updates, local exits,
 reduced-rights updates, one-right depth-256 sparse-Merkle updates, reduced
 exits, CKB/xUDT Factory Vault conservation, and conservative/reduced splice
-paths. It intentionally excludes dynamic signer sets, multi-right reduced
-updates, variable-depth proofs, arbitrary descriptor runtimes, and concurrent
-unconfirmed splice chains.
+paths. Factory membership is dynamic from 2–16 participants; reduced paths
+commit the complete membership and admit exactly one touched participant's
+signature. The profile intentionally excludes membership outside that bound,
+multi-right reduced updates, variable-depth proofs, arbitrary descriptor
+runtimes, and concurrent unconfirmed splice chains.
 
 Those exclusions are versioned protocol boundaries, not bugs to bypass.
-Unknown shapes must continue to fail closed. A future N-party profile requires
-a new witness version, limits, fixtures, contract tests, hash manifest, and
-independent review.
+Unknown shapes must continue to fail closed. Raising the participant bound or
+changing proof shape requires a new witness version, limits, fixtures, contract
+tests, hash manifest, and independent review.
 
 Morph Hub remains a local operator projection. Its Factory actions do not
 submit CKB transactions, and `hub_chain_actions_allowed` therefore remains

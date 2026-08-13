@@ -72,7 +72,7 @@ export function ModelBoundaryPanel({ model }: ModelBoundaryPanelProps) {
         <div>
           <strong>Hub records are not settlement evidence</strong>
           <span>
-            Profile {model.profile}; current Factory signer set is {model.factory_participant_count}-party.
+            Profile {model.profile}; Factory signer sets support {model.factory_min_participants}–{model.factory_max_participants} participants.
             This console records local operator intent and does not build or broadcast chain transactions.
           </span>
         </div>

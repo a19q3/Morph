@@ -16,7 +16,10 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
+    ECDSA_SIGNATURE_LEN, FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION,
+    FACTORY_DYNAMIC_REDUCED_RIGHTS_WITNESS_VERSION, FACTORY_DYNAMIC_REDUCED_SPLICE_WITNESS_VERSION,
+    FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION, FACTORY_DYNAMIC_SPLICE_WITNESS_VERSION,
+    FACTORY_LOCAL_EXIT_WITNESS_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
     FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
     FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_EXIT_RIGHTS_COUNT,
     FACTORY_REDUCED_EXIT_WITNESS_LEN, FACTORY_REDUCED_EXIT_WITNESS_VERSION,
@@ -30,24 +33,32 @@ use morph_script_common::{
     FACTORY_SPARSE_MERKLE_DEPTH, FACTORY_SPLICE_HEADER_LEN, FACTORY_SPLICE_WITNESS_LEN,
     FACTORY_SPLICE_WITNESS_VERSION, FACTORY_STATE_HEADER_LEN, FACTORY_VAULT_ASSET_AMOUNT_LEN,
     FACTORY_VAULT_DELTA_LEN, FACTORY_VAULT_DELTAS_LEN, FACTORY_VAULT_DESCRIPTOR_LEN,
-    FactoryMerkleUpdateWitness, FactoryReducedExitWitness, FactoryReducedRightsWitness,
-    FactoryReducedSpliceWitness, FactorySpliceHeader, FactoryStateHeader, FactoryVaultDeltas,
-    PHASE_ACTIVE, PHASE_SETTLING, SPLICE_ASSET_DELTA_LEN, SPLICE_ASSET_DELTAS_LEN,
-    SPLICE_HEADER_LEN, SPLICE_KIND_IN, SPLICE_KIND_OUT, SPLICE_SIGNATURE_COUNT,
-    SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
-    SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
-    SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN,
-    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, STATE_MODE_FACTORY_PROOF, SpliceAssetDeltas,
-    SpliceHeader, SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
-    StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    FactoryDynamicMerkleUpdateWitness, FactoryDynamicReducedRightsWitness,
+    FactoryDynamicReducedSpliceWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
+    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySpliceHeader,
+    FactoryStateHeader, FactoryVaultDeltas, PHASE_ACTIVE, PHASE_SETTLING, SPLICE_ASSET_DELTA_LEN,
+    SPLICE_ASSET_DELTAS_LEN, SPLICE_HEADER_LEN, SPLICE_KIND_IN, SPLICE_KIND_OUT,
+    SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN,
+    SPLICE_SIGNATURE_WITNESS_VERSION, SPLICE_STATE_TRANSITION_WITNESS_LEN,
+    SPLICE_STATE_TRANSITION_WITNESS_VERSION, SPLICE_VAULT_ASSET_AMOUNT_LEN,
+    SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN, STATE_CARRIER_ACTIVATION_FEE,
+    STATE_HEADER_LEN, STATE_MODE_FACTORY_PROOF, SpliceAssetDeltas, SpliceHeader,
+    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader, StateHeaderInput,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
     WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, blake2b256, encode_state_header, factory_local_exit_digest,
-    factory_participants_commitment, participants_commitment, relative_block_since,
-    settlement_descriptor_commitment, vault_cell_commitment, vault_outpoint_commitment,
-    witness_envelope_body_commitment,
+    WitnessEnvelope, blake2b256, encode_state_header, factory_dynamic_merkle_update_witness_len,
+    factory_dynamic_reduced_rights_witness_len, factory_dynamic_reduced_splice_witness_len,
+    factory_dynamic_signature_witness_len, factory_dynamic_splice_witness_len,
+    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
+    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
+    vault_outpoint_commitment, witness_envelope_body_commitment,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -946,6 +957,91 @@ fn signed_factory_pair_with_vault_roots(
     )
 }
 
+fn signed_dynamic_factory_pair(
+    old_number: u64,
+    new_number: u64,
+    tamper_last_signature: bool,
+) -> (Bytes, Bytes, Bytes) {
+    let mut entries = (1u8..=3)
+        .map(|participant| {
+            let key = signing_key(participant);
+            ([participant; BYTE32_LEN], pubkey(&key), key)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let participant_refs = entries
+        .iter()
+        .map(|entry| (entry.0.as_slice(), entry.1.as_slice()))
+        .collect::<Vec<_>>();
+    let commitment = factory_participants_commitment(3, &participant_refs);
+
+    let mut old = factory_header_raw(old_number);
+    old[108..140].copy_from_slice(&commitment);
+    let mut new = factory_header_raw(new_number);
+    new[108..140].copy_from_slice(&commitment);
+    new[76..108].fill(9);
+    new[140..172].fill(10);
+    new[172..204].fill(11);
+    let header = FactoryStateHeader::parse(&new).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = vec![0u8; factory_dynamic_signature_witness_len(3)];
+    put_u16(&mut witness, 0, FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION);
+    witness[2] = 3;
+    witness[3] = 3;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+    if tamper_last_signature {
+        *witness.last_mut().unwrap() ^= 1;
+    }
+    (old.to_vec().into(), new.to_vec().into(), witness.into())
+}
+
+fn signed_dynamic_initial_factory_header(
+    factory_id: [u8; BYTE32_LEN],
+    vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes) {
+    let mut entries = (1u8..=3)
+        .map(|participant| {
+            let key = signing_key(participant);
+            ([participant; BYTE32_LEN], pubkey(&key), key)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let participant_refs = entries
+        .iter()
+        .map(|entry| (entry.0.as_slice(), entry.1.as_slice()))
+        .collect::<Vec<_>>();
+    let commitment = factory_participants_commitment(3, &participant_refs);
+    let mut header_raw = factory_header_raw_with_id(0, factory_id);
+    header_raw[108..140].copy_from_slice(&commitment);
+    set_factory_vault_materialisation_root(&mut header_raw, vault_materialisation_root);
+    let header = FactoryStateHeader::parse(&header_raw).unwrap();
+    let digest = header.signing_digest();
+    let mut witness = vec![0u8; factory_dynamic_signature_witness_len(3)];
+    put_u16(&mut witness, 0, FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION);
+    witness[2] = 3;
+    witness[3] = 3;
+    for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &digest));
+    }
+    (header_raw.to_vec().into(), witness.into())
+}
+
 fn signed_initial_factory_header(
     factory_id: [u8; BYTE32_LEN],
     vault_materialisation_root: [u8; BYTE32_LEN],
@@ -1212,6 +1308,84 @@ fn signed_factory_splice_pair(
         new.to_vec().into(),
         witness.to_vec().into(),
     )
+}
+
+fn signed_dynamic_factory_splice_pair(
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
+    let (old, new, fixed) = signed_factory_splice_pair(
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+        old_vault_materialisation_root,
+        new_vault_materialisation_root,
+    );
+    let keys = [signing_key(1), signing_key(2), signing_key(3)];
+    let participants = [
+        ([1u8; BYTE32_LEN], pubkey(&keys[0])),
+        ([2u8; BYTE32_LEN], pubkey(&keys[1])),
+        ([3u8; BYTE32_LEN], pubkey(&keys[2])),
+    ];
+    let factory_commitment = factory_participants_commitment(
+        3,
+        &[
+            (participants[0].0.as_slice(), participants[0].1.as_slice()),
+            (participants[1].0.as_slice(), participants[1].1.as_slice()),
+            (participants[2].0.as_slice(), participants[2].1.as_slice()),
+        ],
+    );
+    let splice_commitment = participants_commitment(
+        3,
+        &[
+            participants[0].1.as_slice(),
+            participants[1].1.as_slice(),
+            participants[2].1.as_slice(),
+        ],
+    );
+    let mut old = old.to_vec();
+    let mut new = new.to_vec();
+    old[108..140].copy_from_slice(&factory_commitment);
+    new[108..140].copy_from_slice(&factory_commitment);
+
+    let fixed = fixed.to_vec();
+    let mut header = fixed[2..2 + FACTORY_SPLICE_HEADER_LEN].to_vec();
+    header[277..309].copy_from_slice(&splice_commitment);
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
+    let signature_len = factory_dynamic_signature_witness_len(3);
+    let mut signatures = vec![0u8; signature_len];
+    put_u16(
+        &mut signatures,
+        0,
+        FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION,
+    );
+    signatures[2] = 3;
+    signatures[3] = 3;
+    for (index, ((participant, participant_pubkey), key)) in
+        participants.iter().zip(keys.iter()).enumerate()
+    {
+        let offset =
+            4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+        signatures[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        signatures[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(participant_pubkey);
+        signatures[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+            ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+            .copy_from_slice(&signature(key, &splice_header.signing_digest()));
+    }
+    let mut witness = vec![0u8; factory_dynamic_splice_witness_len(3)];
+    put_u16(&mut witness, 0, FACTORY_DYNAMIC_SPLICE_WITNESS_VERSION);
+    witness[2..2 + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    let signature_offset = 2 + FACTORY_SPLICE_HEADER_LEN;
+    witness[signature_offset..signature_offset + signatures.len()].copy_from_slice(&signatures);
+    let fixed_suffix = 2 + FACTORY_SPLICE_HEADER_LEN + FACTORY_SIGNATURE_WITNESS_LEN;
+    witness[signature_offset + signatures.len()..].copy_from_slice(&fixed[fixed_suffix..]);
+    (old.into(), new.into(), witness.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1583,6 +1757,104 @@ fn signed_factory_reduced_splice_pair(
         new.to_vec().into(),
         witness.to_vec().into(),
     )
+}
+
+fn signed_dynamic_factory_reduced_splice_pair(
+    old_amount: u128,
+    new_amount: u128,
+    external_input: u128,
+    withdrawal: u128,
+    old_vault_materialisation_root: [u8; BYTE32_LEN],
+    new_vault_materialisation_root: [u8; BYTE32_LEN],
+) -> (Bytes, Bytes, Bytes) {
+    let (old, new, fixed) = signed_factory_reduced_splice_pair(
+        old_amount,
+        new_amount,
+        external_input,
+        withdrawal,
+        old_vault_materialisation_root,
+        new_vault_materialisation_root,
+    );
+    let keys = [signing_key(1), signing_key(2), signing_key(3)];
+    let participants = [
+        ([1u8; BYTE32_LEN], pubkey(&keys[0])),
+        ([2u8; BYTE32_LEN], pubkey(&keys[1])),
+        ([3u8; BYTE32_LEN], pubkey(&keys[2])),
+    ];
+    let factory_commitment = factory_participants_commitment(
+        3,
+        &[
+            (participants[0].0.as_slice(), participants[0].1.as_slice()),
+            (participants[1].0.as_slice(), participants[1].1.as_slice()),
+            (participants[2].0.as_slice(), participants[2].1.as_slice()),
+        ],
+    );
+    let splice_commitment = participants_commitment(
+        3,
+        &[
+            participants[0].1.as_slice(),
+            participants[1].1.as_slice(),
+            participants[2].1.as_slice(),
+        ],
+    );
+    let mut old = old.to_vec();
+    let mut new = new.to_vec();
+    old[108..140].copy_from_slice(&factory_commitment);
+    new[108..140].copy_from_slice(&factory_commitment);
+
+    let fixed = fixed.to_vec();
+    let mut header = fixed[2..2 + FACTORY_SPLICE_HEADER_LEN].to_vec();
+    header[277..309].copy_from_slice(&splice_commitment);
+    let splice_header = FactorySpliceHeader::parse(&header).unwrap();
+
+    let fixed_merkle_offset = 2 + FACTORY_SPLICE_HEADER_LEN;
+    let fixed_merkle =
+        &fixed[fixed_merkle_offset..fixed_merkle_offset + FACTORY_MERKLE_UPDATE_WITNESS_LEN];
+    let dynamic_merkle_len = factory_dynamic_merkle_update_witness_len(3);
+    let mut dynamic_merkle = vec![0u8; dynamic_merkle_len];
+    put_u16(
+        &mut dynamic_merkle,
+        0,
+        FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION,
+    );
+    dynamic_merkle[2] = 3;
+    dynamic_merkle[3] = 3;
+    dynamic_merkle[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    dynamic_merkle[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT;
+    for (index, (participant, participant_pubkey)) in participants.iter().enumerate() {
+        let offset = merkle_participant_offset(index);
+        dynamic_merkle[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        dynamic_merkle[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(participant_pubkey);
+        dynamic_merkle[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(index == 0);
+        if index == 0 {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            dynamic_merkle[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(&signature(&keys[0], &splice_header.signing_digest()));
+        }
+    }
+    let dynamic_touched_offset = 8 + 3 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    dynamic_merkle[dynamic_touched_offset..]
+        .copy_from_slice(&fixed_merkle[merkle_touched_offset()..]);
+    FactoryDynamicMerkleUpdateWitness::parse(&dynamic_merkle).unwrap();
+
+    let mut witness = vec![0u8; factory_dynamic_reduced_splice_witness_len(3)];
+    put_u16(
+        &mut witness,
+        0,
+        FACTORY_DYNAMIC_REDUCED_SPLICE_WITNESS_VERSION,
+    );
+    witness[2..2 + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
+    let dynamic_merkle_offset = 2 + FACTORY_SPLICE_HEADER_LEN;
+    witness[dynamic_merkle_offset..dynamic_merkle_offset + dynamic_merkle_len]
+        .copy_from_slice(&dynamic_merkle);
+    let fixed_suffix_offset = 2 + FACTORY_SPLICE_HEADER_LEN + FACTORY_MERKLE_UPDATE_WITNESS_LEN;
+    witness[dynamic_merkle_offset + dynamic_merkle_len..]
+        .copy_from_slice(&fixed[fixed_suffix_offset..]);
+    FactoryDynamicReducedSpliceWitness::parse(&witness).unwrap();
+
+    (old.into(), new.into(), witness.into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1978,6 +2250,67 @@ fn signed_reduced_factory_rights_pair(
     )
 }
 
+fn signed_dynamic_reduced_factory_rights_pair(
+    old_number: u64,
+    new_number: u64,
+    touched_after_balance: u128,
+) -> (Bytes, Bytes, Bytes) {
+    let (fixed, key0, key1) = reduced_rights_witness_raw(touched_after_balance);
+    let key2 = signing_key(3);
+    let participant_count = 3u8;
+    let mut raw = vec![0u8; factory_dynamic_reduced_rights_witness_len(participant_count)];
+    raw[..8].copy_from_slice(&fixed[..8]);
+    put_u16(&mut raw, 0, FACTORY_DYNAMIC_REDUCED_RIGHTS_WITNESS_VERSION);
+    raw[2] = participant_count;
+    raw[3] = participant_count;
+    for index in 0..2 {
+        let source = reduced_participant_offset(index);
+        let target = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        raw[target..target + FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN]
+            .copy_from_slice(&fixed[source..source + FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN]);
+    }
+    let third = 8 + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    raw[third..third + BYTE32_LEN].fill(3);
+    raw[third + BYTE32_LEN..third + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+        .copy_from_slice(&pubkey(&key2));
+    let dynamic_touched = 8 + 3 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    raw[dynamic_touched..].copy_from_slice(&fixed[reduced_touched_offset()..]);
+    let witness = FactoryDynamicReducedRightsWitness::parse(&raw).unwrap();
+    let participants = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+        ([3u8; BYTE32_LEN], pubkey(&key2)),
+    ];
+    let commitment = factory_participants_commitment(
+        3,
+        &[
+            (participants[0].0.as_slice(), participants[0].1.as_slice()),
+            (participants[1].0.as_slice(), participants[1].1.as_slice()),
+            (participants[2].0.as_slice(), participants[2].1.as_slice()),
+        ],
+    );
+    let mut old = factory_header_raw(old_number);
+    old[76..108].copy_from_slice(&witness.rights_root(false).unwrap());
+    old[108..140].copy_from_slice(&commitment);
+    old[140..172].copy_from_slice(&witness.access_manifest_root(false).unwrap());
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
+    let mut new = factory_header_raw(new_number);
+    new[76..108].copy_from_slice(&witness.rights_root(true).unwrap());
+    new[108..140].copy_from_slice(&commitment);
+    new[140..172].copy_from_slice(&witness.access_manifest_root(true).unwrap());
+    let preliminary = FactoryStateHeader::parse(&new).unwrap();
+    let non_interference = witness
+        .non_interference_digest(&old_header, &preliminary)
+        .unwrap();
+    new[172..204].copy_from_slice(&non_interference);
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
+    let signature_offset = 8 + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+    raw[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+        .copy_from_slice(&signature(&key0, &new_header.signing_digest()));
+    FactoryDynamicReducedRightsWitness::parse(&raw).unwrap();
+    (old.to_vec().into(), new.to_vec().into(), raw.into())
+}
+
 fn merkle_update_witness_raw(
     before_right: &FactoryRight,
     after_right: &FactoryRight,
@@ -2101,6 +2434,58 @@ fn signed_factory_merkle_update_pair_with_quantity(
     );
 
     (old.to_vec().into(), new.to_vec().into(), witness_raw.into())
+}
+
+fn signed_dynamic_factory_merkle_update_pair(
+    old_number: u64,
+    new_number: u64,
+) -> (Bytes, Bytes, Bytes) {
+    let (old, new, fixed) = signed_factory_merkle_update_pair(old_number, new_number);
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let key2 = signing_key(3);
+    let participant_count = 3u8;
+    let fixed = fixed.to_vec();
+    let mut raw = vec![0u8; factory_dynamic_merkle_update_witness_len(participant_count)];
+    raw[..8].copy_from_slice(&fixed[..8]);
+    put_u16(&mut raw, 0, FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION);
+    raw[2] = participant_count;
+    raw[3] = participant_count;
+    for index in 0..2 {
+        let source = merkle_participant_offset(index);
+        let target = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        raw[target..target + FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN]
+            .copy_from_slice(&fixed[source..source + FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN]);
+    }
+    let third = 8 + 2 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    raw[third..third + BYTE32_LEN].fill(3);
+    raw[third + BYTE32_LEN..third + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+        .copy_from_slice(&pubkey(&key2));
+    let dynamic_touched = 8 + 3 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    raw[dynamic_touched..].copy_from_slice(&fixed[merkle_touched_offset()..]);
+    let participants = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+        ([3u8; BYTE32_LEN], pubkey(&key2)),
+    ];
+    let commitment = factory_participants_commitment(
+        3,
+        &[
+            (participants[0].0.as_slice(), participants[0].1.as_slice()),
+            (participants[1].0.as_slice(), participants[1].1.as_slice()),
+            (participants[2].0.as_slice(), participants[2].1.as_slice()),
+        ],
+    );
+    let mut old = old.to_vec();
+    let mut new = new.to_vec();
+    old[108..140].copy_from_slice(&commitment);
+    new[108..140].copy_from_slice(&commitment);
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
+    let signature_offset = 8 + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+    raw[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+        .copy_from_slice(&signature(&key0, &new_header.signing_digest()));
+    FactoryDynamicMerkleUpdateWitness::parse(&raw).unwrap();
+    (old.into(), new.into(), raw.into())
 }
 
 fn reduced_exit_participant_offset(index: usize) -> usize {
@@ -3345,6 +3730,62 @@ fn factory_type_accepts_canonical_initial_factory_state() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn factory_type_accepts_three_party_dynamic_initial_state() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let funding_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .build(),
+        Bytes::new(),
+    );
+    let input = CellInput::new_builder()
+        .previous_output(funding_out_point)
+        .build();
+    let factory_id = derived_factory_id(&input, 0);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", factory_id.to_vec());
+    let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
+    let mut factory_vault_args = factory_id.to_vec();
+    factory_vault_args.extend_from_slice(&factory_type_hash);
+    let factory_vault_lock =
+        deploy_contract(&mut context, "morph-factory-vault-lock", factory_vault_args);
+    let factory_state_capacity = CELL_CAPACITY / 2;
+    let factory_vault_capacity = CELL_CAPACITY - factory_state_capacity;
+    let vault_root = vault_commitment(&factory_vault_lock, factory_vault_capacity, None, &[]);
+    let (initial_data, signature_witness) =
+        signed_dynamic_initial_factory_header(factory_id, vault_root);
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(
+            CellOutput::new_builder()
+                .capacity(factory_state_capacity)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(factory_vault_capacity)
+                .lock(factory_vault_lock)
+                .build(),
+        )
+        .output_data(initial_data.pack())
+        .output_data(Bytes::new().pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE,
+            signature_witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic initial factory state should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_rejects_unsigned_initial_factory_state() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
@@ -3611,6 +4052,59 @@ fn factory_type_accepts_signed_factory_update() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn factory_type_accepts_three_party_dynamic_factory_update() {
+    let (context, tx) = dynamic_factory_update_tx(false);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_three_party_dynamic_factory_update_with_bad_signature() {
+    let (context, tx) = dynamic_factory_update_tx(true);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn dynamic_factory_update_tx(tamper_last_signature: bool) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, sig_witness) =
+        signed_dynamic_factory_pair(1, 2, tamper_last_signature);
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE,
+            sig_witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_rejects_signed_factory_update_carrier_drain() {
     let (context, tx) = signed_factory_update_tx(CELL_CAPACITY - 1);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
@@ -3703,8 +4197,19 @@ fn factory_type_and_vault_accept_factory_splice_in() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn factory_type_and_vault_accept_three_party_dynamic_factory_splice_in() {
+    let (context, tx) =
+        factory_splice_ckb_tx_with_carrier(false, STATE_CARRIER_ACTIVATION_FEE, true);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_rejects_splice_without_carrier_activation_reserve() {
-    let (context, tx) = factory_splice_ckb_tx_with_carrier(false, 0);
+    let (context, tx) = factory_splice_ckb_tx_with_carrier(false, 0, false);
     assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
@@ -3762,6 +4267,17 @@ fn factory_type_and_vault_accept_reduced_factory_splice_in() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("reduced factory splice-in should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_and_vault_accept_three_party_dynamic_reduced_factory_splice_in() {
+    let (context, tx) =
+        factory_reduced_splice_ckb_tx_with_mode(ReducedFactorySpliceTamper::None, true);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic reduced factory splice-in should verify");
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -3852,6 +4368,47 @@ fn factory_type_accepts_reduced_rights_update() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
+fn factory_type_accepts_three_party_dynamic_reduced_rights_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_dynamic_reduced_factory_rights_pair(1, 2, 90);
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic reduced-rights update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
 fn factory_type_accepts_sparse_merkle_right_update() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
@@ -3889,6 +4446,47 @@ fn factory_type_accepts_sparse_merkle_right_update() {
     context
         .verify_tx(&tx, MAX_CYCLES)
         .expect("sparse Merkle factory right update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_three_party_dynamic_sparse_merkle_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_dynamic_factory_merkle_update_pair(1, 2);
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("three-party dynamic sparse-Merkle update should verify");
 }
 
 #[ignore = "requires `make build-contracts`"]
@@ -4093,12 +4691,13 @@ fn factory_type_rejects_invalid_participant_signature() {
 }
 
 fn factory_splice_ckb_tx(tamper_capacity: bool) -> (Context, TransactionView) {
-    factory_splice_ckb_tx_with_carrier(tamper_capacity, STATE_CARRIER_ACTIVATION_FEE)
+    factory_splice_ckb_tx_with_carrier(tamper_capacity, STATE_CARRIER_ACTIVATION_FEE, false)
 }
 
 fn factory_splice_ckb_tx_with_carrier(
     tamper_capacity: bool,
     carrier_activation_reserve: u64,
+    dynamic: bool,
 ) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
@@ -4116,14 +4715,30 @@ fn factory_splice_ckb_tx_with_carrier(
     let new_reserve = old_reserve + splice_amount;
     let old_vault_root = vault_commitment(&factory_vault_lock, old_reserve, None, &[]);
     let new_vault_root = vault_commitment(&factory_vault_lock, new_reserve, None, &[]);
-    let (old_factory_data, new_factory_data, splice_witness) = signed_factory_splice_pair(
-        old_reserve as u128,
-        new_reserve as u128,
-        splice_amount as u128,
-        0,
-        old_vault_root,
-        new_vault_root,
-    );
+    let (old_factory_data, new_factory_data, splice_witness) = if dynamic {
+        signed_dynamic_factory_splice_pair(
+            old_reserve as u128,
+            new_reserve as u128,
+            splice_amount as u128,
+            0,
+            old_vault_root,
+            new_vault_root,
+        )
+    } else {
+        signed_factory_splice_pair(
+            old_reserve as u128,
+            new_reserve as u128,
+            splice_amount as u128,
+            0,
+            old_vault_root,
+            new_vault_root,
+        )
+    };
+    let witness_kind = if dynamic {
+        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE
+    } else {
+        WITNESS_ENVELOPE_KIND_FACTORY_SPLICE
+    };
 
     let factory_input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -4192,11 +4807,11 @@ fn factory_splice_ckb_tx_with_carrier(
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+            witness_kind,
             &splice_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+            witness_kind,
             splice_witness,
         ))
         .witness(empty_witness())
@@ -4206,6 +4821,13 @@ fn factory_splice_ckb_tx_with_carrier(
 }
 
 fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context, TransactionView) {
+    factory_reduced_splice_ckb_tx_with_mode(tamper, false)
+}
+
+fn factory_reduced_splice_ckb_tx_with_mode(
+    tamper: ReducedFactorySpliceTamper,
+    dynamic: bool,
+) -> (Context, TransactionView) {
     let mut context = Context::default();
     let factory_lock = deploy_always_success(&mut context);
     let external_input_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![9]));
@@ -4222,19 +4844,45 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
     let new_reserve = old_reserve + splice_amount;
     let old_vault_root = vault_commitment(&factory_vault_lock, old_reserve, None, &[]);
     let new_vault_root = vault_commitment(&factory_vault_lock, new_reserve, None, &[]);
-    let (old_factory_data, new_factory_data, splice_witness) = signed_factory_reduced_splice_pair(
-        old_reserve as u128,
-        new_reserve as u128,
-        splice_amount as u128,
-        0,
-        old_vault_root,
-        new_vault_root,
-    );
+    let (old_factory_data, new_factory_data, splice_witness) = if dynamic {
+        signed_dynamic_factory_reduced_splice_pair(
+            old_reserve as u128,
+            new_reserve as u128,
+            splice_amount as u128,
+            0,
+            old_vault_root,
+            new_vault_root,
+        )
+    } else {
+        signed_factory_reduced_splice_pair(
+            old_reserve as u128,
+            new_reserve as u128,
+            splice_amount as u128,
+            0,
+            old_vault_root,
+            new_vault_root,
+        )
+    };
     let mut splice_witness = splice_witness.to_vec();
     if tamper == ReducedFactorySpliceTamper::SparseMerkleSibling {
-        splice_witness[reduced_splice_merkle_offset() + merkle_sibling_offset(42)] ^= 1;
+        let sibling_offset = if dynamic {
+            2 + FACTORY_SPLICE_HEADER_LEN
+                + 8
+                + 3 * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+                + BYTE32_LEN
+                + 2 * FACTORY_RIGHT_LEN
+                + 42 * BYTE32_LEN
+        } else {
+            reduced_splice_merkle_offset() + merkle_sibling_offset(42)
+        };
+        splice_witness[sibling_offset] ^= 1;
     }
     let splice_witness: Bytes = splice_witness.into();
+    let witness_kind = if dynamic {
+        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE
+    } else {
+        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
+    };
 
     let factory_input_out_point = context.create_cell(
         CellOutput::new_builder()
@@ -4303,11 +4951,11 @@ fn factory_reduced_splice_ckb_tx(tamper: ReducedFactorySpliceTamper) -> (Context
         .output_data(Bytes::new().pack())
         .output_data(Bytes::new().pack())
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+            witness_kind,
             &splice_witness,
         ))
         .witness(factory_witness_with_input_type(
-            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+            witness_kind,
             splice_witness,
         ))
         .witness(empty_witness())

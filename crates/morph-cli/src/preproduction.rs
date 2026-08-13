@@ -3,14 +3,16 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
-use morph_core::CURRENT_FACTORY_PARTICIPANT_COUNT;
-use morph_script_common::FACTORY_REDUCED_RIGHTS_COUNT;
+use morph_script_common::{
+    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+    FACTORY_REDUCED_RIGHTS_COUNT,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::release::FACTORY_V1_RELEASE_PROFILE;
 
 pub const PREPRODUCTION_ENVELOPE_SCHEMA: &str = "morph.preproduction_envelope";
-pub const PREPRODUCTION_ENVELOPE_VERSION: u16 = 1;
+pub const PREPRODUCTION_ENVELOPE_VERSION: u16 = 2;
 
 const MAX_ACTIVE_FACTORIES: u32 = 4;
 const MAX_CHILDREN_PER_FACTORY: u32 = FACTORY_REDUCED_RIGHTS_COUNT as u32;
@@ -45,7 +47,8 @@ pub struct PreproductionEnvelope {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactoryLimits {
-    pub participant_count: u32,
+    pub min_participant_count: u32,
+    pub max_participant_count: u32,
     pub max_active_factories: u32,
     pub max_children_per_factory: u32,
     pub max_capacity_shannons: u64,
@@ -85,7 +88,8 @@ pub struct PreproductionEnvelopeVerification {
     pub release_profile: String,
     pub approved_networks: Vec<String>,
     pub real_assets_allowed: bool,
-    pub factory_participant_count: u32,
+    pub factory_min_participant_count: u32,
+    pub factory_max_participant_count: u32,
     pub max_active_factories: u32,
     pub reorg_mode: String,
     pub verified: bool,
@@ -152,8 +156,9 @@ impl PreproductionEnvelope {
             "Morph Hub chain actions must remain disabled until they submit and verify CKB transactions"
         );
         ensure!(
-            self.factory.participant_count == CURRENT_FACTORY_PARTICIPANT_COUNT as u32,
-            "factory participant_count must match the executable fixed-bilateral profile"
+            self.factory.min_participant_count == FACTORY_DYNAMIC_MIN_PARTICIPANTS as u32
+                && self.factory.max_participant_count == FACTORY_DYNAMIC_MAX_PARTICIPANTS as u32,
+            "factory participant bounds must match the executable dynamic-N profile ({FACTORY_DYNAMIC_MIN_PARTICIPANTS}..={FACTORY_DYNAMIC_MAX_PARTICIPANTS})"
         );
         ensure!(
             (1..=MAX_ACTIVE_FACTORIES).contains(&self.factory.max_active_factories),
@@ -250,7 +255,8 @@ pub fn verify_preproduction_envelope(path: &Path) -> Result<PreproductionEnvelop
         release_profile: envelope.release_profile,
         approved_networks: envelope.approved_networks,
         real_assets_allowed: envelope.real_assets_allowed,
-        factory_participant_count: envelope.factory.participant_count,
+        factory_min_participant_count: envelope.factory.min_participant_count,
+        factory_max_participant_count: envelope.factory.max_participant_count,
         max_active_factories: envelope.factory.max_active_factories,
         reorg_mode: envelope.watchtower.reorg_mode,
         verified: true,
@@ -292,7 +298,8 @@ mod tests {
             real_assets_allowed: false,
             hub_chain_actions_allowed: false,
             factory: FactoryLimits {
-                participant_count: 2,
+                min_participant_count: FACTORY_DYNAMIC_MIN_PARTICIPANTS as u32,
+                max_participant_count: FACTORY_DYNAMIC_MAX_PARTICIPANTS as u32,
                 max_active_factories: 4,
                 max_children_per_factory: 10,
                 max_capacity_shannons: MAX_FACTORY_CAPACITY_SHANNONS,
@@ -321,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_the_reviewed_fixed_bilateral_envelope() {
+    fn accepts_the_reviewed_dynamic_factory_envelope() {
         fixture().validate_at(2).unwrap();
     }
 
@@ -351,13 +358,13 @@ mod tests {
     #[test]
     fn rejects_unsupported_factory_shape_and_caps() {
         let mut envelope = fixture();
-        envelope.factory.participant_count = 3;
+        envelope.factory.max_participant_count += 1;
         assert!(
             envelope
                 .validate_at(2)
                 .unwrap_err()
                 .to_string()
-                .contains("participant_count")
+                .contains("participant bounds")
         );
 
         let mut envelope = fixture();

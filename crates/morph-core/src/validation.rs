@@ -5,9 +5,8 @@ use k256::ecdsa::{Signature, VerifyingKey};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD,
-    FACTORY_RIGHT_KEY_DOMAIN, FACTORY_RIGHT_LEAF_DOMAIN, FACTORY_RIGHT_NODE_DOMAIN,
-    FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD, MORPH_PROTOCOL_VERSION,
+    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MIN_PARTICIPANTS, FACTORY_RIGHT_KEY_DOMAIN,
+    FACTORY_RIGHT_LEAF_DOMAIN, FACTORY_RIGHT_NODE_DOMAIN, MORPH_PROTOCOL_VERSION,
     SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
     STATE_CARRIER_ACTIVATION_FEE, STATE_LAYOUT_VERSION,
 };
@@ -810,8 +809,9 @@ pub fn validate_factory_reduced_splice_authorization(
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if witness.participant_threshold != FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD
-        || witness.participant_keys.len() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+    if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize..=FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize)
+        .contains(&witness.participant_keys.len())
+        || witness.participant_threshold as usize != witness.participant_keys.len()
         || witness.signatures.is_empty()
         || witness
             .participant_keys
@@ -828,6 +828,13 @@ pub fn validate_factory_reduced_splice_authorization(
     let mut participants = BTreeSet::new();
     let mut pubkeys = BTreeSet::new();
     let mut key_map = BTreeMap::new();
+    if !witness
+        .participant_keys
+        .windows(2)
+        .all(|window| window[0].participant < window[1].participant)
+    {
+        return Err(MorphError::FactorySpliceParticipantSetMismatch);
+    }
     for key in &witness.participant_keys {
         if !participants.insert(key.participant) || !pubkeys.insert(key.pubkey_sec1.clone()) {
             return Err(MorphError::FactorySpliceParticipantSetMismatch);
@@ -886,8 +893,9 @@ pub fn validate_factory_splice_authorization(
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if witness.threshold != FACTORY_SIGNATURE_THRESHOLD
-        || witness.signatures.len() != FACTORY_SIGNATURE_COUNT as usize
+    if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize..=FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize)
+        .contains(&witness.signatures.len())
+        || witness.threshold as usize != witness.signatures.len()
         || witness
             .signatures
             .iter()

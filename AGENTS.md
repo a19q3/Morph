@@ -21,8 +21,8 @@ Use `make` targets — they orchestrate the right flags.
 | `make source-hygiene` | Syntax-check every shell script, reject npm lockfiles pinned to the unsupported `npmmirror.com` registry, and deny `unwrap`/`expect`/`panic!` in production Rust targets. |
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
-| `make release-readiness` | Verifies all seven built ELF CKB data hashes, the fixed-bilateral no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
-| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-v1.0-fixed-bilateral.tar.gz` after readiness checks pass. |
+| `make release-readiness` | Verifies all seven built ELF CKB data hashes, the dynamic-N (2–16 participants) no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
+| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-v1.0-dynamic-n.tar.gz` after readiness checks pass. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |
 | `make fixture-checks` | Generates and validates every protocol fixture (bilateral, factory, splice, watch). Writes to `target/fixture-checks/`. |
 | `make smoke` | Workspace tests plus `cargo run -p morph-cli -- validate-fixture`. |
@@ -93,8 +93,8 @@ ui/morph-hub                   React + Vite + TypeScript operator console.
 ### Witness envelope dispatch
 
 - Factory authorisations are carried in a single `WitnessEnvelope` and dispatched by kind/format/body length and a body commitment. See `WITNESS_ENVELOPE_KIND_*` constants and `WitnessEnvelopeKindSpec` table in `contracts/morph-script-common/src/lib.rs`. Bodies are parsed only after the envelope body's `blake2b256` matches the embedded commitment. Witness envelope format version is `WITNESS_ENVELOPE_FORMAT = 2`.
-- `FACTORY_REDUCED_RIGHTS_WITNESS_VERSION = 2`, `FACTORY_REDUCED_EXIT_WITNESS_VERSION = 4`, `FACTORY_MERKLE_UPDATE_WITNESS_VERSION = 4`, `FACTORY_SPLICE_WITNESS_VERSION = 2`, `FACTORY_REDUCED_SPLICE_WITNESS_VERSION = 6`. Bumping any version requires a body-length table update in `WITNESS_ENVELOPE_KIND_SPECS`.
-- Factory reduced-rights/sparse-Merkle/reduced-exit/splice proofs only support `FACTORY_SPARSE_MERKLE_DEPTH = 256` and limited `FACTORY_*_COUNT` constants. Unknown proof shapes must remain rejected.
+- Legacy N=2 Factory bodies use envelope kinds 1–7. Dynamic N bodies use kinds 8–14 with versions: signature 2, reduced-rights 3, Merkle update 5, reduced exit 5, local exit 2, splice 3, and reduced splice 7. Bumping any version or kind requires updating the runtime length dispatch and compatibility tests.
+- Factory participant sets support 2–16 members. Dynamic all-participant paths require `N-of-N`; dynamic reduced paths commit the complete sorted membership but authorise exactly the touched participant. Reduced-rights/sparse-Merkle/reduced-exit/splice proofs retain `FACTORY_SPARSE_MERKLE_DEPTH = 256` and limited `FACTORY_*_COUNT` constants. Unknown proof shapes must remain rejected.
 
 ### CKB cell selection discipline
 
@@ -159,7 +159,7 @@ Each sponsor cell carries an immutable per-cell policy in its lock args. The spo
 - **Both domain-string locations must change together.** `morph-core/src/hash.rs` and `contracts/morph-script-common/src/lib.rs` declare duplicate domain constants for use across the host/script boundary. `hash_parity.rs` enforces equality at test time.
 - **`vault_materialisation_root` aliases `payload_commitment` in JSON.** Don't rename the field without a fixture migration.
 - **Boundary versions are not free.** Bumping `WITNESS_ENVELOPE_FORMAT`, any `FACTORY_*_WITNESS_VERSION`, the `STATE_HEADER_LEN`, or any `*_LEN` constant is a wire-format break and breaks every dependency on it (parsers, fixtures, contract tests, devnet smoke). Check fixtures and security audits first.
-- **Reduced-rights factories only support the documented shapes.** Multi-right or variable-depth Merkle proofs are explicitly future work and must remain rejected.
+- **Reduced-rights factories only support the documented proof shapes.** Signer membership is dynamic from 2–16, but multi-right or variable-depth Merkle proofs remain future work and must be rejected.
 - **Devnet-only `morph-devnet-xudt`.** It is not safe for non-devnet use. The contract name and the README both call this out.
 - **`new_deploy` feature on `morph-cli` only.** The `devnet` feature gates RPC client, fixture-server utilities, `watch_*`, and the entire `devnet` subcommand. A default build will silently lack these.
 - **Hub auth tokens are scoped.** `read,write,restore,sign:<secret>` is the documented scope syntax; an unprefixed token is all-scope. Don't log the secret.

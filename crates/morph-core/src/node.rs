@@ -20,7 +20,10 @@ const LEGACY_INVOICE_CHECKSUM_LEN: usize = 8;
 const MAX_INVOICE_DESCRIPTION_LEN: usize = 280;
 const MAX_CKB_INVOICE_AMOUNT: Amount = u64::MAX as Amount;
 const MAX_PEER_ALIAS_LEN: usize = 80;
-pub const CURRENT_FACTORY_PARTICIPANT_COUNT: usize = 2;
+pub const FACTORY_DYNAMIC_MIN_PARTICIPANTS: usize =
+    morph_script_common::FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize;
+pub const FACTORY_DYNAMIC_MAX_PARTICIPANTS: usize =
+    morph_script_common::FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize;
 const BECH32M_CHECKSUM_CONST: u32 = 0x2bc8_30a3;
 const BECH32_CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -106,7 +109,7 @@ pub enum NodeError {
     FactoryNotFound,
     #[error("factory must include the local node")]
     FactoryMissingLocalParticipant,
-    #[error("current factory profile requires exactly two participants")]
+    #[error("factory participant count is outside the supported dynamic range")]
     FactoryParticipantCountUnsupported,
     #[error("factory child counterparty is not a factory participant")]
     FactoryChildCounterpartyNotParticipant,
@@ -844,7 +847,9 @@ impl MorphNodeState {
         if factory.participant_node_ids.iter().any(is_zero_bytes32) {
             return Err(NodeError::ZeroNodeId);
         }
-        if factory.participant_node_ids.len() != CURRENT_FACTORY_PARTICIPANT_COUNT {
+        if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS..=FACTORY_DYNAMIC_MAX_PARTICIPANTS)
+            .contains(&factory.participant_node_ids.len())
+        {
             return Err(NodeError::FactoryParticipantCountUnsupported);
         }
         if !factory.participant_node_ids.contains(&self.node_id) {

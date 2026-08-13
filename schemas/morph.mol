@@ -22,6 +22,7 @@
 // - FactoryStateHeader: 302 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness: 262 bytes
+// - FactoryDynamicSignatureWitness (N=2..16): 4 + N*129 bytes
 // - FactoryRight: 114 bytes
 // - FactoryReducedRightsWitness: 2580 bytes
 // - FactoryMerkleUpdateWitness: 8720 bytes
@@ -35,6 +36,11 @@
 // - FactoryVaultDeltas: 196 bytes
 // - FactorySpliceWitness: 1161 bytes
 // - FactoryReducedSpliceWitness: 9619 bytes
+// The fixed-size Factory*Witness declarations above are the legacy N=2
+// encodings; kinds 8..14 use the bounded dynamic encodings described below.
+// Dynamic reduced/local/splice lengths use the same suffixes and replace the
+// two fixed participant entries with N bounded entries. The executable length
+// formulas live in morph-script-common and are authoritative.
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
@@ -56,6 +62,13 @@ array EcdsaSignature [byte; 64];
 // 5 FactoryLocalExitWitness or FactoryLocalExitXudtWitness
 // 6 FactorySpliceWitness
 // 7 FactoryReducedSpliceWitness
+// 8 FactoryDynamicSignatureWitness
+// 9 FactoryDynamicReducedRightsWitness
+// 10 FactoryDynamicMerkleUpdateWitness
+// 11 FactoryDynamicReducedExitWitness
+// 12 FactoryDynamicLocalExitWitness
+// 13 FactoryDynamicSpliceWitness
+// 14 FactoryDynamicReducedSpliceWitness
 struct WitnessEnvelope {
     magic: WitnessEnvelopeMagic,
     version: uint16,

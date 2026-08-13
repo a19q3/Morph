@@ -121,16 +121,29 @@ fn splice_witness_for(header: &mut SpliceHeader) -> SpliceWitness {
 }
 
 fn factory_splice_witness_for(header: &mut FactorySpliceHeader) -> SpliceWitness {
-    let key0 = signing_key(1);
-    let key1 = signing_key(2);
-    let mut entries = [(pubkey(&key0), key0), (pubkey(&key1), key1)];
+    factory_splice_witness_for_count(header, 2)
+}
+
+fn factory_splice_witness_for_count(
+    header: &mut FactorySpliceHeader,
+    participant_count: u8,
+) -> SpliceWitness {
+    let mut entries = (1..=participant_count)
+        .map(|participant| {
+            let key = signing_key(participant);
+            (pubkey(&key), key)
+        })
+        .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let pubkeys = [entries[0].0.as_slice(), entries[1].0.as_slice()];
-    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let pubkeys = entries
+        .iter()
+        .map(|(pubkey, _)| pubkey.as_slice())
+        .collect::<Vec<_>>();
+    header.participants_commitment = participants_commitment(participant_count, &pubkeys);
     let digest = header.signing_digest();
     SpliceWitness {
-        threshold: 2,
+        threshold: participant_count,
         signatures: entries
             .iter()
             .map(|(pubkey, key)| ParticipantSignature {
@@ -144,19 +157,29 @@ fn factory_splice_witness_for(header: &mut FactorySpliceHeader) -> SpliceWitness
 fn factory_reduced_splice_witness_for(
     header: &mut FactorySpliceHeader,
 ) -> FactoryReducedSpliceWitness {
-    let key0 = signing_key(1);
-    let key1 = signing_key(2);
-    let mut entries = [
-        (bytes32(1), pubkey(&key0), key0),
-        (bytes32(2), pubkey(&key1), key1),
-    ];
+    factory_reduced_splice_witness_for_count(header, 2)
+}
+
+fn factory_reduced_splice_witness_for_count(
+    header: &mut FactorySpliceHeader,
+    participant_count: u8,
+) -> FactoryReducedSpliceWitness {
+    let mut entries = (1..=participant_count)
+        .map(|participant| {
+            let key = signing_key(participant);
+            (bytes32(participant), pubkey(&key), key)
+        })
+        .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
 
-    let pubkeys = [entries[0].1.as_slice(), entries[1].1.as_slice()];
-    header.participants_commitment = participants_commitment(2, &pubkeys);
+    let pubkeys = entries
+        .iter()
+        .map(|(_, pubkey, _)| pubkey.as_slice())
+        .collect::<Vec<_>>();
+    header.participants_commitment = participants_commitment(participant_count, &pubkeys);
     let digest = header.signing_digest();
     FactoryReducedSpliceWitness {
-        participant_threshold: 2,
+        participant_threshold: participant_count,
         participant_keys: entries
             .iter()
             .map(|(participant, pubkey, _)| FactoryParticipantKey {
@@ -998,6 +1021,23 @@ fn accepts_valid_factory_splice_in_transition() {
 }
 
 #[test]
+fn accepts_three_party_dynamic_factory_splice_authorization() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness = factory_splice_witness_for_count(&mut splice.header, 3);
+
+    validate_factory_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn factory_splice_rejects_participant_count_outside_dynamic_bounds() {
+    let mut splice = factory_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness = factory_splice_witness_for_count(&mut splice.header, 17);
+
+    let err = validate_factory_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceParticipantSetMismatch);
+}
+
+#[test]
 fn accepts_valid_factory_xudt_splice_out_transition() {
     let splice = factory_splice_transition(FactorySpliceKind::Out, VaultAsset::Xudt(bytes32(42)));
 
@@ -1072,6 +1112,24 @@ fn accepts_valid_reduced_factory_splice_transition() {
     let splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
 
     validate_factory_reduced_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn accepts_three_party_dynamic_reduced_factory_splice_authorization() {
+    let mut splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness = factory_reduced_splice_witness_for_count(&mut splice.header, 3);
+
+    validate_factory_reduced_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn reduced_factory_splice_rejects_unsorted_dynamic_participant_ids() {
+    let mut splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    splice.witness = factory_reduced_splice_witness_for_count(&mut splice.header, 3);
+    splice.witness.participant_keys.swap(0, 1);
+
+    let err = validate_factory_reduced_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::FactorySpliceParticipantSetMismatch);
 }
 
 #[test]

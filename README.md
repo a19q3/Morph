@@ -79,7 +79,7 @@ Still not claimed:
 - independent release artefact and supply-chain sign-off;
 - any real-asset value envelope.
 
-The bounded `factory-v1.0-fixed-bilateral` controlled-devnet candidate has a
+The bounded `factory-v1.0-dynamic-n` controlled-devnet candidate has a
 machine-checked no-real-assets envelope, exact CKB contract data-hash manifest,
 operator runbooks, and CI provenance configuration. Verify it with:
 
@@ -90,7 +90,8 @@ make package-contract-release
 ```
 
 This closes repository-side pre-production mechanics only; it does not change
-the mainnet disclaimer or expand the two-participant/fixed-proof protocol.
+the mainnet disclaimer. Factory signer membership is bounded to 2–16, while
+reduced proofs retain their fixed count and depth limits.
 
 ## Main Business Flows
 

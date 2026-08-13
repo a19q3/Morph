@@ -244,6 +244,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_capacity,
             factory_vault_capacity,
             factory_vault_xudt_amount,
@@ -261,6 +262,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     private_key,
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_capacity,
                     factory_vault_capacity,
                     factory_vault_xudt_amount,
@@ -333,6 +335,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             update_number,
             state_root,
@@ -350,6 +353,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     private_key,
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     update_number,
                     state_root,
@@ -397,6 +401,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::SaveFactoryStatePackage {
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             update_number,
             state_root,
@@ -410,6 +415,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 SaveFactoryStatePackageOptions {
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     update_number,
                     state_root,
@@ -439,6 +445,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::SaveFactoryReducedRightsPackage {
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             update_number,
             touched_after_balance,
@@ -450,6 +457,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 SaveFactoryReducedRightsPackageOptions {
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     update_number,
                     touched_after_balance,
@@ -483,6 +491,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::SaveFactorySplicePackage {
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             factory_vault_out_point,
             kind,
@@ -498,6 +507,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 SaveFactorySplicePackageOptions {
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     factory_vault_out_point,
                     kind: match kind {
@@ -534,6 +544,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::SaveFactoryReducedSplicePackage {
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             factory_vault_out_point,
             kind,
@@ -549,6 +560,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 SaveFactoryReducedSplicePackageOptions {
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     factory_vault_out_point,
                     kind: match kind {
@@ -717,6 +729,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::SaveFactoryMerkleUpdatePackage {
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
             factory_out_point,
             update_number,
             touched_after_balance,
@@ -728,6 +741,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 SaveFactoryMerkleUpdatePackageOptions {
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
                     factory_out_point,
                     update_number,
                     touched_after_balance,
@@ -1849,6 +1863,8 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             alice_private_key,
             bob_private_key,
+            additional_participant_private_keys,
+            additional_participant_public_keys,
             bob_public_key,
             authorisation,
             factory_out_point,
@@ -1872,6 +1888,8 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     private_key,
                     alice_private_key,
                     bob_private_key,
+                    additional_participant_private_keys,
+                    additional_participant_public_keys,
                     bob_public_key,
                     factory_out_point,
                     factory_vault_out_point,

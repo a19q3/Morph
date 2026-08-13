@@ -297,25 +297,43 @@ fn factory_requires_local_participant_and_child_counterparty_membership() {
 }
 
 #[test]
-fn factory_projection_rejects_unsupported_participant_count() {
+fn factory_projection_accepts_dynamic_participant_bounds() {
     let mut node = MorphNodeState::new(bytes32(1), MorphNetwork::Devnet).unwrap();
 
-    assert_eq!(
-        node.open_factory(MorphFactoryRecord {
-            factory_id: bytes32(39),
-            participant_node_ids: BTreeSet::from([bytes32(1), bytes32(7), bytes32(8)]),
-            update_number: 0,
-            reserve_balances: vec![MorphAssetBalance {
-                asset: MorphAsset::Ckb,
-                local: 100_000,
-                remote: 100_000,
-                pending: 0,
-            }],
-            materialised_child_channels: BTreeSet::new(),
-        })
-        .unwrap_err(),
-        NodeError::FactoryParticipantCountUnsupported
-    );
+    node.open_factory(MorphFactoryRecord {
+        factory_id: bytes32(38),
+        participant_node_ids: BTreeSet::from([bytes32(1), bytes32(7), bytes32(8)]),
+        update_number: 0,
+        reserve_balances: vec![],
+        materialised_child_channels: BTreeSet::new(),
+    })
+    .unwrap();
+
+    node.open_factory(MorphFactoryRecord {
+        factory_id: bytes32(39),
+        participant_node_ids: (1..=16).map(bytes32).collect(),
+        update_number: 0,
+        reserve_balances: vec![],
+        materialised_child_channels: BTreeSet::new(),
+    })
+    .unwrap();
+
+    for (factory_id, participant_node_ids) in [
+        (bytes32(40), BTreeSet::from([bytes32(1)])),
+        (bytes32(41), (1..=17).map(bytes32).collect()),
+    ] {
+        assert_eq!(
+            node.open_factory(MorphFactoryRecord {
+                factory_id,
+                participant_node_ids,
+                update_number: 0,
+                reserve_balances: vec![],
+                materialised_child_channels: BTreeSet::new(),
+            })
+            .unwrap_err(),
+            NodeError::FactoryParticipantCountUnsupported
+        );
+    }
 }
 
 #[test]

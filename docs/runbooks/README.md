@@ -1,7 +1,7 @@
 # Pre-production Operator Runbooks
 
 These runbooks govern the controlled-devnet
-`factory-v1.0-fixed-bilateral` pilot. They are executable procedures, not a
+`factory-v1.0-dynamic-n` pilot. They are executable procedures, not a
 mainnet operations claim.
 
 Read and rehearse all of the following before activation:
@@ -35,7 +35,7 @@ Activation is allowed only when all items are true:
 2. `make release-readiness` matches all seven ELF hashes.
 3. The deployment report contains those same CKB data hashes.
 4. The envelope is unexpired and every intended value is below its cap.
-5. The Factory has exactly two participants and both verify its initial package.
+5. The Factory has 2–16 participants and every member verifies its N-of-N initial package.
 6. The independent watchtower health file is healthy and its cursor scan floor
    predates the Factory/channel creation block.
 7. Stop, incident, and migration procedures have been rehearsed.

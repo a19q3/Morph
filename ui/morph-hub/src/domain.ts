@@ -73,7 +73,8 @@ export interface HubModel {
   channel_authority: 'state_and_vault';
   routing_role: 'external_optional_provider';
   agent_role: 'application_sidecar';
-  factory_participant_count: number;
+  factory_min_participants: number;
+  factory_max_participants: number;
   chain_actions_enabled: boolean;
   factory_rights_exposed: boolean;
   provider_edges_exposed: boolean;
@@ -220,13 +221,14 @@ export const emptyState: NodeState = {
     max_invoice_expiry_secs: 604800,
   },
   model: {
-    profile: 'sovereign-devnet-v1',
+    profile: 'sovereign-devnet-dynamic-factory-v2',
     hub_role: 'local_operator_projection',
     factory_authority: 'factory_state_and_vault',
     channel_authority: 'state_and_vault',
     routing_role: 'external_optional_provider',
     agent_role: 'application_sidecar',
-    factory_participant_count: 2,
+    factory_min_participants: 2,
+    factory_max_participants: 16,
     chain_actions_enabled: false,
     factory_rights_exposed: false,
     provider_edges_exposed: false,

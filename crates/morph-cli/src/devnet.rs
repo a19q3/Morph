@@ -39,27 +39,32 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
+    ECDSA_SIGNATURE_LEN, FACTORY_DYNAMIC_LOCAL_EXIT_WITNESS_VERSION,
+    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION,
+    FACTORY_DYNAMIC_MIN_PARTICIPANTS, FACTORY_DYNAMIC_REDUCED_EXIT_WITNESS_VERSION,
+    FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
     FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
     FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_REDUCED_EXIT_RIGHTS_COUNT,
     FACTORY_REDUCED_EXIT_WITNESS_LEN, FACTORY_REDUCED_EXIT_WITNESS_VERSION,
     FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD, FACTORY_RIGHT_KIND_RESERVE_CLAIM,
-    FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD,
+    FACTORY_RIGHT_KIND_RESERVE_CLAIM, FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT,
     FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH,
-    FACTORY_STATE_HEADER_LEN, FACTORY_STATE_LAYOUT_VERSION, FactoryMerkleUpdateWitness,
-    FactoryReducedExitWitness, FactoryStateHeader, MORPH_PROTOCOL_VERSION, PHASE_ACTIVE,
-    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPONSOR_POLICY_LEN,
-    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, STATE_LAYOUT_VERSION,
-    STATE_MODE_BILATERAL_PLAINTEXT, STATE_MODE_FACTORY_PROOF, ScriptError,
-    SponsorPolicy as WireSponsorPolicy, StateHeader as WireStateHeader, StateHeaderInput,
-    WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
-    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256 as script_blake2b256,
-    encode_state_header, factory_local_exit_digest, factory_participants_commitment,
-    participants_commitment, relative_block_since, settlement_descriptor_commitment,
-    vault_cell_commitment, verify_factory_merkle_update, verify_reduced_factory_exit_update,
+    FACTORY_STATE_HEADER_LEN, FACTORY_STATE_LAYOUT_VERSION, FactoryDynamicMerkleUpdateWitness,
+    FactoryDynamicReducedExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
+    FactoryStateHeader, MORPH_PROTOCOL_VERSION, PHASE_ACTIVE, PHASE_SETTLING,
+    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPONSOR_POLICY_LEN, STATE_CARRIER_ACTIVATION_FEE,
+    STATE_HEADER_LEN, STATE_LAYOUT_VERSION, STATE_MODE_BILATERAL_PLAINTEXT,
+    STATE_MODE_FACTORY_PROOF, ScriptError, SponsorPolicy as WireSponsorPolicy,
+    StateHeader as WireStateHeader, StateHeaderInput, WITNESS_ENVELOPE_FORMAT,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
+    WitnessEnvelope, blake2b256 as script_blake2b256, encode_state_header,
+    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
+    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
+    verify_factory_dynamic_merkle_update, verify_factory_dynamic_reduced_exit_update,
+    verify_factory_merkle_update, verify_reduced_factory_exit_update,
     witness_envelope_body_commitment,
 };
 use serde::Serialize;
@@ -137,6 +142,7 @@ pub struct OpenFactoryOptions {
     pub private_key: String,
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_capacity: u64,
     pub factory_vault_capacity: u64,
     pub factory_vault_xudt_amount: Option<u128>,
@@ -153,6 +159,7 @@ pub struct UpdateFactoryOptions {
     pub private_key: String,
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub update_number: Option<u64>,
     pub state_root: Option<String>,
@@ -167,6 +174,7 @@ pub struct UpdateFactoryOptions {
 pub struct SaveFactoryStatePackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub update_number: Option<u64>,
     pub state_root: Option<String>,
@@ -179,6 +187,7 @@ pub struct SaveFactoryStatePackageOptions {
 pub struct SaveFactoryReducedRightsPackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub update_number: Option<u64>,
     pub touched_after_balance: u128,
@@ -189,6 +198,7 @@ pub struct SaveFactoryReducedRightsPackageOptions {
 pub struct SaveFactorySplicePackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub factory_vault_out_point: String,
     pub kind: DevnetSpliceKind,
@@ -203,6 +213,7 @@ pub struct SaveFactorySplicePackageOptions {
 pub struct SaveFactoryReducedSplicePackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub factory_vault_out_point: String,
     pub kind: DevnetSpliceKind,
@@ -241,6 +252,7 @@ pub struct ApplyFactoryReducedSpliceOptions {
 pub struct SaveFactoryMerkleUpdatePackageOptions {
     pub alice_private_key: String,
     pub bob_private_key: String,
+    pub additional_participant_private_keys: Vec<String>,
     pub factory_out_point: String,
     pub update_number: Option<u64>,
     pub touched_after_balance: u128,
@@ -432,6 +444,8 @@ pub struct FactoryExitChannelOptions {
     pub private_key: String,
     pub alice_private_key: String,
     pub bob_private_key: Option<String>,
+    pub additional_participant_private_keys: Vec<String>,
+    pub additional_participant_public_keys: Vec<String>,
     pub bob_public_key: Option<String>,
     pub factory_out_point: String,
     pub factory_vault_out_point: String,
@@ -2050,12 +2064,11 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     let owner_key = parse_privkey(&options.private_key)
         .with_context(|| "invalid secp256k1 private key for factory opener")?;
     let owner_lock = secp256k1_lock(&owner_key)?;
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
-    let alice_pubkey = k256_pubkey(&alice_key);
-    let bob_pubkey = k256_pubkey(&bob_key);
+    let participant_entries = factory_signing_entries(
+        &options.alice_private_key,
+        &options.bob_private_key,
+        &options.additional_participant_private_keys,
+    )?;
 
     let tip = rpc.tip_header()?;
     let tip_number = tip.number_value()?;
@@ -2113,7 +2126,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
     )?
     .unwrap_or_else(|| script_blake2b256(&[b"CKB_MORPH_INITIAL_FACTORY_NON_INTERFERENCE"]));
     let participants_commitment =
-        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+        factory_participants_commitment_from_entries(&participant_entries);
     let challenge_policy_commitment = script_blake2b256(&[b"CKB_MORPH_FACTORY_CHALLENGE_POLICY"]);
     let funding_factory_capacity = options
         .factory_capacity
@@ -2197,9 +2210,10 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         &factory_header,
         &options.alice_private_key,
         &options.bob_private_key,
+        &options.additional_participant_private_keys,
     )?;
     let initial_contract_witness = factory_witness_envelope(
-        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
+        factory_signature_envelope_kind(&initial_signature_witness)?,
         &initial_signature_witness,
     )?;
     let signed = sign_single_secp_input_with_input_type(
@@ -2266,7 +2280,7 @@ pub fn open_factory(rpc: &CkbRpcClient, options: OpenFactoryOptions) -> Result<O
         activation_fee: STATE_CARRIER_ACTIVATION_FEE,
         activation_metrics: activation.metrics,
         activation_mined_blocks: activation.mined_blocks,
-        participants: factory_participant_reports(alice_pubkey, bob_pubkey),
+        participants: factory_participant_reports(&participant_entries),
         scripts: contracts
             .into_iter()
             .map(|contract| ResolvedScriptReport {
@@ -2447,9 +2461,12 @@ pub fn update_factory(
             &new_factory_data,
             &options.alice_private_key,
             &options.bob_private_key,
+            &options.additional_participant_private_keys,
         )?;
-        let contract_witness =
-            factory_witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, &signature_witness)?;
+        let contract_witness = factory_witness_envelope(
+            factory_signature_envelope_kind(&signature_witness)?,
+            &signature_witness,
+        )?;
         (
             new_factory_data,
             contract_witness,
@@ -2594,6 +2611,7 @@ pub fn save_factory_state_package(
         &new_factory_data,
         &options.alice_private_key,
         &options.bob_private_key,
+        &options.additional_participant_private_keys,
     )?;
 
     let printable = printable_out_point(&factory_out_point);
@@ -2621,10 +2639,15 @@ pub fn save_factory_reduced_rights_package(
         options.touched_after_balance < 100,
         "touched_after_balance must decrease the fixture balance below 100"
     );
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
+    let participant_entries = factory_signing_entries(
+        &options.alice_private_key,
+        &options.bob_private_key,
+        &options.additional_participant_private_keys,
+    )?;
+    let participant_keys = participant_entries
+        .iter()
+        .map(|(_, _, key)| key.clone())
+        .collect::<Vec<_>>();
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
     let old_header = FactoryStateHeader::parse(factory_cell.data.as_ref()).map_err(|err| {
@@ -2633,8 +2656,7 @@ pub fn save_factory_reduced_rights_package(
     let printable = printable_out_point(&factory_out_point);
     let package = reduced_rights_package_from_factory_header(
         factory_cell.data.as_ref(),
-        &alice_key,
-        &bob_key,
+        &participant_keys,
         options.update_number,
         options.touched_after_balance,
         Some(PackageOutPoint {
@@ -2661,10 +2683,15 @@ pub fn save_factory_splice_package(
     rpc: &CkbRpcClient,
     options: SaveFactorySplicePackageOptions,
 ) -> Result<SaveFactorySplicePackageReport> {
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
+    let participant_entries = factory_signing_entries(
+        &options.alice_private_key,
+        &options.bob_private_key,
+        &options.additional_participant_private_keys,
+    )?;
+    let participant_signing_keys = participant_entries
+        .iter()
+        .map(|(participant, _, key)| (*participant, key.clone()))
+        .collect::<Vec<_>>();
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
@@ -2681,13 +2708,10 @@ pub fn save_factory_splice_package(
         factory_type.args().raw_data().as_ref() == old_header.factory_id(),
         "factory type args do not match the factory id in cell data"
     );
-    let alice_pubkey = k256_pubkey(&alice_key);
-    let bob_pubkey = k256_pubkey(&bob_key);
-    let expected_participants =
-        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+    let expected_participants = factory_participants_commitment_from_entries(&participant_entries);
     ensure!(
         old_header.participants_commitment() == expected_participants.as_slice(),
-        "live factory participant commitment does not match supplied Alice/Bob keys"
+        "live factory participant commitment does not match supplied participant keys"
     );
     let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
     let factory_vault_args = factory_vault_cell.output.lock().args().raw_data();
@@ -2883,10 +2907,8 @@ pub fn save_factory_splice_package(
             xudt_types: xudt_type_hash.into_iter().collect(),
         },
     };
-    let package = StoredFactorySplicePackage::from_transition(
-        transition,
-        &[([1u8; BYTE32_LEN], alice_key), ([2u8; BYTE32_LEN], bob_key)],
-    )?;
+    let package =
+        StoredFactorySplicePackage::from_transition(transition, &participant_signing_keys)?;
     let summary = package.summary()?;
     let path = write_factory_splice_package(&options.store_dir, &package)?;
 
@@ -2914,10 +2936,15 @@ pub fn save_factory_reduced_splice_package(
     rpc: &CkbRpcClient,
     options: SaveFactoryReducedSplicePackageOptions,
 ) -> Result<SaveFactoryReducedSplicePackageReport> {
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
+    let participant_entries = factory_signing_entries(
+        &options.alice_private_key,
+        &options.bob_private_key,
+        &options.additional_participant_private_keys,
+    )?;
+    let participant_signing_keys = participant_entries
+        .iter()
+        .map(|(participant, _, key)| (*participant, key.clone()))
+        .collect::<Vec<_>>();
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_vault_out_point = parse_out_point(&options.factory_vault_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
@@ -2934,13 +2961,10 @@ pub fn save_factory_reduced_splice_package(
         factory_type.args().raw_data().as_ref() == old_header.factory_id(),
         "factory type args do not match the factory id in cell data"
     );
-    let alice_pubkey = k256_pubkey(&alice_key);
-    let bob_pubkey = k256_pubkey(&bob_key);
-    let expected_participants =
-        factory_participants_commitment_from_pubkeys(alice_pubkey, bob_pubkey);
+    let expected_participants = factory_participants_commitment_from_entries(&participant_entries);
     ensure!(
         old_header.participants_commitment() == expected_participants.as_slice(),
-        "live factory participant commitment does not match supplied Alice/Bob keys"
+        "live factory participant commitment does not match supplied participant keys"
     );
     let factory_type_hash: [u8; BYTE32_LEN] = factory_type.calc_script_hash().unpack();
     let factory_vault_args = factory_vault_cell.output.lock().args().raw_data();
@@ -3147,10 +3171,8 @@ pub fn save_factory_reduced_splice_package(
             xudt_types: xudt_type_hash.into_iter().collect(),
         },
     };
-    let package = StoredFactoryReducedSplicePackage::from_transition(
-        transition,
-        &[([1u8; BYTE32_LEN], alice_key), ([2u8; BYTE32_LEN], bob_key)],
-    )?;
+    let package =
+        StoredFactoryReducedSplicePackage::from_transition(transition, &participant_signing_keys)?;
     let summary = package.summary()?;
     let path = write_factory_reduced_splice_package(&options.store_dir, &package)?;
 
@@ -4090,10 +4112,15 @@ pub fn save_factory_merkle_update_package(
         options.touched_after_balance < 1_000,
         "touched_after_balance must decrease the fixture balance below 1000"
     );
-    let alice_key = k256_signing_key(&options.alice_private_key)
-        .with_context(|| "invalid Alice factory private key")?;
-    let bob_key = k256_signing_key(&options.bob_private_key)
-        .with_context(|| "invalid Bob factory private key")?;
+    let participant_entries = factory_signing_entries(
+        &options.alice_private_key,
+        &options.bob_private_key,
+        &options.additional_participant_private_keys,
+    )?;
+    let participant_keys = participant_entries
+        .iter()
+        .map(|(_, _, key)| key.clone())
+        .collect::<Vec<_>>();
     let factory_out_point = parse_out_point(&options.factory_out_point)?;
     let factory_cell = load_live_cell(rpc, factory_out_point.clone())?;
     let old_header = FactoryStateHeader::parse(factory_cell.data.as_ref()).map_err(|err| {
@@ -4102,8 +4129,7 @@ pub fn save_factory_merkle_update_package(
     let printable = printable_out_point(&factory_out_point);
     let package = merkle_update_package_from_factory_header(
         factory_cell.data.as_ref(),
-        &alice_key,
-        &bob_key,
+        &participant_keys,
         options.update_number,
         options.touched_after_balance,
         Some(PackageOutPoint {
@@ -4137,6 +4163,7 @@ pub fn factory_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4153,6 +4180,7 @@ pub fn factory_smoke(
         SaveFactoryStatePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             update_number: None,
             state_root: None,
@@ -4169,6 +4197,7 @@ pub fn factory_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: options.bob_private_key,
+            additional_participant_private_keys: Vec::new(),
             factory_out_point,
             update_number: None,
             state_root: None,
@@ -4200,6 +4229,7 @@ pub fn factory_reduced_rights_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4216,6 +4246,7 @@ pub fn factory_reduced_rights_smoke(
         SaveFactoryReducedRightsPackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             update_number: None,
             touched_after_balance: options.touched_after_balance,
@@ -4229,6 +4260,7 @@ pub fn factory_reduced_rights_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: options.bob_private_key,
+            additional_participant_private_keys: Vec::new(),
             factory_out_point,
             update_number: None,
             state_root: None,
@@ -4281,6 +4313,7 @@ pub fn factory_splice_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4298,6 +4331,7 @@ pub fn factory_splice_smoke(
         SaveFactorySplicePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
             kind: options.kind,
@@ -4328,6 +4362,8 @@ pub fn factory_splice_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: Some(options.bob_private_key),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
@@ -4399,6 +4435,7 @@ pub fn factory_reduced_splice_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4416,6 +4453,7 @@ pub fn factory_reduced_splice_smoke(
         SaveFactoryReducedSplicePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
             kind: options.kind,
@@ -4446,6 +4484,8 @@ pub fn factory_reduced_splice_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: Some(options.bob_private_key),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
@@ -4528,6 +4568,7 @@ pub fn factory_xudt_splice_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(old_xudt_amount),
@@ -4562,6 +4603,7 @@ pub fn factory_xudt_splice_smoke(
         SaveFactorySplicePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
             kind: options.kind,
@@ -4602,6 +4644,8 @@ pub fn factory_xudt_splice_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: Some(options.bob_private_key),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
@@ -4686,6 +4730,7 @@ pub fn factory_reduced_xudt_splice_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(old_xudt_amount),
@@ -4720,6 +4765,7 @@ pub fn factory_reduced_xudt_splice_smoke(
         SaveFactoryReducedSplicePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
             kind: options.kind,
@@ -4760,6 +4806,8 @@ pub fn factory_reduced_xudt_splice_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: Some(options.bob_private_key),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: format!(
                 "{}:{}",
@@ -4814,6 +4862,7 @@ pub fn factory_merkle_update_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4830,6 +4879,7 @@ pub fn factory_merkle_update_smoke(
         SaveFactoryMerkleUpdatePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             update_number: None,
             touched_after_balance: options.touched_after_balance,
@@ -4843,6 +4893,7 @@ pub fn factory_merkle_update_smoke(
             private_key: options.private_key,
             alice_private_key: options.alice_private_key,
             bob_private_key: options.bob_private_key,
+            additional_participant_private_keys: Vec::new(),
             factory_out_point,
             update_number: None,
             state_root: None,
@@ -4883,6 +4934,7 @@ pub fn factory_reduced_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: None,
@@ -4902,6 +4954,8 @@ pub fn factory_reduced_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
@@ -4998,6 +5052,7 @@ pub fn factory_reduced_xudt_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(factory_vault_xudt_amount),
@@ -5017,6 +5072,8 @@ pub fn factory_reduced_xudt_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
@@ -5118,6 +5175,7 @@ pub fn factory_reduced_xudt_negative_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(child_xudt_amount),
@@ -5138,6 +5196,8 @@ pub fn factory_reduced_xudt_negative_exit_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point,
             factory_vault_out_point,
@@ -5200,6 +5260,7 @@ pub fn factory_xudt_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(total_xudt_amount),
@@ -5217,6 +5278,7 @@ pub fn factory_xudt_smoke(
         SaveFactoryStatePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             update_number: None,
             state_root: None,
@@ -5233,6 +5295,7 @@ pub fn factory_xudt_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point,
             update_number: None,
             state_root: None,
@@ -5250,6 +5313,8 @@ pub fn factory_xudt_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: printable_out_point_string(&update.factory_out_point),
             factory_vault_out_point,
@@ -5339,6 +5404,7 @@ pub fn factory_xudt_negative_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_capacity: options.factory_capacity,
             factory_vault_capacity: options.factory_vault_capacity,
             factory_vault_xudt_amount: Some(total_xudt_amount),
@@ -5356,6 +5422,7 @@ pub fn factory_xudt_negative_smoke(
         SaveFactoryStatePackageOptions {
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point: factory_out_point.clone(),
             update_number: None,
             state_root: None,
@@ -5372,6 +5439,7 @@ pub fn factory_xudt_negative_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: options.bob_private_key.clone(),
+            additional_participant_private_keys: Vec::new(),
             factory_out_point,
             update_number: None,
             state_root: None,
@@ -5394,6 +5462,8 @@ pub fn factory_xudt_negative_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: live_factory_out_point.clone(),
             factory_vault_out_point: factory_vault_out_point.clone(),
@@ -5434,6 +5504,8 @@ pub fn factory_xudt_negative_smoke(
             private_key: options.private_key.clone(),
             alice_private_key: options.alice_private_key.clone(),
             bob_private_key: Some(options.bob_private_key.clone()),
+            additional_participant_private_keys: Vec::new(),
+            additional_participant_public_keys: Vec::new(),
             bob_public_key: None,
             factory_out_point: live_factory_out_point,
             factory_vault_out_point,
@@ -5550,10 +5622,60 @@ pub fn factory_exit_channel(
             ));
         }
     };
+    ensure!(
+        options.additional_participant_private_keys.is_empty()
+            || options.additional_participant_public_keys.is_empty(),
+        "additional factory participants must be supplied as either private keys or public keys, not both"
+    );
+    let mut factory_participant_pubkeys = Vec::with_capacity(
+        2 + options.additional_participant_private_keys.len()
+            + options.additional_participant_public_keys.len(),
+    );
+    factory_participant_pubkeys.push(compressed_pubkey(&alice_key)?);
+    factory_participant_pubkeys.push(bob_pubkey);
+    for (index, private_key) in options
+        .additional_participant_private_keys
+        .iter()
+        .enumerate()
+    {
+        let key = k256_signing_key(private_key)
+            .with_context(|| format!("invalid factory participant {} private key", index + 3))?;
+        factory_participant_pubkeys.push(k256_pubkey(&key));
+    }
+    for (index, public_key) in options
+        .additional_participant_public_keys
+        .iter()
+        .enumerate()
+    {
+        factory_participant_pubkeys.push(parse_compressed_pubkey_hex(
+            public_key,
+            &format!("factory participant {} public key", index + 3),
+        )?);
+    }
+    ensure!(
+        factory_participant_pubkeys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && factory_participant_pubkeys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory exit requires {}-{} participants",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS
+    );
+    ensure!(
+        factory_participant_pubkeys
+            .iter()
+            .enumerate()
+            .all(|(index, key)| factory_participant_pubkeys[..index]
+                .iter()
+                .all(|other| other != key)),
+        "factory participant public keys must be unique"
+    );
     if options.authorisation == FactoryExitAuthorisation::FullParticipants {
         ensure!(
             options.bob_private_key.is_some(),
             "full-participant factory exit requires Bob's private key"
+        );
+        ensure!(
+            options.additional_participant_public_keys.is_empty(),
+            "full-participant factory exit requires private keys for every additional participant"
         );
     }
     let owner_lock = secp256k1_lock(&owner_key)?;
@@ -5978,6 +6100,7 @@ pub fn factory_exit_channel(
                     options.bob_private_key.as_deref().ok_or_else(|| {
                         anyhow!("full-participant factory exit requires Bob's private key")
                     })?,
+                    &options.additional_participant_private_keys,
                 )?;
                 let local_exit_witness = factory_local_exit_witness(
                     &factory_signature,
@@ -5994,10 +6117,7 @@ pub fn factory_exit_channel(
                     &local_exit_witness,
                 )
                 .context("constructed factory local-exit package is invalid")?;
-                let contract_witness = factory_witness_envelope(
-                    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
-                    &local_exit_witness,
-                )?;
+                let contract_witness = local_exit_package.contract_witness_bytes()?;
                 (
                     new_factory_data,
                     contract_witness,
@@ -6034,7 +6154,7 @@ pub fn factory_exit_channel(
                 let reduced = reduced_exit_from_factory_header(
                     factory_cell.data.as_ref(),
                     &alice_factory_key,
-                    &bob_pubkey,
+                    &factory_participant_pubkeys,
                     new_update_number,
                     reserve_claim,
                     state_output_index,
@@ -6047,7 +6167,13 @@ pub fn factory_exit_channel(
                     new_factory_vault_materialisation_root,
                 )?;
                 let contract_witness = factory_witness_envelope(
-                    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+                    if factory_participant_pubkeys.len()
+                        == FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
+                    {
+                        WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT
+                    } else {
+                        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_EXIT
+                    },
                     &reduced.witness,
                 )?;
                 (
@@ -11576,22 +11702,34 @@ fn factory_signature_witness(
     factory_header: &[u8],
     alice_private_key: &str,
     bob_private_key: &str,
-) -> Result<[u8; FACTORY_SIGNATURE_WITNESS_LEN]> {
+    additional_participant_private_keys: &[String],
+) -> Result<Vec<u8>> {
     let header = FactoryStateHeader::parse(factory_header)
         .map_err(|err| anyhow!("new factory header is invalid: {err:?}"))?;
-    let alice_key = k256_signing_key(alice_private_key)?;
-    let bob_key = k256_signing_key(bob_private_key)?;
-    let mut entries = [
-        ([1u8; BYTE32_LEN], k256_pubkey(&alice_key), alice_key),
-        ([2u8; BYTE32_LEN], k256_pubkey(&bob_key), bob_key),
-    ];
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let entries = factory_signing_entries(
+        alice_private_key,
+        bob_private_key,
+        additional_participant_private_keys,
+    )?;
 
     let digest = header.signing_digest();
-    let mut witness = [0u8; FACTORY_SIGNATURE_WITNESS_LEN];
-    put_u16(&mut witness, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
-    witness[2] = FACTORY_SIGNATURE_THRESHOLD;
-    witness[3] = FACTORY_SIGNATURE_COUNT;
+    let dynamic = entries.len() != FACTORY_SIGNATURE_COUNT as usize;
+    let mut witness = if dynamic {
+        vec![0u8; morph_script_common::factory_dynamic_signature_witness_len(entries.len() as u8)]
+    } else {
+        vec![0u8; FACTORY_SIGNATURE_WITNESS_LEN]
+    };
+    put_u16(
+        &mut witness,
+        0,
+        if dynamic {
+            FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION
+        } else {
+            FACTORY_SIGNATURE_WITNESS_VERSION
+        },
+    );
+    witness[2] = entries.len() as u8;
+    witness[3] = entries.len() as u8;
     for (index, (participant, pubkey, key)) in entries.iter().enumerate() {
         let offset =
             4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
@@ -11605,6 +11743,18 @@ fn factory_signature_witness(
     Ok(witness)
 }
 
+fn factory_signature_envelope_kind(raw: &[u8]) -> Result<u16> {
+    match raw.get(..2) {
+        Some(version) if version == FACTORY_SIGNATURE_WITNESS_VERSION.to_le_bytes() => {
+            Ok(WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE)
+        }
+        Some(version) if version == FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION.to_le_bytes() => {
+            Ok(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE)
+        }
+        _ => Err(anyhow!("unknown factory signature witness version")),
+    }
+}
+
 fn merkle_update_initial_roots() -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
     let (before, _) = merkle_update_rights(900);
     Ok((
@@ -11616,8 +11766,7 @@ fn merkle_update_initial_roots() -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])>
 
 fn merkle_update_package_from_factory_header(
     old_header_bytes: &[u8],
-    alice: &SigningKey,
-    bob: &SigningKey,
+    participant_keys: &[SigningKey],
     new_update_number: Option<u64>,
     touched_after_balance: u128,
     source_factory_out_point: Option<PackageOutPoint>,
@@ -11631,17 +11780,27 @@ fn merkle_update_package_from_factory_header(
         old_header.update_number()
     );
 
-    let entries = reduced_exit_participant_entries(alice, bob);
-    let participants_commitment = factory_participants_commitment(
-        2,
-        &[
-            (entries[0].0.as_slice(), entries[0].1.as_slice()),
-            (entries[1].0.as_slice(), entries[1].1.as_slice()),
-        ],
+    ensure!(
+        participant_keys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && participant_keys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory Merkle update requires {}-{} participant keys",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS
     );
+    let commitment_entries = participant_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| ([(index + 1) as u8; BYTE32_LEN], k256_pubkey(key)))
+        .collect::<Vec<_>>();
+    let commitment_refs = commitment_entries
+        .iter()
+        .map(|(participant, pubkey)| (participant.as_slice(), pubkey.as_slice()))
+        .collect::<Vec<_>>();
+    let participants_commitment =
+        factory_participants_commitment(participant_keys.len() as u8, &commitment_refs);
     ensure!(
         old_header.participants_commitment() == participants_commitment.as_slice(),
-        "live factory participant commitment does not match supplied Alice/Bob keys"
+        "live factory participant commitment does not match supplied participant keys"
     );
 
     let (before_rights, after_rights) = merkle_update_rights(touched_after_balance);
@@ -11670,14 +11829,9 @@ fn merkle_update_package_from_factory_header(
         &before_proof.right,
         &after_proof.right,
         &before_proof.siblings,
-        alice,
-        bob,
+        participant_keys,
     )?;
-    let parsed_witness = FactoryMerkleUpdateWitness::parse(&witness)
-        .map_err(|err| anyhow!("constructed Merkle update witness is invalid: {err:?}"))?;
-    let new_state_root = parsed_witness
-        .rights_root(true)
-        .map_err(|err| anyhow!("failed to compute Merkle update new root: {err:?}"))?;
+    let new_state_root = merkle_update_rights_root(&witness, true)?;
 
     let mut new_header = old_header_bytes.to_vec();
     put_u64(&mut new_header, 68, update_number);
@@ -11685,22 +11839,18 @@ fn merkle_update_package_from_factory_header(
     new_header[140..172].copy_from_slice(&access_manifest_root);
     let preliminary_new = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("preliminary Merkle update header is invalid: {err:?}"))?;
-    let non_interference_digest = parsed_witness
-        .non_interference_digest(&old_header, &preliminary_new)
-        .map_err(|err| anyhow!("failed to compute Merkle update digest: {err:?}"))?;
+    let non_interference_digest =
+        merkle_update_non_interference_digest(&witness, &old_header, &preliminary_new)?;
     new_header[172..204].copy_from_slice(&non_interference_digest);
     let new_header_parsed = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("new Merkle update header is invalid: {err:?}"))?;
     sign_merkle_update_witness(
         &mut witness,
         [1u8; BYTE32_LEN],
-        alice,
+        &participant_keys[0],
         &new_header_parsed.signing_digest(),
     )?;
-    let signed_witness = FactoryMerkleUpdateWitness::parse(&witness)
-        .map_err(|err| anyhow!("signed Merkle update witness is invalid: {err:?}"))?;
-    verify_factory_merkle_update(&old_header, &new_header_parsed, &signed_witness)
-        .map_err(|err| anyhow!("constructed Merkle update is invalid: {err:?}"))?;
+    verify_merkle_update_witness_any(&old_header, &new_header_parsed, &witness)?;
 
     StoredFactoryMerkleUpdateStatePackage::from_merkle_update(
         old_header_bytes,
@@ -11744,8 +11894,7 @@ fn merkle_update_witness_bytes(
     before: &FactoryRight,
     after: &FactoryRight,
     siblings: &[FactoryMerkleSibling],
-    alice: &SigningKey,
-    bob: &SigningKey,
+    participant_keys: &[SigningKey],
 ) -> Result<Vec<u8>> {
     ensure!(
         siblings.len() == FACTORY_SPARSE_MERKLE_DEPTH,
@@ -11756,30 +11905,58 @@ fn merkle_update_witness_bytes(
         before.id == after.id && before.quantity != after.quantity,
         "Merkle update must prove one changed right"
     );
-    let entries = reduced_exit_participant_entries(alice, bob);
+    ensure!(
+        participant_keys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && participant_keys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory Merkle update requires {}-{} participant keys",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS
+    );
     let touched = before.id.participant;
-    let mut raw = vec![0u8; FACTORY_MERKLE_UPDATE_WITNESS_LEN];
-    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    let dynamic = participant_keys.len() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize;
+    let mut raw = vec![
+        0u8;
+        if dynamic {
+            morph_script_common::factory_dynamic_merkle_update_witness_len(
+                participant_keys.len() as u8
+            )
+        } else {
+            FACTORY_MERKLE_UPDATE_WITNESS_LEN
+        }
+    ];
+    put_u16(
+        &mut raw,
+        0,
+        if dynamic {
+            FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION
+        } else {
+            FACTORY_MERKLE_UPDATE_WITNESS_VERSION
+        },
+    );
+    raw[2] = participant_keys.len() as u8;
+    raw[3] = participant_keys.len() as u8;
     raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
     raw[5] = FACTORY_MERKLE_UPDATE_RIGHT_COUNT;
-    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+    for (index, key) in participant_keys.iter().enumerate() {
+        let participant = [(index + 1) as u8; BYTE32_LEN];
+        let pubkey = k256_pubkey(key);
         let offset = merkle_update_participant_offset(index);
-        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(&participant);
         raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
-            .copy_from_slice(pubkey);
+            .copy_from_slice(&pubkey);
         raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
             u8::from(participant.as_slice() == touched.as_slice());
     }
-    raw[merkle_update_touched_offset()..merkle_update_touched_offset() + BYTE32_LEN]
-        .copy_from_slice(&touched);
-    raw[merkle_update_right_offset(false)..merkle_update_right_offset(false) + FACTORY_RIGHT_LEN]
+    let touched_offset = merkle_update_touched_offset_for_count(participant_keys.len());
+    raw[touched_offset..touched_offset + BYTE32_LEN].copy_from_slice(&touched);
+    let before_offset = merkle_update_right_offset_for_count(participant_keys.len(), false);
+    raw[before_offset..before_offset + FACTORY_RIGHT_LEN]
         .copy_from_slice(&core_factory_right_bytes(before));
-    raw[merkle_update_right_offset(true)..merkle_update_right_offset(true) + FACTORY_RIGHT_LEN]
+    let after_offset = merkle_update_right_offset_for_count(participant_keys.len(), true);
+    raw[after_offset..after_offset + FACTORY_RIGHT_LEN]
         .copy_from_slice(&core_factory_right_bytes(after));
     for (depth, sibling) in siblings.iter().enumerate() {
-        let offset = merkle_update_sibling_offset(depth);
+        let offset = merkle_update_sibling_offset_for_count(participant_keys.len(), depth);
         raw[offset..offset + BYTE32_LEN].copy_from_slice(&sibling.hash);
     }
     Ok(raw)
@@ -11815,7 +11992,12 @@ fn sign_merkle_update_witness(
     digest: &[u8; BYTE32_LEN],
 ) -> Result<()> {
     let sig = ecdsa_signature(key, digest)?;
-    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize {
+    let participant_count = usize::from(
+        *witness
+            .get(3)
+            .ok_or_else(|| anyhow!("factory Merkle update witness is truncated"))?,
+    );
+    for index in 0..participant_count {
         let offset = merkle_update_participant_offset(index);
         if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
             let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
@@ -11832,13 +12014,12 @@ fn merkle_update_participant_offset(index: usize) -> usize {
     8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
-fn merkle_update_touched_offset() -> usize {
-    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+fn merkle_update_touched_offset_for_count(participant_count: usize) -> usize {
+    8 + participant_count * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
-fn merkle_update_right_offset(after: bool) -> usize {
-    let before_offset = merkle_update_touched_offset() + BYTE32_LEN;
+fn merkle_update_right_offset_for_count(participant_count: usize, after: bool) -> usize {
+    let before_offset = merkle_update_touched_offset_for_count(participant_count) + BYTE32_LEN;
     if after {
         before_offset + FACTORY_RIGHT_LEN
     } else {
@@ -11846,8 +12027,53 @@ fn merkle_update_right_offset(after: bool) -> usize {
     }
 }
 
-fn merkle_update_sibling_offset(depth: usize) -> usize {
-    merkle_update_right_offset(true) + FACTORY_RIGHT_LEN + depth * BYTE32_LEN
+fn merkle_update_sibling_offset_for_count(participant_count: usize, depth: usize) -> usize {
+    merkle_update_right_offset_for_count(participant_count, true)
+        + FACTORY_RIGHT_LEN
+        + depth * BYTE32_LEN
+}
+
+fn merkle_update_rights_root(raw: &[u8], after: bool) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryMerkleUpdateWitness::parse(raw) {
+        return witness
+            .rights_root(after)
+            .map_err(|err| anyhow!("failed to compute Merkle update root: {err:?}"));
+    }
+    FactoryDynamicMerkleUpdateWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic Merkle update witness: {err:?}"))?
+        .rights_root(after)
+        .map_err(|err| anyhow!("failed to compute dynamic Merkle update root: {err:?}"))
+}
+
+fn merkle_update_non_interference_digest(
+    raw: &[u8],
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryMerkleUpdateWitness::parse(raw) {
+        return witness
+            .non_interference_digest(old_header, new_header)
+            .map_err(|err| anyhow!("failed to compute Merkle update digest: {err:?}"));
+    }
+    FactoryDynamicMerkleUpdateWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic Merkle update witness: {err:?}"))?
+        .non_interference_digest(old_header, new_header)
+        .map_err(|err| anyhow!("failed to compute dynamic Merkle update digest: {err:?}"))
+}
+
+fn verify_merkle_update_witness_any(
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+    raw: &[u8],
+) -> Result<()> {
+    if let Ok(witness) = FactoryMerkleUpdateWitness::parse(raw) {
+        return verify_factory_merkle_update(old_header, new_header, &witness)
+            .map_err(|err| anyhow!("constructed Merkle update is invalid: {err:?}"));
+    }
+    let witness = FactoryDynamicMerkleUpdateWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic Merkle update witness: {err:?}"))?;
+    verify_factory_dynamic_merkle_update(old_header, new_header, &witness)
+        .map_err(|err| anyhow!("constructed dynamic Merkle update is invalid: {err:?}"))
 }
 
 struct BuiltReducedExit {
@@ -11976,7 +12202,7 @@ fn reduced_exit_initial_roots_with_descriptor(
 fn reduced_exit_from_factory_header(
     old_header_bytes: &[u8],
     alice: &SigningKey,
-    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    participant_pubkeys: &[[u8; COMPRESSED_SECP256K1_PUBKEY_LEN]],
     new_update_number: u64,
     reserve_claim: ReducedExitReserveClaim,
     state_output_index: u32,
@@ -12009,10 +12235,8 @@ fn reduced_exit_from_factory_header(
         old_header.update_number()
     );
 
-    let alice_pubkey = k256_pubkey(alice);
     let mut witness = reduced_exit_witness_bytes_from_pubkeys(
-        &alice_pubkey,
-        bob_pubkey,
+        participant_pubkeys,
         reserve_claim,
         state_output_index,
         vault_output_index,
@@ -12022,48 +12246,24 @@ fn reduced_exit_from_factory_header(
         state_header,
         descriptor,
     )?;
-    let parsed_witness = FactoryReducedExitWitness::parse(&witness)
-        .map_err(|err| anyhow!("constructed reduced-exit witness is invalid: {err:?}"))?;
-    let participant_entries =
-        reduced_exit_participant_entries_from_pubkeys(&alice_pubkey, bob_pubkey);
-    let participants_commitment = factory_participants_commitment(
-        2,
-        &[
-            (
-                participant_entries[0].0.as_slice(),
-                participant_entries[0].1.as_slice(),
-            ),
-            (
-                participant_entries[1].0.as_slice(),
-                participant_entries[1].1.as_slice(),
-            ),
-        ],
-    );
+    let participants_commitment = reduced_exit_participants_commitment(&witness)?;
     ensure!(
         old_header.participants_commitment() == participants_commitment.as_slice(),
-        "live factory participant commitment does not match supplied Alice/Bob keys"
+        "live factory participant commitment does not match supplied participant keys"
     );
 
-    let old_state_root = parsed_witness
-        .rights_root(false)
-        .map_err(|err| anyhow!("failed to compute reduced-exit old root: {err:?}"))?;
+    let old_state_root = reduced_exit_rights_root(&witness, false)?;
     ensure!(
         old_header.state_root() == old_state_root.as_slice(),
         "live factory state_root does not match reduced-exit old root"
     );
-    let old_access_manifest_root = parsed_witness
-        .access_manifest_root(false)
-        .map_err(|err| anyhow!("failed to compute reduced-exit old access root: {err:?}"))?;
+    let old_access_manifest_root = reduced_exit_access_manifest_root(&witness, false)?;
     ensure!(
         old_header.access_manifest_root() == old_access_manifest_root.as_slice(),
         "live factory access_manifest_root does not match reduced-exit old access root"
     );
-    let new_state_root = parsed_witness
-        .rights_root(true)
-        .map_err(|err| anyhow!("failed to compute reduced-exit new root: {err:?}"))?;
-    let new_access_manifest_root = parsed_witness
-        .access_manifest_root(true)
-        .map_err(|err| anyhow!("failed to compute reduced-exit new access root: {err:?}"))?;
+    let new_state_root = reduced_exit_rights_root(&witness, true)?;
+    let new_access_manifest_root = reduced_exit_access_manifest_root(&witness, true)?;
 
     let mut new_header = old_header_bytes.to_vec();
     put_u64(&mut new_header, 68, new_update_number);
@@ -12073,9 +12273,8 @@ fn reduced_exit_from_factory_header(
     new_header[270..302].fill(0);
     let preliminary_new = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("preliminary reduced-exit header is invalid: {err:?}"))?;
-    let non_interference_digest = parsed_witness
-        .non_interference_digest(&old_header, &preliminary_new)
-        .map_err(|err| anyhow!("failed to compute reduced-exit digest: {err:?}"))?;
+    let non_interference_digest =
+        reduced_exit_non_interference_digest(&witness, &old_header, &preliminary_new)?;
     new_header[172..204].copy_from_slice(&non_interference_digest);
     let new_header_parsed = FactoryStateHeader::parse(&new_header)
         .map_err(|err| anyhow!("new reduced-exit header is invalid: {err:?}"))?;
@@ -12085,11 +12284,8 @@ fn reduced_exit_from_factory_header(
         alice,
         &new_header_parsed.signing_digest(),
     )?;
-    let signed_witness = FactoryReducedExitWitness::parse(&witness)
-        .map_err(|err| anyhow!("signed reduced-exit witness is invalid: {err:?}"))?;
-    verify_reduced_factory_exit_update(&old_header, &new_header_parsed, &signed_witness)
-        .map_err(|err| anyhow!("constructed reduced-exit update is invalid: {err:?}"))?;
-    let local_exit_digest = signed_witness.local_exit_digest();
+    verify_reduced_exit_witness_any(&old_header, &new_header_parsed, &witness)?;
+    let local_exit_digest = reduced_exit_local_exit_digest(&witness)?;
     let witness_len = witness.len();
 
     Ok(BuiltReducedExit {
@@ -12122,8 +12318,7 @@ fn reduced_exit_witness_bytes(
     descriptor: &[u8],
 ) -> Result<Vec<u8>> {
     reduced_exit_witness_bytes_from_pubkeys(
-        &k256_pubkey(alice),
-        &k256_pubkey(bob),
+        &[k256_pubkey(alice), k256_pubkey(bob)],
         reserve_claim,
         state_output_index,
         vault_output_index,
@@ -12137,8 +12332,7 @@ fn reduced_exit_witness_bytes(
 
 #[allow(clippy::too_many_arguments)]
 fn reduced_exit_witness_bytes_from_pubkeys(
-    alice_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    participant_pubkeys: &[[u8; COMPRESSED_SECP256K1_PUBKEY_LEN]],
     reserve_claim: ReducedExitReserveClaim,
     state_output_index: u32,
     vault_output_index: u32,
@@ -12148,6 +12342,22 @@ fn reduced_exit_witness_bytes_from_pubkeys(
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Result<Vec<u8>> {
+    ensure!(
+        participant_pubkeys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && participant_pubkeys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory reduced exit requires {}-{} participant public keys",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS
+    );
+    ensure!(
+        participant_pubkeys
+            .iter()
+            .enumerate()
+            .all(|(index, key)| participant_pubkeys[..index]
+                .iter()
+                .all(|other| other != key)),
+        "factory participant public keys must be unique"
+    );
     ensure!(
         state_type_hash.len() == BYTE32_LEN,
         "state type hash must be 32 bytes"
@@ -12165,7 +12375,20 @@ fn reduced_exit_witness_bytes_from_pubkeys(
         "exit state header must be {} bytes",
         STATE_HEADER_LEN
     );
+    let dynamic = participant_pubkeys.len() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize;
     let witness_len = match descriptor.len() {
+        BILATERAL_CKB_DESCRIPTOR_LEN if dynamic => {
+            morph_script_common::factory_dynamic_reduced_exit_witness_len(
+                participant_pubkeys.len() as u8,
+                BILATERAL_CKB_DESCRIPTOR_LEN,
+            )
+        }
+        BILATERAL_CKB_XUDT_DESCRIPTOR_LEN if dynamic => {
+            morph_script_common::factory_dynamic_reduced_exit_witness_len(
+                participant_pubkeys.len() as u8,
+                BILATERAL_CKB_XUDT_DESCRIPTOR_LEN,
+            )
+        }
         BILATERAL_CKB_DESCRIPTOR_LEN => FACTORY_REDUCED_EXIT_WITNESS_LEN,
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => FACTORY_REDUCED_EXIT_XUDT_WITNESS_LEN,
         _ => {
@@ -12176,76 +12399,77 @@ fn reduced_exit_witness_bytes_from_pubkeys(
             ));
         }
     };
-    let entries = reduced_exit_participant_entries_from_pubkeys(alice_pubkey, bob_pubkey);
     let (before, after) = reduced_exit_rights_pair(reserve_claim);
 
     let mut raw = vec![0u8; witness_len];
-    put_u16(&mut raw, 0, FACTORY_REDUCED_EXIT_WITNESS_VERSION);
-    raw[2] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD;
-    raw[3] = FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT;
+    put_u16(
+        &mut raw,
+        0,
+        if dynamic {
+            FACTORY_DYNAMIC_REDUCED_EXIT_WITNESS_VERSION
+        } else {
+            FACTORY_REDUCED_EXIT_WITNESS_VERSION
+        },
+    );
+    raw[2] = participant_pubkeys.len() as u8;
+    raw[3] = participant_pubkeys.len() as u8;
     raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
     raw[5] = FACTORY_REDUCED_EXIT_RIGHTS_COUNT;
-    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+    for (index, pubkey) in participant_pubkeys.iter().enumerate() {
+        let participant = [(index + 1) as u8; BYTE32_LEN];
         let offset = reduced_exit_participant_offset(index);
-        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(&participant);
         raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
             .copy_from_slice(pubkey);
-        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
-            u8::from(participant == &[1u8; BYTE32_LEN]);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] = u8::from(index == 0);
     }
-    raw[reduced_exit_touched_offset()..reduced_exit_touched_offset() + BYTE32_LEN]
-        .copy_from_slice(&[1u8; BYTE32_LEN]);
+    let touched_offset = reduced_exit_touched_offset_for_count(participant_pubkeys.len());
+    raw[touched_offset..touched_offset + BYTE32_LEN].copy_from_slice(&[1u8; BYTE32_LEN]);
     put_u128(
         &mut raw,
-        reduced_exit_release_quantity_offset(),
+        reduced_exit_release_quantity_offset_for_count(participant_pubkeys.len()),
         reserve_claim.release_quantity,
     );
     put_u32(
         &mut raw,
-        reduced_exit_state_output_index_offset(),
+        reduced_exit_state_output_index_offset_for_count(participant_pubkeys.len()),
         state_output_index,
     );
     put_u32(
         &mut raw,
-        reduced_exit_vault_output_index_offset(),
+        reduced_exit_vault_output_index_offset_for_count(participant_pubkeys.len()),
         vault_output_index,
     );
-    raw[reduced_exit_state_type_hash_offset()..reduced_exit_state_type_hash_offset() + BYTE32_LEN]
-        .copy_from_slice(state_type_hash);
-    raw[reduced_exit_vault_lock_hash_offset()..reduced_exit_vault_lock_hash_offset() + BYTE32_LEN]
-        .copy_from_slice(vault_lock_hash);
-    raw[reduced_exit_state_lock_hash_offset()..reduced_exit_state_lock_hash_offset() + BYTE32_LEN]
-        .copy_from_slice(state_lock_hash);
-    raw[reduced_exit_state_header_offset()..reduced_exit_state_header_offset() + STATE_HEADER_LEN]
-        .copy_from_slice(state_header);
-    raw[reduced_exit_descriptor_offset()..reduced_exit_descriptor_offset() + descriptor.len()]
-        .copy_from_slice(descriptor);
+    let state_type_offset =
+        reduced_exit_state_type_hash_offset_for_count(participant_pubkeys.len());
+    raw[state_type_offset..state_type_offset + BYTE32_LEN].copy_from_slice(state_type_hash);
+    let vault_lock_offset =
+        reduced_exit_vault_lock_hash_offset_for_count(participant_pubkeys.len());
+    raw[vault_lock_offset..vault_lock_offset + BYTE32_LEN].copy_from_slice(vault_lock_hash);
+    let state_lock_offset =
+        reduced_exit_state_lock_hash_offset_for_count(participant_pubkeys.len());
+    raw[state_lock_offset..state_lock_offset + BYTE32_LEN].copy_from_slice(state_lock_hash);
+    let state_header_offset = reduced_exit_state_header_offset_for_count(participant_pubkeys.len());
+    raw[state_header_offset..state_header_offset + STATE_HEADER_LEN].copy_from_slice(state_header);
+    let descriptor_offset = reduced_exit_descriptor_offset_for_count(participant_pubkeys.len());
+    raw[descriptor_offset..descriptor_offset + descriptor.len()].copy_from_slice(descriptor);
     for index in 0..FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize {
-        let before_offset = reduced_exit_right_offset(false, descriptor.len(), index);
+        let before_offset = reduced_exit_right_offset_for_count(
+            participant_pubkeys.len(),
+            false,
+            descriptor.len(),
+            index,
+        );
         raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&before[index]);
-        let after_offset = reduced_exit_right_offset(true, descriptor.len(), index);
+        let after_offset = reduced_exit_right_offset_for_count(
+            participant_pubkeys.len(),
+            true,
+            descriptor.len(),
+            index,
+        );
         raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&after[index]);
     }
     Ok(raw)
-}
-
-fn reduced_exit_participant_entries(
-    alice: &SigningKey,
-    bob: &SigningKey,
-) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
-    reduced_exit_participant_entries_from_pubkeys(&k256_pubkey(alice), &k256_pubkey(bob))
-}
-
-fn reduced_exit_participant_entries_from_pubkeys(
-    alice_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-    bob_pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-) -> [([u8; BYTE32_LEN], [u8; COMPRESSED_SECP256K1_PUBKEY_LEN]); 2] {
-    let mut entries = [
-        ([1u8; BYTE32_LEN], *alice_pubkey),
-        ([2u8; BYTE32_LEN], *bob_pubkey),
-    ];
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
-    entries
 }
 
 fn reduced_exit_rights_pair(
@@ -12339,7 +12563,12 @@ fn sign_reduced_exit_witness(
     digest: &[u8; BYTE32_LEN],
 ) -> Result<()> {
     let sig = ecdsa_signature(key, digest)?;
-    for index in 0..FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize {
+    let participant_count = usize::from(
+        *witness
+            .get(3)
+            .ok_or_else(|| anyhow!("factory reduced-exit witness is truncated"))?,
+    );
+    for index in 0..participant_count {
         let offset = reduced_exit_participant_offset(index);
         if &witness[offset..offset + BYTE32_LEN] == participant.as_slice() {
             let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
@@ -12356,45 +12585,50 @@ fn reduced_exit_participant_offset(index: usize) -> usize {
     8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
-fn reduced_exit_touched_offset() -> usize {
-    8 + FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize
-        * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+fn reduced_exit_touched_offset_for_count(participant_count: usize) -> usize {
+    8 + participant_count * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
-fn reduced_exit_release_quantity_offset() -> usize {
-    reduced_exit_touched_offset() + BYTE32_LEN
+fn reduced_exit_release_quantity_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_touched_offset_for_count(participant_count) + BYTE32_LEN
 }
 
-fn reduced_exit_state_output_index_offset() -> usize {
-    reduced_exit_release_quantity_offset() + 16
+fn reduced_exit_state_output_index_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_release_quantity_offset_for_count(participant_count) + 16
 }
 
-fn reduced_exit_vault_output_index_offset() -> usize {
-    reduced_exit_state_output_index_offset() + 4
+fn reduced_exit_vault_output_index_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_state_output_index_offset_for_count(participant_count) + 4
 }
 
-fn reduced_exit_state_type_hash_offset() -> usize {
-    reduced_exit_vault_output_index_offset() + 4
+fn reduced_exit_state_type_hash_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_vault_output_index_offset_for_count(participant_count) + 4
 }
 
-fn reduced_exit_vault_lock_hash_offset() -> usize {
-    reduced_exit_state_type_hash_offset() + BYTE32_LEN
+fn reduced_exit_vault_lock_hash_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_state_type_hash_offset_for_count(participant_count) + BYTE32_LEN
 }
 
-fn reduced_exit_state_lock_hash_offset() -> usize {
-    reduced_exit_vault_lock_hash_offset() + BYTE32_LEN
+fn reduced_exit_state_lock_hash_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_vault_lock_hash_offset_for_count(participant_count) + BYTE32_LEN
 }
 
-fn reduced_exit_state_header_offset() -> usize {
-    reduced_exit_state_lock_hash_offset() + BYTE32_LEN
+fn reduced_exit_state_header_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_state_lock_hash_offset_for_count(participant_count) + BYTE32_LEN
 }
 
-fn reduced_exit_descriptor_offset() -> usize {
-    reduced_exit_state_header_offset() + STATE_HEADER_LEN
+fn reduced_exit_descriptor_offset_for_count(participant_count: usize) -> usize {
+    reduced_exit_state_header_offset_for_count(participant_count) + STATE_HEADER_LEN
 }
 
-fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -> usize {
-    let before_offset = reduced_exit_descriptor_offset() + descriptor_len;
+fn reduced_exit_right_offset_for_count(
+    participant_count: usize,
+    after: bool,
+    descriptor_len: usize,
+    index: usize,
+) -> usize {
+    let before_offset =
+        reduced_exit_descriptor_offset_for_count(participant_count) + descriptor_len;
     if after {
         before_offset
             + FACTORY_REDUCED_EXIT_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN
@@ -12402,6 +12636,79 @@ fn reduced_exit_right_offset(after: bool, descriptor_len: usize, index: usize) -
     } else {
         before_offset + index * FACTORY_RIGHT_LEN
     }
+}
+
+fn reduced_exit_participants_commitment(raw: &[u8]) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return Ok(witness.participants_commitment());
+    }
+    FactoryDynamicReducedExitWitness::parse(raw)
+        .map(|witness| witness.participants_commitment())
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))
+}
+
+fn reduced_exit_rights_root(raw: &[u8], after: bool) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return witness
+            .rights_root(after)
+            .map_err(|err| anyhow!("failed to compute reduced-exit root: {err:?}"));
+    }
+    FactoryDynamicReducedExitWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))?
+        .rights_root(after)
+        .map_err(|err| anyhow!("failed to compute dynamic reduced-exit root: {err:?}"))
+}
+
+fn reduced_exit_access_manifest_root(raw: &[u8], after: bool) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return witness
+            .access_manifest_root(after)
+            .map_err(|err| anyhow!("failed to compute reduced-exit access root: {err:?}"));
+    }
+    FactoryDynamicReducedExitWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))?
+        .access_manifest_root(after)
+        .map_err(|err| anyhow!("failed to compute dynamic reduced-exit access root: {err:?}"))
+}
+
+fn reduced_exit_non_interference_digest(
+    raw: &[u8],
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return witness
+            .non_interference_digest(old_header, new_header)
+            .map_err(|err| anyhow!("failed to compute reduced-exit digest: {err:?}"));
+    }
+    FactoryDynamicReducedExitWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))?
+        .non_interference_digest(old_header, new_header)
+        .map_err(|err| anyhow!("failed to compute dynamic reduced-exit digest: {err:?}"))
+}
+
+fn reduced_exit_local_exit_digest(raw: &[u8]) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return Ok(witness.local_exit_digest());
+    }
+    FactoryDynamicReducedExitWitness::parse(raw)
+        .map(|witness| witness.local_exit_digest())
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))
+}
+
+fn verify_reduced_exit_witness_any(
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+    raw: &[u8],
+) -> Result<()> {
+    if let Ok(witness) = FactoryReducedExitWitness::parse(raw) {
+        return verify_reduced_factory_exit_update(old_header, new_header, &witness)
+            .map_err(|err| anyhow!("constructed reduced-exit update is invalid: {err:?}"));
+    }
+    let witness = FactoryDynamicReducedExitWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-exit witness: {err:?}"))?;
+    verify_factory_dynamic_reduced_exit_update(old_header, new_header, &witness)
+        .map_err(|err| anyhow!("constructed dynamic reduced-exit update is invalid: {err:?}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12415,11 +12722,8 @@ fn factory_local_exit_witness(
     state_header: &[u8],
     descriptor: &[u8],
 ) -> Result<Vec<u8>> {
-    ensure!(
-        factory_signature.len() == FACTORY_SIGNATURE_WITNESS_LEN,
-        "factory signature witness must be {} bytes",
-        FACTORY_SIGNATURE_WITNESS_LEN
-    );
+    let dynamic_signature = factory_signature_envelope_kind(factory_signature)?
+        == WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE;
     ensure!(
         state_type_hash.len() == BYTE32_LEN,
         "state type hash must be 32 bytes"
@@ -12446,11 +12750,22 @@ fn factory_local_exit_witness(
     );
 
     let mut witness =
-        vec![0u8; FACTORY_LOCAL_EXIT_WITNESS_LEN - BILATERAL_CKB_DESCRIPTOR_LEN + descriptor.len()];
-    put_u16(&mut witness, 0, FACTORY_LOCAL_EXIT_WITNESS_VERSION);
+        vec![
+            0u8;
+            2 + factory_signature.len() + 8 + 3 * BYTE32_LEN + STATE_HEADER_LEN + descriptor.len()
+        ];
+    put_u16(
+        &mut witness,
+        0,
+        if dynamic_signature {
+            FACTORY_DYNAMIC_LOCAL_EXIT_WITNESS_VERSION
+        } else {
+            FACTORY_LOCAL_EXIT_WITNESS_VERSION
+        },
+    );
     let mut offset = 2;
-    witness[offset..offset + FACTORY_SIGNATURE_WITNESS_LEN].copy_from_slice(factory_signature);
-    offset += FACTORY_SIGNATURE_WITNESS_LEN;
+    witness[offset..offset + factory_signature.len()].copy_from_slice(factory_signature);
+    offset += factory_signature.len();
     put_u32(&mut witness, offset, state_output_index);
     offset += 4;
     put_u32(&mut witness, offset, vault_output_index);
@@ -13270,40 +13585,82 @@ fn factory_state_header(input: FactoryHeaderInput) -> [u8; FACTORY_STATE_HEADER_
     raw
 }
 
-fn factory_participants_commitment_from_pubkeys(
-    alice_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-    bob_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-) -> [u8; 32] {
-    let mut entries = [
-        ([1u8; BYTE32_LEN], alice_pubkey),
-        ([2u8; BYTE32_LEN], bob_pubkey),
-    ];
+type FactorySigningEntry = (
+    [u8; BYTE32_LEN],
+    [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
+    SigningKey,
+);
+
+fn factory_signing_entries(
+    alice_private_key: &str,
+    bob_private_key: &str,
+    additional_participant_private_keys: &[String],
+) -> Result<Vec<FactorySigningEntry>> {
+    let participant_count = 2usize
+        .checked_add(additional_participant_private_keys.len())
+        .ok_or_else(|| anyhow!("factory participant count overflow"))?;
+    ensure!(
+        participant_count >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && participant_count <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory requires {}-{} participants, got {}",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS,
+        participant_count
+    );
+    let mut private_keys = Vec::with_capacity(participant_count);
+    private_keys.push(alice_private_key);
+    private_keys.push(bob_private_key);
+    private_keys.extend(
+        additional_participant_private_keys
+            .iter()
+            .map(String::as_str),
+    );
+    let mut entries = private_keys
+        .into_iter()
+        .enumerate()
+        .map(|(index, private_key)| {
+            let key = k256_signing_key(private_key).with_context(|| {
+                format!("invalid factory participant {} private key", index + 1)
+            })?;
+            let participant_byte = u8::try_from(index + 1)
+                .map_err(|_| anyhow!("factory participant index overflow"))?;
+            Ok(([participant_byte; BYTE32_LEN], k256_pubkey(&key), key))
+        })
+        .collect::<Result<Vec<_>>>()?;
     entries.sort_by(|left, right| left.0.cmp(&right.0));
-    factory_participants_commitment(
-        FACTORY_SIGNATURE_THRESHOLD,
-        &[
-            (entries[0].0.as_slice(), entries[0].1.as_slice()),
-            (entries[1].0.as_slice(), entries[1].1.as_slice()),
-        ],
-    )
+    ensure!(
+        entries
+            .iter()
+            .enumerate()
+            .all(|(index, entry)| entries[..index].iter().all(|other| other.1 != entry.1)),
+        "factory participant public keys must be unique"
+    );
+    Ok(entries)
 }
 
-fn factory_participant_reports(
-    alice_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-    bob_pubkey: [u8; COMPRESSED_SECP256K1_PUBKEY_LEN],
-) -> Vec<FactoryParticipantReport> {
-    let mut entries = [
-        ("alice", [1u8; BYTE32_LEN], alice_pubkey),
-        ("bob", [2u8; BYTE32_LEN], bob_pubkey),
-    ];
-    entries.sort_by(|left, right| left.1.cmp(&right.1));
+fn factory_participants_commitment_from_entries(entries: &[FactorySigningEntry]) -> [u8; 32] {
+    let commitment_entries = entries
+        .iter()
+        .map(|(participant, pubkey, _)| (participant.as_slice(), pubkey.as_slice()))
+        .collect::<Vec<_>>();
+    factory_participants_commitment(entries.len() as u8, &commitment_entries)
+}
+
+fn factory_participant_reports(entries: &[FactorySigningEntry]) -> Vec<FactoryParticipantReport> {
     entries
-        .into_iter()
-        .map(|(role, participant_id, pubkey)| FactoryParticipantReport {
-            role: role.to_string(),
-            participant_id: hex32(&participant_id),
-            pubkey_sec1: hex_prefixed(&pubkey),
-        })
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (participant_id, pubkey, _))| FactoryParticipantReport {
+                role: match index {
+                    0 => "alice".to_string(),
+                    1 => "bob".to_string(),
+                    _ => format!("participant-{}", index + 1),
+                },
+                participant_id: hex32(participant_id),
+                pubkey_sec1: hex_prefixed(pubkey),
+            },
+        )
         .collect()
 }
 
@@ -13688,8 +14045,7 @@ mod tests {
         )
         .unwrap();
         let from_public_keys = reduced_exit_witness_bytes_from_pubkeys(
-            &alice_pubkey,
-            &bob_pubkey,
+            &[alice_pubkey, bob_pubkey],
             reserve_claim,
             1,
             2,
@@ -13702,6 +14058,222 @@ mod tests {
         .unwrap();
 
         assert_eq!(from_public_keys, from_keys);
+    }
+
+    #[test]
+    fn three_party_dynamic_factory_witnesses_round_trip() {
+        let private_keys = [
+            private_key_from_scalar(1),
+            private_key_from_scalar(2),
+            private_key_from_scalar(3),
+        ];
+        let entries = factory_signing_entries(
+            &private_keys[0],
+            &private_keys[1],
+            &[private_keys[2].clone()],
+        )
+        .unwrap();
+        let header = factory_state_header(FactoryHeaderInput {
+            chain_id: [7u8; BYTE32_LEN],
+            factory_id: [8u8; BYTE32_LEN],
+            update_number: 1,
+            state_root: [9u8; BYTE32_LEN],
+            participants_commitment: factory_participants_commitment_from_entries(&entries),
+            access_manifest_root: [10u8; BYTE32_LEN],
+            non_interference_digest: [11u8; BYTE32_LEN],
+            challenge_policy_commitment: [12u8; BYTE32_LEN],
+            vault_materialisation_root: [13u8; BYTE32_LEN],
+        });
+        let signature = factory_signature_witness(
+            &header,
+            &private_keys[0],
+            &private_keys[1],
+            &[private_keys[2].clone()],
+        )
+        .unwrap();
+        let parsed_header = FactoryStateHeader::parse(&header).unwrap();
+        let parsed_signature =
+            morph_script_common::FactoryDynamicSignatureWitness::parse(&signature).unwrap();
+        morph_script_common::verify_factory_dynamic_state_signatures(
+            &parsed_header,
+            &parsed_signature,
+        )
+        .unwrap();
+
+        let descriptor = bilateral_ckb_descriptor([21u8; BYTE32_LEN], 60, [22u8; BYTE32_LEN], 40);
+        let state_header = initial_state_header(InitialStateHeader {
+            chain_id: [7u8; BYTE32_LEN],
+            channel_id: [31u8; BYTE32_LEN],
+            funding_anchor: [32u8; BYTE32_LEN],
+            vault_set_commitment: [33u8; BYTE32_LEN],
+            participants_commitment: [34u8; BYTE32_LEN],
+            asset_registry_commitment: [35u8; BYTE32_LEN],
+            settlement_descriptor_commitment: settlement_descriptor_commitment(&descriptor),
+            descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
+            challenge_policy_commitment: [36u8; BYTE32_LEN],
+        });
+        let exit_digest = factory_local_exit_digest(
+            1,
+            2,
+            &[41u8; BYTE32_LEN],
+            &[42u8; BYTE32_LEN],
+            &[43u8; BYTE32_LEN],
+            &state_header,
+            &descriptor,
+        );
+        let exit_header = factory_state_header(FactoryHeaderInput {
+            chain_id: [7u8; BYTE32_LEN],
+            factory_id: [8u8; BYTE32_LEN],
+            update_number: 2,
+            state_root: [9u8; BYTE32_LEN],
+            participants_commitment: factory_participants_commitment_from_entries(&entries),
+            access_manifest_root: [10u8; BYTE32_LEN],
+            non_interference_digest: exit_digest,
+            challenge_policy_commitment: [12u8; BYTE32_LEN],
+            vault_materialisation_root: [13u8; BYTE32_LEN],
+        });
+        let exit_signature = factory_signature_witness(
+            &exit_header,
+            &private_keys[0],
+            &private_keys[1],
+            &[private_keys[2].clone()],
+        )
+        .unwrap();
+        let local_exit = factory_local_exit_witness(
+            &exit_signature,
+            1,
+            2,
+            &[41u8; BYTE32_LEN],
+            &[42u8; BYTE32_LEN],
+            &[43u8; BYTE32_LEN],
+            &state_header,
+            &descriptor,
+        )
+        .unwrap();
+        assert!(morph_script_common::FactoryDynamicLocalExitWitness::parse(&local_exit).is_ok());
+        let package =
+            StoredFactoryLocalExitPackage::from_factory_local_exit(&exit_header, &local_exit)
+                .unwrap();
+        assert_eq!(
+            package.contract_witness_bytes().unwrap()[10..12],
+            morph_script_common::WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT.to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn verifies_three_party_dynamic_reduced_exit_from_operator_builder() {
+        let keys = [
+            k256_signing_key(&private_key_from_scalar(1)).unwrap(),
+            k256_signing_key(&private_key_from_scalar(2)).unwrap(),
+            k256_signing_key(&private_key_from_scalar(3)).unwrap(),
+        ];
+        let pubkeys = [
+            k256_pubkey(&keys[0]),
+            k256_pubkey(&keys[1]),
+            k256_pubkey(&keys[2]),
+        ];
+        let descriptor = bilateral_ckb_descriptor([21u8; BYTE32_LEN], 60, [22u8; BYTE32_LEN], 40);
+        let state_header = initial_state_header(InitialStateHeader {
+            chain_id: [7u8; BYTE32_LEN],
+            channel_id: [31u8; BYTE32_LEN],
+            funding_anchor: [32u8; BYTE32_LEN],
+            vault_set_commitment: [33u8; BYTE32_LEN],
+            participants_commitment: [34u8; BYTE32_LEN],
+            asset_registry_commitment: [35u8; BYTE32_LEN],
+            settlement_descriptor_commitment: settlement_descriptor_commitment(&descriptor),
+            descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
+            challenge_policy_commitment: [36u8; BYTE32_LEN],
+        });
+        let reserve_claim = ReducedExitReserveClaim {
+            release_quantity: 100,
+            before_quantity: 100,
+            after_quantity: 0,
+            asset_type: None,
+            ckb_before_quantity: 100,
+            ckb_after_quantity: 100,
+        };
+        let unsigned = reduced_exit_witness_bytes_from_pubkeys(
+            &pubkeys,
+            reserve_claim,
+            1,
+            2,
+            &[41u8; BYTE32_LEN],
+            &[42u8; BYTE32_LEN],
+            &[43u8; BYTE32_LEN],
+            &state_header,
+            &descriptor,
+        )
+        .unwrap();
+        let participants = reduced_exit_participants_commitment(&unsigned).unwrap();
+        let old = factory_state_header(FactoryHeaderInput {
+            chain_id: [7u8; BYTE32_LEN],
+            factory_id: [8u8; BYTE32_LEN],
+            update_number: 1,
+            state_root: reduced_exit_rights_root(&unsigned, false).unwrap(),
+            participants_commitment: participants,
+            access_manifest_root: reduced_exit_access_manifest_root(&unsigned, false).unwrap(),
+            non_interference_digest: [0u8; BYTE32_LEN],
+            challenge_policy_commitment: [12u8; BYTE32_LEN],
+            vault_materialisation_root: [13u8; BYTE32_LEN],
+        })
+        .to_vec();
+        let mut new = old.clone();
+        put_u64(&mut new, 68, 2);
+        new[76..108].copy_from_slice(&reduced_exit_rights_root(&unsigned, true).unwrap());
+        new[140..172].copy_from_slice(&reduced_exit_access_manifest_root(&unsigned, true).unwrap());
+        let old_header = FactoryStateHeader::parse(&old).unwrap();
+        let non_interference_digest = {
+            let preliminary = FactoryStateHeader::parse(&new).unwrap();
+            reduced_exit_non_interference_digest(&unsigned, &old_header, &preliminary).unwrap()
+        };
+        new[172..204].copy_from_slice(&non_interference_digest);
+        let new_header = FactoryStateHeader::parse(&new).unwrap();
+        let mut signed = unsigned;
+        sign_reduced_exit_witness(
+            &mut signed,
+            [1u8; BYTE32_LEN],
+            &keys[0],
+            &new_header.signing_digest(),
+        )
+        .unwrap();
+        verify_reduced_exit_witness_any(&old_header, &new_header, &signed).unwrap();
+    }
+
+    #[test]
+    fn builds_three_party_dynamic_merkle_update_package() {
+        let keys = vec![
+            k256_signing_key(&private_key_from_scalar(1)).unwrap(),
+            k256_signing_key(&private_key_from_scalar(2)).unwrap(),
+            k256_signing_key(&private_key_from_scalar(3)).unwrap(),
+        ];
+        let participant_records = keys
+            .iter()
+            .enumerate()
+            .map(|(index, key)| ([(index + 1) as u8; BYTE32_LEN], k256_pubkey(key)))
+            .collect::<Vec<_>>();
+        let participant_refs = participant_records
+            .iter()
+            .map(|(participant, pubkey)| (participant.as_slice(), pubkey.as_slice()))
+            .collect::<Vec<_>>();
+        let (state_root, access_manifest_root) = merkle_update_initial_roots().unwrap();
+        let old_header = factory_state_header(FactoryHeaderInput {
+            chain_id: [7u8; BYTE32_LEN],
+            factory_id: [8u8; BYTE32_LEN],
+            update_number: 1,
+            state_root,
+            participants_commitment: factory_participants_commitment(3, &participant_refs),
+            access_manifest_root,
+            non_interference_digest: [11u8; BYTE32_LEN],
+            challenge_policy_commitment: [12u8; BYTE32_LEN],
+            vault_materialisation_root: [13u8; BYTE32_LEN],
+        });
+
+        let package =
+            merkle_update_package_from_factory_header(&old_header, &keys, Some(2), 900, None)
+                .unwrap();
+        let witness = package.witness_bytes().unwrap();
+        assert!(FactoryDynamicMerkleUpdateWitness::parse(&witness).is_ok());
+        assert_eq!(package.summary().unwrap().witness_len, witness.len());
     }
 
     #[test]
@@ -14075,6 +14647,16 @@ mod tests {
             &header,
             &filter
         ));
+    }
+
+    #[test]
+    fn factory_signing_entries_reject_nonadjacent_duplicate_public_keys() {
+        let alice = private_key_from_scalar(1);
+        let bob = private_key_from_scalar(2);
+        let error =
+            factory_signing_entries(&alice, &bob, std::slice::from_ref(&alice)).unwrap_err();
+
+        assert!(error.to_string().contains("public keys must be unique"));
     }
 
     fn state_package_record(

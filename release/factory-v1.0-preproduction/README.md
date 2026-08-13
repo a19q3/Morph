@@ -1,13 +1,13 @@
 # Factory v1.0 Pre-production Candidate
 
 This directory defines the bounded release profile
-`factory-v1.0-fixed-bilateral`. It is a controlled-devnet candidate, not a
+`factory-v1.0-dynamic-n`. It is a controlled-devnet candidate, not a
 mainnet or real-assets release.
 
 The profile deliberately freezes the executable Factory boundary:
 
-- exactly two Factory signing participants;
-- 2-of-2 conservative updates and one-of-two authorised reduced paths;
+- 2–16 Factory signing participants with sorted, commitment-bound membership;
+- N-of-N conservative updates and exactly one touched-member authorisation on reduced paths;
 - fixed-layout rights bodies and one-right, depth-256 sparse-Merkle proofs;
 - direct CKB flows plus the devnet-only `morph-devnet-xudt` test asset;
 - no Hub-submitted chain mutations, RGB++, or Morph-backed Fiber routing.

@@ -8,27 +8,36 @@ use morph_script_common::{
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, BilateralSignatureWitness,
-    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
-    FACTORY_MERKLE_UPDATE_WITNESS_LEN, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT,
+    COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_DYNAMIC_MAX_PARTICIPANTS,
+    FACTORY_DYNAMIC_MIN_PARTICIPANTS, FACTORY_DYNAMIC_REDUCED_RIGHTS_WITNESS_VERSION,
+    FACTORY_LOCAL_EXIT_WITNESS_VERSION, FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT,
     FACTORY_REDUCED_RIGHTS_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN, FACTORY_REDUCED_RIGHTS_PARTICIPANT_THRESHOLD,
     FACTORY_REDUCED_RIGHTS_WITNESS_LEN, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION, FACTORY_RIGHT_LEN,
     FACTORY_SIGNATURE_COUNT, FACTORY_SIGNATURE_THRESHOLD, FACTORY_SIGNATURE_WITNESS_LEN,
-    FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_STATE_HEADER_LEN, FactoryLocalExitWitness,
-    FactoryMerkleUpdateWitness, FactoryReducedRightsWitness, FactorySignatureWitness,
-    FactoryStateHeader, PHASE_ACTIVE, PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
-    STATE_HEADER_LEN, StateHeader, WITNESS_ENVELOPE_FORMAT,
+    FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_STATE_HEADER_LEN, FactoryDynamicLocalExitWitness,
+    FactoryDynamicMerkleUpdateWitness, FactoryDynamicReducedRightsWitness,
+    FactoryDynamicSignatureWitness, FactoryLocalExitWitness, FactoryMerkleUpdateWitness,
+    FactoryReducedRightsWitness, FactorySignatureWitness, FactoryStateHeader, PHASE_ACTIVE,
+    PHASE_SETTLING, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, STATE_HEADER_LEN, StateHeader,
+    WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS,
+    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, blake2b256 as script_blake2b256, factory_local_exit_digest,
-    factory_participants_commitment, funding_context_id, participants_commitment,
-    settlement_descriptor_commitment, verify_bilateral_state_signatures,
-    verify_factory_merkle_update, verify_factory_state_signatures,
-    verify_reduced_factory_rights_update, witness_envelope_body_commitment,
+    WitnessEnvelope, blake2b256 as script_blake2b256, factory_dynamic_reduced_rights_witness_len,
+    factory_local_exit_digest, factory_participants_commitment, funding_context_id,
+    participants_commitment, settlement_descriptor_commitment, verify_bilateral_state_signatures,
+    verify_factory_dynamic_merkle_update, verify_factory_dynamic_reduced_rights_update,
+    verify_factory_dynamic_state_signatures, verify_factory_merkle_update,
+    verify_factory_state_signatures, verify_reduced_factory_rights_update,
+    witness_envelope_body_commitment,
 };
 #[cfg(test)]
 use morph_script_common::{
-    FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_VERSION,
+    FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_LEN,
+    FACTORY_MERKLE_UPDATE_WITNESS_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -189,18 +198,18 @@ impl FactoryStateCellUpdatePackage {
 
     pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
         let (kind, body) = match self {
-            Self::Full(package) => (
-                WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
-                package.witness_bytes()?,
-            ),
-            Self::ReducedRights(package) => (
-                WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
-                package.witness_bytes()?,
-            ),
-            Self::MerkleUpdate(package) => (
-                WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
-                package.witness_bytes()?,
-            ),
+            Self::Full(package) => {
+                let body = package.witness_bytes()?;
+                (factory_signature_witness_kind(&body)?, body)
+            }
+            Self::ReducedRights(package) => {
+                let body = package.witness_bytes()?;
+                (factory_reduced_rights_witness_kind(&body)?, body)
+            }
+            Self::MerkleUpdate(package) => {
+                let body = package.witness_bytes()?;
+                (factory_merkle_update_witness_kind(&body)?, body)
+            }
         };
         factory_witness_envelope(kind, &body)
     }
@@ -539,9 +548,7 @@ impl StoredFactoryStateCellPackage {
         source_factory_out_point: Option<PackageOutPoint>,
     ) -> Result<Self> {
         let header = parse_factory_header(header_bytes)?;
-        let witness = parse_factory_witness(witness_bytes)?;
-        verify_factory_state_signatures(&header, &witness)
-            .map_err(|err| anyhow!("factory state package signatures are invalid: {err:?}"))?;
+        verify_factory_state_witness(&header, witness_bytes)?;
 
         let package = Self {
             schema: FACTORY_STATE_CELL_PACKAGE_SCHEMA.to_string(),
@@ -570,14 +577,12 @@ impl StoredFactoryStateCellPackage {
         let header_bytes = self.header_bytes()?;
         let witness_bytes = self.witness_bytes()?;
         let header = parse_factory_header(&header_bytes)?;
-        let witness = parse_factory_witness(&witness_bytes)?;
         ensure!(
             header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
             "unsupported factory signature scheme {}",
             header.signature_scheme_id()
         );
-        verify_factory_state_signatures(&header, &witness)
-            .map_err(|err| anyhow!("factory state package signatures are invalid: {err:?}"))?;
+        verify_factory_state_witness(&header, &witness_bytes)?;
 
         ensure!(
             self.factory_id == hex_prefixed(header.factory_id()),
@@ -611,11 +616,16 @@ impl StoredFactoryStateCellPackage {
     }
 
     pub fn witness_bytes(&self) -> Result<Vec<u8>> {
-        decode_hex_exact(
-            &self.witness_hex,
-            FACTORY_SIGNATURE_WITNESS_LEN,
-            "witness_hex",
-        )
+        let stripped = self
+            .witness_hex
+            .strip_prefix("0x")
+            .unwrap_or(&self.witness_hex);
+        let bytes = hex::decode(stripped).context("witness_hex is not valid hex")?;
+        ensure!(
+            hex_prefixed(&bytes) == self.witness_hex,
+            "witness_hex must use canonical lowercase 0x-prefixed hex"
+        );
+        Ok(bytes)
     }
 
     pub fn file_name(&self) -> String {
@@ -638,8 +648,7 @@ impl StoredFactoryReducedRightsPackage {
     ) -> Result<Self> {
         let old_header = parse_factory_header(old_header_bytes)?;
         let new_header = parse_factory_header(new_header_bytes)?;
-        let witness = parse_factory_reduced_rights_witness(witness_bytes)?;
-        validate_reduced_rights_pair(&old_header, &new_header, &witness)?;
+        validate_reduced_rights_pair_any(&old_header, &new_header, witness_bytes)?;
 
         let package = Self {
             schema: FACTORY_REDUCED_RIGHTS_PACKAGE_SCHEMA.to_string(),
@@ -674,8 +683,7 @@ impl StoredFactoryReducedRightsPackage {
         let witness_bytes = self.witness_bytes()?;
         let old_header = parse_factory_header(&old_header_bytes)?;
         let new_header = parse_factory_header(&new_header_bytes)?;
-        let witness = parse_factory_reduced_rights_witness(&witness_bytes)?;
-        validate_reduced_rights_pair(&old_header, &new_header, &witness)?;
+        validate_reduced_rights_pair_any(&old_header, &new_header, &witness_bytes)?;
 
         ensure!(
             self.factory_id == hex_prefixed(new_header.factory_id()),
@@ -763,11 +771,7 @@ impl StoredFactoryReducedRightsPackage {
     }
 
     pub fn witness_bytes(&self) -> Result<Vec<u8>> {
-        decode_hex_exact(
-            &self.witness_hex,
-            FACTORY_REDUCED_RIGHTS_WITNESS_LEN,
-            "witness_hex",
-        )
+        decode_hex(&self.witness_hex, "witness_hex")
     }
 
     pub fn file_name(&self) -> String {
@@ -790,14 +794,8 @@ impl StoredFactoryMerkleUpdateStatePackage {
     ) -> Result<Self> {
         let old_header = parse_factory_header(old_header_bytes)?;
         let new_header = parse_factory_header(new_header_bytes)?;
-        let witness = parse_factory_merkle_update_witness(witness_bytes)?;
-        validate_merkle_update_pair(&old_header, &new_header, &witness)?;
-        let right_before = witness
-            .right_before()
-            .map_err(|err| anyhow!("factory Merkle package right_before is invalid: {err:?}"))?;
-        let right_after = witness
-            .right_after()
-            .map_err(|err| anyhow!("factory Merkle package right_after is invalid: {err:?}"))?;
+        let (changed_participant, quantity_before, quantity_after) =
+            validate_merkle_update_pair_any(&old_header, &new_header, witness_bytes)?;
 
         let package = Self {
             schema: FACTORY_MERKLE_UPDATE_STATE_PACKAGE_SCHEMA.to_string(),
@@ -811,9 +809,9 @@ impl StoredFactoryMerkleUpdateStatePackage {
             old_access_manifest_root: hex_prefixed(old_header.access_manifest_root()),
             new_access_manifest_root: hex_prefixed(new_header.access_manifest_root()),
             non_interference_digest: hex_prefixed(new_header.non_interference_digest()),
-            changed_participant: hex_prefixed(right_before.participant()),
-            quantity_before: right_before.quantity(),
-            quantity_after: right_after.quantity(),
+            changed_participant: hex_prefixed(&changed_participant),
+            quantity_before,
+            quantity_after,
             proof_siblings: 256,
             witness_len: witness_bytes.len(),
             old_header_hex: hex_prefixed(old_header_bytes),
@@ -837,14 +835,8 @@ impl StoredFactoryMerkleUpdateStatePackage {
         let witness_bytes = self.witness_bytes()?;
         let old_header = parse_factory_header(&old_header_bytes)?;
         let new_header = parse_factory_header(&new_header_bytes)?;
-        let witness = parse_factory_merkle_update_witness(&witness_bytes)?;
-        validate_merkle_update_pair(&old_header, &new_header, &witness)?;
-        let right_before = witness
-            .right_before()
-            .map_err(|err| anyhow!("factory Merkle package right_before is invalid: {err:?}"))?;
-        let right_after = witness
-            .right_after()
-            .map_err(|err| anyhow!("factory Merkle package right_after is invalid: {err:?}"))?;
+        let (changed_participant, quantity_before, quantity_after) =
+            validate_merkle_update_pair_any(&old_header, &new_header, &witness_bytes)?;
 
         ensure!(
             self.factory_id == hex_prefixed(new_header.factory_id()),
@@ -883,16 +875,15 @@ impl StoredFactoryMerkleUpdateStatePackage {
             "factory Merkle package non_interference_digest does not match new header"
         );
         ensure!(
-            self.changed_participant == hex_prefixed(right_before.participant()),
+            self.changed_participant == hex_prefixed(&changed_participant),
             "factory Merkle package changed_participant does not match witness"
         );
         ensure!(
-            self.quantity_before == right_before.quantity()
-                && self.quantity_after == right_after.quantity(),
+            self.quantity_before == quantity_before && self.quantity_after == quantity_after,
             "factory Merkle package quantity metadata does not match witness"
         );
         ensure!(
-            self.proof_siblings == 256 && self.witness_len == FACTORY_MERKLE_UPDATE_WITNESS_LEN,
+            self.proof_siblings == 256 && self.witness_len == witness_bytes.len(),
             "factory Merkle package proof metadata is invalid"
         );
         Ok(())
@@ -949,11 +940,7 @@ impl StoredFactoryMerkleUpdateStatePackage {
     }
 
     pub fn witness_bytes(&self) -> Result<Vec<u8>> {
-        decode_hex_exact(
-            &self.witness_hex,
-            FACTORY_MERKLE_UPDATE_WITNESS_LEN,
-            "witness_hex",
-        )
+        decode_hex(&self.witness_hex, "witness_hex")
     }
 
     pub fn file_name(&self) -> String {
@@ -973,9 +960,8 @@ impl StoredFactoryLocalExitPackage {
         local_exit_witness_bytes: &[u8],
     ) -> Result<Self> {
         let factory_header = parse_factory_header(factory_header_bytes)?;
-        let witness = parse_factory_local_exit_witness(local_exit_witness_bytes)?;
-        let exit_state = parse_header(witness.exit_state_header())?;
-        validate_factory_local_exit_pair(&factory_header, &witness)?;
+        let witness = factory_local_exit_view(&factory_header, local_exit_witness_bytes)?;
+        let exit_state = parse_header(witness.exit_state_header)?;
 
         let package = Self {
             schema: FACTORY_LOCAL_EXIT_PACKAGE_SCHEMA.to_string(),
@@ -983,18 +969,18 @@ impl StoredFactoryLocalExitPackage {
             factory_id: hex_prefixed(factory_header.factory_id()),
             update_number: factory_header.update_number(),
             factory_signing_digest: hex_prefixed(&factory_header.signing_digest()),
-            exit_digest: hex_prefixed(&witness.exit_digest()),
+            exit_digest: hex_prefixed(&witness.exit_digest),
             child_channel_id: hex_prefixed(exit_state.channel_id()),
             child_funding_anchor: hex_prefixed(exit_state.funding_anchor()),
             child_state_number: exit_state.state_number(),
             child_phase: phase_label(exit_state.phase()).to_string(),
             descriptor_version: exit_state.descriptor_version(),
             descriptor_commitment: hex_prefixed(exit_state.settlement_descriptor_commitment()),
-            state_output_index: witness.state_output_index(),
-            vault_output_index: witness.vault_output_index(),
-            state_type_hash: hex_prefixed(witness.state_type_hash()),
-            state_lock_hash: hex_prefixed(witness.state_lock_hash()),
-            vault_lock_hash: hex_prefixed(witness.vault_lock_hash()),
+            state_output_index: witness.state_output_index,
+            vault_output_index: witness.vault_output_index,
+            state_type_hash: hex_prefixed(witness.state_type_hash),
+            state_lock_hash: hex_prefixed(witness.state_lock_hash),
+            vault_lock_hash: hex_prefixed(witness.vault_lock_hash),
             factory_header_hex: hex_prefixed(factory_header_bytes),
             local_exit_witness_hex: hex_prefixed(local_exit_witness_bytes),
         };
@@ -1012,9 +998,8 @@ impl StoredFactoryLocalExitPackage {
         let factory_header_bytes = self.factory_header_bytes()?;
         let witness_bytes = self.local_exit_witness_bytes()?;
         let factory_header = parse_factory_header(&factory_header_bytes)?;
-        let witness = parse_factory_local_exit_witness(&witness_bytes)?;
-        let exit_state = parse_header(witness.exit_state_header())?;
-        validate_factory_local_exit_pair(&factory_header, &witness)?;
+        let witness = factory_local_exit_view(&factory_header, &witness_bytes)?;
+        let exit_state = parse_header(witness.exit_state_header)?;
 
         ensure!(
             self.factory_id == hex_prefixed(factory_header.factory_id()),
@@ -1029,7 +1014,7 @@ impl StoredFactoryLocalExitPackage {
             "factory local-exit package signing digest does not match header"
         );
         ensure!(
-            self.exit_digest == hex_prefixed(&witness.exit_digest()),
+            self.exit_digest == hex_prefixed(&witness.exit_digest),
             "factory local-exit package exit digest does not match witness"
         );
         ensure!(
@@ -1058,23 +1043,23 @@ impl StoredFactoryLocalExitPackage {
             "factory local-exit package descriptor_commitment does not match exit StateHeader"
         );
         ensure!(
-            self.state_output_index == witness.state_output_index(),
+            self.state_output_index == witness.state_output_index,
             "factory local-exit package state_output_index does not match witness"
         );
         ensure!(
-            self.vault_output_index == witness.vault_output_index(),
+            self.vault_output_index == witness.vault_output_index,
             "factory local-exit package vault_output_index does not match witness"
         );
         ensure!(
-            self.state_type_hash == hex_prefixed(witness.state_type_hash()),
+            self.state_type_hash == hex_prefixed(witness.state_type_hash),
             "factory local-exit package state_type_hash does not match witness"
         );
         ensure!(
-            self.state_lock_hash == hex_prefixed(witness.state_lock_hash()),
+            self.state_lock_hash == hex_prefixed(witness.state_lock_hash),
             "factory local-exit package state_lock_hash does not match witness"
         );
         ensure!(
-            self.vault_lock_hash == hex_prefixed(witness.vault_lock_hash()),
+            self.vault_lock_hash == hex_prefixed(witness.vault_lock_hash),
             "factory local-exit package vault_lock_hash does not match witness"
         );
         Ok(())
@@ -1106,6 +1091,11 @@ impl StoredFactoryLocalExitPackage {
 
     pub fn local_exit_witness_bytes(&self) -> Result<Vec<u8>> {
         decode_hex(&self.local_exit_witness_hex, "local_exit_witness_hex")
+    }
+
+    pub fn contract_witness_bytes(&self) -> Result<Vec<u8>> {
+        let body = self.local_exit_witness_bytes()?;
+        factory_witness_envelope(factory_local_exit_witness_kind(&body)?, &body)
     }
 }
 
@@ -1368,43 +1358,24 @@ pub fn read_factory_local_exit_package(path: &Path) -> Result<StoredFactoryLocal
 
 pub fn reduced_rights_package_from_factory_header(
     old_header_bytes: &[u8],
-    alice: &k256::ecdsa::SigningKey,
-    bob: &k256::ecdsa::SigningKey,
+    participant_keys: &[k256::ecdsa::SigningKey],
     new_update_number: Option<u64>,
     touched_after_balance: u128,
     source_factory_out_point: Option<PackageOutPoint>,
 ) -> Result<StoredFactoryReducedRightsPackage> {
     let old_header = parse_factory_header(old_header_bytes)?;
-    let mut witness = reduced_rights_witness_bytes(touched_after_balance, alice, bob)?;
-    let parsed_witness = parse_factory_reduced_rights_witness(&witness)?;
-    let participant_entries = reduced_participant_entries(alice, bob);
-    let participants_commitment = factory_participants_commitment(
-        2,
-        &[
-            (
-                participant_entries[0].0.as_slice(),
-                participant_entries[0].1.as_slice(),
-            ),
-            (
-                participant_entries[1].0.as_slice(),
-                participant_entries[1].1.as_slice(),
-            ),
-        ],
-    );
+    let mut witness =
+        reduced_rights_witness_bytes_for_keys(touched_after_balance, participant_keys)?;
+    let (participants_commitment, before_root, after_root, before_access_root, after_access_root) =
+        reduced_rights_witness_commitments(&witness)?;
     ensure!(
         old_header.participants_commitment() == participants_commitment.as_slice(),
-        "live factory participant commitment does not match supplied Alice/Bob keys"
+        "live factory participant commitment does not match supplied participant keys"
     );
-    let before_root = parsed_witness
-        .rights_root(false)
-        .map_err(|err| anyhow!("failed to compute reduced-rights old root: {err:?}"))?;
     ensure!(
         old_header.state_root() == before_root.as_slice(),
         "live factory state_root does not match reduced-rights old root"
     );
-    let before_access_root = parsed_witness
-        .access_manifest_root(false)
-        .map_err(|err| anyhow!("failed to compute reduced-rights old access root: {err:?}"))?;
     ensure!(
         old_header.access_manifest_root() == before_access_root.as_slice(),
         "live factory access_manifest_root does not match reduced-rights old access root"
@@ -1418,26 +1389,19 @@ pub fn reduced_rights_package_from_factory_header(
 
     let mut new_header = old_header_bytes.to_vec();
     put_u64(&mut new_header, 68, update_number);
-    new_header[76..108].copy_from_slice(
-        &parsed_witness
-            .rights_root(true)
-            .map_err(|err| anyhow!("failed to compute reduced-rights new root: {err:?}"))?,
-    );
-    new_header[140..172].copy_from_slice(
-        &parsed_witness
-            .access_manifest_root(true)
-            .map_err(|err| anyhow!("failed to compute reduced-rights new access root: {err:?}"))?,
-    );
+    new_header[76..108].copy_from_slice(&after_root);
+    new_header[140..172].copy_from_slice(&after_access_root);
     let preliminary_new = parse_factory_header(&new_header)?;
-    let non_interference_digest = parsed_witness
-        .non_interference_digest(&old_header, &preliminary_new)
-        .map_err(|err| anyhow!("failed to compute reduced-rights digest: {err:?}"))?;
+    let non_interference_digest =
+        reduced_rights_non_interference_digest(&witness, &old_header, &preliminary_new)?;
     new_header[172..204].copy_from_slice(&non_interference_digest);
     let new_header_parsed = parse_factory_header(&new_header)?;
-    sign_reduced_rights_witness(
+    sign_reduced_rights_witness_any(
         &mut witness,
         [1u8; BYTE32_LEN],
-        alice,
+        participant_keys
+            .first()
+            .ok_or_else(|| anyhow!("factory reduced-rights package needs participant keys"))?,
         &new_header_parsed.signing_digest(),
     )?;
 
@@ -1889,16 +1853,15 @@ fn parse_factory_header(raw: &[u8]) -> Result<FactoryStateHeader<'_>> {
         .map_err(|err| anyhow!("invalid factory state header encoding: {err:?}"))
 }
 
-fn parse_factory_witness(raw: &[u8]) -> Result<FactorySignatureWitness<'_>> {
-    let witness = FactorySignatureWitness::parse(raw)
-        .map_err(|err| anyhow!("invalid factory signature witness: {err:?}"))?;
-    ensure!(
-        witness.threshold() == FACTORY_SIGNATURE_THRESHOLD
-            && witness.count() == FACTORY_SIGNATURE_COUNT
-            && witness.version() == FACTORY_SIGNATURE_WITNESS_VERSION,
-        "unsupported factory signature witness"
-    );
-    Ok(witness)
+fn verify_factory_state_witness(header: &FactoryStateHeader<'_>, raw: &[u8]) -> Result<()> {
+    if let Ok(witness) = FactorySignatureWitness::parse(raw) {
+        return verify_factory_state_signatures(header, &witness)
+            .map_err(|err| anyhow!("factory state package signatures are invalid: {err:?}"));
+    }
+    let witness = FactoryDynamicSignatureWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic factory signature witness: {err:?}"))?;
+    verify_factory_dynamic_state_signatures(header, &witness)
+        .map_err(|err| anyhow!("dynamic factory state package signatures are invalid: {err:?}"))
 }
 
 fn parse_factory_reduced_rights_witness(raw: &[u8]) -> Result<FactoryReducedRightsWitness<'_>> {
@@ -1906,20 +1869,15 @@ fn parse_factory_reduced_rights_witness(raw: &[u8]) -> Result<FactoryReducedRigh
         .map_err(|err| anyhow!("invalid factory reduced-rights witness: {err:?}"))
 }
 
+#[cfg(test)]
 fn parse_factory_merkle_update_witness(raw: &[u8]) -> Result<FactoryMerkleUpdateWitness<'_>> {
     FactoryMerkleUpdateWitness::parse(raw)
         .map_err(|err| anyhow!("invalid factory Merkle update witness: {err:?}"))
 }
 
-fn parse_factory_local_exit_witness(raw: &[u8]) -> Result<FactoryLocalExitWitness<'_>> {
-    FactoryLocalExitWitness::parse(raw)
-        .map_err(|err| anyhow!("invalid factory local-exit witness: {err:?}"))
-}
-
-fn validate_reduced_rights_pair(
+fn validate_factory_update_context(
     old_header: &FactoryStateHeader<'_>,
     new_header: &FactoryStateHeader<'_>,
-    witness: &FactoryReducedRightsWitness<'_>,
 ) -> Result<()> {
     ensure!(
         new_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
@@ -1928,46 +1886,67 @@ fn validate_reduced_rights_pair(
     );
     ensure!(
         old_header.same_context_except_progress(new_header),
-        "factory reduced-rights package changes immutable factory context"
+        "factory package changes immutable factory context"
     );
     ensure!(
         old_header.vault_materialisation_root() == new_header.vault_materialisation_root(),
-        "factory reduced-rights package changes the FactoryVault materialisation"
+        "factory package changes the FactoryVault materialisation"
     );
     ensure!(
         new_header.update_number() > old_header.update_number(),
-        "factory reduced-rights package must advance the update number"
+        "factory package must advance the update number"
     );
-    verify_reduced_factory_rights_update(old_header, new_header, witness)
-        .map_err(|err| anyhow!("factory reduced-rights proof is invalid: {err:?}"))?;
     Ok(())
 }
 
-fn validate_merkle_update_pair(
+fn validate_reduced_rights_pair_any(
     old_header: &FactoryStateHeader<'_>,
     new_header: &FactoryStateHeader<'_>,
-    witness: &FactoryMerkleUpdateWitness<'_>,
+    raw: &[u8],
 ) -> Result<()> {
-    ensure!(
-        new_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
-        "unsupported factory signature scheme {}",
-        new_header.signature_scheme_id()
-    );
-    ensure!(
-        old_header.same_context_except_progress(new_header),
-        "factory Merkle package changes immutable factory context"
-    );
-    ensure!(
-        old_header.vault_materialisation_root() == new_header.vault_materialisation_root(),
-        "factory Merkle package changes the FactoryVault materialisation"
-    );
-    ensure!(
-        new_header.update_number() > old_header.update_number(),
-        "factory Merkle package must advance the update number"
-    );
-    verify_factory_merkle_update(old_header, new_header, witness)
-        .map_err(|err| anyhow!("factory Merkle update proof is invalid: {err:?}"))?;
-    Ok(())
+    validate_factory_update_context(old_header, new_header)?;
+    if let Ok(witness) = FactoryReducedRightsWitness::parse(raw) {
+        return verify_reduced_factory_rights_update(old_header, new_header, &witness)
+            .map_err(|err| anyhow!("factory reduced-rights proof is invalid: {err:?}"));
+    }
+    let witness = FactoryDynamicReducedRightsWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic factory reduced-rights witness: {err:?}"))?;
+    verify_factory_dynamic_reduced_rights_update(old_header, new_header, &witness)
+        .map_err(|err| anyhow!("dynamic factory reduced-rights proof is invalid: {err:?}"))
+}
+
+fn validate_merkle_update_pair_any(
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+    raw: &[u8],
+) -> Result<([u8; BYTE32_LEN], u128, u128)> {
+    validate_factory_update_context(old_header, new_header)?;
+    if let Ok(witness) = FactoryMerkleUpdateWitness::parse(raw) {
+        verify_factory_merkle_update(old_header, new_header, &witness)
+            .map_err(|err| anyhow!("factory Merkle update proof is invalid: {err:?}"))?;
+        let before = witness
+            .right_before()
+            .map_err(|err| anyhow!("factory Merkle right_before is invalid: {err:?}"))?;
+        let after = witness
+            .right_after()
+            .map_err(|err| anyhow!("factory Merkle right_after is invalid: {err:?}"))?;
+        let mut participant = [0u8; BYTE32_LEN];
+        participant.copy_from_slice(before.participant());
+        return Ok((participant, before.quantity(), after.quantity()));
+    }
+    let witness = FactoryDynamicMerkleUpdateWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic factory Merkle update witness: {err:?}"))?;
+    verify_factory_dynamic_merkle_update(old_header, new_header, &witness)
+        .map_err(|err| anyhow!("dynamic factory Merkle update proof is invalid: {err:?}"))?;
+    let before = witness
+        .right_before()
+        .map_err(|err| anyhow!("dynamic factory Merkle right_before is invalid: {err:?}"))?;
+    let after = witness
+        .right_after()
+        .map_err(|err| anyhow!("dynamic factory Merkle right_after is invalid: {err:?}"))?;
+    let mut participant = [0u8; BYTE32_LEN];
+    participant.copy_from_slice(before.participant());
+    Ok((participant, before.quantity(), after.quantity()))
 }
 
 fn factory_headers_equal(left: &FactoryStateHeader<'_>, right: &FactoryStateHeader<'_>) -> bool {
@@ -1983,30 +1962,70 @@ fn factory_headers_equal(left: &FactoryStateHeader<'_>, right: &FactoryStateHead
         && left.challenge_policy_commitment() == right.challenge_policy_commitment()
         && left.state_layout_version() == right.state_layout_version()
         && left.vault_materialisation_root() == right.vault_materialisation_root()
+        && left.vault_outpoint_commitment() == right.vault_outpoint_commitment()
 }
 
-fn validate_factory_local_exit_pair(
+struct FactoryLocalExitView<'a> {
+    exit_digest: [u8; BYTE32_LEN],
+    state_output_index: u32,
+    vault_output_index: u32,
+    state_type_hash: &'a [u8],
+    vault_lock_hash: &'a [u8],
+    state_lock_hash: &'a [u8],
+    exit_state_header: &'a [u8],
+    settlement_descriptor: &'a [u8],
+}
+
+fn factory_local_exit_view<'a>(
     factory_header: &FactoryStateHeader<'_>,
-    witness: &FactoryLocalExitWitness<'_>,
-) -> Result<()> {
+    raw: &'a [u8],
+) -> Result<FactoryLocalExitView<'a>> {
     ensure!(
         factory_header.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
         "unsupported factory signature scheme {}",
         factory_header.signature_scheme_id()
     );
-    let factory_signature = witness
-        .factory_signature()
-        .map_err(|err| anyhow!("invalid embedded factory signature witness: {err:?}"))?;
-    verify_factory_state_signatures(factory_header, &factory_signature)
-        .map_err(|err| anyhow!("embedded factory signatures are invalid: {err:?}"))?;
-
-    let exit_digest = witness.exit_digest();
+    let view = if let Ok(witness) = FactoryLocalExitWitness::parse(raw) {
+        let factory_signature = witness
+            .factory_signature()
+            .map_err(|err| anyhow!("invalid embedded factory signature witness: {err:?}"))?;
+        verify_factory_state_signatures(factory_header, &factory_signature)
+            .map_err(|err| anyhow!("embedded factory signatures are invalid: {err:?}"))?;
+        FactoryLocalExitView {
+            exit_digest: witness.exit_digest(),
+            state_output_index: witness.state_output_index(),
+            vault_output_index: witness.vault_output_index(),
+            state_type_hash: witness.state_type_hash(),
+            vault_lock_hash: witness.vault_lock_hash(),
+            state_lock_hash: witness.state_lock_hash(),
+            exit_state_header: witness.exit_state_header(),
+            settlement_descriptor: witness.settlement_descriptor(),
+        }
+    } else {
+        let witness = FactoryDynamicLocalExitWitness::parse(raw)
+            .map_err(|err| anyhow!("invalid dynamic factory local-exit witness: {err:?}"))?;
+        let factory_signature = witness.factory_signature().map_err(|err| {
+            anyhow!("invalid embedded dynamic factory signature witness: {err:?}")
+        })?;
+        verify_factory_dynamic_state_signatures(factory_header, &factory_signature)
+            .map_err(|err| anyhow!("embedded dynamic factory signatures are invalid: {err:?}"))?;
+        FactoryLocalExitView {
+            exit_digest: witness.exit_digest(),
+            state_output_index: witness.state_output_index(),
+            vault_output_index: witness.vault_output_index(),
+            state_type_hash: witness.state_type_hash(),
+            vault_lock_hash: witness.vault_lock_hash(),
+            state_lock_hash: witness.state_lock_hash(),
+            exit_state_header: witness.exit_state_header(),
+            settlement_descriptor: witness.settlement_descriptor(),
+        }
+    };
     ensure!(
-        factory_header.non_interference_digest() == exit_digest.as_slice(),
+        factory_header.non_interference_digest() == view.exit_digest.as_slice(),
         "factory header non_interference_digest does not match local-exit digest"
     );
 
-    let exit_state = parse_header(witness.exit_state_header())?;
+    let exit_state = parse_header(view.exit_state_header)?;
     ensure!(
         exit_state.signature_scheme_id() == SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
         "unsupported child state signature scheme {}",
@@ -2020,12 +2039,12 @@ fn validate_factory_local_exit_pair(
         exit_state.phase() == PHASE_ACTIVE,
         "factory local exit must materialise an active child StateCell"
     );
-    let descriptor_commitment = settlement_descriptor_commitment(witness.settlement_descriptor());
+    let descriptor_commitment = settlement_descriptor_commitment(view.settlement_descriptor);
     ensure!(
         exit_state.settlement_descriptor_commitment() == descriptor_commitment.as_slice(),
         "exit StateHeader descriptor commitment does not match local-exit descriptor"
     );
-    let expected_descriptor_version = match witness.settlement_descriptor().len() {
+    let expected_descriptor_version = match view.settlement_descriptor.len() {
         BILATERAL_CKB_DESCRIPTOR_LEN => BILATERAL_CKB_DESCRIPTOR_VERSION,
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
         other => {
@@ -2038,7 +2057,43 @@ fn validate_factory_local_exit_pair(
         exit_state.descriptor_version() == expected_descriptor_version,
         "exit StateHeader descriptor version does not match descriptor encoding"
     );
-    Ok(())
+    Ok(view)
+}
+
+fn factory_signature_witness_kind(raw: &[u8]) -> Result<u16> {
+    if FactorySignatureWitness::parse(raw).is_ok() {
+        return Ok(WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE);
+    }
+    FactoryDynamicSignatureWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid factory signature witness: {err:?}"))?;
+    Ok(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE)
+}
+
+fn factory_reduced_rights_witness_kind(raw: &[u8]) -> Result<u16> {
+    if FactoryReducedRightsWitness::parse(raw).is_ok() {
+        return Ok(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS);
+    }
+    FactoryDynamicReducedRightsWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid factory reduced-rights witness: {err:?}"))?;
+    Ok(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS)
+}
+
+fn factory_merkle_update_witness_kind(raw: &[u8]) -> Result<u16> {
+    if FactoryMerkleUpdateWitness::parse(raw).is_ok() {
+        return Ok(WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE);
+    }
+    FactoryDynamicMerkleUpdateWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid factory Merkle update witness: {err:?}"))?;
+    Ok(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE)
+}
+
+fn factory_local_exit_witness_kind(raw: &[u8]) -> Result<u16> {
+    if FactoryLocalExitWitness::parse(raw).is_ok() {
+        return Ok(WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT);
+    }
+    FactoryDynamicLocalExitWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid factory local-exit witness: {err:?}"))?;
+    Ok(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT)
 }
 
 fn decode_hex_exact(value: &str, expected_len: usize, field: &str) -> Result<Vec<u8>> {
@@ -2285,6 +2340,147 @@ fn reduced_rights_witness_bytes(
     }
     parse_factory_reduced_rights_witness(&raw)?;
     Ok(raw)
+}
+
+fn reduced_rights_witness_bytes_for_keys(
+    touched_after_balance: u128,
+    participant_keys: &[k256::ecdsa::SigningKey],
+) -> Result<Vec<u8>> {
+    ensure!(
+        participant_keys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
+            && participant_keys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize,
+        "factory reduced-rights package requires {}-{} participant keys",
+        FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        FACTORY_DYNAMIC_MAX_PARTICIPANTS
+    );
+    if participant_keys.len() == FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize {
+        return Ok(reduced_rights_witness_bytes(
+            touched_after_balance,
+            &participant_keys[0],
+            &participant_keys[1],
+        )?
+        .to_vec());
+    }
+    let participant_count = participant_keys.len() as u8;
+    let (before, after) = reduced_rights_pair(touched_after_balance);
+    let mut raw = vec![0u8; factory_dynamic_reduced_rights_witness_len(participant_count)];
+    put_u16(&mut raw, 0, FACTORY_DYNAMIC_REDUCED_RIGHTS_WITNESS_VERSION);
+    raw[2] = participant_count;
+    raw[3] = participant_count;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = FACTORY_REDUCED_RIGHTS_COUNT;
+    for (index, key) in participant_keys.iter().enumerate() {
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        raw[offset..offset + BYTE32_LEN].fill((index + 1) as u8);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(&compressed_pubkey(key));
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] = u8::from(index == 0);
+    }
+    let touched_offset = 8 + participant_keys.len() * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    raw[touched_offset..touched_offset + BYTE32_LEN].fill(1);
+    let before_offset = touched_offset + BYTE32_LEN;
+    let after_offset = before_offset + FACTORY_REDUCED_RIGHTS_COUNT as usize * FACTORY_RIGHT_LEN;
+    for index in 0..FACTORY_REDUCED_RIGHTS_COUNT as usize {
+        let offset = before_offset + index * FACTORY_RIGHT_LEN;
+        raw[offset..offset + FACTORY_RIGHT_LEN].copy_from_slice(&before[index]);
+        let offset = after_offset + index * FACTORY_RIGHT_LEN;
+        raw[offset..offset + FACTORY_RIGHT_LEN].copy_from_slice(&after[index]);
+    }
+    FactoryDynamicReducedRightsWitness::parse(&raw)
+        .map_err(|err| anyhow!("constructed dynamic reduced-rights witness is invalid: {err:?}"))?;
+    Ok(raw)
+}
+
+type ReducedRightsCommitments = (
+    [u8; BYTE32_LEN],
+    [u8; BYTE32_LEN],
+    [u8; BYTE32_LEN],
+    [u8; BYTE32_LEN],
+    [u8; BYTE32_LEN],
+);
+
+fn reduced_rights_witness_commitments(raw: &[u8]) -> Result<ReducedRightsCommitments> {
+    if let Ok(witness) = FactoryReducedRightsWitness::parse(raw) {
+        return Ok((
+            witness.participants_commitment(),
+            witness
+                .rights_root(false)
+                .map_err(|err| anyhow!("failed to compute reduced-rights old root: {err:?}"))?,
+            witness
+                .rights_root(true)
+                .map_err(|err| anyhow!("failed to compute reduced-rights new root: {err:?}"))?,
+            witness.access_manifest_root(false).map_err(|err| {
+                anyhow!("failed to compute reduced-rights old access root: {err:?}")
+            })?,
+            witness.access_manifest_root(true).map_err(|err| {
+                anyhow!("failed to compute reduced-rights new access root: {err:?}")
+            })?,
+        ));
+    }
+    let witness = FactoryDynamicReducedRightsWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-rights witness: {err:?}"))?;
+    Ok((
+        witness.participants_commitment(),
+        witness
+            .rights_root(false)
+            .map_err(|err| anyhow!("failed to compute reduced-rights old root: {err:?}"))?,
+        witness
+            .rights_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new root: {err:?}"))?,
+        witness
+            .access_manifest_root(false)
+            .map_err(|err| anyhow!("failed to compute reduced-rights old access root: {err:?}"))?,
+        witness
+            .access_manifest_root(true)
+            .map_err(|err| anyhow!("failed to compute reduced-rights new access root: {err:?}"))?,
+    ))
+}
+
+fn reduced_rights_non_interference_digest(
+    raw: &[u8],
+    old_header: &FactoryStateHeader<'_>,
+    new_header: &FactoryStateHeader<'_>,
+) -> Result<[u8; BYTE32_LEN]> {
+    if let Ok(witness) = FactoryReducedRightsWitness::parse(raw) {
+        return witness
+            .non_interference_digest(old_header, new_header)
+            .map_err(|err| anyhow!("failed to compute reduced-rights digest: {err:?}"));
+    }
+    FactoryDynamicReducedRightsWitness::parse(raw)
+        .map_err(|err| anyhow!("invalid dynamic reduced-rights witness: {err:?}"))?
+        .non_interference_digest(old_header, new_header)
+        .map_err(|err| anyhow!("failed to compute dynamic reduced-rights digest: {err:?}"))
+}
+
+fn sign_reduced_rights_witness_any(
+    witness: &mut [u8],
+    participant: [u8; BYTE32_LEN],
+    key: &k256::ecdsa::SigningKey,
+    digest: &[u8; BYTE32_LEN],
+) -> Result<()> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    let participant_count = usize::from(
+        *witness
+            .get(3)
+            .ok_or_else(|| anyhow!("reduced-rights witness is truncated"))?,
+    );
+    let sig: k256::ecdsa::Signature = key
+        .sign_prehash(digest)
+        .map_err(|err| anyhow!("failed to sign reduced factory rights witness: {err:?}"))?;
+    for index in 0..participant_count {
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        if witness.get(offset..offset + BYTE32_LEN) == Some(participant.as_slice()) {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            let signature_bytes = sig.to_bytes();
+            witness[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(signature_bytes.as_ref());
+            return Ok(());
+        }
+    }
+    Err(anyhow!(
+        "participant not present in reduced factory rights witness"
+    ))
 }
 
 fn sign_reduced_rights_witness(
@@ -2557,6 +2753,72 @@ mod tests {
     }
 
     #[test]
+    fn factory_package_current_header_match_includes_vault_outpoint_binding() {
+        let left = factory_header_fixture(2, [9u8; BYTE32_LEN]);
+        let mut right = left.clone();
+        right[270..302].fill(7);
+
+        assert!(!factory_headers_equal(
+            &FactoryStateHeader::parse(&left).unwrap(),
+            &FactoryStateHeader::parse(&right).unwrap(),
+        ));
+    }
+
+    #[test]
+    fn validates_three_party_dynamic_factory_state_package() {
+        let keys = [
+            SigningKey::from_slice(&[1u8; 32]).unwrap(),
+            SigningKey::from_slice(&[2u8; 32]).unwrap(),
+            SigningKey::from_slice(&[3u8; 32]).unwrap(),
+        ];
+        let mut header = factory_header_fixture(4, [9u8; BYTE32_LEN]);
+        let participants = [
+            ([1u8; BYTE32_LEN], pubkey(&keys[0])),
+            ([2u8; BYTE32_LEN], pubkey(&keys[1])),
+            ([3u8; BYTE32_LEN], pubkey(&keys[2])),
+        ];
+        header[108..140].copy_from_slice(&factory_participants_commitment(
+            3,
+            &[
+                (participants[0].0.as_slice(), participants[0].1.as_slice()),
+                (participants[1].0.as_slice(), participants[1].1.as_slice()),
+                (participants[2].0.as_slice(), participants[2].1.as_slice()),
+            ],
+        ));
+        let parsed = FactoryStateHeader::parse(&header).unwrap();
+        let mut witness = vec![0u8; morph_script_common::factory_dynamic_signature_witness_len(3)];
+        put_u16(
+            &mut witness,
+            0,
+            morph_script_common::FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION,
+        );
+        witness[2] = 3;
+        witness[3] = 3;
+        for (index, (participant, participant_pubkey)) in participants.iter().enumerate() {
+            let offset =
+                4 + index * (BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN);
+            witness[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            witness[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(participant_pubkey);
+            let signature: Signature = keys[index].sign_prehash(&parsed.signing_digest()).unwrap();
+            witness[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN
+                ..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(signature.to_bytes().as_ref());
+        }
+
+        let package =
+            StoredFactoryStateCellPackage::from_signed_factory_state(&header, &witness, None)
+                .unwrap();
+        assert_eq!(package.witness_bytes().unwrap().len(), witness.len());
+        assert_eq!(
+            FactoryStateCellUpdatePackage::Full(package)
+                .contract_witness_bytes()
+                .unwrap()[10..12],
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE.to_le_bytes()
+        );
+    }
+
+    #[test]
     fn writes_reads_and_validates_factory_reduced_rights_package() {
         let dir = temp_dir("factory-reduced-rights");
         let package = fixture_factory_reduced_rights_package().unwrap();
@@ -2573,6 +2835,36 @@ mod tests {
         assert_eq!(update_package.factory_id(), package.factory_id);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn validates_three_party_dynamic_reduced_rights_package() {
+        let keys = vec![
+            SigningKey::from_slice(&[1u8; 32]).unwrap(),
+            SigningKey::from_slice(&[2u8; 32]).unwrap(),
+            SigningKey::from_slice(&[3u8; 32]).unwrap(),
+        ];
+        let unsigned = reduced_rights_witness_bytes_for_keys(90, &keys).unwrap();
+        let (participants, old_root, _, old_access, _) =
+            reduced_rights_witness_commitments(&unsigned).unwrap();
+        let mut old_header = factory_header_fixture(1, [8u8; BYTE32_LEN]);
+        old_header[76..108].copy_from_slice(&old_root);
+        old_header[108..140].copy_from_slice(&participants);
+        old_header[140..172].copy_from_slice(&old_access);
+
+        let package =
+            reduced_rights_package_from_factory_header(&old_header, &keys, Some(2), 90, None)
+                .unwrap();
+        assert_eq!(
+            package.summary().unwrap().witness_len,
+            factory_dynamic_reduced_rights_witness_len(3)
+        );
+        assert_eq!(
+            FactoryStateCellUpdatePackage::ReducedRights(package)
+                .contract_witness_bytes()
+                .unwrap()[10..12],
+            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS.to_le_bytes()
+        );
     }
 
     #[test]

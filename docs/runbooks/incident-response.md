@@ -50,11 +50,12 @@ failed: widen `from_block`, preserve the old cursor as evidence, and rescan.
 
 - Fee-payer/watchtower key: stop its process, stop funding it, move remaining
   devnet capacity with a separately verified key if possible, and rotate.
-- One participant key: freeze the Factory, have both participants settle or
+- One participant key: freeze the Factory, have all participants settle or
   materialise through already signed valid packages, then recreate under new
-  keys. Do not claim unilateral in-place signer rotation.
-- Both participant keys: stop the pilot and preserve evidence; no software
-  procedure can restore the lost trust boundary.
+  membership. Do not claim unilateral in-place signer rotation.
+- All participant keys, or enough operator infrastructure to impersonate every
+  member: stop the pilot and preserve evidence; no software procedure can
+  restore the lost trust boundary.
 - Hub token: restart with a fresh scoped token and review mutation events.
 
 ## Recovery and Restart Approval

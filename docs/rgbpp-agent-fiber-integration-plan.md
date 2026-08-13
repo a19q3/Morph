@@ -321,7 +321,7 @@ settled Morph signed states remain enforceable.
 - type-bound FactoryState locking, independent fee-input signatures, and exact
   State/Factory carrier-capacity deltas across update/activation/splice/exit;
 - signed descriptor progress and fixed Vault root;
-- current 2-of-2 Factory signer-profile honesty;
+- dynamic 2–16 participant Factory signer profile with N-of-N full consent;
 - full baseline CI and CKB-VM suite.
 
 ### Phase B — sovereign host interfaces (implemented, audit pending)
@@ -436,7 +436,8 @@ Until then, documentation and APIs must distinguish:
   canonical CKB FactoryStateCell by the live bridge watcher; host proof
   consistency alone is not chain inclusion;
 - conditional pending TLC force-close/Batch Cell is absent;
-- Factory full-consent signer profile is currently fixed 2-of-2;
+- Factory full-consent membership is bounded to 2–16 and does not yet support
+  threshold subsets or membership changes in place;
 - real three-node Morph-backed Fiber routing evidence is absent;
 - no independent contract/Agent security audit has been completed.
 - production ingress controls (TLS/mTLS, rate limits, admin protection for the

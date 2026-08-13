@@ -395,7 +395,8 @@ struct HubModelView {
     channel_authority: &'static str,
     routing_role: &'static str,
     agent_role: &'static str,
-    factory_participant_count: usize,
+    factory_min_participants: usize,
+    factory_max_participants: usize,
     chain_actions_enabled: bool,
     factory_rights_exposed: bool,
     provider_edges_exposed: bool,
@@ -559,13 +560,14 @@ fn local_state_provenance() -> RecordProvenanceView {
 
 fn hub_model_view() -> HubModelView {
     HubModelView {
-        profile: "sovereign-devnet-v1",
+        profile: "sovereign-devnet-dynamic-factory-v2",
         hub_role: "local_operator_projection",
         factory_authority: "factory_state_and_vault",
         channel_authority: "state_and_vault",
         routing_role: "external_optional_provider",
         agent_role: "application_sidecar",
-        factory_participant_count: CURRENT_FACTORY_PARTICIPANT_COUNT,
+        factory_min_participants: FACTORY_DYNAMIC_MIN_PARTICIPANTS,
+        factory_max_participants: FACTORY_DYNAMIC_MAX_PARTICIPANTS,
         chain_actions_enabled: false,
         factory_rights_exposed: false,
         provider_edges_exposed: false,
@@ -4317,15 +4319,19 @@ mod tests {
         assert_eq!(child["factory_id"].as_str(), Some(factory_id.as_str()));
         assert_eq!(
             body["model"]["profile"].as_str(),
-            Some("sovereign-devnet-v1")
+            Some("sovereign-devnet-dynamic-factory-v2")
         );
         assert_eq!(
             body["model"]["hub_role"].as_str(),
             Some("local_operator_projection")
         );
         assert_eq!(
-            body["model"]["factory_participant_count"].as_u64(),
-            Some(CURRENT_FACTORY_PARTICIPANT_COUNT as u64)
+            body["model"]["factory_min_participants"].as_u64(),
+            Some(FACTORY_DYNAMIC_MIN_PARTICIPANTS as u64)
+        );
+        assert_eq!(
+            body["model"]["factory_max_participants"].as_u64(),
+            Some(FACTORY_DYNAMIC_MAX_PARTICIPANTS as u64)
         );
         assert_eq!(
             body["model"]["chain_actions_enabled"].as_bool(),
