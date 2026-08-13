@@ -17,9 +17,9 @@ DENY ?= cargo deny
 # Remove each waiver as soon as its upstream dependency path is upgraded.
 AUDIT_IGNORE ?= --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2026-0186 --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2026-0253
 
-.PHONY: ci full-test test lint fmt fmt-check source-hygiene audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
+.PHONY: ci full-test test lint fmt fmt-check source-hygiene audit deny supply-chain smoke fixture-checks sdk-check hub-ui-check build-contracts contract-tests verify-contract-manifest preproduction-envelope-check runbook-check release-readiness package-contract-release devnet-smoke devnet-e2e devnet-stateful-e2e fiber-morph-devnet-preflight fiber-morph-devnet-acceptance fiber-morph-devnet-acceptance-full fiber-morph-devnet-audit smoke-report smoke-assert smoke-assert-budget devnet-stateful-report devnet-stateful-assert
 
-ci: fmt-check lint source-hygiene supply-chain test fixture-checks sdk-check hub-ui-check contract-tests
+ci: fmt-check lint source-hygiene supply-chain test fixture-checks sdk-check hub-ui-check contract-tests release-readiness
 
 full-test: test fixture-checks contract-tests
 
@@ -89,10 +89,24 @@ hub-ui-check:
 	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build
 
 build-contracts:
-	$(CONTRACT_CARGO) build --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt
+	$(CONTRACT_CARGO) build --locked --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt
 
 contract-tests: build-contracts
 	$(CARGO) test -p morph-core --test contract_scripts -- --ignored --test-threads=1
+
+verify-contract-manifest:
+	$(CARGO) run -q -p morph-cli -- verify-contract-manifest --manifest release/factory-v1.0-preproduction/contracts.json --contracts-dir target/riscv64imac-unknown-none-elf/release
+
+preproduction-envelope-check:
+	$(CARGO) run -q -p morph-cli -- validate-preproduction-envelope --envelope release/factory-v1.0-preproduction/envelope.json
+
+runbook-check:
+	scripts/check-release-readiness.sh
+
+release-readiness: verify-contract-manifest preproduction-envelope-check runbook-check
+
+package-contract-release: release-readiness
+	scripts/package-contract-release.sh
 
 devnet-smoke:
 	scripts/devnet-smoke.sh

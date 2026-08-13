@@ -1258,6 +1258,15 @@ pub struct ObservedStateCellReport {
     pub confirmations: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WatchReorgRecoveryReport {
+    pub reason: String,
+    pub cursor_scanned_to_block: u64,
+    pub expected_block_hash: Option<String>,
+    pub canonical_block_hash: Option<String>,
+    pub reset_from_block: u64,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WatchLatestStatePackageReport {
     pub channel_id: String,
@@ -1274,6 +1283,8 @@ pub struct WatchLatestStatePackageReport {
     pub alert_webhook_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loaded_cursor: Option<WatchCursor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reorg_recovery: Option<WatchReorgRecoveryReport>,
     pub selected_package: StatePackageRecord,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sponsor_top_up: Option<FundSponsorReport>,
@@ -7366,118 +7377,177 @@ pub fn watch_latest_state_package(
             None => None,
         }
     };
-    let effective_from_block = loaded_cursor
+    let mut reorg_recovery = loaded_cursor
         .as_ref()
+        .map(|cursor| assess_watch_cursor_canonicality(rpc, cursor, options.from_block))
+        .transpose()?
+        .flatten();
+    if let Some(recovery) = &reorg_recovery {
+        append_watch_alert_if_requested(
+            &options.alert_file,
+            &options.alert_webhook_url,
+            reorg_alert(
+                &channel_id,
+                selected_state_number,
+                recovery,
+                "persisted watch cursor is no longer on the canonical chain",
+            )?,
+        )?;
+    }
+    let active_cursor = if reorg_recovery.is_some() {
+        None
+    } else {
+        loaded_cursor.as_ref()
+    };
+    let effective_from_block = active_cursor
         .map(|cursor| options.from_block.max(cursor.next_block))
         .unwrap_or(options.from_block);
+    let mut cursor_context = active_cursor.cloned();
     let started = Instant::now();
     let timeout = Duration::from_secs(options.timeout_secs);
     let poll_interval = Duration::from_millis(options.poll_ms);
     let mut next_block = effective_from_block;
     let mut scanned_to_block = effective_from_block.saturating_sub(1);
     let mut last_observed = None;
-    let mut current_funding_anchor = loaded_cursor
-        .as_ref()
-        .and_then(|cursor| cursor.current_funding_anchor.clone());
-    let mut current_funding_context_id = loaded_cursor
-        .as_ref()
-        .and_then(|cursor| cursor.current_funding_context_id.clone());
+    let mut scanned_to_block_hash = active_cursor
+        .filter(|cursor| cursor.scanned_to_block == scanned_to_block)
+        .and_then(|cursor| cursor.scanned_to_block_hash.clone());
+    let mut current_funding_anchor =
+        active_cursor.and_then(|cursor| cursor.current_funding_anchor.clone());
+    let mut current_funding_context_id =
+        active_cursor.and_then(|cursor| cursor.current_funding_context_id.clone());
 
     loop {
+        if let Some(expected_hash) = scanned_to_block_hash.as_deref() {
+            let canonical_hash = canonical_block_hash(rpc, scanned_to_block)?;
+            if canonical_hash.as_deref() != Some(expected_hash) {
+                let recovery = watch_reorg_recovery(
+                    scanned_to_block,
+                    Some(expected_hash),
+                    canonical_hash.as_deref(),
+                    options.from_block,
+                );
+                append_watch_alert_if_requested(
+                    &options.alert_file,
+                    &options.alert_webhook_url,
+                    reorg_alert(
+                        &channel_id,
+                        selected_state_number,
+                        &recovery,
+                        "canonical chain changed while the watch scan was running",
+                    )?,
+                )?;
+                reorg_recovery = Some(recovery);
+                next_block = options.from_block;
+                scanned_to_block = options.from_block.saturating_sub(1);
+                scanned_to_block_hash = None;
+                last_observed = None;
+                current_funding_anchor = None;
+                current_funding_context_id = None;
+                cursor_context = None;
+                continue;
+            }
+        }
         let tip_number = rpc.tip_header()?.number_value()?;
         if tip_number.saturating_add(1) >= options.detection_depth {
             let mature_tip = tip_number + 1 - options.detection_depth;
             while next_block <= mature_tip {
                 let current_block = next_block;
-                if let Some(block) = rpc.block_by_number(next_block)? {
-                    scanned_to_block = current_block;
-                    for observed in
-                        observed_state_cells(&block, &channel_id, tip_number, &state_cell_filter)?
-                    {
-                        let previous_funding_anchor = current_funding_anchor.clone();
-                        let previous_funding_context_id = current_funding_context_id.clone();
-                        let splice_detected = previous_funding_context_id
-                            .as_ref()
-                            .is_some_and(|context_id| context_id != &observed.funding_context_id)
-                            || (previous_funding_context_id.is_none()
-                                && previous_funding_anchor
-                                    .as_ref()
-                                    .is_some_and(|anchor| anchor != &observed.funding_anchor));
-                        if splice_detected {
-                            append_watch_alert_if_requested(
-                                &options.alert_file,
-                                &options.alert_webhook_url,
-                                WatchtowerAlert::new(
-                                    channel_id.clone(),
-                                    WatchAlertSeverity::Warning,
-                                    WatchAlertEvent::SpliceDetected,
-                                    format!(
-                                        "confirmed StateCell funding anchor changed from {} to {}",
-                                        previous_funding_anchor.as_deref().unwrap_or_default(),
-                                        observed.funding_anchor
-                                    ),
-                                    selected_state_number,
-                                    scanned_to_block,
-                                    current_block.saturating_add(1),
-                                )?
-                                .with_observed(observed.state_number, observed.out_point.clone())
-                                .with_funding_anchors(
-                                    previous_funding_anchor.unwrap_or_default(),
-                                    observed.funding_anchor.clone(),
-                                )
-                                .with_optional_funding_contexts(
-                                    previous_funding_context_id,
-                                    Some(observed.funding_context_id.clone()),
+                let block = rpc.block_by_number(next_block)?.ok_or_else(|| {
+                    anyhow!(
+                        "canonical block {next_block} disappeared while scanning; retry so reorg recovery can restart from block {}",
+                        options.from_block
+                    )
+                })?;
+                scanned_to_block = current_block;
+                scanned_to_block_hash = Some(format!("{:#x}", block.header.hash));
+                for observed in
+                    observed_state_cells(&block, &channel_id, tip_number, &state_cell_filter)?
+                {
+                    let previous_funding_anchor = current_funding_anchor.clone();
+                    let previous_funding_context_id = current_funding_context_id.clone();
+                    let splice_detected = previous_funding_context_id
+                        .as_ref()
+                        .is_some_and(|context_id| context_id != &observed.funding_context_id)
+                        || (previous_funding_context_id.is_none()
+                            && previous_funding_anchor
+                                .as_ref()
+                                .is_some_and(|anchor| anchor != &observed.funding_anchor));
+                    if splice_detected {
+                        append_watch_alert_if_requested(
+                            &options.alert_file,
+                            &options.alert_webhook_url,
+                            WatchtowerAlert::new(
+                                channel_id.clone(),
+                                WatchAlertSeverity::Warning,
+                                WatchAlertEvent::SpliceDetected,
+                                format!(
+                                    "confirmed StateCell funding anchor changed from {} to {}",
+                                    previous_funding_anchor.as_deref().unwrap_or_default(),
+                                    observed.funding_anchor
                                 ),
-                            )?;
-                        }
-                        current_funding_anchor = Some(observed.funding_anchor.clone());
-                        current_funding_context_id = Some(observed.funding_context_id.clone());
-
-                        let selected_for_context = latest_package_for_funding_context(
-                            &package_records,
-                            &observed.funding_context_id,
-                        )
-                        .or_else(|| {
-                            latest_package_for_funding_anchor(
-                                &package_records,
-                                &observed.funding_anchor,
+                                selected_state_number,
+                                scanned_to_block,
+                                current_block.saturating_add(1),
+                            )?
+                            .with_observed(observed.state_number, observed.out_point.clone())
+                            .with_funding_anchors(
+                                previous_funding_anchor.unwrap_or_default(),
+                                observed.funding_anchor.clone(),
                             )
-                        });
-                        let Some(selected_for_context) = selected_for_context else {
-                            append_watch_alert_if_requested(
-                                &options.alert_file,
-                                &options.alert_webhook_url,
-                                WatchtowerAlert::new(
-                                    channel_id.clone(),
-                                    WatchAlertSeverity::Warning,
-                                    WatchAlertEvent::SplicePackageStale,
-                                    format!(
-                                        "no saved state package matches confirmed funding anchor {}",
-                                        observed.funding_anchor
-                                    ),
-                                    selected_state_number,
-                                    scanned_to_block,
-                                    current_block.saturating_add(1),
-                                )?
-                                .with_observed(observed.state_number, observed.out_point.clone())
-                                .with_funding_anchors(
-                                    selected_package.package.funding_anchor.clone(),
-                                    observed.funding_anchor.clone(),
-                                )
-                                .with_optional_funding_contexts(
-                                    state_package_funding_context_id(&selected_package),
-                                    Some(observed.funding_context_id.clone()),
-                                ),
-                            )?;
-                            last_observed = Some(observed);
-                            continue;
-                        };
+                            .with_optional_funding_contexts(
+                                previous_funding_context_id,
+                                Some(observed.funding_context_id.clone()),
+                            ),
+                        )?;
+                    }
+                    current_funding_anchor = Some(observed.funding_anchor.clone());
+                    current_funding_context_id = Some(observed.funding_context_id.clone());
 
-                        if selected_package.package.funding_anchor != observed.funding_anchor
-                            && selected_package.package.state_number > observed.state_number
-                        {
-                            append_watch_alert_if_requested(
+                    let selected_for_context = latest_package_for_funding_context(
+                        &package_records,
+                        &observed.funding_context_id,
+                    )
+                    .or_else(|| {
+                        latest_package_for_funding_anchor(
+                            &package_records,
+                            &observed.funding_anchor,
+                        )
+                    });
+                    let Some(selected_for_context) = selected_for_context else {
+                        append_watch_alert_if_requested(
+                            &options.alert_file,
+                            &options.alert_webhook_url,
+                            WatchtowerAlert::new(
+                                channel_id.clone(),
+                                WatchAlertSeverity::Warning,
+                                WatchAlertEvent::SplicePackageStale,
+                                format!(
+                                    "no saved state package matches confirmed funding anchor {}",
+                                    observed.funding_anchor
+                                ),
+                                selected_state_number,
+                                scanned_to_block,
+                                current_block.saturating_add(1),
+                            )?
+                            .with_observed(observed.state_number, observed.out_point.clone())
+                            .with_funding_anchors(
+                                selected_package.package.funding_anchor.clone(),
+                                observed.funding_anchor.clone(),
+                            )
+                            .with_optional_funding_contexts(
+                                state_package_funding_context_id(&selected_package),
+                                Some(observed.funding_context_id.clone()),
+                            ),
+                        )?;
+                        last_observed = Some(observed);
+                        continue;
+                    };
+
+                    if selected_package.package.funding_anchor != observed.funding_anchor
+                        && selected_package.package.state_number > observed.state_number
+                    {
+                        append_watch_alert_if_requested(
                                 &options.alert_file,
                                 &options.alert_webhook_url,
                                 WatchtowerAlert::new(
@@ -7504,122 +7574,122 @@ pub fn watch_latest_state_package(
                                     Some(observed.funding_context_id.clone()),
                                 ),
                             )?;
-                        }
-
-                        let selected_for_context_state_number =
-                            selected_for_context.package.state_number;
-                        if observed.state_number < selected_for_context_state_number {
-                            append_watch_alert_if_requested(
-                                &options.alert_file,
-                                &options.alert_webhook_url,
-                                WatchtowerAlert::new(
-                                    channel_id.clone(),
-                                    WatchAlertSeverity::Warning,
-                                    WatchAlertEvent::OlderStateDetected,
-                                    format!(
-                                        "confirmed StateCell {} is older than saved state {}",
-                                        observed.state_number, selected_for_context_state_number
-                                    ),
-                                    selected_for_context_state_number,
-                                    scanned_to_block,
-                                    current_block.saturating_add(1),
-                                )?
-                                .with_observed(observed.state_number, observed.out_point.clone())
-                                .with_funding_anchors(
-                                    selected_for_context.package.funding_anchor.clone(),
-                                    observed.funding_anchor.clone(),
-                                )
-                                .with_optional_funding_contexts(
-                                    state_package_funding_context_id(&selected_for_context),
-                                    Some(observed.funding_context_id.clone()),
-                                ),
-                            )?;
-                            let (sponsor_out_point, sponsor_top_up) =
-                                sponsor_for_watch_publication(
-                                    rpc,
-                                    &options,
-                                    &observed,
-                                    selected_for_context_state_number,
-                                )?;
-                            let publication = publish_state(
-                                rpc,
-                                PublishStateOptions {
-                                    contracts_dir: options.contracts_dir.clone(),
-                                    private_key: options.private_key.clone(),
-                                    alice_private_key: options.alice_private_key.clone(),
-                                    bob_private_key: options.bob_private_key.clone(),
-                                    state_out_point: observed.out_point.clone(),
-                                    sponsor_out_point,
-                                    state_number: None,
-                                    state_package: Some(selected_for_context.path.clone()),
-                                    fee: options.fee,
-                                    mine_blocks: options.mine_blocks,
-                                },
-                            )?;
-                            let publication_event = if splice_detected
-                                || selected_for_context.package.funding_anchor
-                                    != selected_package.package.funding_anchor
-                            {
-                                WatchAlertEvent::SplicePublicationSubmitted
-                            } else {
-                                WatchAlertEvent::PublicationSubmitted
-                            };
-                            append_watch_alert_if_requested(
-                                &options.alert_file,
-                                &options.alert_webhook_url,
-                                WatchtowerAlert::new(
-                                    channel_id.clone(),
-                                    WatchAlertSeverity::Warning,
-                                    publication_event,
-                                    format!(
-                                        "published saved state {} against older StateCell {}",
-                                        selected_for_context_state_number, observed.state_number
-                                    ),
-                                    selected_for_context_state_number,
-                                    scanned_to_block,
-                                    current_block.saturating_add(1),
-                                )?
-                                .with_observed(observed.state_number, observed.out_point.clone())
-                                .with_funding_anchors(
-                                    selected_for_context.package.funding_anchor.clone(),
-                                    observed.funding_anchor.clone(),
-                                )
-                                .with_optional_funding_contexts(
-                                    state_package_funding_context_id(&selected_for_context),
-                                    Some(observed.funding_context_id.clone()),
-                                )
-                                .with_publication(publication.tx_hash.clone()),
-                            )?;
-                            let next_from_block = current_block.saturating_add(1);
-                            write_watch_cursor(
-                                &cursor_file,
-                                &watch_cursor_for_state(
-                                    &channel_id,
-                                    next_from_block,
-                                    scanned_to_block,
-                                    Some(&observed),
-                                    loaded_cursor.as_ref(),
-                                )?,
-                            )?;
-                            return Ok(WatchLatestStatePackageReport {
-                                channel_id,
-                                from_block: options.from_block,
-                                effective_from_block,
-                                scanned_to_block,
-                                next_from_block,
-                                detection_depth: options.detection_depth,
-                                cursor_file: Some(cursor_file),
-                                alert_file: options.alert_file.clone(),
-                                alert_webhook_url: options.alert_webhook_url.clone(),
-                                loaded_cursor,
-                                selected_package: selected_for_context,
-                                sponsor_top_up,
-                                observed: Some(observed),
-                                publication: Some(publication),
-                            });
-                        }
-                        last_observed = Some(observed);
                     }
+
+                    let selected_for_context_state_number =
+                        selected_for_context.package.state_number;
+                    if observed.state_number < selected_for_context_state_number {
+                        append_watch_alert_if_requested(
+                            &options.alert_file,
+                            &options.alert_webhook_url,
+                            WatchtowerAlert::new(
+                                channel_id.clone(),
+                                WatchAlertSeverity::Warning,
+                                WatchAlertEvent::OlderStateDetected,
+                                format!(
+                                    "confirmed StateCell {} is older than saved state {}",
+                                    observed.state_number, selected_for_context_state_number
+                                ),
+                                selected_for_context_state_number,
+                                scanned_to_block,
+                                current_block.saturating_add(1),
+                            )?
+                            .with_observed(observed.state_number, observed.out_point.clone())
+                            .with_funding_anchors(
+                                selected_for_context.package.funding_anchor.clone(),
+                                observed.funding_anchor.clone(),
+                            )
+                            .with_optional_funding_contexts(
+                                state_package_funding_context_id(&selected_for_context),
+                                Some(observed.funding_context_id.clone()),
+                            ),
+                        )?;
+                        let (sponsor_out_point, sponsor_top_up) = sponsor_for_watch_publication(
+                            rpc,
+                            &options,
+                            &observed,
+                            selected_for_context_state_number,
+                        )?;
+                        let publication = publish_state(
+                            rpc,
+                            PublishStateOptions {
+                                contracts_dir: options.contracts_dir.clone(),
+                                private_key: options.private_key.clone(),
+                                alice_private_key: options.alice_private_key.clone(),
+                                bob_private_key: options.bob_private_key.clone(),
+                                state_out_point: observed.out_point.clone(),
+                                sponsor_out_point,
+                                state_number: None,
+                                state_package: Some(selected_for_context.path.clone()),
+                                fee: options.fee,
+                                mine_blocks: options.mine_blocks,
+                            },
+                        )?;
+                        let publication_event = if splice_detected
+                            || selected_for_context.package.funding_anchor
+                                != selected_package.package.funding_anchor
+                        {
+                            WatchAlertEvent::SplicePublicationSubmitted
+                        } else {
+                            WatchAlertEvent::PublicationSubmitted
+                        };
+                        append_watch_alert_if_requested(
+                            &options.alert_file,
+                            &options.alert_webhook_url,
+                            WatchtowerAlert::new(
+                                channel_id.clone(),
+                                WatchAlertSeverity::Warning,
+                                publication_event,
+                                format!(
+                                    "published saved state {} against older StateCell {}",
+                                    selected_for_context_state_number, observed.state_number
+                                ),
+                                selected_for_context_state_number,
+                                scanned_to_block,
+                                current_block.saturating_add(1),
+                            )?
+                            .with_observed(observed.state_number, observed.out_point.clone())
+                            .with_funding_anchors(
+                                selected_for_context.package.funding_anchor.clone(),
+                                observed.funding_anchor.clone(),
+                            )
+                            .with_optional_funding_contexts(
+                                state_package_funding_context_id(&selected_for_context),
+                                Some(observed.funding_context_id.clone()),
+                            )
+                            .with_publication(publication.tx_hash.clone()),
+                        )?;
+                        let next_from_block = current_block.saturating_add(1);
+                        write_watch_cursor(
+                            &cursor_file,
+                            &watch_cursor_for_state(
+                                &channel_id,
+                                next_from_block,
+                                scanned_to_block,
+                                scanned_to_block_hash.as_deref(),
+                                Some(&observed),
+                                cursor_context.as_ref(),
+                            )?,
+                        )?;
+                        return Ok(WatchLatestStatePackageReport {
+                            channel_id,
+                            from_block: options.from_block,
+                            effective_from_block,
+                            scanned_to_block,
+                            next_from_block,
+                            detection_depth: options.detection_depth,
+                            cursor_file: Some(cursor_file),
+                            alert_file: options.alert_file.clone(),
+                            alert_webhook_url: options.alert_webhook_url.clone(),
+                            loaded_cursor,
+                            reorg_recovery,
+                            selected_package: selected_for_context,
+                            sponsor_top_up,
+                            observed: Some(observed),
+                            publication: Some(publication),
+                        });
+                    }
+                    last_observed = Some(observed);
                 }
                 next_block = current_block.saturating_add(1);
                 write_watch_cursor(
@@ -7628,8 +7698,9 @@ pub fn watch_latest_state_package(
                         &channel_id,
                         next_block,
                         scanned_to_block,
+                        scanned_to_block_hash.as_deref(),
                         last_observed.as_ref(),
-                        loaded_cursor.as_ref(),
+                        cursor_context.as_ref(),
                     )?,
                 )?;
             }
@@ -7642,8 +7713,9 @@ pub fn watch_latest_state_package(
                     &channel_id,
                     next_block,
                     scanned_to_block,
+                    scanned_to_block_hash.as_deref(),
                     last_observed.as_ref(),
-                    loaded_cursor.as_ref(),
+                    cursor_context.as_ref(),
                 )?,
             )?;
             append_watch_alert_if_requested(
@@ -7670,6 +7742,7 @@ pub fn watch_latest_state_package(
                 alert_file: options.alert_file.clone(),
                 alert_webhook_url: options.alert_webhook_url.clone(),
                 loaded_cursor,
+                reorg_recovery,
                 selected_package,
                 sponsor_top_up: None,
                 observed: last_observed,
@@ -7741,10 +7814,18 @@ fn watch_cursor_for_state(
     channel_id: &str,
     next_block: u64,
     scanned_to_block: u64,
+    scanned_to_block_hash: Option<&str>,
     observed: Option<&ObservedStateCellReport>,
     previous_cursor: Option<&WatchCursor>,
 ) -> Result<WatchCursor> {
     let mut cursor = WatchCursor::new(channel_id, next_block, scanned_to_block)?;
+    if let Some(block_hash) = scanned_to_block_hash {
+        cursor = cursor.with_scanned_block_hash(block_hash)?;
+    } else if let Some(previous_cursor) =
+        previous_cursor.filter(|previous| previous.scanned_to_block == scanned_to_block)
+    {
+        cursor.scanned_to_block_hash = previous_cursor.scanned_to_block_hash.clone();
+    }
     if let Some(observed) = observed {
         cursor.with_observed_context_state(
             &observed.funding_anchor,
@@ -7762,6 +7843,90 @@ fn watch_cursor_for_state(
     } else {
         Ok(cursor)
     }
+}
+
+fn assess_watch_cursor_canonicality(
+    rpc: &CkbRpcClient,
+    cursor: &WatchCursor,
+    reset_from_block: u64,
+) -> Result<Option<WatchReorgRecoveryReport>> {
+    let canonical_hash = canonical_block_hash(rpc, cursor.scanned_to_block)?;
+    Ok(watch_reorg_recovery_if_needed(
+        cursor.scanned_to_block,
+        cursor.scanned_to_block_hash.as_deref(),
+        canonical_hash.as_deref(),
+        reset_from_block,
+    ))
+}
+
+fn canonical_block_hash(rpc: &CkbRpcClient, block_number: u64) -> Result<Option<String>> {
+    Ok(rpc
+        .block_by_number(block_number)?
+        .map(|block| format!("{:#x}", block.header.hash)))
+}
+
+fn watch_reorg_recovery_if_needed(
+    cursor_scanned_to_block: u64,
+    expected_block_hash: Option<&str>,
+    canonical_block_hash: Option<&str>,
+    reset_from_block: u64,
+) -> Option<WatchReorgRecoveryReport> {
+    if expected_block_hash.is_some() && expected_block_hash == canonical_block_hash {
+        return None;
+    }
+    Some(watch_reorg_recovery(
+        cursor_scanned_to_block,
+        expected_block_hash,
+        canonical_block_hash,
+        reset_from_block,
+    ))
+}
+
+fn watch_reorg_recovery(
+    cursor_scanned_to_block: u64,
+    expected_block_hash: Option<&str>,
+    canonical_block_hash: Option<&str>,
+    reset_from_block: u64,
+) -> WatchReorgRecoveryReport {
+    let reason = match (expected_block_hash, canonical_block_hash) {
+        (None, _) => "cursor_missing_block_hash",
+        (Some(_), None) => "cursor_block_missing",
+        (Some(_), Some(_)) => "cursor_block_hash_mismatch",
+    };
+    WatchReorgRecoveryReport {
+        reason: reason.to_string(),
+        cursor_scanned_to_block,
+        expected_block_hash: expected_block_hash.map(str::to_string),
+        canonical_block_hash: canonical_block_hash.map(str::to_string),
+        reset_from_block,
+    }
+}
+
+fn reorg_alert(
+    channel_id: &str,
+    selected_state_number: u64,
+    recovery: &WatchReorgRecoveryReport,
+    context: &str,
+) -> Result<WatchtowerAlert> {
+    WatchtowerAlert::new(
+        channel_id.to_string(),
+        WatchAlertSeverity::Critical,
+        WatchAlertEvent::ChainReorgDetected,
+        format!(
+            "{context}; reason={}, cursor_block={}, expected_hash={}, canonical_hash={}, resetting scan to {}",
+            recovery.reason,
+            recovery.cursor_scanned_to_block,
+            recovery.expected_block_hash.as_deref().unwrap_or("missing"),
+            recovery
+                .canonical_block_hash
+                .as_deref()
+                .unwrap_or("missing"),
+            recovery.reset_from_block
+        ),
+        selected_state_number,
+        recovery.cursor_scanned_to_block,
+        recovery.reset_from_block,
+    )
 }
 
 fn append_watch_alert_if_requested(
@@ -13725,11 +13890,24 @@ mod tests {
             confirmations: 4,
         };
 
-        let cursor = watch_cursor_for_state(&channel_id, 12, 11, Some(&observed), None).unwrap();
+        let scanned_hash = format!("0x{}", "88".repeat(BYTE32_LEN));
+        let cursor = watch_cursor_for_state(
+            &channel_id,
+            12,
+            11,
+            Some(&scanned_hash),
+            Some(&observed),
+            None,
+        )
+        .unwrap();
 
         assert_eq!(cursor.channel_id, channel_id);
         assert_eq!(cursor.next_block, 12);
         assert_eq!(cursor.scanned_to_block, 11);
+        assert_eq!(
+            cursor.scanned_to_block_hash.as_deref(),
+            Some(scanned_hash.as_str())
+        );
         assert_eq!(
             cursor.current_funding_anchor.as_deref(),
             Some(funding_anchor.as_str())
@@ -13755,7 +13933,8 @@ mod tests {
             .with_observed_context_state(&funding_anchor, &funding_context_id, 5, "0xabc:0")
             .unwrap();
 
-        let cursor = watch_cursor_for_state(&channel_id, 12, 11, None, Some(&previous)).unwrap();
+        let cursor =
+            watch_cursor_for_state(&channel_id, 12, 11, None, None, Some(&previous)).unwrap();
 
         assert_eq!(cursor.next_block, 12);
         assert_eq!(cursor.scanned_to_block, 11);
@@ -13769,6 +13948,44 @@ mod tests {
         );
         assert_eq!(cursor.last_observed_state_number, Some(5));
         assert_eq!(cursor.last_observed_out_point.as_deref(), Some("0xabc:0"));
+    }
+
+    #[test]
+    fn watch_cursor_canonicality_accepts_matching_hash() {
+        let hash = format!("0x{}", "55".repeat(BYTE32_LEN));
+        assert_eq!(
+            watch_reorg_recovery_if_needed(42, Some(&hash), Some(&hash), 10),
+            None
+        );
+    }
+
+    #[test]
+    fn watch_cursor_canonicality_resets_on_reorg() {
+        let expected = format!("0x{}", "55".repeat(BYTE32_LEN));
+        let canonical = format!("0x{}", "66".repeat(BYTE32_LEN));
+        let recovery =
+            watch_reorg_recovery_if_needed(42, Some(&expected), Some(&canonical), 10).unwrap();
+
+        assert_eq!(recovery.reason, "cursor_block_hash_mismatch");
+        assert_eq!(recovery.cursor_scanned_to_block, 42);
+        assert_eq!(
+            recovery.expected_block_hash.as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            recovery.canonical_block_hash.as_deref(),
+            Some(canonical.as_str())
+        );
+        assert_eq!(recovery.reset_from_block, 10);
+    }
+
+    #[test]
+    fn legacy_cursor_without_hash_is_rescanned() {
+        let canonical = format!("0x{}", "66".repeat(BYTE32_LEN));
+        let recovery = watch_reorg_recovery_if_needed(42, None, Some(&canonical), 10).unwrap();
+
+        assert_eq!(recovery.reason, "cursor_missing_block_hash");
+        assert_eq!(recovery.reset_from_block, 10);
     }
 
     #[test]

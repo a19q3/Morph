@@ -634,6 +634,7 @@ export function WatchtowerPanel({
             Severity
             <select value={severityFilter} onChange={event => setSeverityFilter(event.target.value as WatchSeverityFilter)}>
               <option value="all">all</option>
+              <option value="critical">critical</option>
               <option value="warning">warning</option>
               <option value="info">info</option>
             </select>
@@ -686,7 +687,7 @@ export function WatchtowerPanel({
         <div className="event-log watchtower-log">
           {visibleAlerts.map(alert => (
             <div className={`event-entry ${alert.severity}`} key={`${alert.created_unix_ms}-${alert.channel_id}-${alert.event}`}>
-              <EventMark severity={alert.severity === 'warning' ? 'warning' : 'info'} />
+              <EventMark severity={alert.severity} />
               <div className="event-main">
                 <div className="event-line">
                   <strong>{alert.event}</strong>

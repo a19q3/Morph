@@ -301,6 +301,8 @@ pub struct WatchCursor {
     pub next_block: u64,
     pub scanned_to_block: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scanned_to_block_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_funding_anchor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_funding_context_id: Option<String>,
@@ -459,6 +461,7 @@ impl WatchCursor {
             channel_id: canonical_hex32(channel_id)?,
             next_block,
             scanned_to_block,
+            scanned_to_block_hash: None,
             current_funding_anchor: None,
             current_funding_context_id: None,
             last_observed_state_number: None,
@@ -484,6 +487,12 @@ impl WatchCursor {
         Ok(self)
     }
 
+    pub fn with_scanned_block_hash(mut self, block_hash: &str) -> Result<Self> {
+        self.scanned_to_block_hash = Some(canonical_hex32(block_hash)?);
+        self.validate()?;
+        Ok(self)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.schema == WATCH_CURSOR_SCHEMA,
@@ -495,6 +504,12 @@ impl WatchCursor {
             self.channel_id == canonical_channel_id,
             "watch cursor channel_id must be canonical"
         );
+        if let Some(block_hash) = &self.scanned_to_block_hash {
+            ensure!(
+                *block_hash == canonical_hex32(block_hash)?,
+                "watch cursor scanned_to_block_hash must be canonical"
+            );
+        }
         if let Some(anchor) = &self.current_funding_anchor {
             ensure!(
                 *anchor == canonical_hex32(anchor)?,
@@ -2626,6 +2641,8 @@ mod tests {
         let path = default_watch_cursor_path(&dir, &channel_id).unwrap();
         let cursor = WatchCursor::new(&channel_id, 43, 42)
             .unwrap()
+            .with_scanned_block_hash(&format!("0x{}", "24".repeat(BYTE32_LEN)))
+            .unwrap()
             .with_observed_context_state(&funding_anchor, &funding_context_id, 7, "0xabc:0")
             .unwrap();
 
@@ -2636,6 +2653,10 @@ mod tests {
         assert_eq!(loaded.channel_id, channel_id);
         assert_eq!(loaded.next_block, 43);
         assert_eq!(loaded.scanned_to_block, 42);
+        assert_eq!(
+            loaded.scanned_to_block_hash.as_deref(),
+            Some(format!("0x{}", "24".repeat(BYTE32_LEN)).as_str())
+        );
         assert_eq!(
             loaded.current_funding_anchor.as_deref(),
             Some(funding_anchor.as_str())

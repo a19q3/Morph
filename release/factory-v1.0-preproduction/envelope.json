@@ -1,0 +1,43 @@
+{
+  "schema": "morph.preproduction_envelope",
+  "envelope_version": 1,
+  "release_profile": "factory-v1.0-fixed-bilateral",
+  "effective_date": "2026-08-14",
+  "review_by": "2026-09-13",
+  "approval_timezone": "Asia/Shanghai",
+  "effective_unix": 1786636800,
+  "review_by_unix": 1789315199,
+  "approved_networks": [
+    "devnet"
+  ],
+  "real_assets_allowed": false,
+  "hub_chain_actions_allowed": false,
+  "factory": {
+    "participant_count": 2,
+    "max_active_factories": 4,
+    "max_children_per_factory": 10,
+    "max_capacity_shannons": 1000000000000
+  },
+  "channel": {
+    "max_capacity_shannons": 100000000000,
+    "max_total_pilot_capacity_shannons": 4000000000000
+  },
+  "sponsor": {
+    "max_capacity_shannons": 50000000000,
+    "max_fee_per_transaction_shannons": 200000000
+  },
+  "xudt": {
+    "allowed_scripts": [
+      "morph-devnet-xudt"
+    ],
+    "max_asset_types_per_factory": 1,
+    "max_units_per_factory": 1000000000000
+  },
+  "watchtower": {
+    "minimum_detection_depth": 3,
+    "reorg_mode": "detect_reset_and_rescan",
+    "restart_scan_floor_required": true,
+    "independent_operator_required": true
+  },
+  "legacy_factory_policy": "recreate"
+}

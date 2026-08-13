@@ -42,6 +42,8 @@ mod devnet_dispatch;
 mod factory_packages;
 mod hub;
 mod packages;
+mod preproduction;
+mod release;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
 mod rpc;
 mod smoke_report;
@@ -185,6 +187,39 @@ enum Command {
     Hub {
         #[command(subcommand)]
         command: HubCommand,
+    },
+    /// Print the CKB data-hash manifest for built contract ELFs.
+    PrintContractManifest {
+        /// Directory containing the release-profile RISC-V contract ELFs.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: PathBuf,
+    },
+    /// Verify built contract ELFs against the reviewed release manifest.
+    VerifyContractManifest {
+        /// Reviewed contract release manifest.
+        #[arg(
+            long,
+            default_value = "release/factory-v1.0-preproduction/contracts.json"
+        )]
+        manifest: PathBuf,
+        /// Directory containing the release-profile RISC-V contract ELFs.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate the bounded Factory v1.0 pre-production envelope.
+    ValidatePreproductionEnvelope {
+        /// Pre-production policy envelope to validate.
+        #[arg(
+            long,
+            default_value = "release/factory-v1.0-preproduction/envelope.json"
+        )]
+        envelope: PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
@@ -2842,6 +2877,43 @@ fn main() -> Result<()> {
                 cors_origin,
             }),
         },
+        Command::PrintContractManifest { contracts_dir } => {
+            let manifest = release::build_contract_manifest(&contracts_dir)?;
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+            Ok(())
+        }
+        Command::VerifyContractManifest {
+            manifest,
+            contracts_dir,
+            json,
+        } => {
+            let verification = release::verify_contract_manifest(&manifest, &contracts_dir)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&verification)?);
+            } else {
+                println!(
+                    "verified {} CKB contract ELFs for {} against {}",
+                    verification.script_count,
+                    verification.release_profile,
+                    manifest.display()
+                );
+            }
+            Ok(())
+        }
+        Command::ValidatePreproductionEnvelope { envelope, json } => {
+            let verification = preproduction::verify_preproduction_envelope(&envelope)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&verification)?);
+            } else {
+                println!(
+                    "verified {} for {:?}; real_assets_allowed={}",
+                    verification.release_profile,
+                    verification.approved_networks,
+                    verification.real_assets_allowed
+                );
+            }
+            Ok(())
+        }
         Command::PrintFactoryFixture => {
             let package = factory_packages::fixture_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);

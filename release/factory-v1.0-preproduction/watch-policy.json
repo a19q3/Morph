@@ -1,0 +1,13 @@
+{
+  "schema": "morph.watchtower_policy",
+  "channel_id": null,
+  "min_detection_depth": 3,
+  "min_timeout_secs": 30,
+  "max_poll_ms": 1000,
+  "max_fee": 200000000,
+  "allow_explicit_sponsor": true,
+  "require_auto_fund_sponsor": false,
+  "max_auto_sponsor_capacity": 50000000000,
+  "require_mine_blocks": true,
+  "allow_webhook_alerts": true
+}

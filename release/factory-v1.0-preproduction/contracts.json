@@ -1,0 +1,60 @@
+{
+  "schema": "morph.contract_release_manifest",
+  "manifest_version": 1,
+  "release_profile": "factory-v1.0-fixed-bilateral",
+  "rust_toolchain": "1.92.0",
+  "target": "riscv64imac-unknown-none-elf",
+  "build_profile": "release",
+  "cargo_locked": true,
+  "scripts": [
+    {
+      "name": "morph-state-lock",
+      "file": "morph-state-lock",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 21448,
+      "ckb_data_hash": "0x9315af6005be256865687c03d2305d78066916317e810086bb92baf428aed05d"
+    },
+    {
+      "name": "morph-state-type",
+      "file": "morph-state-type",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 187304,
+      "ckb_data_hash": "0x71665e6dc09ca1a6bd5f54f2e90ad12e3f63d002b09841e319d0118bcdd7f3e2"
+    },
+    {
+      "name": "morph-factory-type",
+      "file": "morph-factory-type",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 218352,
+      "ckb_data_hash": "0xa6751cfdb2e9df4b3306bc90c511b8c25a7ae5de372d335cd03bfe13a3feb16b"
+    },
+    {
+      "name": "morph-factory-vault-lock",
+      "file": "morph-factory-vault-lock",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 195976,
+      "ckb_data_hash": "0x6a36b26e61d62ba0a267b7b3bc057b59982e92bce8b7dcb654b84c6139c93bf6"
+    },
+    {
+      "name": "morph-vault-lock",
+      "file": "morph-vault-lock",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 166704,
+      "ckb_data_hash": "0x109b25269a522635f6b50ec1bdc9e6b95a01341857c5a398eb95b10f1cee71e9"
+    },
+    {
+      "name": "morph-sponsor-lock",
+      "file": "morph-sponsor-lock",
+      "deployment_scope": "controlled_devnet",
+      "size_bytes": 24256,
+      "ckb_data_hash": "0xe1ff69d5fbad96cc1d4b43f0c72fdbe8e316b663ab74ac6daf964f3ab0f5dbbc"
+    },
+    {
+      "name": "morph-devnet-xudt",
+      "file": "morph-devnet-xudt",
+      "deployment_scope": "devnet_only",
+      "size_bytes": 22104,
+      "ckb_data_hash": "0x0f11c12d816b4a905b04fabe49f8723f4454781d0ff6d7650c52a8d9c508df87"
+    }
+  ]
+}

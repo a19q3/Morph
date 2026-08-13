@@ -7,9 +7,10 @@ export type EventSeverity = 'info' | 'warning' | 'critical';
 export type RpcStatus = 'connected' | 'degraded' | 'offline' | 'not_configured';
 export type ProvenanceSource = 'hub_state_file' | 'watchtower_alert_file';
 export type ChainStatus = 'not_chain_verified' | 'watchtower_alert';
-export type WatchAlertSeverity = 'info' | 'warning';
+export type WatchAlertSeverity = 'info' | 'warning' | 'critical';
 export type HubScope = 'read' | 'write' | 'restore' | 'sign';
 export type WatchAlertEvent =
+  | 'chain_reorg_detected'
   | 'older_state_detected'
   | 'publication_submitted'
   | 'splice_detected'

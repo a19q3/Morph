@@ -1,0 +1,35 @@
+{
+  "schema": "morph.watchtower_config",
+  "defaults": {
+    "store_dir": "operator-data/packages",
+    "watch_policy": "watch-policy.json",
+    "alert_file": "operator-data/watch-alerts.jsonl",
+    "alert_webhook_url": null,
+    "detection_depth": 3,
+    "timeout_secs": 30,
+    "poll_ms": 1000,
+    "fee": 100000000,
+    "mine_blocks": 4,
+    "auto_fund_sponsor": true,
+    "auto_sponsor_capacity": 50000000000
+  },
+  "channels": [
+    {
+      "channel_id": "0x0101010101010101010101010101010101010101010101010101010101010101",
+      "from_block": 0,
+      "sponsor_out_point": null,
+      "store_dir": null,
+      "cursor_file": "operator-data/watch-cursor.json",
+      "watch_policy": null,
+      "alert_file": null,
+      "alert_webhook_url": null,
+      "detection_depth": null,
+      "timeout_secs": null,
+      "poll_ms": null,
+      "fee": null,
+      "mine_blocks": null,
+      "auto_fund_sponsor": null,
+      "auto_sponsor_capacity": null
+    }
+  ]
+}

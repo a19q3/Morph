@@ -15,6 +15,16 @@ RGB++ product integrations instead of treating them as one readiness claim.
 > clean-commit Devnet E2E evidence recorded below. `CONDITIONAL GO` means approval
 > only after those gates pass; it is not permission to enter pre-production now.
 
+> **2026-08-14 remediation note:** this report preserves the historical verdict
+> for its audited commits. A later Factory v1.0 candidate adds the C1 contract
+> hash manifest and CI provenance configuration, the C2 machine-checked
+> no-real-assets devnet envelope, the C3 operator/incident/upgrade runbooks and
+> repository rehearsal, and C4 canonical watch-cursor reorg detection with
+> reset-and-rescan tests. Current status must be read from
+> `docs/mainnet-readiness.md` and `release/factory-v1.0-preproduction/`; external
+> review, an independent rebuild/operator rehearsal, and repeated induced-reorg
+> evidence remain outside this remediation.
+
 > **Definition of "1.0 pre-production" used here** (per the audit brief):
 > deployable to a controlled devnet/testnet or isolated production-like
 > environment; capable of limited-user, limited-asset, reversible, monitored

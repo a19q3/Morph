@@ -16,11 +16,13 @@ const WATCH_ALERT_SCHEMA: &str = "morph.watchtower_alert";
 pub enum WatchAlertSeverity {
     Info,
     Warning,
+    Critical,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchAlertEvent {
+    ChainReorgDetected,
     OlderStateDetected,
     PublicationSubmitted,
     SpliceDetected,
@@ -364,6 +366,24 @@ mod tests {
         assert!(path.exists());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn serializes_critical_reorg_alert_for_operator_clients() {
+        let alert = WatchtowerAlert::new(
+            channel_id(3),
+            WatchAlertSeverity::Critical,
+            WatchAlertEvent::ChainReorgDetected,
+            "canonical cursor hash changed".to_string(),
+            7,
+            42,
+            10,
+        )
+        .unwrap();
+
+        let value = serde_json::to_value(alert).unwrap();
+        assert_eq!(value["severity"], "critical");
+        assert_eq!(value["event"], "chain_reorg_detected");
     }
 
     fn loopback_listener_or_skip(test_name: &str) -> Option<std::net::TcpListener> {

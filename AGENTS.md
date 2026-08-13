@@ -21,6 +21,8 @@ Use `make` targets — they orchestrate the right flags.
 | `make source-hygiene` | Syntax-check every shell script, reject npm lockfiles pinned to the unsupported `npmmirror.com` registry, and deny `unwrap`/`expect`/`panic!` in production Rust targets. |
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
+| `make release-readiness` | Verifies all seven built ELF CKB data hashes, the fixed-bilateral no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
+| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-v1.0-fixed-bilateral.tar.gz` after readiness checks pass. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |
 | `make fixture-checks` | Generates and validates every protocol fixture (bilateral, factory, splice, watch). Writes to `target/fixture-checks/`. |
 | `make smoke` | Workspace tests plus `cargo run -p morph-cli -- validate-fixture`. |
@@ -100,6 +102,12 @@ ui/morph-hub                   React + Vite + TypeScript operator console.
 - Vault finalisation requires exactly one authentic StateCell input with the expected StateType **and** StateLock hash. See "Authentic StateCell authority" in `SECURITY-FIXES.md` and tests `vault_lock_rejects_fake_state_header_without_state_type`, etc.
 - `since` is encoded as canonical relative block (`relative_block_since` in `morph-script-common`). Raw `u64` is not a valid CKB `since`. CLI arguments are block counts.
 - State retirement cannot orphan value: StateType finalise and splice retire paths require an input whose VaultCell commitment matches `StateHeader.vault_materialisation_root` (the former `payload_commitment`).
+
+### Watchtower reorg recovery
+
+- New watch cursors persist `scanned_to_block_hash`. At startup and while scanning, the watchtower compares that hash with the canonical block returned by CKB RPC.
+- A missing/mismatched block or a legacy cursor without a hash emits a critical `chain_reorg_detected` alert, clears orphanable funding/observation context, and rescans from the channel's configured `from_block`.
+- Operators must set `from_block` no later than channel creation and retain packages across funding contexts. Do not weaken this to resume from an unverifiable height.
 
 ### Signatures
 

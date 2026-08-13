@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+
+required_files=(
+  "release/factory-v1.0-preproduction/contracts.json"
+  "release/factory-v1.0-preproduction/envelope.json"
+  "release/factory-v1.0-preproduction/README.md"
+  "release/factory-v1.0-preproduction/watch-policy.json"
+  "release/factory-v1.0-preproduction/watch-config.example.json"
+  "docs/preproduction-envelope.md"
+  "docs/runbooks/README.md"
+  "docs/runbooks/operations.md"
+  "docs/runbooks/incident-response.md"
+  "docs/runbooks/upgrade-and-migration.md"
+  "docs/runbooks/rehearsal-2026-08-14.md"
+)
+
+for relative_path in "${required_files[@]}"; do
+  if [[ ! -s "$REPO_ROOT/$relative_path" ]]; then
+    echo "missing or empty release-readiness file: $relative_path" >&2
+    exit 1
+  fi
+done
+
+cd "$REPO_ROOT"
+grep -q "chain_reorg_detected" docs/runbooks/incident-response.md
+grep -q "legacy Factory" docs/runbooks/upgrade-and-migration.md
+grep -q "Real assets | Prohibited" docs/preproduction-envelope.md
+cargo run -q -p morph-cli -- validate-watch-policy \
+  release/factory-v1.0-preproduction/watch-policy.json
+cargo run -q -p morph-cli -- validate-watch-config \
+  release/factory-v1.0-preproduction/watch-config.example.json
+
+echo "Factory v1.0 pre-production release-readiness documents verified"

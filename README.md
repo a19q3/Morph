@@ -53,7 +53,7 @@ Implemented locally:
 - CKB and xUDT settlement through the same state/vault authority model;
 - splice-in and splice-out, so a channel can be resized without starting over;
 - watchtower-style package publication with cursor persistence, policy checks,
-  JSONL alerts, and optional webhook alerts;
+  canonical block-hash reorg recovery, JSONL alerts, and optional webhook alerts;
 - conservative factory updates signed by all factory participants;
 - factory local exits that materialise child bilateral channels;
 - reduced factory paths for bounded rights updates, exits, sparse-Merkle
@@ -76,8 +76,21 @@ Still not claimed:
 - independent external review;
 - long-running multi-operator watchtower evidence;
 - production fee and reorganisation measurements;
-- release artefact and supply-chain sign-off;
-- real-asset value limits.
+- independent release artefact and supply-chain sign-off;
+- any real-asset value envelope.
+
+The bounded `factory-v1.0-fixed-bilateral` controlled-devnet candidate has a
+machine-checked no-real-assets envelope, exact CKB contract data-hash manifest,
+operator runbooks, and CI provenance configuration. Verify it with:
+
+```sh
+make build-contracts
+make release-readiness
+make package-contract-release
+```
+
+This closes repository-side pre-production mechanics only; it does not change
+the mainnet disclaimer or expand the two-participant/fixed-proof protocol.
 
 ## Main Business Flows
 

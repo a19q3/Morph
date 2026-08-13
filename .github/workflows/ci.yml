@@ -69,3 +69,38 @@ jobs:
 
       - name: Run contract tests
         run: make contract-tests
+
+      - name: Verify pre-production release boundary
+        run: make release-readiness
+
+      - name: Package contract release
+        run: make package-contract-release
+
+      - name: Upload contract release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: morph-contracts-${{ github.sha }}
+          path: target/factory-v1.0-fixed-bilateral.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  attest-contracts:
+    name: Attest main-branch contract release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: rust
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download contract release bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: morph-contracts-${{ github.sha }}
+          path: target/attestation
+
+      - name: Attest contract release provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: target/attestation/factory-v1.0-fixed-bilateral.tar.gz

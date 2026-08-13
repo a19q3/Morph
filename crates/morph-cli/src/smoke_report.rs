@@ -2501,11 +2501,13 @@ fn watch_alert_severity_name(severity: &WatchAlertSeverity) -> &'static str {
     match severity {
         WatchAlertSeverity::Info => "info",
         WatchAlertSeverity::Warning => "warning",
+        WatchAlertSeverity::Critical => "critical",
     }
 }
 
 fn watch_alert_event_name(event: &WatchAlertEvent) -> &'static str {
     match event {
+        WatchAlertEvent::ChainReorgDetected => "chain_reorg_detected",
         WatchAlertEvent::OlderStateDetected => "older_state_detected",
         WatchAlertEvent::PublicationSubmitted => "publication_submitted",
         WatchAlertEvent::SpliceDetected => "splice_detected",
