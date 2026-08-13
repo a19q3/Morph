@@ -11,7 +11,8 @@ RGB++ product integrations instead of treating them as one readiness claim.
 
 > **Post-review correction:** the current entry status is **not ready**. There
 > are zero confirmed code-security blockers in the supplied finding set, but
-> five pre-production entry blockers (C0–C4). `CONDITIONAL GO` means approval
+> four remaining pre-production entry blockers (C1–C4); C0 was satisfied by
+> clean-commit Devnet E2E evidence recorded below. `CONDITIONAL GO` means approval
 > only after those gates pass; it is not permission to enter pre-production now.
 
 > **Definition of "1.0 pre-production" used here** (per the audit brief):
@@ -30,6 +31,7 @@ RGB++ product integrations instead of treating them as one readiness claim.
 | `git rev-parse HEAD` | `7692eab703400dc313986b3abcd5cb551e00a4dd` |
 | `git branch --show-current` | `main` |
 | `git status --short` | clean before report generation; the report itself was subsequently added |
+| Post-review implementation commit | `55f6bb5cdbb155d949dded8ee894d83330d80ae2` (`git_dirty=false` in both acceptance summaries) |
 | Toolchain (pinned) | `rust-toolchain.toml` → `1.92.0`, edition 2024 |
 | Toolchain (executed) | `~/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/bin/cargo` (the host `rustup` proxy mangles `argv[0]` as `ZCode-3.7.5-linux-x64`; the pinned toolchain binary was invoked directly — see Evidence log) |
 | RISC-V target | `riscv64imac-unknown-none-elf` installed for 1.92.0 |
@@ -49,8 +51,8 @@ contract crates, the TypeScript SDK, the React UI build, and the CI workflow.
 Those require a local CKB node. The original run did not discover the available
 sibling debug binaries. `make smoke` does **not** require CKB; it is a
 local semantic gate and was run during post-review verification. Missing
-current-clean-HEAD devnet/stateful evidence is an entry blocker (C0), not a code
-failure.
+current-clean-HEAD devnet/stateful evidence was an entry blocker (C0), not a code
+failure; C0 was subsequently satisfied on clean implementation commit `55f6bb5`.
 
 ---
 
@@ -68,13 +70,16 @@ workspace tests pass, all 14 fixture families validate, and every previously
 raised candidate vulnerability that implicated this kernel (C-01 sponsor-budget
 bypass, D-04 high-S malleability) was independently re-traced and **refuted**
 against the audited code. This is not an exhaustive proof, and the production-
-shaped stateful matrix has not been rerun on the audited clean HEAD.
+shaped matrix is not a substitute for an external security audit. Post-review,
+`make devnet-e2e` and `make devnet-stateful-e2e` both passed on clean
+implementation commit `55f6bb5`, satisfying C0; their artifact paths and
+summary counts are recorded in §7.
 
-The model can enter a controlled 1.0 pre-production phase **only after C0–C4
-are met** (§5): current-clean-HEAD devnet/stateful acceptance, reproducible
-artefacts and a script-hash manifest, an explicit value/scope envelope,
-operator runbooks, and implemented or explicitly bounded watchtower reorg
-behaviour. Agent receipts, Morph-backed Fiber routing, pending conditional-
+The model can enter a controlled 1.0 pre-production phase **only after the
+remaining C1–C4 gates are met** (§5): reproducible artefacts and a script-hash
+manifest, an explicit value/scope envelope, operator runbooks, and implemented
+or explicitly bounded watchtower reorg behaviour. Agent receipts, Morph-backed
+Fiber routing, pending conditional-
 payment force-close, and RGB++ proof admission are outside the approved 1.0
 pre-production scope unless their documented integration gates are completed.
 
@@ -97,7 +102,7 @@ devnet research code, and that positioning is accurate.
 | Persistence & recovery | **Conditionally Ready** | Hub atomic COW + fsync; Agent durable settle idempotent (`PendingSubmission` recorded before Fiber send); Fiber adapter disables unbacked edges. **Condition:** watchtower has no canonical-block rollback/reorg recovery (documented open gate). |
 | Operational observability | **Not Ready** | JSONL/SSE alerting, watch config/policy, redacted payment index, and token-scoped auth exist; but operator runbooks, monitoring, incident-response, and emergency-stop procedures are absent (documented open). |
 | Release & supply chain | **Conditionally Ready** | CI now mirrors `make ci` exactly with `--all-features`, SHA-pinned actions, `permissions: contents: read`, `timeout-minutes: 60`, `publish = false` on all 12 crates, and `cargo deny` clean. **Condition:** no reproducible-build manifest, no artefact signing, no CHANGELOG; `cargo audit` could not be run with DB fetch (sandbox network) — see §7. |
-| Test evidence | **Conditionally Ready** | 401 workspace + 112 contract tests pass, fixtures validate, and SDK/UI checks pass. Current-clean-HEAD devnet/stateful acceptance and the in-scope Fiber matrix remain unverified (C0). |
+| Test evidence | **Ready for the scoped kernel** | 401 workspace + 112 contract tests pass, fixtures validate, SDK/UI checks pass, and clean implementation commit `55f6bb5` passed budget-backed Devnet and stateful E2E. Agent/Fiber/Morph is excluded from this scope unless C5 is completed. |
 | Documentation consistency | **Ready after post-review correction** | Sponsor policy is already documented as per-cell; the stale AGENTS workspace count was corrected from two to four host crates. Product claims must retain the scope exclusions above. |
 
 ---
@@ -263,8 +268,8 @@ runs with least privilege and a 60-minute timeout, and all 12 crates are
 `publish = false`. The remaining gates are reproducible artefacts, a published
 script-hash manifest, a CHANGELOG, and operational runbooks — all documented as
 open release gates, not hidden remotely exploitable defects. The additional C0
-gate requires production-shaped acceptance evidence from the current clean
-implementation commit rather than historical closeout artifacts.
+gate required production-shaped acceptance evidence from a clean implementation
+commit rather than historical closeout artifacts and is now satisfied.
 
 ---
 
@@ -274,7 +279,7 @@ Ordered by priority. Each is concrete, finite, and verifiable.
 
 | # | Condition | Owner role | Acceptance command / evidence | Code change? | Blocks entry? |
 | --- | --- | --- | --- | --- | --- |
-| C0 | Produce current-clean-HEAD production-shaped acceptance evidence. | Protocol / release engineer | `make devnet-e2e` and `make devnet-stateful-e2e` pass with manifests recording the audited implementation commit, `git_dirty=false`, and `status=passed`; run `make fiber-morph-devnet-acceptance-full` if Agent/Fiber is in scope. | No unless failures expose defects | **Yes** — the checked-in closeouts explicitly identify their artifacts as historical, not current release evidence. |
+| C0 | Produce current-clean-HEAD production-shaped acceptance evidence. | Protocol / release engineer | `make devnet-e2e` and `make devnet-stateful-e2e` pass with manifests recording the audited implementation commit, `git_dirty=false`, and `status=passed`; run `make fiber-morph-devnet-acceptance-full` if Agent/Fiber is in scope. | No unless failures expose defects | **Satisfied 2026-08-13** — both budget-backed runs passed on clean implementation commit `55f6bb5`; Agent/Fiber/Morph remains excluded. |
 | C1 | Publish a reproducible RISC-V build + script-hash manifest for the audited commit, attested in CI. | Release engineer | Clean-environment `make build-contracts` reproduces byte-identical ELFs; committed hash manifest matches. | Yes (CI/release configuration; no protocol semantics) | **Yes** — without a pinned, reproducible script-hash manifest, a deployed pre-production cell cannot prove which code enforces its safety boundary. |
 | C2 | Set and document explicit value/asset/pilot caps for the pre-production envelope (per-channel, per-factory, per-sponsor, total pilot). | Release owner | A dated `docs/preproduction-envelope.md` (or mainnet-readiness addition) with concrete numbers. | No (docs/policy) | **Yes** — "no real assets by default" is the correct posture, but a controlled pre-production trial requires an explicit, evidence-tied cap rather than an open-ended "some". |
 | C3 | Document operator runbooks: key handling, package retention, alert response, rollback/stop, incident response, upgrade. | Operator / SRE | `docs/runbooks/` covering the above; at least one dry-run rehearsal log. | No (docs) | **Yes** — pre-production implies a reversible, monitored trial; without runbooks and a stop procedure an operator cannot safely respond to the failure modes the model itself documents (e.g. watchtower stale packages, legacy factory migration). |
@@ -282,14 +287,15 @@ Ordered by priority. Each is concrete, finite, and verifiable.
 | C5 | Complete the Agent/Fiber/Morph settlement boundary before bringing it into scope. | Integration engineer | Populate `morph_state` from native channel evidence, implement the Morph-backed external edge and pending conditional-payment force-close, and pass the Fiber/Morph acceptance matrix. | Yes | No while explicitly excluded; **Yes** before any claim that Agent/Fiber payment proves Morph/CKB settlement. |
 | C6 | Re-run `cargo audit` with network access in the release environment and record the result. | Release engineer | `cargo audit` exit 0 (with the five documented, reviewed waivers) recorded in the release evidence. | No | No (the five waivers are reviewed and test/build-only; `cargo deny` passes). Required for release hygiene, not for model readiness. |
 
-**Conditions C0–C4 are the minimal pre-production entry-blocking set.** There
-are zero confirmed code-security blockers in the supplied findings; these five
-entry gates are tracked separately. C5 may be deferred only by excluding
-Agent/Fiber/Morph settlement claims; C6 is release hygiene.
+**Conditions C1–C4 are the remaining pre-production entry-blocking set.** C0 is
+satisfied. There are zero confirmed code-security blockers in the supplied
+findings; the four remaining entry gates are tracked separately. C5 may be
+deferred only by excluding Agent/Fiber/Morph settlement claims; C6 is release
+hygiene.
 
 ---
 
-## 6. Deployment Envelope (assuming C0–C4 are met)
+## 6. Deployment Envelope (assuming the remaining C1–C4 gates are met)
 
 If the verdict is honoured as `CONDITIONAL GO`, the allowed pre-production
 envelope is:
@@ -365,7 +371,9 @@ working branch. Generated artifacts are not treated as source mutations.
 | post-review `make ci` | nonzero | formatting and all-features Clippy passed; stopped only when the online RustSec fetch returned the same I/O error |
 | post-review `cargo audit --no-fetch --deny warnings <5 ignores>` | 0 | cached DB loaded **1,216 advisories** and scanned 415 dependencies; database freshness remains unverified |
 | post-review `make deny test fixture-checks sdk-check hub-ui-check contract-tests` | 0 | all-features workspace tests, 14 fixture summaries, SDK/UI audits/builds, and **112 contract tests** pass |
-| `make devnet-*`, Fiber acceptance | **not run by original audit** | sibling debug CKB/Fiber checkouts exist, but no clean-current-HEAD acceptance artifact was produced; tracked as C0 |
+| post-review `CKB_BIN=../ckb/target/debug/ckb make devnet-e2e` | 0 | clean implementation commit `55f6bb5`, `git_dirty=false`, top-level `status=passed`; 323 transactions, 322 committed, 6 expected script failures, 7 deployed script hashes verified; `target/devnet-e2e/20260813T145057Z/` |
+| post-review `CKB_BIN=../ckb/target/debug/ckb make devnet-stateful-e2e` | 0 | clean implementation commit `55f6bb5`, `git_dirty=false`, top-level `status=passed`; 9/9 scenarios and 11/11 audit families passed, 62 required committed checks, no unknown coverage tags; `target/devnet-stateful-e2e/20260813T145758Z/` |
+| Fiber acceptance | **not run** | Agent/Fiber/Morph settlement claims are excluded from the approved scoped kernel and remain gated by C5 |
 
 ---
 
@@ -373,12 +381,12 @@ working branch. Generated artifacts are not treated as source mutations.
 
 Findings are classified as: Code-security blocker · Pre-production entry gate · Confirmed non-blocker ·
 Release/process gate · Documentation defect · Hardening opportunity · Refuted
-candidate. **There are zero confirmed code-security blockers and five
-pre-production entry blockers (C0–C4).**
+candidate. **There are zero confirmed code-security blockers and four remaining
+pre-production entry blockers (C1–C4); C0 is satisfied.**
 
-### Pre-production evidence gate
+### Resolved pre-production evidence gate
 
-#### F-00 — No production-shaped acceptance artifact for the current clean HEAD
+#### F-00 — Production-shaped acceptance evidence was initially absent (Resolved)
 
 - **Component:** release evidence; `docs/devnet-stateful-acceptance-closeout.md:3-12`.
 - **Issue:** the checked-in stateful and devnet closeouts identify their
@@ -386,7 +394,10 @@ pre-production entry blockers (C0–C4).**
   stateful E2E, or the Fiber/Morph matrix against `7692eab`.
 - **Impact:** unit, fixture, and CKB-VM coverage cannot by themselves establish
   process-level deployment, RPC, watchtower, restart, or cross-stack behaviour.
-- **Disposition:** confirmed pre-production entry gate, **C0**. This is missing
+- **Disposition:** **resolved for the scoped kernel (C0)**. Budget-backed Devnet
+  and stateful E2E passed on clean implementation commit `55f6bb5`; the
+  manifests and summaries record `git_dirty=false` and `status=passed`.
+  Fiber/Morph remains excluded and separately gated by C5. This was missing
   evidence, not proof of a code defect.
 
 ### Refuted candidates (re-derived against current HEAD)
@@ -536,6 +547,7 @@ pre-production entry blockers (C0–C4).**
 ```json
 {
   "commit": "7692eab703400dc313986b3abcd5cb551e00a4dd",
+  "post_review_implementation_commit": "55f6bb5cdbb155d949dded8ee894d83330d80ae2",
   "verdict": "CONDITIONAL_GO",
   "current_entry_status": "NOT_READY",
   "model_scope": "direct CKB bilateral, factory, splice, sponsor, and settlement kernel; excludes RGB++, Morph-backed Fiber routing, and pending conditional-payment force-close",
@@ -544,18 +556,23 @@ pre-production entry blockers (C0–C4).**
   "mainnet_ready": false,
   "security_code_blockers": [],
   "blockers": [
-    "C0",
     "C1",
     "C2",
     "C3",
     "C4"
   ],
+  "satisfied_conditions": ["C0"],
   "conditions": [
     {
       "id": "C0",
       "title": "Produce production-shaped devnet and stateful acceptance evidence from the current clean implementation commit",
-      "blocking": true,
-      "code_change": "no_unless_failures_expose_defects"
+      "blocking": false,
+      "status": "satisfied_2026-08-13",
+      "code_change": "no_unless_failures_expose_defects",
+      "evidence": [
+        "target/devnet-e2e/20260813T145057Z/",
+        "target/devnet-stateful-e2e/20260813T145758Z/"
+      ]
     },
     {
       "id": "C1",
@@ -597,13 +614,14 @@ pre-production entry blockers (C0–C4).**
   "findings": [
     {
       "id": "F-00",
-      "severity": "Medium",
+      "severity": "Informational",
       "confidence": "High",
-      "class": "Pre-production evidence gate",
-      "title": "No production-shaped acceptance artifact for the current clean HEAD",
+      "class": "Resolved pre-production evidence gate",
+      "title": "Production-shaped acceptance evidence was initially absent and was subsequently produced",
       "files": ["docs/devnet-stateful-acceptance-closeout.md"],
-      "release_blocking": true,
-      "condition": "C0"
+      "release_blocking": false,
+      "condition": "C0",
+      "status": "resolved"
     },
     {
       "id": "F-01",
@@ -731,7 +749,9 @@ pre-production entry blockers (C0–C4).**
     {"command": "make ci", "exit_code": 2, "result": "fmt and all-features clippy pass; stopped at online RustSec fetch IO error"},
     {"command": "cargo audit --no-fetch with five reviewed ignores", "exit_code": 0, "result": "cached DB: 1216 advisories, 415 dependencies scanned; freshness unverified"},
     {"command": "make deny test fixture-checks sdk-check hub-ui-check contract-tests", "exit_code": 0, "result": "all remaining CI gates pass, including 112 contract tests"},
-    {"command": "make devnet-* / Fiber acceptance", "exit_code": -1, "result": "not run by original audit; no clean-current-HEAD acceptance artifact"}
+    {"command": "CKB_BIN=../ckb/target/debug/ckb make devnet-e2e", "exit_code": 0, "result": "clean implementation commit 55f6bb5; git_dirty=false; status=passed; artifact target/devnet-e2e/20260813T145057Z/"},
+    {"command": "CKB_BIN=../ckb/target/debug/ckb make devnet-stateful-e2e", "exit_code": 0, "result": "clean implementation commit 55f6bb5; git_dirty=false; status=passed; 9/9 scenarios and 11/11 audit families; artifact target/devnet-stateful-e2e/20260813T145758Z/"},
+    {"command": "make fiber-morph-devnet-acceptance-full", "exit_code": -1, "result": "not run; Agent/Fiber/Morph settlement claims excluded from the scoped kernel and gated by C5"}
   ]
 }
 ```
@@ -739,6 +759,8 @@ pre-production entry blockers (C0–C4).**
 ---
 
 *Original audit evidence was collected against `7692eab`; this corrected report
-also records post-review documentation and Hub-auth hardening. It remains a
+also records post-review documentation and Hub-auth hardening plus clean
+implementation-commit (`55f6bb5`) Devnet/stateful acceptance evidence. The
+report-only follow-up does not alter that tested implementation. This remains a
 point-in-time assessment and does not constitute mainnet-readiness or a
 real-asset endorsement.*
