@@ -503,13 +503,17 @@ fn state_cell_scripts_match(
         return Ok(false);
     }
     let type_args = state_type.args().raw_data();
-    if type_args.len() != BYTE32_LEN + 8
-        || &type_args.as_ref()[..BYTE32_LEN] != expected_funding_anchor
+    if type_args.len() < BYTE32_LEN || &type_args.as_ref()[..BYTE32_LEN] != expected_funding_anchor
     {
         return Ok(false);
     }
+    let since_offset = match type_args.len() {
+        len if len == BYTE32_LEN + 8 => BYTE32_LEN,
+        len if len == 2 * BYTE32_LEN + 8 => 2 * BYTE32_LEN,
+        _ => return Ok(false),
+    };
     let expected_since = expected_min_since.to_le_bytes();
-    if type_args.as_ref()[BYTE32_LEN..] != expected_since {
+    if type_args.as_ref()[since_offset..] != expected_since {
         return Ok(false);
     }
     state_lock_script_matches_type(

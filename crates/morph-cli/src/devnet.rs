@@ -5685,7 +5685,7 @@ pub fn factory_exit_channel(
 
     let state_type = data1_script(
         state_contract.data_hash.clone(),
-        state_type_args(&funding_anchor, finalise_since),
+        factory_state_type_args(&funding_anchor, &factory_type_hash, finalise_since),
     );
     let state_type_hash: [u8; BYTE32_LEN] = state_type.calc_script_hash().unpack();
     let state_lock = data1_script(
@@ -12316,6 +12316,17 @@ fn relative_block_since_arg(blocks: u64) -> Result<u64> {
 
 fn state_type_args(funding_anchor: &[u8; BYTE32_LEN], finalise_since: u64) -> Bytes {
     let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(&finalise_since.to_le_bytes());
+    Bytes::from(args)
+}
+
+fn factory_state_type_args(
+    funding_anchor: &[u8; BYTE32_LEN],
+    factory_type_hash: &[u8; BYTE32_LEN],
+    finalise_since: u64,
+) -> Bytes {
+    let mut args = funding_anchor.to_vec();
+    args.extend_from_slice(factory_type_hash);
     args.extend_from_slice(&finalise_since.to_le_bytes());
     Bytes::from(args)
 }

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use morph_core::hash as host_hash;
 use morph_core::{
     AssetRegistry, FactorySpliceHeader, FactorySpliceKind, FactoryVaultDelta,
     FactoryVaultDescriptor, Mode, Phase, SpliceAssetDelta, SpliceHeader, SpliceKind, StateHeader,
@@ -11,6 +12,38 @@ use morph_script_common as wire;
 
 fn bytes32(value: u8) -> [u8; 32] {
     [value; 32]
+}
+
+#[test]
+fn duplicated_host_and_script_domains_match() {
+    assert_eq!(host_hash::STATE_DOMAIN, wire::STATE_DOMAIN);
+    assert_eq!(
+        host_hash::FUNDING_CONTEXT_DOMAIN,
+        wire::FUNDING_CONTEXT_DOMAIN
+    );
+    assert_eq!(host_hash::PARTICIPANTS_DOMAIN, wire::PARTICIPANTS_DOMAIN);
+    assert_eq!(host_hash::SPLICE_HEADER_DOMAIN, wire::SPLICE_HEADER_DOMAIN);
+    assert_eq!(host_hash::SPLICE_DELTA_DOMAIN, wire::SPLICE_DELTA_DOMAIN);
+    assert_eq!(
+        host_hash::VAULT_DESCRIPTOR_DOMAIN,
+        wire::VAULT_DESCRIPTOR_DOMAIN
+    );
+    assert_eq!(
+        host_hash::FACTORY_SPLICE_HEADER_DOMAIN,
+        wire::FACTORY_SPLICE_HEADER_DOMAIN
+    );
+    assert_eq!(
+        host_hash::FACTORY_VAULT_DESCRIPTOR_DOMAIN,
+        wire::FACTORY_VAULT_DESCRIPTOR_DOMAIN
+    );
+    assert_eq!(
+        host_hash::FACTORY_VAULT_DELTA_DOMAIN,
+        wire::FACTORY_VAULT_DELTA_DOMAIN
+    );
+    assert_eq!(
+        host_hash::VAULT_OUTPOINT_COMMITMENT_DOMAIN,
+        wire::VAULT_OUTPOINT_COMMITMENT_DOMAIN
+    );
 }
 
 fn put_u16(raw: &mut [u8], offset: usize, value: u16) {

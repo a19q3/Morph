@@ -1,6 +1,6 @@
 {
   "schema": "morph.devnet_smoke_budget",
-  "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. The schema suffixes do not denote the active protocol baseline; factory witnesses are interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current witness-envelope implementation line.",
+  "description": "Budget profile schema and proof_kind values are devnet smoke evidence labels. Factory child-exit byte and cycle ceilings include the FactoryType identity now committed by each materialised child StateType and preserve roughly ten percent headroom over the 2026-08-13 full-matrix measurement. The schema suffixes do not denote the active protocol baseline; factory witnesses are interpreted through bounded WitnessEnvelope kind/body/digest envelopes on the current witness-envelope implementation line.",
   "max_total_cycles": 1600000000,
   "max_tx_cycles": 30000000,
   "max_total_bytes": 2000000,
@@ -99,19 +99,19 @@
     {
       "check": "factory/exit-channel",
       "path": "$",
-      "max_cycles": 15000000,
-      "max_bytes": 4000
+      "max_cycles": 16500000,
+      "max_bytes": 4500
     },
     {
       "check": "factory-xudt/smoke",
       "path": "$.exit",
-      "max_cycles": 15000000,
+      "max_cycles": 16500000,
       "max_bytes": 4500
     },
     {
       "check": "factory-xudt-negative/smoke",
       "path": "$.exit",
-      "max_cycles": 15000000,
+      "max_cycles": 16500000,
       "max_bytes": 4500
     }
   ],
@@ -175,7 +175,7 @@
       "transaction_path": "$.apply",
       "proof_kind": "factory_splice_all_participants_ckb",
       "proof_siblings": 0,
-      "max_witness_len": 1200,
+      "max_witness_len": 1300,
       "max_cycles": 16000000,
       "max_bytes": 12000
     },
@@ -184,7 +184,7 @@
       "transaction_path": "$.apply",
       "proof_kind": "factory_splice_all_participants_ckb",
       "proof_siblings": 0,
-      "max_witness_len": 1200,
+      "max_witness_len": 1300,
       "max_cycles": 16000000,
       "max_bytes": 12000
     },
@@ -229,7 +229,7 @@
       "transaction_path": "$.apply",
       "proof_kind": "factory_splice_all_participants_xudt",
       "proof_siblings": 0,
-      "max_witness_len": 1200,
+      "max_witness_len": 1300,
       "max_cycles": 16000000,
       "max_bytes": 13000
     },
@@ -238,7 +238,7 @@
       "transaction_path": "$.apply",
       "proof_kind": "factory_splice_all_participants_xudt",
       "proof_siblings": 0,
-      "max_witness_len": 1200,
+      "max_witness_len": 1300,
       "max_cycles": 16000000,
       "max_bytes": 13000
     }

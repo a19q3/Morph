@@ -2,6 +2,8 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { blake2b } from "@noble/hashes/blake2.js";
 import { sha256 as nobleSha256 } from "@noble/hashes/sha2.js";
 
+const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+
 export type AssetKind = "ckb" | "rgbpp";
 export type BitcoinNetwork = "mainnet" | "testnet" | "signet" | "regtest";
 
@@ -89,12 +91,20 @@ export class MorphAgentError extends Error {
 /** Browser/Node client for the standalone Morph Agent HTTP API. */
 export class MorphAgentClient {
   private readonly baseUrl: URL;
+  private readonly apiBearerToken: string | undefined;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, options: { apiBearerToken?: string } = {}) {
     this.baseUrl = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
-    if (this.baseUrl.protocol !== "http:" && this.baseUrl.protocol !== "https:") {
-      throw new TypeError("Morph Agent URL must use HTTP or HTTPS");
+    if (
+      this.baseUrl.protocol !== "https:"
+      && !(this.baseUrl.protocol === "http:" && isLoopbackHostname(this.baseUrl.hostname))
+    ) {
+      throw new TypeError("Morph Agent URL must use HTTPS unless it is loopback HTTP");
     }
+    if (options.apiBearerToken !== undefined && options.apiBearerToken.length < 32) {
+      throw new TypeError("Morph Agent API bearer token must contain at least 32 bytes");
+    }
+    this.apiBearerToken = options.apiBearerToken;
   }
 
   supported(): Promise<Record<string, unknown>> {
@@ -126,7 +136,7 @@ export class MorphAgentClient {
   }): Promise<PaymentRequirements> {
     const response = await fetch(new URL("v1/x402/challenge", this.baseUrl), {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: this.headers(true),
       body: JSON.stringify(input),
       redirect: "error",
     });
@@ -205,15 +215,15 @@ export class MorphAgentClient {
 
   private async request<T>(path: string, body?: unknown): Promise<T> {
     const init: RequestInit = body === undefined
-      ? { method: "GET", redirect: "error" }
+      ? { method: "GET", headers: this.headers(false), redirect: "error" }
       : {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        redirect: "error",
-      };
+          method: "POST",
+          headers: this.headers(true),
+          body: JSON.stringify(body),
+          redirect: "error",
+        };
     const response = await fetch(new URL(path, this.baseUrl), init);
-    const value: unknown = await response.json().catch(() => null);
+    const value = await readJsonResponseLimited(response, MAX_RESPONSE_BYTES);
     if (!response.ok) {
       const message = isRecord(value) && typeof value.error === "string"
         ? value.error
@@ -222,6 +232,61 @@ export class MorphAgentClient {
     }
     return value as T;
   }
+
+  private headers(json: boolean): Record<string, string> {
+    return {
+      ...(json ? { "content-type": "application/json" } : {}),
+      ...(this.apiBearerToken === undefined
+        ? {}
+        : { authorization: `Bearer ${this.apiBearerToken}` }),
+    };
+  }
+}
+
+async function readJsonResponseLimited(response: Response, maximum: number): Promise<unknown> {
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null) {
+    const parsedLength = Number(declaredLength);
+    if (!Number.isSafeInteger(parsedLength) || parsedLength < 0 || parsedLength > maximum) {
+      throw new Error("Morph Agent response exceeds the maximum size");
+    }
+  }
+
+  if (response.body === null) return null;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximum) {
+        await reader.cancel();
+        throw new Error("Morph Agent response exceeds the maximum size");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host === "[::1]" || host === "::1") return true;
+  const octets = host.split(".");
+  return octets.length === 4
+    && octets[0] === "127"
+    && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255);
 }
 
 export interface X402SettleRequest {

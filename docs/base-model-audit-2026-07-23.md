@@ -95,7 +95,7 @@ supported by Miri, so Miri is not counted as passing evidence.
 
 ## Accepted Upstream Dependency Exceptions
 
-`make supply-chain` fails on any unlisted advisory. These four temporary
+`make supply-chain` fails on any unlisted advisory. These five temporary
 exceptions are pinned in the `Makefile` with removal conditions:
 
 | Advisory | Path / exposure | Current disposition |
@@ -104,6 +104,7 @@ exceptions are pinned in the `Makefile` with removal conditions:
 | [RUSTSEC-2026-0097](https://rustsec.org/advisories/RUSTSEC-2026-0097.html) | `rand 0.7`, inherited through CKB | The reported custom-logger re-entrancy trigger is absent from first-party code; remove on the next compatible CKB dependency line. |
 | [RUSTSEC-2026-0186](https://rustsec.org/advisories/RUSTSEC-2026-0186.html) | `memmap2`, test-only through `ckb-testtool` and `cacache` | The affected advise/flush API is not used by first-party code; remove when the test stack upgrades. |
 | [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html) | `proc-macro-error2`, compile-time through `biscuit-auth` | No runtime protocol exposure; remove when upstream replaces the macro dependency. |
+| [RUSTSEC-2026-0253](https://rustsec.org/advisories/RUSTSEC-2026-0253.html) | `lru 0.7`, test-only through `ckb-testtool` and `ckb-verification` | The affected CKB cache key is `Byte32`, whose drop cannot panic, so the advisory's panic-unwind trigger is absent. `ckb-verification 1.2` requires Rust 1.95; remove this waiver when the pinned CKB/Rust line can upgrade. |
 
 The exceptions are risk acceptances, not declarations that the dependencies are
 safe. A mainnet release must either remove them or document a separately

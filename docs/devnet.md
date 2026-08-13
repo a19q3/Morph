@@ -160,7 +160,9 @@ scripts/devnet-e2e.sh
 
 This starts a fresh CKB devnet, builds current scripts, runs the on-chain smoke
 suite, and applies the smoke budget profile. By default it looks for the CKB
-source tree in `../ckb`.
+source tree in `../ckb`. It reads the public disposable Fiber devnet fixture
+keys from `../fiber/tests/nodes/{deployer,1,2}/ckb/plain_key`; only those file
+paths are recorded. No production key has a default.
 
 Useful overrides:
 
@@ -170,7 +172,14 @@ CKB_BIN=../ckb/target/debug/ckb scripts/devnet-e2e.sh
 RPC_PORT=18124 P2P_PORT=18125 RUN_ID=local-evidence scripts/devnet-e2e.sh
 BUILD_CONTRACTS=0 scripts/devnet-e2e.sh
 KEEP_NODE=1 scripts/devnet-e2e.sh
+MORPH_E2E_DEPLOYER_KEY_FILE=/path/to/devnet/deployer.key \
+MORPH_E2E_ALICE_KEY_FILE=/path/to/devnet/alice.key \
+MORPH_E2E_BOB_KEY_FILE=/path/to/devnet/bob.key scripts/devnet-e2e.sh
 ```
+
+Direct `MORPH_DEVNET_PRIVATE_KEY`, `MORPH_ALICE_PRIVATE_KEY`, and
+`MORPH_BOB_PRIVATE_KEY` values take precedence over the fixture files. The
+runner validates key shape before starting CKB and never prints key material.
 
 Important artefacts:
 
@@ -190,6 +199,10 @@ Run:
 ```sh
 make devnet-stateful-e2e
 ```
+
+The stateful runner uses the same validated disposable fixture-key lookup and
+override variables as `scripts/devnet-e2e.sh`; key material is never written to
+its manifest.
 
 This creates scenario records under:
 

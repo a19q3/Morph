@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   createSignedPaymentPayload,
   deriveMorphAccountId,
+  MorphAgentClient,
   verifySignedPaymentPayload,
 } from "../dist/index.js";
 
@@ -37,3 +38,39 @@ assert.equal(
   ),
   false,
 );
+
+assert.throws(
+  () => new MorphAgentClient("http://agent.example.com"),
+  /must use HTTPS/,
+);
+assert.doesNotThrow(() => new MorphAgentClient("http://127.4.3.2:4617"));
+
+const apiBearerToken = "m".repeat(32);
+const originalFetch = globalThis.fetch;
+globalThis.fetch = async (_url, init) => {
+  assert.equal(init.headers.authorization, `Bearer ${apiBearerToken}`);
+  return new Response(JSON.stringify({ network: "morph-ckb" }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+try {
+  const client = new MorphAgentClient("https://agent.example.com", { apiBearerToken });
+  assert.deepEqual(await client.supported(), { network: "morph-ckb" });
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
+globalThis.fetch = async () => new Response(
+  new Uint8Array(2 * 1024 * 1024 + 1),
+  { status: 200 },
+);
+try {
+  const client = new MorphAgentClient("https://agent.example.com");
+  await assert.rejects(
+    client.supported(),
+    /response exceeds the maximum size/,
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+}

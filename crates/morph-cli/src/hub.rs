@@ -1300,7 +1300,31 @@ fn handle_connection(mut stream: TcpStream, server: &HubServer) -> Result<()> {
     stream
         .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
         .context("failed to set Morph Hub response write timeout")?;
-    let request = read_request(&mut stream)?;
+    let mut reader = BufReader::new(&mut stream);
+    let (mut request, content_length) = read_request_head_from_reader(&mut reader)?;
+    if request.method != "OPTIONS" && (request.path.starts_with("/api/") || request.path == "/api")
+    {
+        let request_id = server.next_request_id();
+        if let Some(response) = server.auth_failure_response(
+            &request,
+            request_auth_scope(&request.method, &request.path),
+            &request_id,
+        ) {
+            drop(reader);
+            write_response(
+                &mut stream,
+                with_header(response, "X-Morph-Hub-Request-Id", request_id),
+                server.cors_origin.as_deref(),
+            )?;
+            return Ok(());
+        }
+    }
+    if (request.path.starts_with("/api/") || request.path == "/api")
+        && matches!(request.method.as_str(), "POST" | "PUT")
+    {
+        read_request_body(&mut reader, &mut request, content_length)?;
+    }
+    drop(reader);
     if request.method == "GET" && request.path == "/api/events" {
         server.stream_events(&request, &mut stream)?;
         return Ok(());
@@ -2506,13 +2530,16 @@ fn parse_bytes32(label: &str, value: &str) -> Result<Bytes32> {
     Ok(out)
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
-    read_request_from_reader(stream)
-}
-
+#[cfg(test)]
 fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
     let mut reader = BufReader::new(reader);
-    let (request_line, mut header_bytes) = read_limited_line(&mut reader, MAX_REQUEST_LINE_BYTES)?;
+    let (mut request, content_length) = read_request_head_from_reader(&mut reader)?;
+    read_request_body(&mut reader, &mut request, content_length)?;
+    Ok(request)
+}
+
+fn read_request_head_from_reader(reader: &mut impl BufRead) -> Result<(HttpRequest, usize)> {
+    let (request_line, mut header_bytes) = read_limited_line(reader, MAX_REQUEST_LINE_BYTES)?;
     let mut parts = request_line.split_whitespace();
     let method = parts
         .next()
@@ -2535,7 +2562,7 @@ fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
     let mut content_length = None;
     let mut headers = BTreeMap::new();
     loop {
-        let (line, line_bytes) = read_limited_line(&mut reader, MAX_REQUEST_LINE_BYTES)?;
+        let (line, line_bytes) = read_limited_line(reader, MAX_REQUEST_LINE_BYTES)?;
         header_bytes = header_bytes
             .checked_add(line_bytes)
             .context("HTTP headers are too large")?;
@@ -2548,7 +2575,17 @@ fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
             break;
         }
         if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+            let canonical_name = name.trim().to_ascii_lowercase();
+            let duplicate_message = match canonical_name.as_str() {
+                "authorization" => "duplicate Authorization header".to_string(),
+                "content-length" => "duplicate Content-Length header".to_string(),
+                _ => format!("duplicate {canonical_name} header"),
+            };
+            ensure!(
+                !headers.contains_key(&canonical_name),
+                "{duplicate_message}"
+            );
+            headers.insert(canonical_name, value.trim().to_string());
             if name.eq_ignore_ascii_case("content-length") {
                 ensure!(content_length.is_none(), "duplicate Content-Length header");
                 let parsed = value
@@ -2570,18 +2607,28 @@ fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
         }
     }
 
-    let content_length = content_length.unwrap_or(0);
+    Ok((
+        HttpRequest {
+            method,
+            path,
+            headers,
+            body: Vec::new(),
+        },
+        content_length.unwrap_or(0),
+    ))
+}
+
+fn read_request_body(
+    reader: &mut impl Read,
+    request: &mut HttpRequest,
+    content_length: usize,
+) -> Result<()> {
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader.read_exact(&mut body)?;
     }
-
-    Ok(HttpRequest {
-        method,
-        path,
-        headers,
-        body,
-    })
+    request.body = body;
+    Ok(())
 }
 
 fn read_limited_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<(String, usize)> {
@@ -3264,6 +3311,27 @@ mod tests {
             err.to_string().contains("duplicate Content-Length"),
             "unexpected error: {err:#}"
         );
+    }
+
+    #[test]
+    fn request_parser_rejects_duplicate_authorization() {
+        let duplicate = b"GET /api/state HTTP/1.1\r\nAuthorization: Bearer first\r\nauthorization: Bearer second\r\n\r\n";
+        let err = read_request_from_reader(Cursor::new(duplicate))
+            .expect_err("duplicate Authorization should be rejected");
+        assert!(
+            err.to_string().contains("duplicate Authorization header"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn request_head_can_be_authenticated_before_body_is_read() {
+        let headers = b"POST /api/peers HTTP/1.1\r\nContent-Length: 1024\r\n\r\n";
+        let mut reader = BufReader::new(Cursor::new(headers));
+        let (request, content_length) = read_request_head_from_reader(&mut reader).unwrap();
+        assert_eq!(request.path, "/api/peers");
+        assert_eq!(content_length, 1024);
+        assert!(request.body.is_empty());
     }
 
     #[test]

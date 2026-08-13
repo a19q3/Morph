@@ -8,6 +8,7 @@
 //! hook that Fiber can implement or Morph can carry in an isolated patch.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -328,19 +329,9 @@ impl FiberHookClient {
         if !response.status().is_success() {
             return Err(AdapterError::Http(response.status().as_u16()));
         }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_RPC_RESPONSE_BYTES as u64)
-        {
-            return Err(AdapterError::ResponseTooLarge);
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| AdapterError::Transport(error.to_string()))?;
-        if bytes.len() > MAX_RPC_RESPONSE_BYTES {
-            return Err(AdapterError::ResponseTooLarge);
-        }
+        let bytes = read_response_limited(response, MAX_RPC_RESPONSE_BYTES)
+            .await?
+            .ok_or(AdapterError::ResponseTooLarge)?;
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| AdapterError::MalformedResponse)?;
         if value.get("jsonrpc") != Some(&json!("2.0")) || value.get("id") != Some(&json!(id)) {
@@ -486,10 +477,48 @@ pub type AdapterResult<T> = Result<T, AdapterError>;
 
 fn parse_http_url(value: &str) -> AdapterResult<Url> {
     let url = Url::parse(value).map_err(|_| AdapterError::InvalidUrl)?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+    let is_loopback = url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
         return Err(AdapterError::InvalidUrl);
     }
     Ok(url)
+}
+
+async fn read_response_limited(
+    mut response: reqwest::Response,
+    maximum: usize,
+) -> AdapterResult<Option<Vec<u8>>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum as u64)
+    {
+        return Ok(None);
+    }
+    let mut body = Vec::with_capacity(
+        response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or(0)
+            .min(maximum),
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| AdapterError::Transport(error.to_string()))?
+    {
+        if chunk.len() > maximum.saturating_sub(body.len()) {
+            return Ok(None);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(Some(body))
 }
 
 fn validate_enabled_ack(
@@ -596,6 +625,32 @@ mod tests {
                 .len(),
             66
         );
+    }
+
+    #[test]
+    fn hook_and_callback_require_tls_off_loopback() {
+        for accepted in [
+            "http://localhost:8227",
+            "http://127.0.0.1:8227",
+            "http://[::1]:8227",
+            "https://fiber.example.com",
+        ] {
+            assert!(parse_http_url(accepted).is_ok(), "{accepted}");
+        }
+        for rejected in ["http://example.com", "http://10.0.0.8:8227"] {
+            assert!(
+                matches!(parse_http_url(rejected), Err(AdapterError::InvalidUrl)),
+                "{rejected}"
+            );
+        }
+        assert!(matches!(
+            FiberHookClient::new(
+                "https://fiber.example.com",
+                None,
+                "http://10.0.0.9:4621/callback"
+            ),
+            Err(AdapterError::InvalidUrl)
+        ));
     }
 
     #[test]

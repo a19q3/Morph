@@ -17,6 +17,50 @@ revalidation, operational readiness sign-off, and value-limit policy.
 
 Implementation safety-boundary baseline: `8944bf7`.
 
+## Factory-materialised State authority binding (2026-08-13)
+
+- Issue: a FactoryProof State creation parsed the Factory exit envelope from
+  input zero but did not bind that carrier to the exact FactoryType script
+  authorised by the child transaction.
+- Fix: FactoryProof StateType args now commit the 32-byte FactoryType script
+  hash between the funding anchor and optional relative `since`. Creation
+  rejects bilateral witnesses with Factory args, rejects Factory witnesses
+  without those args, and requires input zero's Type Script hash to match the
+  committed FactoryType identity before accepting the materialised child.
+- Negative test:
+  `state_type_rejects_factory_exit_without_bound_factory_authority`.
+- Compatibility: bilateral StateType args remain 32 or 40 bytes. Factory child
+  args are 64 or 72 bytes and therefore intentionally produce new StateType
+  script hashes; pre-fix devnet factory children must be recreated.
+
+## Agent and remote HTTP boundaries (2026-08-13)
+
+- Issue: Agent/Fiber/Gateway/hook clients admitted remote cleartext HTTP,
+  response limits were applied only after whole-body buffering, durable public
+  challenge and offer creation was unbounded, and the payment index exposed
+  raw provider metadata.
+- Fix: remote service URLs require HTTPS while loopback HTTP remains available
+  for local devnet. Response readers enforce limits incrementally. Non-loopback
+  Agent listeners require a minimum-length API bearer token; the token gates
+  durable creation and operator-observability routes. Transient records have
+  count and serialized-size reserves, expired records are pruned, creation is
+  rate limited, raw payment metadata is size bounded, and the public response
+  is a redacted projection.
+- Tests: `plaintext_http_is_loopback_only`,
+  `chunked_response_is_rejected_as_soon_as_the_limit_is_crossed`,
+  `outstanding_challenge_quota_rejects_without_corrupting_existing_state`,
+  `payment_index_requires_auth_and_redacts_raw_fiber_metadata`, and the
+  Agent/Fiber/hook TLS constructor tests.
+
+## Watchtower alert egress and file privacy (2026-08-13)
+
+- Issue: a validated webhook could redirect to an unvalidated destination and
+  JSONL alert files inherited ambient process permissions.
+- Fix: webhook redirects are disabled, including for loopback development
+  URLs. On Unix, alert files are created and tightened to mode `0600` on every
+  append.
+- Tests: `webhook_does_not_follow_redirects` and `appends_jsonl_alerts`.
+
 ## Post-baseline sovereign Factory hardening (2026-07-22)
 
 - Issue: the devnet transaction layer placed FactoryStateCells under an
@@ -199,24 +243,24 @@ Implementation safety-boundary baseline: `8944bf7`.
 
 ## Sponsor policy boundary
 
-- Issue: sponsor `expiry` and `allowed_sponsor_source` are meaningful operator
-  policy fields, but the current sponsor lock has no verifiable clock/source
-  evidence for enforcing them on chain.
+- Issue: expiry, sponsor-source, and cadence are meaningful operator policy,
+  but the current sponsor lock has no verifiable clock/source evidence for
+  enforcing them on chain.
 - Attack model: documentation overstates script-enforced sponsor safety and a
   reviewer assumes operator-only policy fields are consensus checks.
 - Fix: current documents the script-enforced sponsor boundary as state type,
-  channel/state-number range, fee caps, and clean change. The sponsor lock now
-  rejects finite script-level `expiry` values instead of silently accepting an
-  unenforceable deadline. Expiry windows, sponsor source, cadence, webhook
-  policy, and similar runtime bounds are operator/watchtower policy until a
-  future script-verifiable design exists.
+  channel/state-number range, per-cell fee caps, exact fee attribution, and
+  clean change. The current 136-byte `SponsorPolicy` has no expiry or sponsor
+  source field. Expiry windows, sponsor source, cadence, webhook policy, and
+  similar runtime bounds are operator/watchtower policy until a future
+  script-verifiable design exists.
 - Negative tests: `sponsor_lock_rejects_fee_above_per_tx_limit`,
   `sponsor_lock_rejects_state_number_outside_policy_range`,
-  `sponsor_lock_rejects_finite_expiry_policy`,
+  `sponsor_lock_rejects_third_party_capacity_diversion`,
   `rejects_fee_above_operator_limit`,
   `rejects_explicit_sponsor_when_policy_forbids_it`.
-- Remaining limitation: finite expiry windows and sponsor source are not current
-  script-enforced fields; finite script-level expiry is rejected.
+- Remaining limitation: expiry windows and sponsor source are not current
+  script-enforced fields.
 
 ## Evidence run
 

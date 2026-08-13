@@ -48,6 +48,9 @@ enum Command {
         fiber_bearer_token: Option<String>,
         #[arg(long, default_value = "./morph-agent.db")]
         store: PathBuf,
+        /// Bearer required by durable creation and operator routes. Mandatory for non-loopback listeners.
+        #[arg(long, env = "MORPH_AGENT_API_BEARER_TOKEN", hide_env_values = true)]
+        api_bearer_token: Option<String>,
         #[arg(long, env = "MORPH_AGENT_BISCUIT_PRIVATE_KEY", hide_env_values = true)]
         biscuit_private_key: String,
         /// secp256k1 key used to sign canonical terminal settlement receipts.
@@ -112,6 +115,7 @@ async fn main() -> Result<()> {
             fiber_rpc,
             fiber_bearer_token,
             store,
+            api_bearer_token,
             biscuit_private_key,
             receipt_private_key,
             payee,
@@ -125,6 +129,10 @@ async fn main() -> Result<()> {
             credential_ttl_seconds,
             upstream_base_url,
         } => {
+            ensure!(
+                listen.ip().is_loopback() || api_bearer_token.is_some(),
+                "--api-bearer-token is required for a non-loopback listener"
+            );
             let credentials = CredentialService::from_private_key(&biscuit_private_key)
                 .context("invalid MORPH_AGENT_BISCUIT_PRIVATE_KEY")?;
             let receipt_signing_key = parse_receipt_signing_key(&receipt_private_key)?;
@@ -162,6 +170,7 @@ async fn main() -> Result<()> {
                             .collect::<BTreeSet<_>>(),
                         default_credential_ttl_seconds: credential_ttl_seconds,
                         upstream_base_url,
+                        api_bearer_token,
                     },
                     fiber,
                     durable_store,

@@ -7,6 +7,7 @@ pub mod client;
 pub mod credential;
 pub mod crypto;
 pub mod fiber_rpc;
+mod http_safety;
 pub mod protocol;
 pub mod service;
 pub mod store;
