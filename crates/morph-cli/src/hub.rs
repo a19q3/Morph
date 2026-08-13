@@ -117,7 +117,7 @@ impl Default for RateLimiter {
 
 #[derive(Debug, Clone)]
 struct HubAuthToken {
-    secret: String,
+    secret_hash: Bytes32,
     scopes: BTreeSet<AuthScope>,
 }
 
@@ -609,10 +609,13 @@ fn parse_hub_auth_token(value: Option<String>) -> Result<Option<HubAuthToken>> {
             !scopes.is_empty(),
             "Morph Hub scoped token must include at least one scope"
         );
-        Ok(Some(HubAuthToken { secret, scopes }))
+        Ok(Some(HubAuthToken {
+            secret_hash: blake2b256(secret.as_bytes()),
+            scopes,
+        }))
     } else {
         Ok(Some(HubAuthToken {
-            secret: value,
+            secret_hash: blake2b256(value.as_bytes()),
             scopes: all_auth_scopes(),
         }))
     }
@@ -1926,10 +1929,12 @@ impl HubServer {
         let authorised = request
             .header("authorization")
             .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|value| constant_time_eq(value.as_bytes(), token.secret.as_bytes()))
-            || request
-                .header("x-morph-hub-token")
-                .is_some_and(|value| constant_time_eq(value.as_bytes(), token.secret.as_bytes()));
+            .is_some_and(|value| {
+                constant_time_eq(&blake2b256(value.as_bytes()), &token.secret_hash)
+            })
+            || request.header("x-morph-hub-token").is_some_and(|value| {
+                constant_time_eq(&blake2b256(value.as_bytes()), &token.secret_hash)
+            });
         if !authorised {
             return Some(api_error_response(
                 401,
@@ -2246,15 +2251,13 @@ fn channel_from_request(
     })
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    let mut diff = left.len() ^ right.len();
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        diff |= usize::from(left_byte ^ right_byte);
-    }
-    diff == 0
+fn constant_time_eq(left: &Bytes32, right: &Bytes32) -> bool {
+    left.iter()
+        .zip(right)
+        .fold(0_u8, |difference, (left, right)| {
+            difference | (left ^ right)
+        })
+        == 0
 }
 
 fn hub_state_has_operational_records(state: &HubRuntimeState) -> bool {
@@ -3747,6 +3750,23 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["security"]["auth_required"].as_bool(), Some(true));
         assert_eq!(body["security"]["single_operator"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn auth_tokens_are_hashed_before_fixed_size_comparison() {
+        let token = parse_hub_auth_token(Some("read,write:secret-token".to_string()))
+            .unwrap()
+            .unwrap();
+        let matching = blake2b256(b"secret-token");
+        let shorter = blake2b256(b"secret-toke");
+        let longer = blake2b256(b"secret-token-longer");
+
+        assert_eq!(token.secret_hash, matching);
+        assert!(token.scopes.contains(&AuthScope::Read));
+        assert!(token.scopes.contains(&AuthScope::Write));
+        assert!(constant_time_eq(&matching, &token.secret_hash));
+        assert!(!constant_time_eq(&shorter, &token.secret_hash));
+        assert!(!constant_time_eq(&longer, &token.secret_hash));
     }
 
     #[test]
