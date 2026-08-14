@@ -20,30 +20,20 @@ use morph_core::{
     validate_reduced_factory_exit,
 };
 use morph_script_common::{
-    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN,
-    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION,
-    FACTORY_DYNAMIC_MIN_PARTICIPANTS, FACTORY_DYNAMIC_REDUCED_SPLICE_WITNESS_VERSION,
-    FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION, FACTORY_DYNAMIC_SPLICE_WITNESS_VERSION,
+    BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN, ECDSA_SIGNATURE_LEN, FACTORY_MAX_PARTICIPANTS,
     FACTORY_MERKLE_UPDATE_DOMAIN, FACTORY_MERKLE_UPDATE_RIGHT_COUNT,
-    FACTORY_MERKLE_UPDATE_WITNESS_LEN, FACTORY_MERKLE_UPDATE_WITNESS_VERSION,
-    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT,
-    FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN, FACTORY_REDUCED_SPLICE_WITNESS_LEN,
-    FACTORY_REDUCED_SPLICE_WITNESS_VERSION, FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_COUNT,
-    FACTORY_SIGNATURE_WITNESS_LEN, FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH,
-    FACTORY_SPLICE_HEADER_LEN, FACTORY_SPLICE_WITNESS_LEN, FACTORY_SPLICE_WITNESS_VERSION,
+    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_MIN_PARTICIPANTS,
+    FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT, FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN,
+    FACTORY_REDUCED_SPLICE_WITNESS_VERSION, FACTORY_RIGHT_LEN, FACTORY_SIGNATURE_WITNESS_VERSION,
+    FACTORY_SPARSE_MERKLE_DEPTH, FACTORY_SPLICE_HEADER_LEN, FACTORY_SPLICE_WITNESS_VERSION,
     FACTORY_VAULT_ASSET_AMOUNT_LEN, FACTORY_VAULT_DELTA_LEN, FACTORY_VAULT_DELTAS_LEN,
-    FACTORY_VAULT_DESCRIPTOR_LEN,
-    FactoryDynamicReducedSpliceWitness as WireFactoryDynamicReducedSpliceWitness,
-    FactoryDynamicSpliceWitness as WireFactoryDynamicSpliceWitness,
-    FactoryReducedSpliceWitness as WireFactoryReducedSpliceWitness,
+    FACTORY_VAULT_DESCRIPTOR_LEN, FactoryReducedSpliceWitness as WireFactoryReducedSpliceWitness,
     FactorySpliceWitness as WireFactorySpliceWitness, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B,
     VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, factory_dynamic_merkle_update_witness_len,
-    factory_dynamic_reduced_splice_witness_len, factory_dynamic_signature_witness_len,
-    factory_dynamic_splice_witness_len, witness_envelope_body_commitment,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope,
+    factory_merkle_update_witness_len, factory_reduced_splice_witness_len,
+    factory_signature_witness_len, factory_splice_witness_len, witness_envelope_body_commitment,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2260,7 +2250,7 @@ pub fn write_factory_reduced_splice_package(
 pub fn fixture_factory_splice_package_with_kind(
     kind: FixtureFactorySpliceKind,
 ) -> Result<StoredFactorySplicePackage> {
-    fixture_factory_splice_package_with_participant_count(kind, FACTORY_SIGNATURE_COUNT)
+    fixture_factory_splice_package_with_participant_count(kind, FACTORY_MIN_PARTICIPANTS)
 }
 
 pub fn fixture_factory_splice_package_with_participant_count(
@@ -2268,8 +2258,7 @@ pub fn fixture_factory_splice_package_with_participant_count(
     participant_count: u8,
 ) -> Result<StoredFactorySplicePackage> {
     ensure!(
-        (FACTORY_DYNAMIC_MIN_PARTICIPANTS..=FACTORY_DYNAMIC_MAX_PARTICIPANTS)
-            .contains(&participant_count),
+        (FACTORY_MIN_PARTICIPANTS..=FACTORY_MAX_PARTICIPANTS).contains(&participant_count),
         "dynamic factory fixture participant count must be in 2..=16"
     );
     let (splice_kind, asset, old_amount, new_amount, external_input, withdrawal) = match kind {
@@ -2402,7 +2391,7 @@ pub fn fixture_factory_splice_package_with_participant_count(
 pub fn fixture_factory_reduced_splice_package_with_kind(
     kind: FixtureFactorySpliceKind,
 ) -> Result<StoredFactoryReducedSplicePackage> {
-    fixture_factory_reduced_splice_package_with_participant_count(kind, FACTORY_SIGNATURE_COUNT)
+    fixture_factory_reduced_splice_package_with_participant_count(kind, FACTORY_MIN_PARTICIPANTS)
 }
 
 pub fn fixture_factory_reduced_splice_package_with_participant_count(
@@ -2983,22 +2972,9 @@ fn contract_witness_bytes_from_transition(
         factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
     let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
 
-    let dynamic = participant_keys.len() != FACTORY_SIGNATURE_COUNT as usize;
-    let body_len = if dynamic {
-        factory_dynamic_splice_witness_len(participant_keys.len() as u8)
-    } else {
-        FACTORY_SPLICE_WITNESS_LEN
-    };
+    let body_len = factory_splice_witness_len(participant_keys.len() as u8);
     let mut raw = vec![0u8; body_len];
-    put_u16(
-        &mut raw,
-        0,
-        if dynamic {
-            FACTORY_DYNAMIC_SPLICE_WITNESS_VERSION
-        } else {
-            FACTORY_SPLICE_WITNESS_VERSION
-        },
-    );
+    put_u16(&mut raw, 0, FACTORY_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
     raw[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
     offset += FACTORY_SPLICE_HEADER_LEN;
@@ -3010,16 +2986,9 @@ fn contract_witness_bytes_from_transition(
     offset += FACTORY_VAULT_DESCRIPTOR_LEN;
     raw[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
-    if dynamic {
-        WireFactoryDynamicSpliceWitness::parse(&raw).map_err(|err| {
-            anyhow::anyhow!("encoded dynamic factory splice witness is invalid: {err:?}")
-        })?;
-        witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE, &raw)
-    } else {
-        WireFactorySpliceWitness::parse(&raw)
-            .map_err(|err| anyhow::anyhow!("encoded factory splice witness is invalid: {err:?}"))?;
-        witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, &raw)
-    }
+    WireFactorySpliceWitness::parse(&raw)
+        .map_err(|err| anyhow::anyhow!("encoded factory splice witness is invalid: {err:?}"))?;
+    witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, &raw)
 }
 
 fn contract_reduced_splice_witness_bytes_from_transition(
@@ -3034,23 +3003,10 @@ fn contract_reduced_splice_witness_bytes_from_transition(
         factory_vault_descriptor_wire_bytes(&transition.header.factory_id, &transition.new_vault)?;
     let deltas = factory_vault_deltas_wire_bytes(&transition.deltas)?;
 
-    let dynamic = transition.witness.participant_keys.len()
-        != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize;
-    let body_len = if dynamic {
-        factory_dynamic_reduced_splice_witness_len(transition.witness.participant_keys.len() as u8)
-    } else {
-        FACTORY_REDUCED_SPLICE_WITNESS_LEN
-    };
+    let body_len =
+        factory_reduced_splice_witness_len(transition.witness.participant_keys.len() as u8);
     let mut raw = vec![0u8; body_len];
-    put_u16(
-        &mut raw,
-        0,
-        if dynamic {
-            FACTORY_DYNAMIC_REDUCED_SPLICE_WITNESS_VERSION
-        } else {
-            FACTORY_REDUCED_SPLICE_WITNESS_VERSION
-        },
-    );
+    put_u16(&mut raw, 0, FACTORY_REDUCED_SPLICE_WITNESS_VERSION);
     let mut offset = 2;
     raw[offset..offset + FACTORY_SPLICE_HEADER_LEN].copy_from_slice(&header);
     offset += FACTORY_SPLICE_HEADER_LEN;
@@ -3062,17 +3018,10 @@ fn contract_reduced_splice_witness_bytes_from_transition(
     offset += FACTORY_VAULT_DESCRIPTOR_LEN;
     raw[offset..offset + FACTORY_VAULT_DELTAS_LEN].copy_from_slice(&deltas);
 
-    if dynamic {
-        WireFactoryDynamicReducedSpliceWitness::parse(&raw).map_err(|err| {
-            anyhow::anyhow!("encoded dynamic reduced factory splice witness is invalid: {err:?}")
-        })?;
-        witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE, &raw)
-    } else {
-        WireFactoryReducedSpliceWitness::parse(&raw).map_err(|err| {
-            anyhow::anyhow!("encoded reduced factory splice witness is invalid: {err:?}")
-        })?;
-        witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, &raw)
-    }
+    WireFactoryReducedSpliceWitness::parse(&raw).map_err(|err| {
+        anyhow::anyhow!("encoded reduced factory splice witness is invalid: {err:?}")
+    })?;
+    witness_envelope(WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, &raw)
 }
 
 fn witness_envelope(kind: u16, body: &[u8]) -> Result<Vec<u8>> {
@@ -3153,8 +3102,8 @@ fn factory_signature_witness_wire_bytes(
     signatures: &[StoredFactorySignature],
 ) -> Result<Vec<u8>> {
     ensure!(
-        participant_keys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
-            && participant_keys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize
+        participant_keys.len() >= FACTORY_MIN_PARTICIPANTS as usize
+            && participant_keys.len() <= FACTORY_MAX_PARTICIPANTS as usize
             && signatures.len() == participant_keys.len(),
         "dynamic factory splice witness requires 2..=16 participant keys and one signature each"
     );
@@ -3215,24 +3164,8 @@ fn factory_signature_witness_wire_bytes(
         "factory splice header participant commitment does not match witness pubkeys"
     );
 
-    let dynamic = participants.len() != FACTORY_SIGNATURE_COUNT as usize;
-    let mut raw = vec![
-        0u8;
-        if dynamic {
-            factory_dynamic_signature_witness_len(participants.len() as u8)
-        } else {
-            FACTORY_SIGNATURE_WITNESS_LEN
-        }
-    ];
-    put_u16(
-        &mut raw,
-        0,
-        if dynamic {
-            FACTORY_DYNAMIC_SIGNATURE_WITNESS_VERSION
-        } else {
-            FACTORY_SIGNATURE_WITNESS_VERSION
-        },
-    );
+    let mut raw = vec![0u8; factory_signature_witness_len(participants.len() as u8)];
+    put_u16(&mut raw, 0, FACTORY_SIGNATURE_WITNESS_VERSION);
     raw[2] = participants.len() as u8;
     raw[3] = participants.len() as u8;
     for (index, participant) in participants.iter().enumerate() {
@@ -3264,8 +3197,8 @@ fn factory_merkle_update_witness_wire_bytes(
     witness: &FactoryReducedSpliceWitness,
 ) -> Result<Vec<u8>> {
     ensure!(
-        witness.participant_keys.len() >= FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize
-            && witness.participant_keys.len() <= FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize
+        witness.participant_keys.len() >= FACTORY_MIN_PARTICIPANTS as usize
+            && witness.participant_keys.len() <= FACTORY_MAX_PARTICIPANTS as usize
             && witness.participant_threshold as usize == witness.participant_keys.len()
             && witness.signatures.len() == FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT as usize,
         "dynamic reduced factory splice witness requires 2..=16 participant keys and one authorised signature"
@@ -3280,25 +3213,9 @@ fn factory_merkle_update_witness_wire_bytes(
         "contract reduced factory splice witness requires one changed right"
     );
 
-    let dynamic =
-        witness.participant_keys.len() != FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT as usize;
-    let mut raw = vec![
-        0u8;
-        if dynamic {
-            factory_dynamic_merkle_update_witness_len(witness.participant_keys.len() as u8)
-        } else {
-            FACTORY_MERKLE_UPDATE_WITNESS_LEN
-        }
-    ];
-    put_u16(
-        &mut raw,
-        0,
-        if dynamic {
-            FACTORY_DYNAMIC_MERKLE_UPDATE_WITNESS_VERSION
-        } else {
-            FACTORY_MERKLE_UPDATE_WITNESS_VERSION
-        },
-    );
+    let mut raw =
+        vec![0u8; factory_merkle_update_witness_len(witness.participant_keys.len() as u8)];
+    put_u16(&mut raw, 0, FACTORY_MERKLE_UPDATE_WITNESS_VERSION);
     raw[2] = witness.participant_keys.len() as u8;
     raw[3] = witness.participant_keys.len() as u8;
     raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
@@ -3649,14 +3566,11 @@ mod tests {
         let summary = package.summary().unwrap();
         let envelope_bytes = package.contract_witness_bytes().unwrap();
         let envelope = WitnessEnvelope::parse(&envelope_bytes).unwrap();
-        let witness = WireFactoryDynamicSpliceWitness::parse(envelope.body()).unwrap();
+        let witness = WireFactorySpliceWitness::parse(envelope.body()).unwrap();
 
         assert_eq!(summary.signature_threshold, 3);
         assert_eq!(summary.signatures, 3);
-        assert_eq!(
-            envelope.kind(),
-            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE
-        );
+        assert_eq!(envelope.kind(), WITNESS_ENVELOPE_KIND_FACTORY_SPLICE);
         assert_eq!(witness.participant_count(), 3);
     }
 
@@ -3708,7 +3622,7 @@ mod tests {
         assert_eq!(loaded.signing_digest, package.signing_digest);
         assert_eq!(
             loaded.summary().unwrap().contract_witness_len,
-            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN
+            WITNESS_ENVELOPE_LEN + factory_splice_witness_len(2)
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3745,14 +3659,14 @@ mod tests {
         let summary = package.summary().unwrap();
         let envelope_bytes = package.contract_witness_bytes().unwrap();
         let envelope = WitnessEnvelope::parse(&envelope_bytes).unwrap();
-        let witness = WireFactoryDynamicReducedSpliceWitness::parse(envelope.body()).unwrap();
+        let witness = WireFactoryReducedSpliceWitness::parse(envelope.body()).unwrap();
 
         assert_eq!(summary.participant_keys, 3);
         assert_eq!(summary.signature_threshold, 3);
         assert_eq!(summary.signatures, 1);
         assert_eq!(
             envelope.kind(),
-            WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE
+            WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
         );
         assert_eq!(witness.participant_count(), 3);
     }
@@ -3794,7 +3708,7 @@ mod tests {
         assert_eq!(loaded_summary.proof_siblings, 256);
         assert_eq!(
             loaded_summary.contract_witness_len,
-            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN
+            WITNESS_ENVELOPE_LEN + factory_reduced_splice_witness_len(2)
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -3836,11 +3750,11 @@ mod tests {
     ) {
         assert_eq!(
             summary.contract_witness_len,
-            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN
+            WITNESS_ENVELOPE_LEN + factory_splice_witness_len(2)
         );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            WITNESS_ENVELOPE_LEN + FACTORY_SPLICE_WITNESS_LEN,
+            WITNESS_ENVELOPE_LEN + factory_splice_witness_len(2),
             "contract_witness_hex",
         )
         .unwrap();
@@ -3883,11 +3797,11 @@ mod tests {
     ) {
         assert_eq!(
             summary.contract_witness_len,
-            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN
+            WITNESS_ENVELOPE_LEN + factory_reduced_splice_witness_len(2)
         );
         let summary_bytes = decode_hex_exact(
             &summary.contract_witness_hex,
-            WITNESS_ENVELOPE_LEN + FACTORY_REDUCED_SPLICE_WITNESS_LEN,
+            WITNESS_ENVELOPE_LEN + factory_reduced_splice_witness_len(2),
             "contract_witness_hex",
         )
         .unwrap();

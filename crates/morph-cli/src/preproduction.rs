@@ -4,15 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use morph_script_common::{
-    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MIN_PARTICIPANTS,
-    FACTORY_REDUCED_RIGHTS_COUNT,
+    FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS, FACTORY_REDUCED_RIGHTS_COUNT,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::release::FACTORY_V1_RELEASE_PROFILE;
+use crate::release::FACTORY_RELEASE_PROFILE;
 
 pub const PREPRODUCTION_ENVELOPE_SCHEMA: &str = "morph.preproduction_envelope";
-pub const PREPRODUCTION_ENVELOPE_VERSION: u16 = 2;
 
 const MAX_ACTIVE_FACTORIES: u32 = 4;
 const MAX_CHILDREN_PER_FACTORY: u32 = FACTORY_REDUCED_RIGHTS_COUNT as u32;
@@ -27,7 +25,6 @@ const MIN_WATCHTOWER_DETECTION_DEPTH: u64 = 3;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreproductionEnvelope {
     pub schema: String,
-    pub envelope_version: u16,
     pub release_profile: String,
     pub effective_date: String,
     pub review_by: String,
@@ -42,7 +39,6 @@ pub struct PreproductionEnvelope {
     pub sponsor: SponsorLimits,
     pub xudt: XudtLimits,
     pub watchtower: WatchtowerLimits,
-    pub legacy_factory_policy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,13 +107,8 @@ impl PreproductionEnvelope {
             self.schema
         );
         ensure!(
-            self.envelope_version == PREPRODUCTION_ENVELOPE_VERSION,
-            "unsupported pre-production envelope version {}",
-            self.envelope_version
-        );
-        ensure!(
-            self.release_profile == FACTORY_V1_RELEASE_PROFILE,
-            "pre-production release profile must be {FACTORY_V1_RELEASE_PROFILE}"
+            self.release_profile == FACTORY_RELEASE_PROFILE,
+            "pre-production release profile must be {FACTORY_RELEASE_PROFILE}"
         );
         ensure!(
             is_iso_date(&self.effective_date) && is_iso_date(&self.review_by),
@@ -156,9 +147,9 @@ impl PreproductionEnvelope {
             "Morph Hub chain actions must remain disabled until they submit and verify CKB transactions"
         );
         ensure!(
-            self.factory.min_participant_count == FACTORY_DYNAMIC_MIN_PARTICIPANTS as u32
-                && self.factory.max_participant_count == FACTORY_DYNAMIC_MAX_PARTICIPANTS as u32,
-            "factory participant bounds must match the executable dynamic-N profile ({FACTORY_DYNAMIC_MIN_PARTICIPANTS}..={FACTORY_DYNAMIC_MAX_PARTICIPANTS})"
+            self.factory.min_participant_count == FACTORY_MIN_PARTICIPANTS as u32
+                && self.factory.max_participant_count == FACTORY_MAX_PARTICIPANTS as u32,
+            "factory participant bounds must match the executable dynamic-N profile ({FACTORY_MIN_PARTICIPANTS}..={FACTORY_MAX_PARTICIPANTS})"
         );
         ensure!(
             (1..=MAX_ACTIVE_FACTORIES).contains(&self.factory.max_active_factories),
@@ -233,10 +224,6 @@ impl PreproductionEnvelope {
             self.watchtower.independent_operator_required,
             "a separate watchtower operator is required by the pilot envelope"
         );
-        ensure!(
-            self.legacy_factory_policy == "recreate",
-            "legacy owner-locked factories must be recreated, never migrated in place"
-        );
         Ok(())
     }
 }
@@ -287,8 +274,7 @@ mod tests {
     fn fixture() -> PreproductionEnvelope {
         PreproductionEnvelope {
             schema: PREPRODUCTION_ENVELOPE_SCHEMA.to_string(),
-            envelope_version: PREPRODUCTION_ENVELOPE_VERSION,
-            release_profile: FACTORY_V1_RELEASE_PROFILE.to_string(),
+            release_profile: FACTORY_RELEASE_PROFILE.to_string(),
             effective_date: "2026-08-14".to_string(),
             review_by: "2026-09-13".to_string(),
             approval_timezone: "Asia/Shanghai".to_string(),
@@ -298,8 +284,8 @@ mod tests {
             real_assets_allowed: false,
             hub_chain_actions_allowed: false,
             factory: FactoryLimits {
-                min_participant_count: FACTORY_DYNAMIC_MIN_PARTICIPANTS as u32,
-                max_participant_count: FACTORY_DYNAMIC_MAX_PARTICIPANTS as u32,
+                min_participant_count: FACTORY_MIN_PARTICIPANTS as u32,
+                max_participant_count: FACTORY_MAX_PARTICIPANTS as u32,
                 max_active_factories: 4,
                 max_children_per_factory: 10,
                 max_capacity_shannons: MAX_FACTORY_CAPACITY_SHANNONS,
@@ -323,7 +309,6 @@ mod tests {
                 restart_scan_floor_required: true,
                 independent_operator_required: true,
             },
-            legacy_factory_policy: "recreate".to_string(),
         }
     }
 

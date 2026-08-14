@@ -1,7 +1,7 @@
-# Factory v1.0 Runbook Rehearsal — 2026-08-14
+# Factory Runbook Rehearsal — 2026-08-14
 
 This is the repository-side rehearsal for the controlled-devnet
-`factory-v1.0-dynamic-n` candidate. It validates that a release operator
+`factory-dynamic-n` candidate. It validates that a release operator
 can execute the documented gates from the candidate worktree. It is not the
 independent multi-operator rehearsal still required for a production claim.
 
@@ -22,7 +22,7 @@ independent multi-operator rehearsal still required for a production claim.
 | `cargo check -p morph-cli --all-features` | Passed |
 | Release manifest unit tests | 2 passed |
 | Pre-production envelope unit tests | 5 passed |
-| Watch cursor/reorg targeted tests | Passed, including canonical match, hash mismatch reset, and legacy cursor reset |
+| Watch cursor/reorg targeted tests | Passed, including canonical match, hash mismatch reset, and uninitialised cursor reset |
 | `make build-contracts` | Passed; seven release ELFs built |
 | Manifest generation | Seven CKB data hashes and sizes recorded in the committed manifest |
 | Clean independent target-directory rebuild | Passed; all seven sizes and CKB data hashes matched the committed manifest |
@@ -42,10 +42,9 @@ independent multi-operator rehearsal still required for a production claim.
   consent; 1 or 17 signers and malformed reduced membership are rejected.
 - Mainnet, real assets, external xUDTs, and Hub-submitted chain actions are
   rejected by the current envelope.
-- A cursor hash mismatch or missing legacy cursor hash resets scanning to the
+- A cursor hash mismatch or uninitialised cursor hash resets scanning to the
   configured floor and emits a critical alert.
-- A legacy owner-locked Factory is settled and recreated; it is not migrated
-  in place.
+- An unpublished no-value Factory is discarded and recreated after a wire change.
 - A manifest mismatch stops release packaging; the reviewed hash is not edited
   to accommodate an unexplained binary.
 

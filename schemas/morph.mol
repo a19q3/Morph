@@ -21,26 +21,19 @@
 // - SpliceStateTransitionWitness: 1145 bytes
 // - FactoryStateHeader: 302 bytes
 // - BilateralSignatureWitness: 198 bytes
-// - FactorySignatureWitness: 262 bytes
-// - FactoryDynamicSignatureWitness (N=2..16): 4 + N*129 bytes
+// - FactorySignatureWitness (N=2..16): 4 + N*129 bytes
 // - FactoryRight: 114 bytes
-// - FactoryReducedRightsWitness: 2580 bytes
-// - FactoryMerkleUpdateWitness: 8720 bytes
-// - FactoryReducedExitWitness: 3586 bytes
-// - FactoryReducedExitXudtWitness: 3650 bytes
-// - FactoryLocalExitWitness: 798 bytes
-// - FactoryLocalExitXudtWitness: 862 bytes
+// - FactoryReducedRightsWitness: 8 + N*130 + 32 + 20*114 bytes
+// - FactoryMerkleUpdateWitness: 8 + N*130 + 32 + 2*114 + 256*32 bytes
+// - FactoryReducedExitWitness: participant-dependent; see morph-script-common
+// - FactoryLocalExitWitness: participant-dependent; see morph-script-common
 // - FactorySpliceHeader: 437 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
 // - FactoryVaultDeltas: 196 bytes
-// - FactorySpliceWitness: 1161 bytes
-// - FactoryReducedSpliceWitness: 9619 bytes
-// The fixed-size Factory*Witness declarations above are the legacy N=2
-// encodings; kinds 8..14 use the bounded dynamic encodings described below.
-// Dynamic reduced/local/splice lengths use the same suffixes and replace the
-// two fixed participant entries with N bounded entries. The executable length
-// formulas live in morph-script-common and are authoritative.
+// - FactorySpliceWitness: participant-dependent; see morph-script-common
+// - FactoryReducedSpliceWitness: participant-dependent; see morph-script-common
+// The executable length formulas live in morph-script-common and are authoritative.
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
@@ -62,13 +55,6 @@ array EcdsaSignature [byte; 64];
 // 5 FactoryLocalExitWitness or FactoryLocalExitXudtWitness
 // 6 FactorySpliceWitness
 // 7 FactoryReducedSpliceWitness
-// 8 FactoryDynamicSignatureWitness
-// 9 FactoryDynamicReducedRightsWitness
-// 10 FactoryDynamicMerkleUpdateWitness
-// 11 FactoryDynamicReducedExitWitness
-// 12 FactoryDynamicLocalExitWitness
-// 13 FactoryDynamicSpliceWitness
-// 14 FactoryDynamicReducedSpliceWitness
 struct WitnessEnvelope {
     magic: WitnessEnvelopeMagic,
     version: uint16,
@@ -207,17 +193,6 @@ struct BilateralSignatureWitness {
     participant_1_signature: EcdsaSignature,
 }
 
-struct FactorySignatureWitness {
-    version: uint16,
-    threshold: byte,
-    count: byte,
-    participant_0_id: Byte32,
-    participant_0_pubkey: Secp256k1CompressedPubkey,
-    participant_0_signature: EcdsaSignature,
-    participant_1_id: Byte32,
-    participant_1_pubkey: Secp256k1CompressedPubkey,
-    participant_1_signature: EcdsaSignature,
-}
 
 struct FactoryRight {
     participant: Byte32,
@@ -235,96 +210,8 @@ struct FactoryReducedRightsParticipant {
     signature: EcdsaSignature,
 }
 
-struct FactoryReducedRightsWitness {
-    version: uint16,
-    participant_threshold: byte,
-    participant_count: byte,
-    authorised_count: byte,
-    right_count: byte,
-    reserved: uint16,
-    participant_0: FactoryReducedRightsParticipant,
-    participant_1: FactoryReducedRightsParticipant,
-    touched_participant: Byte32,
-    before_0: FactoryRight,
-    before_1: FactoryRight,
-    before_2: FactoryRight,
-    before_3: FactoryRight,
-    before_4: FactoryRight,
-    before_5: FactoryRight,
-    before_6: FactoryRight,
-    before_7: FactoryRight,
-    before_8: FactoryRight,
-    before_9: FactoryRight,
-    after_0: FactoryRight,
-    after_1: FactoryRight,
-    after_2: FactoryRight,
-    after_3: FactoryRight,
-    after_4: FactoryRight,
-    after_5: FactoryRight,
-    after_6: FactoryRight,
-    after_7: FactoryRight,
-    after_8: FactoryRight,
-    after_9: FactoryRight,
-}
 
-struct FactoryMerkleUpdateWitness {
-    version: uint16,
-    participant_threshold: byte,
-    participant_count: byte,
-    authorised_count: byte,
-    right_count: byte,
-    reserved: uint16,
-    participant_0: FactoryReducedRightsParticipant,
-    participant_1: FactoryReducedRightsParticipant,
-    touched_participant: Byte32,
-    right_before: FactoryRight,
-    right_after: FactoryRight,
-    proof_siblings: FactoryMerkleProofSiblings,
-}
 
-struct FactoryReducedExitWitness {
-    version: uint16,
-    participant_threshold: byte,
-    participant_count: byte,
-    authorised_count: byte,
-    right_count: byte,
-    reserved: uint16,
-    participant_0: FactoryReducedRightsParticipant,
-    participant_1: FactoryReducedRightsParticipant,
-    touched_participant: Byte32,
-    release_quantity: uint128,
-    state_output_index: uint32,
-    vault_output_index: uint32,
-    state_type_hash: Byte32,
-    vault_lock_hash: Byte32,
-    state_lock_hash: Byte32,
-    exit_state_header: StateHeader,
-    settlement_descriptor: BilateralCkbSettlementDescriptor,
-    before_0: FactoryRight,
-    before_1: FactoryRight,
-    before_2: FactoryRight,
-    before_3: FactoryRight,
-    before_4: FactoryRight,
-    before_5: FactoryRight,
-    before_6: FactoryRight,
-    before_7: FactoryRight,
-    before_8: FactoryRight,
-    before_9: FactoryRight,
-    before_10: FactoryRight,
-    before_11: FactoryRight,
-    after_0: FactoryRight,
-    after_1: FactoryRight,
-    after_2: FactoryRight,
-    after_3: FactoryRight,
-    after_4: FactoryRight,
-    after_5: FactoryRight,
-    after_6: FactoryRight,
-    after_7: FactoryRight,
-    after_8: FactoryRight,
-    after_9: FactoryRight,
-    after_10: FactoryRight,
-    after_11: FactoryRight,
-}
 
 struct FactoryReducedExitXudtWitness {
     version: uint16,
@@ -370,29 +257,7 @@ struct FactoryReducedExitXudtWitness {
     after_11: FactoryRight,
 }
 
-struct FactoryLocalExitWitness {
-    version: uint16,
-    factory_signature: FactorySignatureWitness,
-    state_output_index: uint32,
-    vault_output_index: uint32,
-    state_type_hash: Byte32,
-    vault_lock_hash: Byte32,
-    state_lock_hash: Byte32,
-    exit_state_header: StateHeader,
-    settlement_descriptor: BilateralCkbSettlementDescriptor,
-}
 
-struct FactoryLocalExitXudtWitness {
-    version: uint16,
-    factory_signature: FactorySignatureWitness,
-    state_output_index: uint32,
-    vault_output_index: uint32,
-    state_type_hash: Byte32,
-    vault_lock_hash: Byte32,
-    state_lock_hash: Byte32,
-    exit_state_header: StateHeader,
-    settlement_descriptor: BilateralCkbXudtSettlementDescriptor,
-}
 
 struct FactorySpliceHeader {
     protocol_version: uint16,
@@ -443,23 +308,7 @@ struct FactoryVaultDeltas {
     delta_1: FactoryVaultDelta,
 }
 
-struct FactorySpliceWitness {
-    version: uint16,
-    splice_header: FactorySpliceHeader,
-    factory_signature: FactorySignatureWitness,
-    old_vault_descriptor: FactoryVaultDescriptor,
-    new_vault_descriptor: FactoryVaultDescriptor,
-    vault_deltas: FactoryVaultDeltas,
-}
 
-struct FactoryReducedSpliceWitness {
-    version: uint16,
-    splice_header: FactorySpliceHeader,
-    merkle_update: FactoryMerkleUpdateWitness,
-    old_vault_descriptor: FactoryVaultDescriptor,
-    new_vault_descriptor: FactoryVaultDescriptor,
-    vault_deltas: FactoryVaultDeltas,
-}
 
 struct BilateralCkbSettlementOutput {
     lock_hash: Byte32,

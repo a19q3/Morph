@@ -25,7 +25,7 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         vault_materialisation_root: bytes32(7),
         vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 2,
+        state_layout_version: 1,
     }
 }
 
@@ -48,7 +48,7 @@ fn header_with_epoch(n: u64, phase: Phase, funding_epoch: u64) -> StateHeader {
         vault_materialisation_root: bytes32(7),
         vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 2,
+        state_layout_version: 1,
     }
 }
 

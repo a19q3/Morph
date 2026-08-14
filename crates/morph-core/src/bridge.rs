@@ -1070,7 +1070,7 @@ mod tests {
                 vault.out_point.index,
             ),
             challenge_policy_commitment: [45; 32],
-            state_layout_version: 2,
+            state_layout_version: 1,
         };
         let mut signatures = keys
             .iter()

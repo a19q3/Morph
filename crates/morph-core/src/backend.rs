@@ -725,7 +725,7 @@ mod tests {
                 vault_materialisation_root: [8; 32],
                 vault_outpoint_commitment: [10; 32],
                 challenge_policy_commitment: [9; 32],
-                state_layout_version: 2,
+                state_layout_version: 1,
             },
             capacity: 1_000,
             occupied_capacity: 1_000,

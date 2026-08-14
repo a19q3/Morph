@@ -8,7 +8,7 @@ OUTPUT_PARENT="$REPO_ROOT/target"
 
 mkdir -p "$OUTPUT_PARENT"
 STAGING_DIR=$(mktemp -d "$OUTPUT_PARENT/contract-release.XXXXXXXX")
-ARTIFACT_DIR="$STAGING_DIR/factory-v1.0-dynamic-n"
+ARTIFACT_DIR="$STAGING_DIR/factory-dynamic-n"
 mkdir -p "$ARTIFACT_DIR/contracts"
 
 scripts=(
@@ -25,19 +25,19 @@ for script_name in "${scripts[@]}"; do
   install -m 0755 "$CONTRACT_DIR/$script_name" "$ARTIFACT_DIR/contracts/$script_name"
 done
 install -m 0644 \
-  "$REPO_ROOT/release/factory-v1.0-preproduction/contracts.json" \
+  "$REPO_ROOT/release/factory-preproduction/contracts.json" \
   "$ARTIFACT_DIR/contracts.json"
 install -m 0644 \
-  "$REPO_ROOT/release/factory-v1.0-preproduction/envelope.json" \
+  "$REPO_ROOT/release/factory-preproduction/envelope.json" \
   "$ARTIFACT_DIR/envelope.json"
 install -m 0644 \
-  "$REPO_ROOT/release/factory-v1.0-preproduction/README.md" \
+  "$REPO_ROOT/release/factory-preproduction/README.md" \
   "$ARTIFACT_DIR/README.md"
 install -m 0644 \
-  "$REPO_ROOT/release/factory-v1.0-preproduction/watch-policy.json" \
+  "$REPO_ROOT/release/factory-preproduction/watch-policy.json" \
   "$ARTIFACT_DIR/watch-policy.json"
 install -m 0644 \
-  "$REPO_ROOT/release/factory-v1.0-preproduction/watch-config.example.json" \
+  "$REPO_ROOT/release/factory-preproduction/watch-config.example.json" \
   "$ARTIFACT_DIR/watch-config.example.json"
 
 (
@@ -46,11 +46,11 @@ install -m 0644 \
     watch-policy.json watch-config.example.json > SHA256SUMS
 )
 
-STAGED_ARCHIVE="$STAGING_DIR/factory-v1.0-dynamic-n.tar.gz"
+STAGED_ARCHIVE="$STAGING_DIR/factory-dynamic-n.tar.gz"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-  -C "$STAGING_DIR" -cf - factory-v1.0-dynamic-n \
+  -C "$STAGING_DIR" -cf - factory-dynamic-n \
   | gzip -n > "$STAGED_ARCHIVE"
-ARCHIVE_PATH="$OUTPUT_PARENT/factory-v1.0-dynamic-n.tar.gz"
+ARCHIVE_PATH="$OUTPUT_PARENT/factory-dynamic-n.tar.gz"
 install -m 0644 "$STAGED_ARCHIVE" "$ARCHIVE_PATH"
 
 echo "contract release directory: $ARTIFACT_DIR"

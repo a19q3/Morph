@@ -23,15 +23,14 @@ Implementation safety-boundary baseline: `8944bf7`.
   input zero but did not bind that carrier to the exact FactoryType script
   authorised by the child transaction.
 - Fix: FactoryProof StateType args now commit the 32-byte FactoryType script
-  hash between the funding anchor and optional relative `since`. Creation
+  hash between the funding anchor and required relative `since`. Creation
   rejects bilateral witnesses with Factory args, rejects Factory witnesses
   without those args, and requires input zero's Type Script hash to match the
   committed FactoryType identity before accepting the materialised child.
 - Negative test:
   `state_type_rejects_factory_exit_without_bound_factory_authority`.
-- Compatibility: bilateral StateType args remain 32 or 40 bytes. Factory child
-  args are 64 or 72 bytes and therefore intentionally produce new StateType
-  script hashes; pre-fix devnet factory children must be recreated.
+- Current boundary: bilateral StateType args are exactly 40 bytes and Factory
+  child args are exactly 72 bytes. Unpublished shorter forms are rejected.
 
 ## Agent and remote HTTP boundaries (2026-08-13)
 
@@ -77,8 +76,8 @@ Implementation safety-boundary baseline: `8944bf7`.
   `reduced_exit_witness_needs_only_counterparty_public_key`, and
   `factory_type_and_vault_accept_reduced_exit_reserve_release` using the real
   StateLock.
-- Migration limitation: legacy owner-locked devnet factories must be recreated;
-  this is not an in-place mainnet migration profile.
+- Pre-release policy: no owner-locked Factory shape is supported; no-value
+  devnet state is discarded and recreated after a boundary change.
 
 ## Exact State/Factory carrier conservation (2026-07-22)
 
@@ -186,7 +185,7 @@ Implementation safety-boundary baseline: `8944bf7`.
   families.
 - Remaining limitation: this closes the known clone/substitution path in the
   implemented single-Vault profile, but still requires independent review and
-  an explicit migration/version policy before mainnet deployment.
+  an explicit deployment policy before mainnet deployment.
 
 ## Merkle locality is not mint authority
 

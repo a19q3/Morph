@@ -197,10 +197,7 @@ enum Command {
     /// Verify built contract ELFs against the reviewed release manifest.
     VerifyContractManifest {
         /// Reviewed contract release manifest.
-        #[arg(
-            long,
-            default_value = "release/factory-v1.0-preproduction/contracts.json"
-        )]
+        #[arg(long, default_value = "release/factory-preproduction/contracts.json")]
         manifest: PathBuf,
         /// Directory containing the release-profile RISC-V contract ELFs.
         #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
@@ -209,13 +206,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Validate the bounded Factory v1.0 pre-production envelope.
+    /// Validate the bounded Factory pre-production envelope.
     ValidatePreproductionEnvelope {
         /// Pre-production policy envelope to validate.
-        #[arg(
-            long,
-            default_value = "release/factory-v1.0-preproduction/envelope.json"
-        )]
+        #[arg(long, default_value = "release/factory-preproduction/envelope.json")]
         envelope: PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -4317,7 +4311,7 @@ fn header(n: u64, phase: Phase) -> StateHeader {
         vault_materialisation_root: bytes32(7),
         vault_outpoint_commitment: bytes32(34),
         challenge_policy_commitment: bytes32(8),
-        state_layout_version: 2,
+        state_layout_version: 1,
     }
 }
 

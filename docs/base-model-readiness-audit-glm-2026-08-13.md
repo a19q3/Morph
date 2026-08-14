@@ -16,12 +16,12 @@ RGB++ product integrations instead of treating them as one readiness claim.
 > only after those gates pass; it is not permission to enter pre-production now.
 
 > **2026-08-14 remediation note:** this report preserves the historical verdict
-> for its audited commits. A later Factory v1.0 candidate adds the C1 contract
+> for its audited commits. A later Factory candidate adds the C1 contract
 > hash manifest and CI provenance configuration, the C2 machine-checked
 > no-real-assets devnet envelope, the C3 operator/incident/upgrade runbooks and
 > repository rehearsal, and C4 canonical watch-cursor reorg detection with
 > reset-and-rescan tests. Current status must be read from
-> `docs/mainnet-readiness.md` and `release/factory-v1.0-preproduction/`; external
+> `docs/mainnet-readiness.md` and `release/factory-preproduction/`; external
 > review, an independent rebuild/operator rehearsal, and repeated induced-reorg
 > evidence remain outside this remediation.
 
@@ -214,8 +214,8 @@ sink-less, or unrecoverable intermediate state was found.
   body-commitment match before body parse — `lib.rs:480-503`).
 - Unknown witness kinds, unknown versions, non-zero reserved fields, and
   abnormal proof shapes (multi-right, variable-depth) are rejected.
-- JSON aliasing (`vault_materialisation_root` ↔ `payload_commitment`) is
-  backwards-compatible with existing fixtures.
+- The current unpublished JSON accepts only `vault_materialisation_root`;
+  historical aliases recorded by this audit were removed before release.
 - The Molecule schema (`schemas/morph.mol`) is honestly labelled a draft; the
   live wire format is the fixed-layout `morph-script-common` encoders.
 - The format is stable enough to freeze as a 1.0 baseline:
@@ -292,7 +292,7 @@ Ordered by priority. Each is concrete, finite, and verifiable.
 | C0 | Produce current-clean-HEAD production-shaped acceptance evidence. | Protocol / release engineer | `make devnet-e2e` and `make devnet-stateful-e2e` pass with manifests recording the audited implementation commit, `git_dirty=false`, and `status=passed`; run `make fiber-morph-devnet-acceptance-full` if Agent/Fiber is in scope. | No unless failures expose defects | **Satisfied 2026-08-13** — both budget-backed runs passed on clean implementation commit `55f6bb5`; Agent/Fiber/Morph remains excluded. |
 | C1 | Publish a reproducible RISC-V build + script-hash manifest for the audited commit, attested in CI. | Release engineer | Clean-environment `make build-contracts` reproduces byte-identical ELFs; committed hash manifest matches. | Yes (CI/release configuration; no protocol semantics) | **Yes** — without a pinned, reproducible script-hash manifest, a deployed pre-production cell cannot prove which code enforces its safety boundary. |
 | C2 | Set and document explicit value/asset/pilot caps for the pre-production envelope (per-channel, per-factory, per-sponsor, total pilot). | Release owner | A dated `docs/preproduction-envelope.md` (or mainnet-readiness addition) with concrete numbers. | No (docs/policy) | **Yes** — "no real assets by default" is the correct posture, but a controlled pre-production trial requires an explicit, evidence-tied cap rather than an open-ended "some". |
-| C3 | Document operator runbooks: key handling, package retention, alert response, rollback/stop, incident response, upgrade. | Operator / SRE | `docs/runbooks/` covering the above; at least one dry-run rehearsal log. | No (docs) | **Yes** — pre-production implies a reversible, monitored trial; without runbooks and a stop procedure an operator cannot safely respond to the failure modes the model itself documents (e.g. watchtower stale packages, legacy factory migration). |
+| C3 | Document operator runbooks: key handling, package retention, alert response, rollback/stop, incident response, upgrade. | Operator / SRE | `docs/runbooks/` covering the above; at least one dry-run rehearsal log. | No (docs) | **Yes** — pre-production implies a reversible, monitored trial; without runbooks and a stop procedure an operator cannot safely respond to the failure modes the model itself documents (e.g. watchtower stale packages and stale pre-reset factory state). |
 | C4 | Close the watchtower reorg/rollback gap (or explicitly scope it out of the pre-production envelope). | Protocol engineer | Either a canonical-block rollback path with tests, or an explicit documented statement that pre-production assumes low-reorg devnet/testnet only and watchtower packages are best-effort under reorg. | Possibly (if a rollback path is added) | **Yes** — a reorg can invalidate a published package with no automatic recovery; this must be either implemented or explicitly bounded. |
 | C5 | Complete the Agent/Fiber/Morph settlement boundary before bringing it into scope. | Integration engineer | Populate `morph_state` from native channel evidence, implement the Morph-backed external edge and pending conditional-payment force-close, and pass the Fiber/Morph acceptance matrix. | Yes | No while explicitly excluded; **Yes** before any claim that Agent/Fiber payment proves Morph/CKB settlement. |
 | C6 | Re-run `cargo audit` with network access in the release environment and record the result. | Release engineer | `cargo audit` exit 0 (with the five documented, reviewed waivers) recorded in the release evidence. | No | No (the five waivers are reviewed and test/build-only; `cargo deny` passes). Required for release hygiene, not for model readiness. |
@@ -336,7 +336,7 @@ envelope is:
   caps; relying on watchtower packages as final under a reorg (until C4 is
   implemented); treating Agent receipts or Fiber terminal status as proof of
   Morph/CKB settlement (until C5); advertising a Morph-backed Fiber route;
-  in-place migration of legacy owner-locked devnet factories (they must be
+  in-place migration of stale pre-reset devnet factories (they must be
   recreated — documented).
 - **Rollback / stop conditions:** pre-production must be runnable with a
   documented emergency-stop (e.g. cease publishing, let channels settle via the
@@ -477,7 +477,7 @@ pre-production entry blockers (C1–C4); C0 is satisfied.**
   emergency stop, and upgrade.
 - **Why it blocks pre-production:** pre-production implies a reversible,
   monitored trial. The model itself documents failure modes (watchtower stale
-  packages, legacy factory migration, reorg) that an operator must be able to
+  packages, stale pre-reset factory state, reorg) that an operator must be able to
   respond to.
 - **Blocking:** entry condition **C3**.
 

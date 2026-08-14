@@ -1,14 +1,14 @@
-# Factory v1.0 Pre-production Envelope
+# Factory Pre-production Envelope
 
 Effective: 2026-08-14. Mandatory review by: 2026-09-13.
 
 This envelope authorises only a controlled, no-real-assets CKB devnet pilot of
-the `factory-v1.0-dynamic-n` profile. It does not authorise mainnet,
+the `factory-dynamic-n` profile. It does not authorise mainnet,
 public-value testnet trials, externally issued xUDTs, production traffic, or a
 claim that Morph is production-ready.
 
 The canonical machine-readable policy is
-[`release/factory-v1.0-preproduction/envelope.json`](../release/factory-v1.0-preproduction/envelope.json).
+[`release/factory-preproduction/envelope.json`](../release/factory-preproduction/envelope.json).
 `morph-cli validate-preproduction-envelope` rejects a wider network, real
 assets, unsupported Factory shapes, excessive caps, missing independent
 watchtower operation, weaker reorg handling, or a policy used outside its
@@ -49,27 +49,27 @@ signature. The profile intentionally excludes membership outside that bound,
 multi-right reduced updates, variable-depth proofs, arbitrary descriptor
 runtimes, and concurrent unconfirmed splice chains.
 
-Those exclusions are versioned protocol boundaries, not bugs to bypass.
-Unknown shapes must continue to fail closed. Raising the participant bound or
-changing proof shape requires a new witness version, limits, fixtures, contract
+Those exclusions are protocol boundaries, not bugs to bypass. Unknown shapes
+must continue to fail closed. Raising the participant bound or changing proof
+shape requires a deliberate wire redesign, updated limits, fixtures, contract
 tests, hash manifest, and independent review.
 
 Morph Hub remains a local operator projection. Its Factory actions do not
 submit CKB transactions, and `hub_chain_actions_allowed` therefore remains
 false. Chain evidence comes from the devnet CLI reports and watchtower output.
 
-## Reorg and Migration Policy
+## Reorg and Reset Policy
 
 Every persisted watch cursor records the canonical hash of its last scanned
-block. A missing block, a changed hash, or a legacy cursor without that hash
-causes a critical `chain_reorg_detected` alert, clears orphanable observation
+block. An uninitialised cursor hash, a missing block, or a changed hash causes a
+critical `chain_reorg_detected` alert, clears orphanable observation
 context, and restarts the scan from the configured channel `from_block` floor.
 Operators must retain a floor old enough to cover the complete live channel
 history.
 
-Owner-locked legacy FactoryState cells and pre-provenance Factory children are
-not upgraded in place. The approved migration is to quiesce and settle them,
-deploy the reviewed hashes, and create a new Factory. See
+Morph has no released wire to migrate. When this unpublished shape changes,
+discard no-value devnet state, deploy the reviewed hashes, and create a new
+Factory. See
 [`runbooks/upgrade-and-migration.md`](runbooks/upgrade-and-migration.md).
 
 ## Approval and Expiry

@@ -25,14 +25,14 @@ is necessary evidence, but it is not enough for mainnet.
 | --- | --- | --- |
 | Independent protocol review | External review of state, vault, sponsor, splice, and factory rules. | Open. |
 | Independent script review | Review of no-std CKB parsing, cell selection, since handling, and error paths. | Open. |
-| Exact Vault provenance | Activation/rotation binds every bilateral and Factory Vault to its exact CKB OutPoint; clone/substitution negatives pass. | Implemented and locally verified; independent review/migration policy remain open. |
-| Factory state sovereignty | FactoryState uses the type-bound Morph StateLock; participant/reduced proofs, rather than a fee payer's secp lock, authorise state transitions. | Implemented for newly created factories; the release policy explicitly requires legacy owner-locked devnet factories to settle and be recreated. Independent review remains open. |
-| Factory child provenance | A FactoryProof child StateType commits and verifies the exact input FactoryType script hash that authorises materialisation. | Implemented with a CKB-VM negative test; pre-fix devnet children require recreation and independent review remains open. |
+| Exact Vault provenance | Activation/rotation binds every bilateral and Factory Vault to its exact CKB OutPoint; clone/substitution negatives pass. | Implemented and locally verified; independent review remains open. |
+| Factory state sovereignty | FactoryState uses the type-bound Morph StateLock; participant/reduced proofs, rather than a fee payer's secp lock, authorise state transitions. | Implemented for the sole unpublished Factory shape; independent review remains open. |
+| Factory child provenance | A FactoryProof child StateType commits and verifies the exact input FactoryType script hash that authorises materialisation. | Implemented with a CKB-VM negative test; independent review remains open. |
 | State-carrier conservation | Ordinary State/Factory updates preserve carrier capacity exactly; activation consumes exactly 10,000 shannons; splice/exit successors reserve exactly that amount. | Implemented and covered by CKB-VM negative tests; independent review remains open. |
 | Timed payment commit | The bilateral backend rejects commits before preparation and at/after the signed intent expiry. | Implemented in the host boundary; pending conditional-payment force-close remains open. |
 | Morph-backed routed edge | A provider-neutral edge and minimal Fiber hook prove real routed/MPP traffic against live Morph materialisation and failure callbacks. | Open; current real Fiber route is not Morph-backed. |
 | RGB++ proof and reorg pipeline | Bitcoin proof, CKB binding/leap, confirmation, quarantine, and rollback evidence for admitted RGB++ assets. | Open. |
-| Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Implemented for the bounded Factory v1.0 devnet candidate: committed CKB data-hash manifest, deterministic bundle, CI upload, and main-branch provenance attestation. A successful clean main-branch run and independent rebuild remain required evidence. |
+| Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Implemented for the bounded Factory devnet candidate: committed CKB data-hash manifest, deterministic bundle, CI upload, and main-branch provenance attestation. A successful clean main-branch run and independent rebuild remain required evidence. |
 | Supply-chain warning closure | Remove or formally review current upstream warnings (`memmap2` and `lru 0.7` through dev-only `ckb-testtool` and unmaintained `proc-macro-error2`). | Open; policy gates pass with narrow reviewed waivers, but upstream warnings remain. |
 | Mainnet-like fee evidence | Repeated runs under realistic fee pressure and transaction-size budgets. | Open. |
 | Reorg and delay evidence | Watchtower and publication behaviour under delayed observations and chain reorg scenarios. | Canonical cursor-hash verification, critical reorg alerting, context reset, and rescan-from-floor are implemented and unit tested. Repeated induced-reorg and public-network delay evidence remains open. |
@@ -83,8 +83,6 @@ Local devnet evidence does not prove:
 - reproducibility of release artefacts in a separate independent environment;
 - correctness under independent review;
 - independent validation of the implemented exact-OutPoint activation profile;
-- migration of legacy owner-locked devnet FactoryState cells (they cannot be
-  upgraded in place because lock continuity correctly rejects the change);
 - real Morph-backed external-edge operation inside a routing provider;
 - production RGB++ SPV/leap/reorg handling;
 - safe value limits for real users.
@@ -120,7 +118,7 @@ release, review record, operator procedure, and observed run history.
 The current bounded policy is
 [`preproduction-envelope.md`](preproduction-envelope.md), backed by the
 machine-checked JSON envelope and exact contract manifest under
-`release/factory-v1.0-preproduction/`. It permits only controlled devnet and
+`release/factory-preproduction/`. It permits only controlled devnet and
 prohibits real assets.
 
 ## Go / No-Go Summary

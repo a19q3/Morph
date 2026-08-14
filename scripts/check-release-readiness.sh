@@ -5,11 +5,11 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 required_files=(
-  "release/factory-v1.0-preproduction/contracts.json"
-  "release/factory-v1.0-preproduction/envelope.json"
-  "release/factory-v1.0-preproduction/README.md"
-  "release/factory-v1.0-preproduction/watch-policy.json"
-  "release/factory-v1.0-preproduction/watch-config.example.json"
+  "release/factory-preproduction/contracts.json"
+  "release/factory-preproduction/envelope.json"
+  "release/factory-preproduction/README.md"
+  "release/factory-preproduction/watch-policy.json"
+  "release/factory-preproduction/watch-config.example.json"
   "docs/preproduction-envelope.md"
   "docs/runbooks/README.md"
   "docs/runbooks/operations.md"
@@ -27,11 +27,11 @@ done
 
 cd "$REPO_ROOT"
 grep -q "chain_reorg_detected" docs/runbooks/incident-response.md
-grep -q "legacy Factory" docs/runbooks/upgrade-and-migration.md
+grep -q "supports no historical Factory" docs/runbooks/upgrade-and-migration.md
 grep -q "Real assets | Prohibited" docs/preproduction-envelope.md
 cargo run -q -p morph-cli -- validate-watch-policy \
-  release/factory-v1.0-preproduction/watch-policy.json
+  release/factory-preproduction/watch-policy.json
 cargo run -q -p morph-cli -- validate-watch-config \
-  release/factory-v1.0-preproduction/watch-config.example.json
+  release/factory-preproduction/watch-config.example.json
 
-echo "Factory v1.0 pre-production release-readiness documents verified"
+echo "Factory pre-production release-readiness documents verified"

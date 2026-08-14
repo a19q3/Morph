@@ -245,8 +245,6 @@ pub struct SponsorPolicySummary {
     pub state_number_span: u64,
     pub max_fee_per_tx: u64,
     pub max_total_fee: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub legacy_expiry: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -2881,7 +2879,6 @@ fn sponsor_policy_from_object(
         state_number_span: max_state_number.saturating_sub(min_state_number),
         max_fee_per_tx: object.get("max_fee_per_tx")?.as_u64()?,
         max_total_fee: object.get("max_total_fee")?.as_u64()?,
-        legacy_expiry: object.get("expiry").and_then(|value| value.as_u64()),
     })
 }
 
@@ -4549,7 +4546,7 @@ mod tests {
             factory_splice(check, kind, reserve_claim_asset, external_input, withdrawal);
         summary.proof_siblings = morph_script_common::FACTORY_SPARSE_MERKLE_DEPTH;
         summary.signatures = 1;
-        summary.witness_len = morph_script_common::FACTORY_REDUCED_SPLICE_WITNESS_LEN;
+        summary.witness_len = morph_script_common::factory_reduced_splice_witness_len(2);
         summary
     }
 

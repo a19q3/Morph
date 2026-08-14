@@ -56,7 +56,6 @@ pub struct StateHeader {
     pub asset_registry_commitment: Bytes32,
     pub settlement_descriptor_commitment: Bytes32,
     pub descriptor_version: u16,
-    #[serde(alias = "payload_commitment")]
     pub vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
     pub state_layout_version: u16,
@@ -521,9 +520,7 @@ pub struct SpliceHeader {
     pub new_vault_commitment: Bytes32,
     pub asset_delta_commitment: Bytes32,
     pub participants_commitment: Bytes32,
-    #[serde(alias = "payload_commitment")]
     pub vault_materialisation_root: Bytes32,
-    #[serde(alias = "new_payload_commitment")]
     pub new_vault_materialisation_root: Bytes32,
     pub challenge_policy_commitment: Bytes32,
     pub old_vault_outpoint_commitment: Bytes32,

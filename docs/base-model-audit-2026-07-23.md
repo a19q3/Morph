@@ -110,7 +110,7 @@ The exceptions are risk acceptances, not declarations that the dependencies are
 safe. A mainnet release must either remove them or document a separately
 approved, deployment-specific decision.
 
-## Compatibility Note
+## Pre-release Reset Note
 
 The registry commitment and supported-profile checks intentionally reject older
 devnet State headers and splice packages that used placeholder commitments or

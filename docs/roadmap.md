@@ -29,7 +29,7 @@ acceptance gates exist locally. Production work remains open.
 | M3: Assets and splice | Implemented locally | CKB+xUDT settlement, splice-in/out, funding epoch, vault-set commitment, package validation, and devnet smokes. |
 | M4: Factory mode | Implemented narrowly | Conservative factory updates, local exits, reduced-rights proof, sparse-Merkle update, reduced exit, factory splice, and reduced splice through `WitnessEnvelope`. |
 | M5: Watchtower and audit gates | Implemented locally | Watch config, policy checks, JSONL/webhook alerts, stale-package guard, smoke assertions, stateful assertions, and budget profiles. |
-| M6: Production readiness | Controlled-devnet candidate; production open | Factory v1.0 now has a checked manifest/envelope, runbooks, CI release provenance configuration, and canonical-cursor reorg recovery. External review, successful independent rebuild, mainnet-like fee/reorg runs, and multi-operator evidence remain open. |
+| M6: Production readiness | Controlled-devnet candidate; production open | Factory now has a checked manifest/envelope, runbooks, CI release provenance configuration, and canonical-cursor reorg recovery. External review, successful independent rebuild, mainnet-like fee/reorg runs, and multi-operator evidence remain open. |
 
 ## Current Factory Witness Baseline
 

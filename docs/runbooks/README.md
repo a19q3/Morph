@@ -1,7 +1,7 @@
 # Pre-production Operator Runbooks
 
 These runbooks govern the controlled-devnet
-`factory-v1.0-dynamic-n` pilot. They are executable procedures, not a
+`factory-dynamic-n` pilot. They are executable procedures, not a
 mainnet operations claim.
 
 Read and rehearse all of the following before activation:
@@ -10,8 +10,8 @@ Read and rehearse all of the following before activation:
   retention, watchtower startup, health, and routine shutdown;
 - [`incident-response.md`](incident-response.md): alert triage, emergency stop,
   reorg recovery, evidence preservation, and restart approval;
-- [`upgrade-and-migration.md`](upgrade-and-migration.md): contract upgrades,
-  compatibility, legacy Factory recreation, and rollback;
+- [`upgrade-and-migration.md`](upgrade-and-migration.md): pre-release resets,
+  contract upgrades, and rollback;
 - [`rehearsal-2026-08-14.md`](rehearsal-2026-08-14.md): the repository-side dry
   run evidence for this candidate.
 

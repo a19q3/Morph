@@ -1,7 +1,7 @@
-# Factory v1.0 Pre-production Candidate
+# Factory Pre-production Candidate
 
 This directory defines the bounded release profile
-`factory-v1.0-dynamic-n`. It is a controlled-devnet candidate, not a
+`factory-dynamic-n`. It is a controlled-devnet candidate, not a
 mainnet or real-assets release.
 
 The profile deliberately freezes the executable Factory boundary:

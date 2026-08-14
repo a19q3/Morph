@@ -16,7 +16,7 @@ make package-contract-release
 The Rust release must be 1.92.0, the Git worktree must be clean, and the
 manifest verifier must report seven matching scripts. Compare the deployment
 report's `data_hash` values with
-`release/factory-v1.0-preproduction/contracts.json` before creating cells.
+`release/factory-preproduction/contracts.json` before creating cells.
 
 ## 2. Handle Keys and Tokens
 
@@ -108,5 +108,5 @@ Preserve the health file, cursor, alerts, and package stores. Do not kill the
 process during a write unless it is unsafe to let it continue.
 
 On restart, verify the release manifest, RPC chain identity, envelope date,
-package backup, cursor ownership, and health output. A legacy cursor without a
+package backup, cursor ownership, and health output. An uninitialised cursor without a
 canonical block hash will deliberately trigger a critical rescan.

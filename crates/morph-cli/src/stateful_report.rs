@@ -1582,7 +1582,6 @@ mod tests {
             state_number_span: max_state_number.saturating_sub(min_state_number),
             max_fee_per_tx: 100,
             max_total_fee: 200,
-            legacy_expiry: None,
         }
     }
 }

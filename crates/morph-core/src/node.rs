@@ -15,15 +15,11 @@ const INVOICE_SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B: u16 = 1;
 const INVOICE_PAYEE_PUBKEY_LEN: usize = 33;
 const INVOICE_SIGNATURE_LEN: usize = 64;
 const INVOICE_HRP: &str = "morph";
-const LEGACY_INVOICE_PREFIX: &str = "morph1";
-const LEGACY_INVOICE_CHECKSUM_LEN: usize = 8;
 const MAX_INVOICE_DESCRIPTION_LEN: usize = 280;
 const MAX_CKB_INVOICE_AMOUNT: Amount = u64::MAX as Amount;
 const MAX_PEER_ALIAS_LEN: usize = 80;
-pub const FACTORY_DYNAMIC_MIN_PARTICIPANTS: usize =
-    morph_script_common::FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize;
-pub const FACTORY_DYNAMIC_MAX_PARTICIPANTS: usize =
-    morph_script_common::FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize;
+pub const FACTORY_MIN_PARTICIPANTS: usize = morph_script_common::FACTORY_MIN_PARTICIPANTS as usize;
+pub const FACTORY_MAX_PARTICIPANTS: usize = morph_script_common::FACTORY_MAX_PARTICIPANTS as usize;
 const BECH32M_CHECKSUM_CONST: u32 = 0x2bc8_30a3;
 const BECH32_CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
@@ -43,8 +39,6 @@ pub enum NodeError {
     InvoiceDescriptionTooLong,
     #[error("invoice has an unsupported prefix")]
     InvoicePrefixMismatch,
-    #[error("invoice hex payload is invalid")]
-    InvoiceHexInvalid,
     #[error("invoice checksum mismatch")]
     InvoiceChecksumMismatch,
     #[error("invoice payload is malformed")]
@@ -294,16 +288,7 @@ impl MorphInvoice {
     }
 
     pub fn decode(encoded: &str) -> NodeResult<Self> {
-        // Read-only compatibility path. New invoices are always Bech32m; see
-        // docs/compatibility.md for the migration evidence required to remove
-        // legacy hex decoding.
-        let payload = match decode_bech32m(INVOICE_HRP, encoded) {
-            Ok(payload) => payload,
-            Err(_) if legacy_hex_invoice_body(encoded).is_some() => {
-                decode_legacy_hex_invoice(encoded)?
-            }
-            Err(err) => return Err(err),
-        };
+        let payload = decode_bech32m(INVOICE_HRP, encoded)?;
         let invoice = Self::from_payload_bytes(&payload)?;
         if invoice.invoice_id != invoice.derived_invoice_id() {
             return Err(NodeError::InvoiceIdMismatch);
@@ -847,7 +832,7 @@ impl MorphNodeState {
         if factory.participant_node_ids.iter().any(is_zero_bytes32) {
             return Err(NodeError::ZeroNodeId);
         }
-        if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS..=FACTORY_DYNAMIC_MAX_PARTICIPANTS)
+        if !(FACTORY_MIN_PARTICIPANTS..=FACTORY_MAX_PARTICIPANTS)
             .contains(&factory.participant_node_ids.len())
         {
             return Err(NodeError::FactoryParticipantCountUnsupported);
@@ -1133,51 +1118,6 @@ fn bech32_polymod(values: &[u8]) -> u32 {
     chk
 }
 
-fn legacy_hex_invoice_body(encoded: &str) -> Option<&str> {
-    let body = encoded.strip_prefix(LEGACY_INVOICE_PREFIX)?;
-    if body.len() <= LEGACY_INVOICE_CHECKSUM_LEN * 2 || body.len() % 2 != 0 {
-        return None;
-    }
-    if !body.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(body)
-}
-
-fn decode_legacy_hex_invoice(encoded: &str) -> NodeResult<Vec<u8>> {
-    let body = encoded
-        .strip_prefix(LEGACY_INVOICE_PREFIX)
-        .ok_or(NodeError::InvoicePrefixMismatch)?;
-    if body.len() <= LEGACY_INVOICE_CHECKSUM_LEN * 2 || body.len() % 2 != 0 {
-        return Err(NodeError::InvoiceHexInvalid);
-    }
-    let split_at = body.len() - LEGACY_INVOICE_CHECKSUM_LEN * 2;
-    let payload = hex::decode(&body[..split_at]).map_err(|_| NodeError::InvoiceHexInvalid)?;
-    let checksum = hex::decode(&body[split_at..]).map_err(|_| NodeError::InvoiceHexInvalid)?;
-    if checksum != legacy_invoice_checksum(&payload) {
-        return Err(NodeError::InvoiceChecksumMismatch);
-    }
-    Ok(payload)
-}
-
-#[cfg(test)]
-fn encode_legacy_hex_invoice_for_tests(invoice: &MorphInvoice) -> String {
-    let payload = invoice.payload_bytes();
-    let checksum = legacy_invoice_checksum(&payload);
-    format!(
-        "{LEGACY_INVOICE_PREFIX}{}{}",
-        hex::encode(payload),
-        hex::encode(checksum)
-    )
-}
-
-fn legacy_invoice_checksum(payload: &[u8]) -> [u8; LEGACY_INVOICE_CHECKSUM_LEN] {
-    let digest = blake2b256(payload);
-    let mut checksum = [0u8; LEGACY_INVOICE_CHECKSUM_LEN];
-    checksum.copy_from_slice(&digest[..LEGACY_INVOICE_CHECKSUM_LEN]);
-    checksum
-}
-
 fn encode_option_bytes32(value: Option<Bytes32>, out: &mut Vec<u8>) {
     match value {
         Some(bytes) => {
@@ -1287,7 +1227,7 @@ mod tests {
     }
 
     #[test]
-    fn invoice_encodes_as_bech32m_and_decodes_legacy_hex() {
+    fn invoice_encodes_and_decodes_as_bech32m() {
         let key = signing_key(1);
         let invoice = MorphInvoice::new_signed(invoice_request(&key), &key).unwrap();
         let encoded = invoice.encode();
@@ -1296,12 +1236,9 @@ mod tests {
             !encoded["morph1".len()..]
                 .bytes()
                 .all(|byte| byte.is_ascii_hexdigit()),
-            "new invoices should not use the legacy hex payload encoding"
+            "new invoices reject the unsupported hex payload encoding"
         );
         assert_eq!(MorphInvoice::decode(&encoded).unwrap(), invoice);
-
-        let legacy = encode_legacy_hex_invoice_for_tests(&invoice);
-        assert_eq!(MorphInvoice::decode(&legacy).unwrap(), invoice);
     }
 
     #[test]

@@ -221,7 +221,7 @@ export const emptyState: NodeState = {
     max_invoice_expiry_secs: 604800,
   },
   model: {
-    profile: 'sovereign-devnet-dynamic-factory-v2',
+    profile: 'sovereign-devnet-factory',
     hub_role: 'local_operator_projection',
     factory_authority: 'factory_state_and_vault',
     channel_authority: 'state_and_vault',

@@ -5,7 +5,7 @@ use k256::ecdsa::{Signature, VerifyingKey};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    FACTORY_DYNAMIC_MAX_PARTICIPANTS, FACTORY_DYNAMIC_MIN_PARTICIPANTS, FACTORY_RIGHT_KEY_DOMAIN,
+    FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS, FACTORY_RIGHT_KEY_DOMAIN,
     FACTORY_RIGHT_LEAF_DOMAIN, FACTORY_RIGHT_NODE_DOMAIN, MORPH_PROTOCOL_VERSION,
     SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
     STATE_CARRIER_ACTIVATION_FEE, STATE_LAYOUT_VERSION,
@@ -809,7 +809,7 @@ pub fn validate_factory_reduced_splice_authorization(
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize..=FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize)
+    if !(FACTORY_MIN_PARTICIPANTS as usize..=FACTORY_MAX_PARTICIPANTS as usize)
         .contains(&witness.participant_keys.len())
         || witness.participant_threshold as usize != witness.participant_keys.len()
         || witness.signatures.is_empty()
@@ -893,7 +893,7 @@ pub fn validate_factory_splice_authorization(
     if header.signature_scheme_id != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
         return Err(MorphError::FactorySpliceUnsupportedSignatureScheme);
     }
-    if !(FACTORY_DYNAMIC_MIN_PARTICIPANTS as usize..=FACTORY_DYNAMIC_MAX_PARTICIPANTS as usize)
+    if !(FACTORY_MIN_PARTICIPANTS as usize..=FACTORY_MAX_PARTICIPANTS as usize)
         .contains(&witness.signatures.len())
         || witness.threshold as usize != witness.signatures.len()
         || witness

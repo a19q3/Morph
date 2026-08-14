@@ -22,7 +22,7 @@ Use `make` targets — they orchestrate the right flags.
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
 | `make release-readiness` | Verifies all seven built ELF CKB data hashes, the dynamic-N (2–16 participants) no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
-| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-v1.0-dynamic-n.tar.gz` after readiness checks pass. |
+| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-dynamic-n.tar.gz` after readiness checks pass. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |
 | `make fixture-checks` | Generates and validates every protocol fixture (bilateral, factory, splice, watch). Writes to `target/fixture-checks/`. |
 | `make smoke` | Workspace tests plus `cargo run -p morph-cli -- validate-fixture`. |
@@ -87,31 +87,30 @@ ui/morph-hub                   React + Vite + TypeScript operator console.
 ### State header and witness formats
 
 - `StateHeader` has a fixed encoded length of 346 bytes (`STATE_HEADER_LEN` in `morph-script-common`). `encode_state_header` / `StateHeader::parse` are the only legal encoders; treat the byte order as load-bearing.
-- `pub vault_materialisation_root: Bytes32` in `crates/morph-core/src/types.rs` is **serde-aliased** as `payload_commitment` for backwards compatibility with existing JSON fixtures (`#[serde(alias = "payload_commitment")]`). Don't rename it without migrating fixtures.
+- `pub vault_materialisation_root: Bytes32` in `crates/morph-core/src/types.rs` is the sole JSON and Rust field name; unpublished aliases are intentionally unsupported.
 - Factory state headers (`FACTORY_STATE_HEADER_LEN = 302`), splice headers (`SPLICE_HEADER_LEN = 453`, `FACTORY_SPLICE_HEADER_LEN = 437`), and witness envelopes (`WITNESS_ENVELOPE_LEN = 8 + 2 + 2 + 2 + 4 + 32`, magic `b"MORPHW!!"`) are likewise fixed-layout.
 
 ### Witness envelope dispatch
 
-- Factory authorisations are carried in a single `WitnessEnvelope` and dispatched by kind/format/body length and a body commitment. See `WITNESS_ENVELOPE_KIND_*` constants and `WitnessEnvelopeKindSpec` table in `contracts/morph-script-common/src/lib.rs`. Bodies are parsed only after the envelope body's `blake2b256` matches the embedded commitment. Witness envelope format version is `WITNESS_ENVELOPE_FORMAT = 2`.
-- Legacy N=2 Factory bodies use envelope kinds 1–7. Dynamic N bodies use kinds 8–14 with versions: signature 2, reduced-rights 3, Merkle update 5, reduced exit 5, local exit 2, splice 3, and reduced splice 7. Bumping any version or kind requires updating the runtime length dispatch and compatibility tests.
-- Factory participant sets support 2–16 members. Dynamic all-participant paths require `N-of-N`; dynamic reduced paths commit the complete sorted membership but authorise exactly the touched participant. Reduced-rights/sparse-Merkle/reduced-exit/splice proofs retain `FACTORY_SPARSE_MERKLE_DEPTH = 256` and limited `FACTORY_*_COUNT` constants. Unknown proof shapes must remain rejected.
+- Factory authorisations are carried in a single `WitnessEnvelope` and dispatched by kind/format/body length and a body commitment. See `WITNESS_ENVELOPE_KIND_*` constants and `WitnessEnvelopeKindSpec` table in `contracts/morph-script-common/src/lib.rs`. Bodies are parsed only after the envelope body's `blake2b256` matches the embedded commitment. The sole unpublished envelope format is `WITNESS_ENVELOPE_FORMAT = 1` with Factory kinds 1–7.
+- Factory participant sets support 2–16 members. All-participant paths require `N-of-N`; reduced paths commit the complete sorted membership but authorise exactly the touched participant. Reduced-rights/sparse-Merkle/reduced-exit/splice proofs retain `FACTORY_SPARSE_MERKLE_DEPTH = 256` and limited `FACTORY_*_COUNT` constants. Unknown proof shapes must remain rejected.
 
 ### CKB cell selection discipline
 
 - Scripts rely on `zero_or_one_group_cell_data` to detect create/supersede/finalise/splice-retire paths. The match arms in `contracts/morph-state-type/src/main.rs` are exhaustive over `(input, output)` shape.
 - Vault finalisation requires exactly one authentic StateCell input with the expected StateType **and** StateLock hash. See "Authentic StateCell authority" in `SECURITY-FIXES.md` and tests `vault_lock_rejects_fake_state_header_without_state_type`, etc.
 - `since` is encoded as canonical relative block (`relative_block_since` in `morph-script-common`). Raw `u64` is not a valid CKB `since`. CLI arguments are block counts.
-- State retirement cannot orphan value: StateType finalise and splice retire paths require an input whose VaultCell commitment matches `StateHeader.vault_materialisation_root` (the former `payload_commitment`).
+- State retirement cannot orphan value: StateType finalise and splice retire paths require an input whose VaultCell commitment matches `StateHeader.vault_materialisation_root`.
 
 ### Watchtower reorg recovery
 
 - New watch cursors persist `scanned_to_block_hash`. At startup and while scanning, the watchtower compares that hash with the canonical block returned by CKB RPC.
-- A missing/mismatched block or a legacy cursor without a hash emits a critical `chain_reorg_detected` alert, clears orphanable funding/observation context, and rescans from the channel's configured `from_block`.
+- An uninitialised cursor hash or a missing/mismatched canonical block emits a critical `chain_reorg_detected` alert, clears orphanable funding/observation context, and rescans from the channel's configured `from_block`.
 - Operators must set `from_block` no later than channel creation and retain packages across funding contexts. Do not weaken this to resume from an unverifiable height.
 
 ### Signatures
 
-- Signatures are prehashed secp256k1 with the CKB personalization. Threshold and count constants (e.g. `BILATERAL_SIGNATURE_THRESHOLD = 2`, `FACTORY_SIGNATURE_THRESHOLD = 2`, `FACTORY_REDUCED_RIGHTS_PARTICIPANT_COUNT = 2`, `FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT = 1`) are enforced by the script — never hard-code a count in tests.
+- Signatures are prehashed secp256k1 with the CKB personalization. Bilateral signatures are 2-of-2; Factory all-participant signatures are N-of-N for N=2..16; reduced witnesses carry exactly one authorised touched-participant signature.
 - Compressed pubkeys are exactly 33 bytes (`COMPRESSED_SECP256K1_PUBKEY_LEN = 33`).
 
 ### Sponsor policy boundary (script vs operator)
@@ -122,7 +121,7 @@ Each sponsor cell carries an immutable per-cell policy in its lock args. The spo
 
 - `crates/morph-cli/src/hub.rs` implements the full hub server from scratch (stdlib `TcpListener` + threads + `Mutex<HubStore>`); no HTTP framework. Constants `MAX_REQUEST_BODY_BYTES`, `MAX_REQUEST_LINE_BYTES`, `MAX_REQUEST_HEADER_BYTES`, `REQUEST_IO_TIMEOUT`, `MAX_CONCURRENT_CONNECTIONS`, `MAX_CONCURRENT_MUTATIONS`, `MAX_CONCURRENT_SSE_STREAMS`, mutation rate limit, and `MAX_INVOICE_EXPIRY_SECS` are all explicit guard rails; respect them.
 - Server-sent events use `/api/events` only for the unauthenticated loopback path; token-protected sessions use authenticated short polling so the bearer token never appears in a URL.
-- State file is `STATE_FILE_VERSION = 1`; replacing it via the UI is disabled unless `--allow-state-restore` is passed.
+- The Hub state file has one current unpublished shape; replacing it via the UI is disabled unless `--allow-state-restore` is passed.
 - CORS for direct browser API access requires an explicit `--cors-origin http(s)://...`. Loopback is the default; `--allow-unauthenticated-loopback` is for local dev only.
 - `--pubkey` is the **33-byte compressed secp256k1 pubkey as 66 hex chars without `0x`**; the 32-byte node id is derived from it. This matches Fiber's RPC-facing node-identity format.
 - Auth tokens support `read,write,restore,sign:<secret>` scopes. Rotation is restart-based via `--rotate-auth-token-on-restart`.
@@ -157,14 +156,14 @@ Each sponsor cell carries an immutable per-cell policy in its lock args. The spo
 ## Gotchas and Non-Obvious Rules
 
 - **Both domain-string locations must change together.** `morph-core/src/hash.rs` and `contracts/morph-script-common/src/lib.rs` declare duplicate domain constants for use across the host/script boundary. `hash_parity.rs` enforces equality at test time.
-- **`vault_materialisation_root` aliases `payload_commitment` in JSON.** Don't rename the field without a fixture migration.
+- **`vault_materialisation_root` is the only accepted JSON name.** Do not reintroduce unpublished aliases.
 - **Boundary versions are not free.** Bumping `WITNESS_ENVELOPE_FORMAT`, any `FACTORY_*_WITNESS_VERSION`, the `STATE_HEADER_LEN`, or any `*_LEN` constant is a wire-format break and breaks every dependency on it (parsers, fixtures, contract tests, devnet smoke). Check fixtures and security audits first.
 - **Reduced-rights factories only support the documented proof shapes.** Signer membership is dynamic from 2–16, but multi-right or variable-depth Merkle proofs remain future work and must be rejected.
 - **Devnet-only `morph-devnet-xudt`.** It is not safe for non-devnet use. The contract name and the README both call this out.
 - **`new_deploy` feature on `morph-cli` only.** The `devnet` feature gates RPC client, fixture-server utilities, `watch_*`, and the entire `devnet` subcommand. A default build will silently lack these.
 - **Hub auth tokens are scoped.** `read,write,restore,sign:<secret>` is the documented scope syntax; an unprefixed token is all-scope. Don't log the secret.
 - **Mutation rate limit is per-instance.** `MAX_MUTATIONS_PER_WINDOW = 120` over `MUTATION_RATE_LIMIT_WINDOW = 60s` applies per hub process. Be aware when load-testing.
-- **Invoices are Morph-native, not Fiber or Lightning.** Encoding/decoding/settle live in `crates/morph-cli` (`new-invoice`, `decode-invoice`, `settle-invoice`) and `crates/morph-core/src/node.rs`. HRP is `morph`; legacy prefix `morph1` is still accepted.
+- **Invoices are Morph-native, not Fiber or Lightning.** Encoding/decoding/settle live in `crates/morph-cli` (`new-invoice`, `decode-invoice`, `settle-invoice`) and `crates/morph-core/src/node.rs`. The sole encoding is Bech32m with HRP `morph`.
 - **Local semantic tests don't need CKB.** `cargo test --workspace` and `cargo run -p morph-cli -- validate-fixture` run without any CKB binary. Only `make contract-tests` and the `scripts/*` flows need `ckb`.
 - **CI caches the cargo target.** First CI run is slow; locally expect a multi-minute `make build-contracts` plus initial tests.
 

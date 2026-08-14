@@ -9,9 +9,7 @@
 > not current release evidence. Exact test and devnet counts below are
 > historical snapshot evidence unless a fresh clean-HEAD artifact says
 > otherwise. The current implementation names the bilateral materialisation
-> field `vault_materialisation_root` / `new_vault_materialisation_root`;
-> the older `payload_commitment` name remains relevant only as an audit-trail
-> term and JSON compatibility alias.
+> field `vault_materialisation_root` / `new_vault_materialisation_root`.
 
 I read four reference materials end-to-end before writing this:
 

@@ -52,12 +52,10 @@ fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
     let (expected_factory_type_hash, finalise_since) = match args.len() {
-        len if len == BYTE32_LEN => (None, None),
-        len if len == BYTE32_LEN + 8 => (None, Some(read_u64(args.as_ref(), BYTE32_LEN))),
-        len if len == 2 * BYTE32_LEN => (Some(&args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN]), None),
+        len if len == BYTE32_LEN + 8 => (None, read_u64(args.as_ref(), BYTE32_LEN)),
         len if len == 2 * BYTE32_LEN + 8 => (
             Some(&args.as_ref()[BYTE32_LEN..2 * BYTE32_LEN]),
-            Some(read_u64(args.as_ref(), 2 * BYTE32_LEN)),
+            read_u64(args.as_ref(), 2 * BYTE32_LEN),
         ),
         _ => return Err(ScriptError::WrongArgsLength),
     };
@@ -502,15 +500,14 @@ fn validate_factory_materialised_state(
 }
 
 #[cfg(target_arch = "riscv64")]
-fn validate_finalise(old_header: &StateHeader, finalise_since: Option<u64>) -> Result<()> {
+fn validate_finalise(old_header: &StateHeader, finalise_since: u64) -> Result<()> {
     if old_header.phase() != PHASE_SETTLING {
         return Err(ScriptError::NewStateNotSettling);
     }
 
-    let required_since = finalise_since.ok_or(ScriptError::StateSinceNotMature)?;
     let input = load_input(0, Source::GroupInput).map_err(|_| ScriptError::Encoding)?;
     let since: u64 = input.since().unpack();
-    validate_relative_block_since(since, required_since)?;
+    validate_relative_block_since(since, finalise_since)?;
     find_unique_input_by_vault_reference(
         old_header.vault_materialisation_root(),
         old_header.vault_outpoint_commitment(),

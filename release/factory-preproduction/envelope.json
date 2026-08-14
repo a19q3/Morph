@@ -1,7 +1,6 @@
 {
   "schema": "morph.preproduction_envelope",
-  "envelope_version": 2,
-  "release_profile": "factory-v1.0-dynamic-n",
+  "release_profile": "factory-dynamic-n",
   "effective_date": "2026-08-14",
   "review_by": "2026-09-13",
   "approval_timezone": "Asia/Shanghai",
@@ -39,6 +38,5 @@
     "reorg_mode": "detect_reset_and_rescan",
     "restart_scan_floor_required": true,
     "independent_operator_required": true
-  },
-  "legacy_factory_policy": "recreate"
+  }
 }

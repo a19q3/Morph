@@ -20,7 +20,6 @@ use serde_json::json;
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
-const STATE_FILE_VERSION: u16 = 1;
 const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
 const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
@@ -148,7 +147,6 @@ struct CachedRpcView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedHubState {
-    version: u16,
     pubkey: String,
     network: MorphNetwork,
     peers: Vec<PersistedPeer>,
@@ -560,14 +558,14 @@ fn local_state_provenance() -> RecordProvenanceView {
 
 fn hub_model_view() -> HubModelView {
     HubModelView {
-        profile: "sovereign-devnet-dynamic-factory-v2",
+        profile: "sovereign-devnet-factory",
         hub_role: "local_operator_projection",
         factory_authority: "factory_state_and_vault",
         channel_authority: "state_and_vault",
         routing_role: "external_optional_provider",
         agent_role: "application_sidecar",
-        factory_min_participants: FACTORY_DYNAMIC_MIN_PARTICIPANTS,
-        factory_max_participants: FACTORY_DYNAMIC_MAX_PARTICIPANTS,
+        factory_min_participants: FACTORY_MIN_PARTICIPANTS,
+        factory_max_participants: FACTORY_MAX_PARTICIPANTS,
         chain_actions_enabled: false,
         factory_rights_exposed: false,
         provider_edges_exposed: false,
@@ -1119,7 +1117,6 @@ impl HubStore {
 
     fn persisted(&self) -> Result<PersistedHubState> {
         Ok(PersistedHubState {
-            version: STATE_FILE_VERSION,
             pubkey: self.state.pubkey.clone(),
             network: self.state.node.network,
             peers: self
@@ -1194,11 +1191,6 @@ impl HubStore {
 
 impl HubRuntimeState {
     fn from_persisted(persisted: PersistedHubState) -> Result<Self> {
-        ensure!(
-            persisted.version == STATE_FILE_VERSION,
-            "unsupported hub state version {}",
-            persisted.version
-        );
         let pubkey = canonical_pubkey(&persisted.pubkey)?;
         let mut peer_pubkeys = BTreeMap::new();
         let mut node = MorphNodeState::new(node_id_from_pubkey(&pubkey)?, persisted.network)?;
@@ -2310,7 +2302,6 @@ fn restore_confirmation_hash(
     #[derive(Serialize)]
     struct RestoreConfirmationMaterial<'a> {
         domain: &'static str,
-        state_file_version: u16,
         current: &'a PersistedHubState,
         candidate: &'a PersistedHubState,
         allowed: bool,
@@ -2319,8 +2310,7 @@ fn restore_confirmation_hash(
     }
 
     let material = RestoreConfirmationMaterial {
-        domain: "morph.hub.state_restore_confirmation.v1",
-        state_file_version: STATE_FILE_VERSION,
+        domain: "morph.hub.state_restore_confirmation",
         current,
         candidate,
         allowed,
@@ -4319,7 +4309,7 @@ mod tests {
         assert_eq!(child["factory_id"].as_str(), Some(factory_id.as_str()));
         assert_eq!(
             body["model"]["profile"].as_str(),
-            Some("sovereign-devnet-dynamic-factory-v2")
+            Some("sovereign-devnet-factory")
         );
         assert_eq!(
             body["model"]["hub_role"].as_str(),
@@ -4327,11 +4317,11 @@ mod tests {
         );
         assert_eq!(
             body["model"]["factory_min_participants"].as_u64(),
-            Some(FACTORY_DYNAMIC_MIN_PARTICIPANTS as u64)
+            Some(FACTORY_MIN_PARTICIPANTS as u64)
         );
         assert_eq!(
             body["model"]["factory_max_participants"].as_u64(),
-            Some(FACTORY_DYNAMIC_MAX_PARTICIPANTS as u64)
+            Some(FACTORY_MAX_PARTICIPANTS as u64)
         );
         assert_eq!(
             body["model"]["chain_actions_enabled"].as_bool(),

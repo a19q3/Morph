@@ -6,8 +6,7 @@ use morph_core::blake2b256;
 use serde::{Deserialize, Serialize};
 
 pub const CONTRACT_MANIFEST_SCHEMA: &str = "morph.contract_release_manifest";
-pub const CONTRACT_MANIFEST_VERSION: u16 = 1;
-pub const FACTORY_V1_RELEASE_PROFILE: &str = "factory-v1.0-dynamic-n";
+pub const FACTORY_RELEASE_PROFILE: &str = "factory-dynamic-n";
 pub const CONTRACT_RUST_TOOLCHAIN: &str = "1.92.0";
 pub const CONTRACT_BUILD_TARGET: &str = "riscv64imac-unknown-none-elf";
 pub const CONTRACT_BUILD_PROFILE: &str = "release";
@@ -47,7 +46,6 @@ impl ContractSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractReleaseManifest {
     pub schema: String,
-    pub manifest_version: u16,
     pub release_profile: String,
     pub rust_toolchain: String,
     pub target: String,
@@ -84,8 +82,7 @@ pub fn build_contract_manifest(contracts_dir: &Path) -> Result<ContractReleaseMa
         .collect::<Result<Vec<_>>>()?;
     Ok(ContractReleaseManifest {
         schema: CONTRACT_MANIFEST_SCHEMA.to_string(),
-        manifest_version: CONTRACT_MANIFEST_VERSION,
-        release_profile: FACTORY_V1_RELEASE_PROFILE.to_string(),
+        release_profile: FACTORY_RELEASE_PROFILE.to_string(),
         rust_toolchain: CONTRACT_RUST_TOOLCHAIN.to_string(),
         target: CONTRACT_BUILD_TARGET.to_string(),
         build_profile: CONTRACT_BUILD_PROFILE.to_string(),
@@ -138,13 +135,8 @@ fn validate_manifest_metadata(manifest: &ContractReleaseManifest) -> Result<()> 
         manifest.schema
     );
     ensure!(
-        manifest.manifest_version == CONTRACT_MANIFEST_VERSION,
-        "unsupported contract manifest version {}",
-        manifest.manifest_version
-    );
-    ensure!(
-        manifest.release_profile == FACTORY_V1_RELEASE_PROFILE,
-        "contract manifest release profile must be {FACTORY_V1_RELEASE_PROFILE}"
+        manifest.release_profile == FACTORY_RELEASE_PROFILE,
+        "contract manifest release profile must be {FACTORY_RELEASE_PROFILE}"
     );
     ensure!(
         manifest.rust_toolchain == CONTRACT_RUST_TOOLCHAIN,
@@ -248,8 +240,7 @@ mod tests {
     fn metadata_rejects_an_unlocked_build() {
         let mut manifest = ContractReleaseManifest {
             schema: CONTRACT_MANIFEST_SCHEMA.to_string(),
-            manifest_version: CONTRACT_MANIFEST_VERSION,
-            release_profile: FACTORY_V1_RELEASE_PROFILE.to_string(),
+            release_profile: FACTORY_RELEASE_PROFILE.to_string(),
             rust_toolchain: CONTRACT_RUST_TOOLCHAIN.to_string(),
             target: CONTRACT_BUILD_TARGET.to_string(),
             build_profile: CONTRACT_BUILD_PROFILE.to_string(),

@@ -21,31 +21,18 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION,
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION, BYTE32_LEN,
     BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
-    FactoryDynamicLocalExitWitness, FactoryDynamicMerkleUpdateWitness,
-    FactoryDynamicReducedExitWitness, FactoryDynamicReducedRightsWitness,
-    FactoryDynamicReducedSpliceWitness, FactoryDynamicSignatureWitness,
-    FactoryDynamicSpliceWitness, FactoryLocalExitWitness, FactoryMerkleUpdateWitness,
-    FactoryReducedExitWitness, FactoryReducedRightsWitness, FactoryReducedSpliceWitness,
-    FactorySignatureWitness, FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result,
-    SETTLEMENT_DESCRIPTOR_DOMAIN, STATE_CARRIER_ACTIVATION_FEE, ScriptError, StateHeader,
-    UNBOUND_VAULT_OUTPOINT_COMMITMENT, WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_EXIT,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE,
-    WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE,
+    FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
+    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySignatureWitness,
+    FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN,
+    STATE_CARRIER_ACTIVATION_FEE, ScriptError, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
     WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope, blake2b256, read_u128,
-    validate_factory_merkle_update_local_predicate, vault_cell_commitment,
-    vault_outpoint_commitment, verify_factory_dynamic_merkle_update,
-    verify_factory_dynamic_reduced_exit_update, verify_factory_dynamic_reduced_rights_update,
-    verify_factory_dynamic_reduced_splice_update, verify_factory_dynamic_splice_update,
-    verify_factory_dynamic_state_signatures, verify_factory_merkle_update,
+    vault_cell_commitment, vault_outpoint_commitment, verify_factory_merkle_update,
+    verify_factory_reduced_exit_update, verify_factory_reduced_rights_update,
     verify_factory_reduced_splice_update, verify_factory_splice_update,
-    verify_factory_state_signatures, verify_reduced_factory_exit_update,
-    verify_reduced_factory_rights_update,
+    verify_factory_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -129,17 +116,11 @@ fn validate_initial_participant_authorisation(header: &FactoryStateHeader) -> Re
         .ok_or(ScriptError::ParticipantWitnessMissing)?;
     let input_type_data = input_type.raw_data();
     let envelope = WitnessEnvelope::parse(input_type_data.as_ref())?;
-    match envelope.kind() {
-        WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE => {
-            let witness = FactorySignatureWitness::parse(envelope.body())?;
-            verify_factory_state_signatures(header, &witness)
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE => {
-            let witness = FactoryDynamicSignatureWitness::parse(envelope.body())?;
-            verify_factory_dynamic_state_signatures(header, &witness)
-        }
-        _ => Err(ScriptError::WitnessEnvelopeEncoding),
+    if envelope.kind() != WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE {
+        return Err(ScriptError::WitnessEnvelopeEncoding);
     }
+    let witness = FactorySignatureWitness::parse(envelope.body())?;
+    verify_factory_state_signatures(header, &witness)
 }
 
 #[cfg(target_arch = "riscv64")]
@@ -176,11 +157,8 @@ fn validate_update(
     let authorisation_kind = validate_participant_authorisation(old_header, &new_header)?;
     match authorisation_kind {
         WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS
-        | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE => {
+        | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
             if !new_header.vault_is_bound()
                 || old_header.vault_materialisation_root()
                     != new_header.vault_materialisation_root()
@@ -191,13 +169,9 @@ fn validate_update(
             validate_preserved_carrier_capacity()?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_EXIT
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE
-        | WITNESS_ENVELOPE_KIND_FACTORY_SPLICE
-        | WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE => {
+        | WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
             if new_header.vault_is_bound() {
                 return Err(ScriptError::VaultActivationInvalid);
             }
@@ -240,64 +214,32 @@ fn validate_participant_authorisation(
             let witness = FactorySignatureWitness::parse(raw)?;
             verify_factory_state_signatures(header, &witness)?;
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SIGNATURE => {
-            let witness = FactoryDynamicSignatureWitness::parse(raw)?;
-            verify_factory_dynamic_state_signatures(header, &witness)?;
-        }
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS => {
             let witness = FactoryReducedRightsWitness::parse(raw)?;
-            verify_reduced_factory_rights_update(old_header, header, &witness)?;
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_RIGHTS => {
-            let witness = FactoryDynamicReducedRightsWitness::parse(raw)?;
-            verify_factory_dynamic_reduced_rights_update(old_header, header, &witness)?;
+            verify_factory_reduced_rights_update(old_header, header, &witness)?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
             let witness = FactoryMerkleUpdateWitness::parse(raw)?;
             verify_factory_merkle_update(old_header, header, &witness)?;
-            validate_factory_merkle_update_local_predicate(&witness)?;
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_MERKLE_UPDATE => {
-            let witness = FactoryDynamicMerkleUpdateWitness::parse(raw)?;
-            verify_factory_dynamic_merkle_update(old_header, header, &witness)?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
             let witness = FactoryReducedExitWitness::parse(raw)?;
-            verify_reduced_factory_exit_update(old_header, header, &witness)?;
+            verify_factory_reduced_exit_update(old_header, header, &witness)?;
             validate_reduced_exit(header, &witness)?;
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_EXIT => {
-            let witness = FactoryDynamicReducedExitWitness::parse(raw)?;
-            verify_factory_dynamic_reduced_exit_update(old_header, header, &witness)?;
-            validate_dynamic_reduced_exit(header, &witness)?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE => {
             let witness = FactoryReducedSpliceWitness::parse(raw)?;
             verify_factory_reduced_splice_update(old_header, header, &witness)?;
         }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_REDUCED_SPLICE => {
-            let witness = FactoryDynamicReducedSpliceWitness::parse(raw)?;
-            verify_factory_dynamic_reduced_splice_update(old_header, header, &witness)?;
-        }
         WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
             let witness = FactorySpliceWitness::parse(raw)?;
             verify_factory_splice_update(old_header, header, &witness)?;
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_SPLICE => {
-            let witness = FactoryDynamicSpliceWitness::parse(raw)?;
-            verify_factory_dynamic_splice_update(old_header, header, &witness)?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT => {
             let witness = FactoryLocalExitWitness::parse(raw)?;
             let signatures = witness.factory_signature()?;
             verify_factory_state_signatures(header, &signatures)?;
             validate_local_exit(header, &witness)?;
-        }
-        WITNESS_ENVELOPE_KIND_FACTORY_DYNAMIC_LOCAL_EXIT => {
-            let witness = FactoryDynamicLocalExitWitness::parse(raw)?;
-            let signatures = witness.factory_signature()?;
-            verify_factory_dynamic_state_signatures(header, &signatures)?;
-            validate_dynamic_local_exit(header, &witness)?;
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
@@ -451,26 +393,6 @@ fn validate_local_exit(
     if header.non_interference_digest() != witness.exit_digest().as_slice() {
         return Err(ScriptError::FactoryLocalExitMismatch);
     }
-
-    validate_exit_materialisation(
-        witness.state_output_index(),
-        witness.vault_output_index(),
-        witness.state_type_hash(),
-        witness.vault_lock_hash(),
-        witness.state_lock_hash(),
-        witness.exit_state_header(),
-        witness.settlement_descriptor(),
-    )
-}
-
-#[cfg(target_arch = "riscv64")]
-fn validate_dynamic_local_exit(
-    header: &FactoryStateHeader,
-    witness: &FactoryDynamicLocalExitWitness,
-) -> Result<()> {
-    if header.non_interference_digest() != witness.exit_digest().as_slice() {
-        return Err(ScriptError::FactoryLocalExitMismatch);
-    }
     validate_exit_materialisation(
         witness.state_output_index(),
         witness.vault_output_index(),
@@ -486,22 +408,6 @@ fn validate_dynamic_local_exit(
 fn validate_reduced_exit(
     _header: &FactoryStateHeader,
     witness: &FactoryReducedExitWitness,
-) -> Result<()> {
-    validate_exit_materialisation(
-        witness.state_output_index(),
-        witness.vault_output_index(),
-        witness.state_type_hash(),
-        witness.vault_lock_hash(),
-        witness.state_lock_hash(),
-        witness.exit_state_header(),
-        witness.settlement_descriptor(),
-    )
-}
-
-#[cfg(target_arch = "riscv64")]
-fn validate_dynamic_reduced_exit(
-    _header: &FactoryStateHeader,
-    witness: &FactoryDynamicReducedExitWitness,
 ) -> Result<()> {
     validate_exit_materialisation(
         witness.state_output_index(),

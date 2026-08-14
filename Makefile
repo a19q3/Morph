@@ -95,10 +95,10 @@ contract-tests: build-contracts
 	$(CARGO) test -p morph-core --test contract_scripts -- --ignored --test-threads=1
 
 verify-contract-manifest:
-	$(CARGO) run -q -p morph-cli -- verify-contract-manifest --manifest release/factory-v1.0-preproduction/contracts.json --contracts-dir target/riscv64imac-unknown-none-elf/release
+	$(CARGO) run -q -p morph-cli -- verify-contract-manifest --manifest release/factory-preproduction/contracts.json --contracts-dir target/riscv64imac-unknown-none-elf/release
 
 preproduction-envelope-check:
-	$(CARGO) run -q -p morph-cli -- validate-preproduction-envelope --envelope release/factory-v1.0-preproduction/envelope.json
+	$(CARGO) run -q -p morph-cli -- validate-preproduction-envelope --envelope release/factory-preproduction/envelope.json
 
 runbook-check:
 	scripts/check-release-readiness.sh
