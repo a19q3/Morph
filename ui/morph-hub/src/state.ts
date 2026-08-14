@@ -1,4 +1,5 @@
 import {
+  Hex32,
   Balance,
   ChannelRecord,
   FactoryRecord,
@@ -24,6 +25,22 @@ export function queryTokens(value: string): string[] {
 
 export function uniqueStrings(values: string[]): string[] {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))];
+}
+
+export function requiredText(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error(`${label} is required.`);
+  return trimmed;
+}
+
+export function randomHex32(): Hex32 {
+  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
+    throw new Error('Secure browser randomness is unavailable.');
+  }
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  if (bytes.every(byte => byte === 0)) bytes[31] = 1;
+  return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}` as Hex32;
 }
 
 export function filterRecords<T>(records: T[], tokens: string[], searchText: (record: T) => string[]): T[] {
@@ -242,6 +259,17 @@ export async function copyTextToClipboard(text: string): Promise<void> {
 export function balanceTotal(balance?: Balance): bigint {
   if (!balance) return 0n;
   return BigInt(balance.local) + BigInt(balance.remote) + BigInt(balance.pending);
+}
+
+export function invoiceExpiryLabel(expiresAtUnix: number, nowMs: number): string {
+  const remainingSeconds = Math.floor(expiresAtUnix - nowMs / 1_000);
+  if (remainingSeconds <= 0) return 'expired';
+  if (remainingSeconds < 60) return `expires in ${remainingSeconds}s`;
+  const remainingMinutes = Math.floor(remainingSeconds / 60);
+  if (remainingMinutes < 60) return `expires in ${remainingMinutes}m`;
+  const remainingHours = Math.floor(remainingMinutes / 60);
+  if (remainingHours < 48) return `expires in ${remainingHours}h`;
+  return `expires in ${Math.floor(remainingHours / 24)}d`;
 }
 
 export function rpcTone(status: NodeState['rpc']['status']): 'good' | 'neutral' | 'warn' | 'bad' {

@@ -1,15 +1,14 @@
 import { Activity, BadgeCheck, Factory, FileJson, GitBranch, Network, Plus, RadioTower, ReceiptText, RefreshCw, Split, Upload, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { connectPeer, getStateFile, postAction, previewStateFile, replaceStateFile, type RestorePreview } from './api';
+import { ConfirmActionDialog, ValidatedInput, ValidatedTextarea } from './components';
 import {
   Asset,
   ChannelRecord,
   FactoryRecord,
   Hex32,
-  HubEvent,
-  InvoiceRecord,
   NodeState,
   PeerRecord,
   Pubkey,
@@ -19,12 +18,23 @@ import {
   assertNonNegativeInteger,
   assertPositiveInteger,
   assertRemotePubkey,
+  assetLabel,
   formatAmount,
   hasHubScope,
   normaliseAsset,
   parsePubkeyList,
   shortHex,
 } from './domain';
+import {
+  copyTextToClipboard,
+  newestInvoice,
+  randomHex32,
+  requiredText,
+  sortChannelsForOperator,
+  sortFactoriesForOperator,
+  sortInvoicesNewestFirst,
+  uniqueStrings,
+} from './state';
 
 type RunAction = (label: string, action: () => Promise<NodeState>) => Promise<void>;
 type ChannelActionTab = 'open' | 'splice' | 'publish' | 'finalise';
@@ -62,41 +72,6 @@ const invoiceExpiryPresets = [
   { label: '24h', value: '86400' },
   { label: '7d', value: '604800' },
 ];
-
-function ConfirmActionDialog({
-  title,
-  detail,
-  confirmLabel,
-  confirmTestId = 'confirm-action',
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  detail: string;
-  confirmLabel: string;
-  confirmTestId?: string;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
-        <div>
-          <h3 id="confirm-dialog-title">{title}</h3>
-          <p>{detail}</p>
-        </div>
-        <div className="confirm-dialog-actions">
-          <button type="button" className="copy-button" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button type="button" className="danger-button" data-testid={confirmTestId} onClick={onConfirm} disabled={busy}>
-            <BadgeCheck size={15} /> {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 export function PeerActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
   const [pubkey, setPubkey] = useState('');
@@ -406,76 +381,6 @@ function ActionSubTabs<T extends string>({
   );
 }
 
-function ValidatedInput({
-  label,
-  value,
-  onChange,
-  validate,
-  testId,
-  className,
-  maxLength,
-  disabled,
-}: {
-  label: React.ReactNode;
-  value: string;
-  onChange: (value: string) => void;
-  validate: (value: string) => void;
-  testId?: string;
-  className?: string;
-  maxLength?: number;
-  disabled?: boolean;
-}) {
-  const [touched, setTouched] = useState(false);
-  const error = touched ? validationError(value, validate) : '';
-  return (
-    <label>
-      {label}
-      <input
-        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
-        data-testid={testId}
-        value={value}
-        maxLength={maxLength}
-        disabled={disabled}
-        onBlur={() => setTouched(true)}
-        onChange={event => onChange(event.target.value)}
-      />
-      {error && <small className="field-error">{error}</small>}
-    </label>
-  );
-}
-
-function ValidatedTextarea({
-  label,
-  value,
-  onChange,
-  validate,
-  testId,
-  className,
-}: {
-  label: React.ReactNode;
-  value: string;
-  onChange: (value: string) => void;
-  validate: (value: string) => void;
-  testId?: string;
-  className?: string;
-}) {
-  const [touched, setTouched] = useState(false);
-  const error = touched ? validationError(value, validate) : '';
-  return (
-    <label>
-      {label}
-      <textarea
-        className={`${className ?? ''} ${error ? 'invalid' : ''}`.trim()}
-        data-testid={testId}
-        value={value}
-        onBlur={() => setTouched(true)}
-        onChange={event => onChange(event.target.value)}
-      />
-      {error && <small className="field-error">{error}</small>}
-    </label>
-  );
-}
-
 export function ChannelActions({ state, runAction, busy }: { state: NodeState; runAction: RunAction; busy: boolean }) {
   const [activeTab, setActiveTab] = useState<ChannelActionTab>('open');
   const [spliceChannelId, setSpliceChannelId] = useState('');
@@ -663,6 +568,10 @@ export function FactoryActions({
   const [materialisePrefill, setMaterialisePrefill] = useState<ChannelFormPrefill | null>(null);
   const orderedFactories = sortFactoriesForOperator(state.factories, state.events);
   const selectedFactory = orderedFactories.find(factory => factory.factory_id === selectedFactoryId);
+  const selectedFactoryAssets = useMemo(
+    () => uniqueAssets(selectedFactory?.reserve_balances.map(balance => balance.asset) ?? []),
+    [selectedFactory?.reserve_balances]
+  );
   const canWrite = hasHubScope(state.security, 'write');
 
   useEffect(() => {
@@ -682,7 +591,6 @@ export function FactoryActions({
         fundingContextId: createDraftHex32(),
         pending: DEFAULT_PENDING_CAPACITY,
         sponsorBudget: DEFAULT_SPONSOR_BUDGET,
-        asset: targetFactory?.reserve_balances[0]?.asset ?? { kind: 'ckb' },
       },
     });
   }, [target?.nonce]);
@@ -847,6 +755,7 @@ export function FactoryActions({
           testPrefix="factory-child"
           submitIcon={<Network size={15} />}
           prefill={materialisePrefill}
+          assetOptions={selectedFactoryAssets}
           disabled={!canWrite || !selectedFactoryId || orderedFactories.length === 0}
           peers={state.peers}
           beforeFields={(
@@ -877,6 +786,7 @@ function ChannelOpenForm({
   disabled = false,
   prefill,
   peers = [],
+  assetOptions = [],
 }: {
   mode: ChannelFormMode;
   state: NodeState;
@@ -892,6 +802,7 @@ function ChannelOpenForm({
   disabled?: boolean;
   prefill?: ChannelFormPrefill | null;
   peers?: PeerRecord[];
+  assetOptions?: Asset[];
 }) {
   const [draft, setDraft] = useState<ChannelFormDraft>(() => createChannelDraft());
   const child = mode === 'materialise';
@@ -912,6 +823,15 @@ function ChannelOpenForm({
         : { ...current, counterpartyPubkey: peers[0].pubkey, counterpartyAlias: '' }
     ));
   }, [usePeerSelect, peers]);
+
+  useEffect(() => {
+    if (!child || assetOptions.length === 0) return;
+    setDraft(current => {
+      const selectedKey = assetKey(current.asset);
+      const selected = assetOptions.find(asset => assetKey(asset) === selectedKey);
+      return selected ? current : { ...current, asset: assetOptions[0] };
+    });
+  }, [child, assetOptions]);
 
   const updateDraft = <Key extends keyof ChannelFormDraft>(key: Key, value: ChannelFormDraft[Key]) => {
     setDraft(current => ({ ...current, [key]: value }));
@@ -971,7 +891,22 @@ function ChannelOpenForm({
       <ValidatedInput label="Remote capacity" className="mono" testId={`${testPrefix}-remote`} value={draft.remote} onChange={value => updateDraft('remote', value)} validate={value => { assertPositiveInteger(value, 'Remote capacity'); }} />
       <ValidatedInput label="Pending capacity" className="mono" testId={`${testPrefix}-pending`} value={draft.pending} onChange={value => updateDraft('pending', value)} validate={value => { assertNonNegativeInteger(value, 'Pending capacity'); }} />
       <ValidatedInput label="Sponsor budget" className="mono" testId={`${testPrefix}-sponsor-budget`} value={draft.sponsorBudget} onChange={value => updateDraft('sponsorBudget', value)} validate={value => { assertPositiveInteger(value, 'Sponsor budget'); }} />
-      <AssetSelect value={draft.asset} onChange={asset => updateDraft('asset', asset)} />
+      {child && assetOptions.length > 0 ? (
+        <label>Reserve asset
+          <select
+            data-testid={`${testPrefix}-asset`}
+            value={assetKey(draft.asset)}
+            onChange={event => {
+              const asset = assetOptions.find(option => assetKey(option) === event.target.value);
+              if (asset) updateDraft('asset', asset);
+            }}
+          >
+            {assetOptions.map(asset => <option key={assetKey(asset)} value={assetKey(asset)}>{assetLabel(asset)}</option>)}
+          </select>
+        </label>
+      ) : (
+        <AssetSelect value={draft.asset} onChange={asset => updateDraft('asset', asset)} />
+      )}
       <button data-testid={submitTestId} disabled={busy || disabled}>{submitIcon}{submitLabel}</button>
     </form>
   );
@@ -1147,25 +1082,6 @@ function channelBody(input: {
   return { ...base, channel_id: assertHex32(input.channelId, 'Channel id') };
 }
 
-function validationError(value: string, validate: (value: string) => void): string {
-  try {
-    validate(value);
-    return '';
-  } catch (err) {
-    return err instanceof Error ? err.message : String(err);
-  }
-}
-
-function requiredText(value: string, label: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error(`${label} must not be empty.`);
-  return trimmed;
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values.map(value => value.trim()).filter(Boolean))];
-}
-
 function createChannelDraft(overrides: Partial<ChannelFormDraft> = {}): ChannelFormDraft {
   return {
     channelId: createDraftHex32(),
@@ -1181,106 +1097,24 @@ function createChannelDraft(overrides: Partial<ChannelFormDraft> = {}): ChannelF
   };
 }
 
+function assetKey(asset: Asset): string {
+  return asset.kind === 'ckb' ? 'ckb' : `xudt:${asset.type_hash ?? 'unknown'}`;
+}
+
+function uniqueAssets(assets: Asset[]): Asset[] {
+  const seen = new Set<string>();
+  return assets.filter(asset => {
+    const key = assetKey(asset);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function createDraftHex32(): string {
   try {
     return randomHex32();
   } catch {
     return '';
-  }
-}
-
-function randomHex32(): Hex32 {
-  if (typeof crypto === 'undefined' || !crypto.getRandomValues) {
-    throw new Error('Secure browser randomness is unavailable.');
-  }
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  if (bytes.every(byte => byte === 0)) {
-    bytes[31] = 1;
-  }
-  return `0x${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}` as Hex32;
-}
-function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
-  return [...invoices].sort((left, right) => {
-    const byCreatedAt = right.created_at_unix - left.created_at_unix;
-    return byCreatedAt || right.invoice_id.localeCompare(left.invoice_id);
-  });
-}
-
-function newestInvoice(invoices: InvoiceRecord[]): InvoiceRecord | undefined {
-  return sortInvoicesNewestFirst(invoices)[0];
-}
-
-function sortChannelsForOperator(channels: ChannelRecord[], events: HubEvent[]): ChannelRecord[] {
-  const eventRank = subjectEventRank(events);
-  return [...channels].sort((left, right) => {
-    const byEvent = subjectRank(right.channel_id, eventRank) - subjectRank(left.channel_id, eventRank);
-    const byPhase = phaseRank(right.phase) - phaseRank(left.phase);
-    const byState = right.state_number - left.state_number;
-    const byFunding = right.funding_epoch - left.funding_epoch;
-    return byEvent || byPhase || byState || byFunding || right.channel_id.localeCompare(left.channel_id);
-  });
-}
-
-function sortFactoriesForOperator(factories: FactoryRecord[], events: HubEvent[]): FactoryRecord[] {
-  const eventRank = subjectEventRank(events);
-  return [...factories].sort((left, right) => {
-    const byEvent = subjectRank(right.factory_id, eventRank) - subjectRank(left.factory_id, eventRank);
-    const byUpdate = right.update_number - left.update_number;
-    const byChildren = right.materialised_child_channels.length - left.materialised_child_channels.length;
-    return byEvent || byUpdate || byChildren || right.factory_id.localeCompare(left.factory_id);
-  });
-}
-
-function subjectEventRank(events: HubEvent[]): Map<string, number> {
-  const rank = new Map<string, number>();
-  events.forEach(event => {
-    if (!event.subject_id) return;
-    const subject = event.subject_id.toLowerCase();
-    rank.set(subject, Math.max(rank.get(subject) ?? 0, event.id));
-  });
-  return rank;
-}
-
-function subjectRank(subjectId: string, eventRank: Map<string, number>): number {
-  return eventRank.get(subjectId.toLowerCase()) ?? 0;
-}
-
-function phaseRank(phase: ChannelRecord['phase']): number {
-  if (phase === 'active') return 4;
-  if (phase === 'settling') return 3;
-  if (phase === 'funding') return 2;
-  if (phase === 'closed') return 1;
-  return 0;
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  let clipboardError: unknown;
-  if (navigator.clipboard?.writeText && window.isSecureContext) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch (err) {
-      clipboardError = err;
-    }
-  }
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', '');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  textarea.style.top = '0';
-  document.body.appendChild(textarea);
-  textarea.focus();
-  textarea.select();
-  try {
-    if (!document.execCommand('copy')) {
-      throw new Error('clipboard copy was rejected');
-    }
-  } catch (err) {
-    throw clipboardError instanceof Error ? clipboardError : err;
-  } finally {
-    document.body.removeChild(textarea);
   }
 }
