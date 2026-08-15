@@ -15,7 +15,7 @@ required_files=(
   "docs/runbooks/operations.md"
   "docs/runbooks/incident-response.md"
   "docs/runbooks/upgrade-and-migration.md"
-  "docs/runbooks/rehearsal-2026-08-14.md"
+  "docs/runbooks/rehearsal-2026-08-15.md"
 )
 
 for relative_path in "${required_files[@]}"; do

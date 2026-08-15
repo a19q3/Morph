@@ -91,9 +91,11 @@ The vault lock checks that the settlement outputs match the descriptor
 committed in the signed state. For xUDT, it also checks token type and exact
 token amounts.
 
-## Step 5: Splice
+## Step 5: Resize / Re-anchor (`SPLICE` on the wire)
 
-A splice resizes a channel without closing the relationship.
+A resize changes a channel's funding context without closing the logical
+relationship. The current wire format, package names, and CLI retain the
+historical name `SPLICE`.
 
 ```mermaid
 flowchart LR
@@ -102,9 +104,13 @@ flowchart LR
     N --> V["new vault set"]
 ```
 
-Splice-in adds assets. Splice-out withdraws assets. The channel keeps its
-logical identity, but the funding anchor and vault set move forward with signed
-transition evidence.
+Resize-in adds assets. Resize-out withdraws assets. The channel keeps its stable
+`channel_id`, but its signed funding anchor, Vault commitments, and
+`funding_epoch` move forward; tooling derives a new `funding_context_id` from
+that context and the exact Vault OutPoint. The old Vault is consumed and the
+successor Vault is committed to the new State Header. For resize-out,
+participant signatures also bind the exact withdrawal lock, and the vault
+script requires an output with that lock and the exact CKB/xUDT amount.
 
 ## Step 6: Factory Channels
 
@@ -121,6 +127,12 @@ flowchart TB
 The conservative path requires all factory participants to sign. Reduced paths
 prove a narrow local change, such as one participant reducing their own reserve
 claim. Factory scripts receive those proofs through `WitnessEnvelope`.
+
+An internal rights update can remain off chain while the required participants
+cooperate and the Factory Vault does not change. Adding/removing Factory funds,
+materialising a child channel, or enforcing an exit requires an on-chain
+transaction. General multi-right reduced rebalancing is not part of the current
+bounded proof profile.
 
 ## Why `WitnessEnvelope` Matters
 

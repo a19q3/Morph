@@ -1,5 +1,10 @@
 # Swarm Security Audit — GLM — 2026-08-15
 
+> Current-tree note: superseded audit/closeout documents cited as evidence in
+> this frozen baseline were removed from the active docs tree after remediation.
+> They remain recoverable from audited commit `9ab9ec1`; line references below
+> intentionally describe that historical baseline rather than current HEAD.
+
 A self-contained, evidence-driven **protocol audit** of the Morph Channel
 repository, performed by a swarm of eight independent agents (A–H) covering:
 the shared wire-format library (`morph-script-common`), the state cell

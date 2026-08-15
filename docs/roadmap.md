@@ -55,7 +55,7 @@ authorisation boundary.
 | Factory membership | Larger participant sets with production ergonomics. | Needs proof-size, fee, and UX evidence. |
 | Watchtower | Multi-operator deployment evidence. | Current evidence is local and single-environment. |
 | Network conditions | Reorg and fee-pressure runs. | Requires repeated mainnet-like devnet/testnet scenarios. |
-| Release process | Reproducible release artefacts and CI hash attestations. | Local hashes exist; external release process is not complete. |
+| Release process | Independent reproduction and main-branch provenance completion. | Deterministic bundles, reviewed ELF hashes, CI upload/attestation configuration, and staging cleanup exist; a successful independent rebuild and release-owner sign-off remain open. |
 | Policy | Value-limit policy and operator runbooks. | Needed before any real-assets claim. |
 
 ## Next Engineering Slice

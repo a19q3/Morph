@@ -87,9 +87,10 @@ flowchart LR
 Vault lock 会检查结算输出是否匹配签名状态里承诺的 settlement descriptor。
 如果是 xUDT，还会检查 token 类型和精确 token 数量。
 
-## 第五步：Splice
+## 第五步：Resize / Re-anchor（线上的名称是 `SPLICE`）
 
-Splice 可以在不关闭通道关系的情况下调整通道资金。
+Resize 可以在不关闭逻辑通道关系的情况下更新资金上下文。当前 wire format、
+package 和 CLI 仍保留历史名称 `SPLICE`。
 
 ```mermaid
 flowchart LR
@@ -98,8 +99,12 @@ flowchart LR
     N --> V["新 vault set"]
 ```
 
-Splice-in 是增加资产，splice-out 是取出资产。通道的逻辑身份继续存在，但
-funding anchor 和 vault set 会通过签名转换证据向前移动。
+Resize-in 是增加资产，resize-out 是取出资产。稳定的 `channel_id` 保持不变，
+但签名的 funding anchor、Vault commitments 和 `funding_epoch` 会向前移动；
+工具再根据这些上下文和精确 Vault OutPoint 派生新的 `funding_context_id`。旧
+Vault 会被消费，后继 Vault 被新的 State Header 承诺。对于 resize-out，参与者
+签名还会承诺精确的提现 lock，Vault 脚本要求链上存在该 lock 和精确 CKB/xUDT
+数量的输出。
 
 ## 第六步：Factory 通道
 
@@ -116,6 +121,10 @@ flowchart TB
 保守路径要求所有 factory 参与者签名。Reduced 路径只证明一个很窄的局部变化，
 例如一个参与者减少自己的 reserve claim。Factory 脚本通过
 `WitnessEnvelope` 接收这些证明。
+
+只改变 Factory 内部权利、且 Factory Vault 不变时，相关参与者可以在协作状态
+下把更新保留在链下。增加或移除 Factory 资金、物化子通道、强制退出则必须上链。
+当前 bounded proof profile 不支持通用的 multi-right reduced rebalance。
 
 ## 为什么 `WitnessEnvelope` 重要
 

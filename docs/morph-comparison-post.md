@@ -1,15 +1,15 @@
 # Morph Channel vs. Lightning/eltoo, Perun, and the CKB Generic Payment Channel — A Comparative Reading
 
 > Note: this post is comparative positioning — how Morph relates to the
-> construction families that already exist for CKB and for Bitcoin. The current
-> implementation-security verdict is in
-> `docs/base-model-audit-2026-07-23.md`.
+> construction families that already exist for CKB and for Bitcoin. Morph's
+> current implementation-security baseline is the 2026-08-15 swarm audit, with
+> remediation status in `SECURITY-FIXES.md`.
 >
-> Import audit note, 2026-06-30: this is a comparative positioning draft,
-> not current release evidence. Exact test and devnet counts below are
-> historical snapshot evidence unless a fresh clean-HEAD artifact says
-> otherwise. The current implementation names the bilateral materialisation
-> field `vault_materialisation_root` / `new_vault_materialisation_root`.
+> Refresh note, 2026-08-15: external-project statements remain a source
+> snapshot and must be revalidated before publication as current deployment
+> claims. Morph statements below reflect the bounded devnet implementation:
+> exact Vault provenance, 2–16 Factory participants, fixed reduced proof shapes,
+> and signed splice-out withdrawal locks. This is not production evidence.
 
 I read four reference materials end-to-end before writing this:
 
@@ -25,9 +25,9 @@ I read four reference materials end-to-end before writing this:
    Composability"*. This is the CKB-native baseline that any new CKB
    channel construction has to position against.
 4. **Morph Channel** — my own construction. The implementation and
-   current docs are in this repo; the research paper draft is external
-   and the current implementation-security verdict is recorded in
-   `docs/base-model-audit-2026-07-23.md`.
+   current docs are in this repo; the research paper draft is external,
+   the latest audit baseline is `docs/swarm-audit-glm-2026-08-15.md`, and
+   remediation status is recorded in `SECURITY-FIXES.md`.
 
 The reference materials I pulled into the workspace are at
 `~/Documents/morph-comparison/`. I was unable to download the Perun
@@ -58,9 +58,9 @@ The structure of this post is:
 | Funding anchor                    | The funding outpoint            | Contract reference                     | Funding outpoint                         | Type-ID-style derivation OR live Fund Cell |
 | Multi-asset                       | Single asset                    | Multi-asset (EVM tokens)              | Native (any UDT/SUDT/CKB)                | Native (CKB + any xUDT)                |
 | Sponsor / fee model                | Channel pays fees                | Channel pays fees                      | Channel pays fees                        | Sponsor partition (channel never pays fees) |
-| Splice / resize                    | Not in paper                     | Re-fund / new channel                   | Not in paper                              | SPLICE branch in script-level validation |
-| Channel factory                   | Not in paper                     | Layered virtual channels               | Not in paper                              | Yes (factory profile, design framework) |
-| Reduced signing set               | Not in paper                     | Not in paper                            | Not in paper                              | Yes (factory, design framework)        |
+| Splice / resize                    | Not in paper                     | Re-fund / new channel                   | Not in paper                              | Resize/re-anchor (`SPLICE` on wire) with exact old/new Vault binding |
+| Channel factory                   | Not in paper                     | Layered virtual channels               | Not in paper                              | Bounded devnet implementation (2–16 participants) |
+| Reduced signing set               | Not in paper                     | Not in paper                            | Not in paper                              | Fixed single-participant proof families; general multi-right deferred |
 | Composability with L1 assets      | Low (Bitcoin only)               | Medium (token interface)               | High (any UDT/CKB)                       | High (any xUDT/CKB)                    |
 | Has a deployed Bitcoin/CKB impl?  | No (SIGHASH_ANYPREVOUT not deployed) | Yes (Ethereum, CKB via perun-ckb-contract) | Talk only — no impl                      | Yes, for devnet/research evidence; exact counts are snapshot-specific |
 | Maturity for bilateral profile     | Academic                         | Production (Ethereum); experimental (CKB) | Spec only                                | Devnet-evidenced                        |
@@ -113,7 +113,8 @@ stable by construction. The state uniqueness comes from CKB's
 single-spend rule plus Morph's "exactly one input, exactly one output"
 type script rule (`verify_state_cell_type` in the external paper draft).
 
-eltoo has no splice and no factory. Morph has both — and the splice is
+eltoo has no splice and no factory. Morph has both — and its resize/re-anchor
+(historically `SPLICE` in the wire/API) is
 the only construction in this comparison that script-level checks a
 signed splice event against the current state, the successor's preserved
 context, and the splice-specific vault roots
@@ -131,6 +132,12 @@ extension: sponsor funds sit in a separate Cell that pays the
 publication carrier without touching channel value. eltoo's analogue
 would be a separate fee-bumping wallet that publishes the update, which
 is operationally possible but not protocol-blessed.
+
+CKB does support replacement of pending conflicting transactions. Morph's
+distinction is not “no RBF”: participant signatures authorise the State Header,
+not sponsor coin selection or fee rate. A publisher can rebuild or replace the
+carrier transaction with different sponsor inputs without asking participants
+to re-sign the channel state.
 
 ### Where eltoo is better than Morph
 
@@ -186,11 +193,11 @@ different:
   plus optional reduced signing per factory root. The factory is
   itself a single channel with a more complex authorisation model.
 
-Morph does not have a virtual-channel construction. A future Morph
-extension could add one, but the audit-response paper makes clear that
-the factory profile is a design framework, not yet a complete
-construction; layering virtual channels on top of Morph would inherit
-this open question.
+Morph does not have a virtual-channel construction. Its Factory is now a
+bounded executable devnet profile: 2–16 participants, N-of-N conservative
+paths, fixed reduced-right/sparse-Merkle/reduced-exit/reduced-splice proof
+families, and exact FactoryVault provenance. General multi-right rebalancing,
+variable-depth proofs, and virtual-channel layering remain open.
 
 Perun's encoding is Ethereum-first. Morph's encoding is CKB-native
 (fixed-layout parsers, Molecule schema in `schemas/morph.mol`). They
@@ -199,13 +206,12 @@ translator at the L2 boundary.
 
 ### Where Perun is better than Morph
 
-Perun has a deployed multi-chain story. The `go-perun` backend
-implements the same wire format on Ethereum and on CKB, with
-cross-chain Perun channels as a documented feature. Morph has only
-the bilateral CKB profile; cross-chain Morph would need to be built
-from scratch. Perun also has an academic formal security proof; Morph
-has the audit-driven definitional hardening and devnet evidence, but
-not a formal proof.
+Perun has a published multi-chain architecture. The cited `go-perun` backend
+and CKB contract sources describe the same state encoding across Ethereum and
+CKB. Morph has only CKB-native bilateral and bounded Factory profiles;
+cross-chain Morph would need to be built from scratch. Perun also has an
+academic formal security proof; Morph has audit-driven definitional hardening
+and devnet evidence, but not a formal proof.
 
 Perun's watchtower design is cleaner. Perun's watchtowers operate
 inside the channel's adjudication phase and the protocol supports
@@ -304,27 +310,27 @@ domain is bigger but follows the same idea.
 
 ---
 
-## 5. What would it take to deploy each on CKB today?
+## 5. CKB implementation posture (source snapshot)
 
-| Construction  | On CKB today (June 2026)                                                              |
+| Construction  | Evidence represented by the reviewed sources                                                              |
 | ------------- | -------------------------------------------------------------------------------------- |
-| Lightning (Poon-Dryja penalty) | Yes, but no first-class CKB implementation; the closest is the Fibre prototype. Penalty construction is awkward on UTXO because you have to encode the revocation keys in the witness and on-chain encoding. |
+| Lightning (Poon-Dryja penalty) | The reviewed material does not provide a first-class CKB deployment of the Bitcoin penalty construction. |
 | eltoo         | No — requires `SIGHASH_ANYPREVOUT`, which CKB does not have and which Morph does not need. The Ademan reference implementation is a Rust bench, not a wire-level implementation. |
-| Perun         | Yes — `perun-ckb-contract` deploys on CKB. The backend is Go, the contracts are Rust. Cross-chain story is the main selling point. |
-| GPC           | Talk only — no implementation in the public NervosTalk post. The post describes the construction precisely; an implementation would be one lock script and a few hundred lines of off-chain code. |
-| Morph Channel | Yes, for devnet/research use. The June audit response cites historical snapshot evidence: 248 active workspace tests, 155 smoke JSONs, 192 committed transactions, and 7 deployed scripts with verified hashes. Treat those as snapshot counts, not current release gates; rerun the current acceptance targets before citing them as fresh evidence. Bilateral profile is now defensible after the June 2026 audit patches. Factory profile is a design framework + acceptance agenda. |
+| Perun         | The cited repositories provide CKB contracts and a Go backend. Current deployment availability and maintenance status must be checked against fresh upstream evidence before publication. |
+| GPC           | The reviewed Nervos Talk post specifies the construction; this comparison did not identify a maintained implementation artifact. |
+| Morph Channel | The repository implements bilateral and bounded Factory profiles for controlled devnet research, including exact Vault provenance, sponsor policy, resize, full/reduced Factory paths, release artefacts, and negative CKB-VM tests. It prohibits production/real-asset claims pending the readiness gates. |
 
 The "what would it take" reading is:
 
-- If you want a deployed channel on CKB **today**, Perun is the only
-  fully wired option.
-- If you want a smaller, more auditable bilateral channel on CKB, the
-  GPC construction is the right place to start, and it would
-  probably take one engineer a week.
+- Perun is the relevant published CKB/multi-chain implementation family, but a
+  deployment decision requires fresh upstream build, maintenance, and network
+  evidence.
+- GPC is the smallest CKB-native specification in this comparison; an actual
+  deployment still needs an implementation and independent review.
 - If you want a CKB-native channel with sponsor partitioning, splice,
-  and a route to factories, Morph is the option. It costs you a
-  larger script surface, a definitional pass per audit, and explicit
-  resource-bound checks at FUND.
+  and bounded Factory paths, Morph supplies executable devnet evidence. It also
+  has the largest local script surface here and explicitly remains no-real-assets
+  research software.
 - If you want eltoo on Bitcoin, the answer is "wait for
   `SIGHASH_ANYPREVOUT`" plus "there is no testnet deployment today".
 
@@ -361,7 +367,8 @@ The "what would it take" reading is:
   transaction-graph level; Morph's `SpliceHeader::matches_current_state`
   and `state_context_matches_splice_next` checks bind the current
   vault-materialisation root, the successor vault-materialisation root,
-  and the preserved context inside CKB-VM. This is closer to Perun's
+  exact old/new Vault OutPoints, and the signed splice-out withdrawal lock.
+  This is closer to Perun's
   strict state-binding than to eltoo's update-transaction model, and it
   is what makes the C-01 attack from the June 2026 audit impossible in
   the current bilateral profile.
@@ -370,13 +377,13 @@ The "what would it take" reading is:
   Type-ID-style) and the current devnet implements the latter. GPC
   and Perun both have a live funding cell. Morph's Type-ID-style
   profile is one of the more opinionated choices in the comparison.
-- **Factory framework** with envelope-first admission and rights
+- **Bounded Factory implementation** with envelope-first admission and rights
   non-interference as an explicit condition. None of the four
   reference constructions has a factory profile. Perun has
   *layered* virtual channels, but factories (single-channel with
-  children + reduced signing) are different. Morph's factory is
-  explicitly labelled as a design framework + acceptance agenda; the
-  bilateral profile is the deployment-ready part.
+  children + reduced signing) are different. Morph implements the admitted
+  2–16 participant, fixed-proof devnet profile; general multi-right and
+  variable-depth proof families remain deferred.
 
 ### What Morph does not yet have
 
@@ -395,32 +402,26 @@ The "what would it take" reading is:
 
 ## 7. What this means for the audit verdict
 
-The June 2026 audit verdict was a "MAJOR REVISION — not deployable as
-written" judgement on the external paper draft, with one critical
-vulnerability (C-01, splice content-binding) and seven high-severity gaps.
-After the paper-draft patches and the implementation hardening in this repo:
+The 2026-08-15 swarm audit at `9ab9ec1` found one High, four Medium,
+seventeen Low, and twenty-two Informational items. On the current implementation
+line:
 
-- C-01 is closed at the splice bundle layer for `participants_commitment`,
-  `settlement_descriptor_commitment`, `mode`, `asset_registry_commitment`,
-  `challenge_policy_commitment`, `state_number`, and the equality
-  predicates for `protocol_version` / `chain_id` / `signature_scheme_id`
-  / `channel_id` / `descriptor_version` / `state_layout_version`.
-  The current bilateral profile also binds `vault_materialisation_root`
-  and `new_vault_materialisation_root` through the signed `SpliceHeader`
-  and repeats the successor materialisation check at the vault lock.
-- H-01..H-07 are addressed in the external paper draft with explicit
-  Definitions (Funding Anchor Profiles, Vault Manifest, Partition Classifier,
-  Morph Operation Envelope, three-distinguished identity names,
-  Worst-Case Finalisation Bound, factory_active phase, Factory
-  Acceptance Agenda).
-- M-01..M-04 are addressed in a new "Deployment Considerations"
-  section.
-- The implementation has explicit SpliceHeader bindings for current and
-  successor vault materialisation roots, C-01 negative tests at the
-  splice bundle layer, and CKB-VM coverage in `contract_scripts`.
-- The `248 tests pass` wording from the June audit trail is a historical
-  active-workspace count. Contract-script CKB-VM tests and devnet
-  acceptance evidence should be cited separately from a fresh run.
+- AUD-01 is closed by adding signed `withdrawal_lock_hash` fields to bilateral
+  and Factory resize headers and enforcing exact CKB/xUDT withdrawal outputs;
+- AUD-03 is closed by rejecting typed Vault inputs in the CKB-only settlement
+  branch;
+- AUD-04 and AUD-05 are closed by aligning host validation with the script's
+  successor phase and Factory Vault-OutPoint lifecycle rules;
+- AUD-02 is documented as an explicit code-identity trust boundary: a
+  FactoryProof child delegates creation authority to the exact FactoryType hash
+  in its args, so deployments must pin the audited FactoryType code identity;
+- the Low/Informational hardening backlog and mainnet-readiness gates remain
+  visible rather than being promoted into production claims.
+
+The header additions are an intentional unpublished wire-format break:
+`SpliceHeader`/`FactorySpliceHeader` are 485/469 bytes and the affected witness
+body versions are 2. Historical audit counts and layouts remain valid only for
+their recorded baseline.
 
 For positioning against eltoo, Perun, and GPC: the bilateral profile
 is now defensible relative to eltoo and GPC on the spec-and-evidence
@@ -439,13 +440,13 @@ interop or virtual channels, and **GPC** as the baseline for any
 deployment that wants the smallest possible spec surface and is
 willing to hand-engineer sponsor policy and splice off-chain.
 
-I would pick **Morph** for any deployment that has a clear sponsor
-budget, expects to splice channels in production, and is willing to
-pay for the audit-driven definitional discipline. The factory
-profile is the long pole; the bilateral profile is the part that is
-defensible today.
+I would evaluate **Morph** for controlled CKB devnet research that needs a
+separate sponsor budget, resize/re-anchor, or the implemented bounded Factory
+paths. I would not use it for production or real assets until the explicit
+mainnet-readiness gates are closed.
 
-Read `docs/base-model-audit-2026-07-23.md` alongside this post for the current
-security verdict, verification evidence, and remaining release blockers.
+Read `docs/swarm-audit-glm-2026-08-15.md`, `SECURITY-FIXES.md`, and
+`docs/mainnet-readiness.md` alongside this post for the current audit baseline,
+remediation status, and remaining release blockers.
 
-— Mavis, 2026-06-20
+— Mavis, originally 2026-06-20; implementation posture refreshed 2026-08-15

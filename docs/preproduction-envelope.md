@@ -1,6 +1,6 @@
 # Factory Pre-production Envelope
 
-Effective: 2026-08-14. Mandatory review by: 2026-09-13.
+Effective: 2026-08-15. Mandatory review by: 2026-09-14.
 
 This envelope authorises only a controlled, no-real-assets CKB devnet pilot of
 the `factory-dynamic-n` profile. It does not authorise mainnet,
@@ -45,8 +45,11 @@ reduced-rights updates, one-right depth-256 sparse-Merkle updates, reduced
 exits, CKB/xUDT Factory Vault conservation, and conservative/reduced splice
 paths. Factory membership is dynamic from 2–16 participants; reduced paths
 commit the complete membership and admit exactly one touched participant's
-signature. The profile intentionally excludes membership outside that bound,
-multi-right reduced updates, variable-depth proofs, arbitrary descriptor
+signature. Resize witness bodies use version 2: splice-out headers sign the
+participant withdrawal lock and the Vault scripts enforce the exact CKB/xUDT
+payout output. The profile also binds every live bilateral and Factory Vault by
+content and exact OutPoint. It intentionally excludes membership outside that
+bound, multi-right reduced updates, variable-depth proofs, arbitrary descriptor
 runtimes, and concurrent unconfirmed splice chains.
 
 Those exclusions are protocol boundaries, not bugs to bypass. Unknown shapes
@@ -74,7 +77,7 @@ Factory. See
 
 ## Approval and Expiry
 
-The envelope expires unless a release owner reviews it by 2026-09-13. Any
+The envelope expires unless a release owner reviews it by 2026-09-14. Any
 increase requires fresh acceptance evidence and a reviewed change to both the
 JSON policy and this document. CI validation is necessary but is not release
 owner approval for higher limits.

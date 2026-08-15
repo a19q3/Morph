@@ -12,7 +12,7 @@ Read and rehearse all of the following before activation:
   reorg recovery, evidence preservation, and restart approval;
 - [`upgrade-and-migration.md`](upgrade-and-migration.md): pre-release resets,
   contract upgrades, and rollback;
-- [`rehearsal-2026-08-14.md`](rehearsal-2026-08-14.md): the repository-side dry
+- [`rehearsal-2026-08-15.md`](rehearsal-2026-08-15.md): the repository-side dry
   run evidence for this candidate.
 
 ## Roles

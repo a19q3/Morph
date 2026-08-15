@@ -100,7 +100,7 @@ flowchart LR
     A["Open"] --> B["Update off chain"]
     B --> C["Publish if needed"]
     C --> D["Finalise / withdraw"]
-    B --> E["Splice / resize"]
+    B --> E["Resize / re-anchor<br/>(wire: SPLICE)"]
     E --> B
     A --> F["Factory reserve"]
     F --> G["Child channel"]
@@ -129,11 +129,16 @@ After the relative `since` delay, the vault can be spent only against the
 current settling State Cell and its settlement descriptor. This is the withdrawal
 step.
 
-### Resize With Splice
+### Resize / Re-anchor (Wire Name: Splice)
 
-Splice-in adds value and splice-out removes value while keeping the logical
-channel identity. Old watch packages must not be reused after a splice unless
-their signed funding context still matches the live state track.
+The user-facing operation is a channel resize or funding re-anchor. The current
+wire format and CLI retain the historical `SPLICE` name. Resize-in adds value
+and resize-out removes value while keeping `channel_id` as the stable logical
+identity. Tooling selects the live funding object by its derived
+`funding_context_id`; old watch packages must not be reused unless that signed
+context still matches the live state track. A resize-out also signs the exact
+participant withdrawal lock, and the vault script requires the corresponding
+CKB/xUDT output on chain.
 
 ### Use A Factory
 
@@ -343,8 +348,9 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [RGB++ / Agent / Fiber integration plan](docs/rgbpp-agent-fiber-integration-plan.md):
   the sovereign Factory-to-channel-to-provider-edge design and its release
   gate.
-- [Base-model audit](docs/base-model-audit-2026-07-23.md): current security
-  verdict, remediated findings, verification evidence, and release blockers.
+- [2026-08-15 swarm audit](docs/swarm-audit-glm-2026-08-15.md): latest audit
+  baseline and findings; [Security fixes](SECURITY-FIXES.md) records the current
+  remediation status and negative-path evidence.
 - [English tutorial](docs/morph-channel-tutorial.md): a gentler introduction
   with diagrams.
 - [Chinese tutorial](docs/morph-channel-tutorial.zh.md): Chinese-language

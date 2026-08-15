@@ -46,11 +46,11 @@ state, but they cannot rewrite vault settlement or drain participant assets.
 
 | Object | Where it lives | Role |
 | --- | --- | --- |
-| `StateHeader` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set commitment, state number, phase, and settlement descriptor commitment. |
+| `StateHeader` | script-common, CLI, core | Signed channel state header with funding epoch, funding anchor, vault-set/content and exact-OutPoint commitments, state number, phase, and settlement descriptor commitment. |
 | `BilateralSignatureWitness` | script-common | Two sorted participant public keys and signatures over the state digest. |
-| `SpliceStateTransitionWitness` | script-common, CLI | Bounded body proving an old funding anchor can move to a new funding anchor. |
-| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, participant commitment, rights roots, reserve context, and the exact materialised FactoryVault commitment. |
-| `FactorySpliceHeader` | core, script-common, CLI | Signed Factory splice bridge binding rights-root progress, reserve deltas, and the old/new materialised FactoryVault Cells. |
+| `SpliceStateTransitionWitness` | script-common, CLI | Bounded resize/re-anchor body proving an old funding context can move to a new one. |
+| `FactoryStateHeader` | script-common, CLI | Factory state pointer: factory id, update number, state root, participant commitment, access-manifest root, non-interference digest, challenge policy, and exact FactoryVault content/OutPoint commitments. |
+| `FactorySpliceHeader` | core, script-common, CLI | Signed Factory resize bridge binding state/access-root progress, reserve deltas, non-interference, and the old/new materialised FactoryVault Cells. |
 | `FactoryRight` | script-common, core, CLI | Fixed-layout representation of a participant right such as balance or reserve claim. |
 | `WitnessEnvelope` | script-common, CLI, factory scripts | Factory authorisation envelope: kind, flags, body length, and body digest. |
 | `SponsorPolicy` | script-common, CLI | Script-level sponsor fee policy. |
@@ -65,10 +65,22 @@ devnet funding-anchor profile; a mainnet-track profile should add live Fund Cell
 uniqueness checking before treating the anchor as deployment-grade identity.
 
 Tooling derives `funding_context_id = H("CKB_MORPH_FUNDING_CONTEXT",
-chain_id, channel_id, funding_anchor, vault_set_commitment)` from the signed
-State Header context. This identifier is an integration and audit key for the
-current funding context. It is not an additional consensus field, and it does
-not replace the current signed `funding_epoch` semantics.
+chain_id, channel_id, funding_anchor, vault_set_commitment,
+vault_outpoint_commitment)` from the signed State Header context. This
+identifier is an integration and audit key for one exact materialised funding
+context. It is not an additional consensus field. It deliberately omits
+`funding_epoch`: exact-context uniqueness rests on the OutPoint commitment,
+while the signed epoch remains a monotonic engineering namespace for logs,
+package construction, recovery, SDKs, and indexers. The epoch is therefore not
+the minimal anti-replay primitive, but it remains consensus-checked in the
+current wire profile.
+
+The stable user/integration identity is `channel_id`. The current funding
+object is identified by `funding_context_id`, and `funding_epoch` is its signed
+generation label. A user-facing resize or re-anchor changes the latter two
+while preserving `channel_id`. Source code, packages, CLI commands, and witness
+kinds retain the historical `splice` name; changing those identifiers would be
+a separate wire/API migration rather than a documentation synonym.
 
 The current public mode surface is intentionally narrow. Host code names the
 implemented modes `BilateralPlain` and `FactoryProof`; the signing and fixed
@@ -159,6 +171,11 @@ script. Transition rules remain in the type script.
 `morph-vault-lock` owns channel value. It finalises only against an authentic
 current settling State Cell with a matching descriptor commitment and matured
 relative `since`. It also verifies the vault side of splice transitions.
+Vault Cells remain unchanged during ordinary off-chain state exchange and
+ordinary State Cell publication/supersession. They are consumed at explicit
+value boundaries: finalisation, resize/re-anchor, and Factory
+exit/materialisation paths. A resize successor is a newly committed Vault, not
+the same Vault left untouched for the full logical channel lifetime.
 The current bilateral finalisation profile is atomic: it consumes the committed
 vault value and does not create terminal receipt Cells.
 Cooperative close is not part of the current State type, vault contract, CLI,
@@ -209,6 +226,27 @@ complete participant set but require exactly one signature from the touched
 participant. Counts outside 2–16, threshold subsets on full paths, duplicate or
 unsorted identifiers, duplicate public keys, and unknown witness shapes fail
 closed. The sparse-Merkle depth and reduced right-count limits remain fixed.
+
+### Factory Liquidity Movement
+
+Factory liquidity has two distinct kinds of change:
+
+- a **rights delta** changes who can claim value inside the Factory while the
+  FactoryVault assets remain unchanged;
+- a **vault delta** changes the assets held at the Factory boundary.
+
+Cooperative rights deltas can remain off chain as signed Factory state. The
+current conservative update requires N-of-N signatures. Bounded reduced-rights
+and sparse-Merkle paths admit only the implemented local proof shapes; locality
+alone is not economic authority. General multi-right rebalancing therefore
+falls back to full signatures and remains a future reduced-proof family.
+
+Vault deltas are on-chain. Adding/removing Factory funds uses full or reduced
+Factory resize (`factory splice`) evidence. Materialising a child and local or
+reduced exit also consume/recreate the parent Factory state and bind the exact
+FactoryVault/child-vault changes. Cooperation may keep internal accounting off
+chain, but crossing the Factory boundary, materialising a child, or enforcing
+an exit/dispute requires a CKB transaction.
 
 ### Factory Local Exit Lifecycle
 
@@ -331,10 +369,11 @@ attack-shaped variants.
 | Reserve release mismatch | reduced-exit host, script, and devnet smoke coverage. |
 | Witness envelope tamper | `WitnessEnvelope` parser and factory script negative tests. |
 
-The current base-model security verdict, remediated findings, and verification
-evidence are in
-[base-model-audit-2026-07-23.md](base-model-audit-2026-07-23.md). Devnet
-assertion gates are described in [devnet.md](devnet.md).
+The latest security baseline is the
+[2026-08-15 swarm audit](swarm-audit-glm-2026-08-15.md); current remediation
+status and negative-path evidence are recorded in
+[SECURITY-FIXES.md](../SECURITY-FIXES.md). Devnet assertion gates are described
+in [devnet.md](devnet.md).
 
 ## Where To Inspect The Code
 

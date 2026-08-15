@@ -9,6 +9,9 @@ The profile deliberately freezes the executable Factory boundary:
 - 2–16 Factory signing participants with sorted, commitment-bound membership;
 - N-of-N conservative updates and exactly one touched-member authorisation on reduced paths;
 - fixed-layout rights bodies and one-right, depth-256 sparse-Merkle proofs;
+- resize witness version 2 with signed participant withdrawal locks and exact
+  CKB/xUDT payout-output enforcement;
+- exact bilateral and Factory Vault content plus OutPoint commitments;
 - direct CKB flows plus the devnet-only `morph-devnet-xudt` test asset;
 - no Hub-submitted chain mutations, RGB++, or Morph-backed Fiber routing.
 
@@ -32,3 +35,8 @@ make package-contract-release
 Changing any contract hash requires a fresh protocol review, contract tests,
 devnet acceptance run, and deliberate manifest update. Never update the
 manifest merely to make CI green.
+
+The current manifest was regenerated after the 2026-08-15 withdrawal-binding
+wire break. Any archive produced before that manifest is stale and must not be
+used; `make package-contract-release` always builds a fresh archive from the
+reviewed files in this directory.

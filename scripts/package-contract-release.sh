@@ -8,6 +8,17 @@ OUTPUT_PARENT="$REPO_ROOT/target"
 
 mkdir -p "$OUTPUT_PARENT"
 STAGING_DIR=$(mktemp -d "$OUTPUT_PARENT/contract-release.XXXXXXXX")
+cleanup_staging_dir() {
+  case "$STAGING_DIR" in
+    "$OUTPUT_PARENT"/contract-release.*)
+      rm -rf -- "$STAGING_DIR"
+      ;;
+    *)
+      echo "refusing to clean unexpected staging directory: $STAGING_DIR" >&2
+      ;;
+  esac
+}
+trap cleanup_staging_dir EXIT
 ARTIFACT_DIR="$STAGING_DIR/factory-dynamic-n"
 mkdir -p "$ARTIFACT_DIR/contracts"
 
@@ -53,5 +64,5 @@ tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
 ARCHIVE_PATH="$OUTPUT_PARENT/factory-dynamic-n.tar.gz"
 install -m 0644 "$STAGED_ARCHIVE" "$ARCHIVE_PATH"
 
-echo "contract release directory: $ARTIFACT_DIR"
+echo "temporary release staging verified and scheduled for cleanup: $ARTIFACT_DIR"
 echo "contract release archive: $ARCHIVE_PATH"

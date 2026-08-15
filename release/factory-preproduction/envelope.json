@@ -1,11 +1,11 @@
 {
   "schema": "morph.preproduction_envelope",
   "release_profile": "factory-dynamic-n",
-  "effective_date": "2026-08-14",
-  "review_by": "2026-09-13",
+  "effective_date": "2026-08-15",
+  "review_by": "2026-09-14",
   "approval_timezone": "Asia/Shanghai",
-  "effective_unix": 1786636800,
-  "review_by_unix": 1789315199,
+  "effective_unix": 1786723200,
+  "review_by_unix": 1789401599,
   "approved_networks": [
     "devnet"
   ],

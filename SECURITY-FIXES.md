@@ -1,21 +1,22 @@
-# Security Fixes Closeout
+# Security Fixes And Trust-Boundary Closeout
 
-This is a historical safety-kernel closeout for baseline `8944bf7`. It is
-superseded for current devnet release-candidate status by the stateful closeout
-at `3814453` in
-[`docs/devnet-stateful-acceptance-closeout.md`](docs/devnet-stateful-acceptance-closeout.md).
+This is the living reviewer index for security-boundary fixes and explicitly
+accepted trust boundaries. The earliest safety-kernel closeout was baseline
+`8944bf7`; current executable acceptance commands and release posture are
+tracked in [`docs/devnet.md`](docs/devnet.md) and
+[`docs/mainnet-readiness.md`](docs/mainnet-readiness.md). Superseded closeout
+snapshots remain available from git history rather than the current docs tree.
 
-This note records the local P0/P1 safety-boundary fixes for the current safety
-kernel candidate. It is intended as reviewer context for the security-fix
-baseline commit.
+The 2026-08-15 swarm audit was performed at `9ab9ec1` and is preserved in
+[`docs/swarm-audit-glm-2026-08-15.md`](docs/swarm-audit-glm-2026-08-15.md).
+Commit `1cc830f` closes AUD-01, AUD-03, AUD-04, and AUD-05. AUD-02 is an
+explicit code-identity trust boundary rather than a hidden signature check: a
+FactoryProof child delegates creation authority to the exact FactoryType hash
+in its StateType args, so deployments must pin the audited FactoryType code.
 
-Status at this closeout: the known local P0/P1 safety-kernel blockers were
-addressed in the implementation baseline, making this a current safety-kernel audit
-candidate. This was not a mainnet-ready or production-ready claim; value limits
-still required external diff review, mainnet-like evidence, supply-chain
-revalidation, operational readiness sign-off, and value-limit policy.
-
-Implementation safety-boundary baseline: `8944bf7`.
+None of these closeouts is a mainnet-ready or production-ready claim. External
+review, mainnet-like fee/reorg evidence, independent release verification,
+multi-operator rehearsal, and a real-asset value policy remain required.
 
 ## Factory-materialised State authority binding (2026-08-13)
 
@@ -302,8 +303,8 @@ The local verification run for this closeout passed:
 - `make fmt-check`
 - `git diff --check`
 
-Historical supply-chain status for this closeout: `make supply-chain` was
-attempted twice, but `cargo audit` could not fetch the RustSec advisory
-database because the GitHub request failed with an IO error. Later evidence:
-`make supply-chain` passed in the devnet stateful closeout at `3814453`.
-Mainnet release still requires release/CI supply-chain revalidation.
+Historical supply-chain status for the earliest closeout: `cargo audit` could
+not fetch the RustSec advisory database because the GitHub request failed with
+an IO error. Later cached and CI runs passed the repository's narrow reviewed
+waiver policy. Every release candidate must still rerun `make supply-chain` and
+record fresh CI/independent-build evidence.
