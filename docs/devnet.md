@@ -208,13 +208,15 @@ normal devnet default and a higher RBF rate, then proves:
 - a below-floor carrier is rejected;
 - an over-cap carrier is stopped before broadcast while its SponsorCell remains
   live and the pool remains unchanged;
+- the initial carrier's fee is recomputed from its final serialized size and a
+  non-converging rebuild fails before broadcast;
 - operator A publishes with no participant private keys;
 - an underpriced conflicting operator-B carrier is rejected;
 - operator B learns CKB's replacement floor, rebuilds under its caps, and wins
   with a distinct SponsorCell and operator key;
-- every watcher child passes a private-key-environment probe, and both the
-  original and alternate carriers preserve the package header and participant
-  witness byte-for-byte;
+- the key-scrubbing wrapper used for every watcher launch passes a child
+  environment probe, and both the original and alternate carriers preserve the
+  package header and participant witness byte-for-byte;
 - the replaced transaction is `RBFRejected` and the replacement commits;
 - durable JSONL attempt records reconcile after confirmation;
 - clearing the pool without a reorg forces a cursor-floor retry, while an

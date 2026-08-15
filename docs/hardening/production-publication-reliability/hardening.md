@@ -108,7 +108,8 @@ fee(rate, s) = ceil(rate * s / 1000)
 
 Build once to learn the exact serialized size, recompute the fee, and rebuild.
 Because the relevant witnesses have fixed length, a second pass must converge;
-the implementation still verifies the final effective rate.
+the implementation verifies the exact recomputed fee and final effective rate,
+and fails before broadcast if the rebuilt size does not converge.
 
 ### Replacement
 
@@ -288,7 +289,8 @@ The report records the node pool policy, both operators' complete attempt arrays
 transaction hashes/fees/sizes, the learned replacement floor, expected
 rejections, committed state number, measured component timings, operator
 identities, the runtime deadline budget, immutable signed-evidence checks,
-watcher-environment probe, dataset digest, and source/binary hashes.
+watcher-launch-wrapper environment probe, dataset digest, and source/binary
+hashes.
 
 The deterministic implementation is
 `scripts/devnet-publication-reliability.sh`. A passing run is written under

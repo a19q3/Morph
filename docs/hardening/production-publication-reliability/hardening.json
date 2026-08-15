@@ -28,6 +28,7 @@
       "status": "implemented_local_devnet",
       "invariants": [
         "participant-signed state bytes remain unchanged across fee attempts",
+        "the initial carrier fee converges against the final rebuilt serialized size before broadcast",
         "fee never exceeds sponsor-script or operator-policy caps",
         "replacement fee is at least the node-reported min_replace_fee",
         "the runtime deadline deducts observed confirmations and preserves reorg, failover, safety, and canonical-confirmation budgets",

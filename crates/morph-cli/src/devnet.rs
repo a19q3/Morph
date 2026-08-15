@@ -82,7 +82,7 @@ use crate::publication::{
     FeeObservation, PublicationAttemptInput, PublicationProfile, PublicationReconciliationReport,
     append_publication_attempt, fee_for_rate, initial_fee_rate, publication_attempt_record,
     read_publication_profile, reconcile_publication_attempts, replacement_fee,
-    required_replacement_fee_from_error,
+    required_replacement_fee_from_error, verify_initial_fee_convergence,
 };
 use crate::rpc::CkbRpcClient;
 use crate::splice_packages::{StoredSplicePackage, read_splice_package, write_splice_package};
@@ -7076,6 +7076,7 @@ fn publish_state_with_descriptor_update_and_runtime(
                 runtime.profile.fee.max_fee
             );
             let initial = build_transaction(dynamic_fee)?;
+            verify_initial_fee_convergence(rate, dynamic_fee, initial.data().as_slice().len())?;
             let sent = send_publication_attempts(
                 rpc,
                 initial,

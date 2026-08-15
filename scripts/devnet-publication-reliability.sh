@@ -234,6 +234,8 @@ OPERATOR_B_KEY_TMP="$(mktemp "${TMPDIR:-/tmp}/morph-operator-b.XXXXXX")"
 printf '%s\n' "$MORPH_DEVNET_PRIVATE_KEY" >"$OPERATOR_A_KEY_TMP"
 printf '%s\n' "$OPERATOR_B_PRIVATE_KEY" >"$OPERATOR_B_KEY_TMP"
 chmod 600 "$OPERATOR_A_KEY_TMP" "$OPERATOR_B_KEY_TMP" 2>/dev/null || true
+# Exercise the exact key-scrubbing wrapper used by every watcher launch below.
+# This proves the launch boundary, not introspection inside the watcher binary.
 run_without_private_keys sh -c '
   test -z "${MORPH_DEVNET_PRIVATE_KEY+x}" &&
   test -z "${MORPH_ALICE_PRIVATE_KEY+x}" &&

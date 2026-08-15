@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.11.0 — 2026-08-15
+
+### Publication verification follow-up
+
+- Fail closed if rebuilding the initial publication carrier changes its final
+  serialized size without converging to the fee selected from the observed fee
+  market. The controller now verifies both the exact recomputed fee and the
+  final effective fee rate before broadcast.
+- Clarify that the deterministic private-key environment probe exercises the
+  same key-scrubbing launch wrapper used by every harness watcher process; it
+  does not introspect the watcher binary after launch.
+- Align the host crates, Fiber adapter, TypeScript SDK, Morph Hub frontend, and
+  their lockfiles at v1.11.0; the Hub displays its package version in the
+  operator console.
+- Preserve the controlled-devnet and production-measurement boundaries from
+  v1.10.0. No CKB contract source or wire-format change is included.
+
 ## v1.10.0 — 2026-08-15
 
 Publication Reliability Hardening for the controlled-devnet Morph Channel

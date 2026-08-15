@@ -12,6 +12,8 @@
 - The chosen fee must be no larger than all applicable bounds: SponsorPolicy
   `max_fee_per_tx`, remaining SponsorPolicy total budget, operator maximum, and
   available capacity above occupied clean change.
+- The initial carrier fee must equal the fee recomputed from the final rebuilt
+  serialized size, and its effective rate must meet the selected market rate.
 - Unknown/rejected outcomes trigger canonical StateCell reconciliation. They are
   never interpreted as proof that the intended state failed to land.
 - An advanced scan cursor cannot suppress retry: if its last observed StateCell
@@ -31,6 +33,8 @@
 ## Acceptance tests
 
 - Initial fee is calculated with integer ceiling from serialized bytes.
+- A final carrier whose rebuilt size does not converge with the selected fee is
+  rejected before RPC broadcast.
 - Node floor and estimator are multiplied and capped without overflow.
 - RBF-disabled nodes are rejected by a production profile.
 - A node-provided replacement fee overrides a lower local bump.

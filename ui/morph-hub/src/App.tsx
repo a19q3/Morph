@@ -26,6 +26,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import packageMetadata from '../package.json';
 import { getState, hasApiToken, openEventStream, setApiToken } from './api';
 import { useModalFocus } from './components';
 import {
@@ -497,7 +498,7 @@ export function App() {
           <div className="brand-mark">M</div>
           <div>
             <strong>Morph Hub</strong>
-            <span>Operator console</span>
+            <span>Operator console · v{packageMetadata.version}</span>
           </div>
         </div>
 
