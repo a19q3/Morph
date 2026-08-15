@@ -32,11 +32,17 @@ make release-readiness
 make package-contract-release
 ```
 
+`make build-contracts` always compiles in a fresh temporary target directory
+and remaps the repository and Cargo-home prefixes to stable virtual paths. This
+prevents machine-specific source paths or restored build caches from changing
+the reviewed CKB Data Hashes.
+
 Changing any contract hash requires a fresh protocol review, contract tests,
 devnet acceptance run, and deliberate manifest update. Never update the
 manifest merely to make CI green.
 
-The current manifest was regenerated after the 2026-08-15 withdrawal-binding
-wire break. Any archive produced before that manifest is stale and must not be
-used; `make package-contract-release` always builds a fresh archive from the
-reviewed files in this directory.
+The current manifest includes the 2026-08-15 withdrawal-binding semantics and
+was refreshed for the v1.10.0 deterministic path-remapped build. Any archive
+produced before this manifest is stale and must not be used;
+`make package-contract-release` always builds a fresh archive from the reviewed
+files in this directory.

@@ -10,50 +10,50 @@
       "name": "morph-state-lock",
       "file": "morph-state-lock",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 21448,
-      "ckb_data_hash": "0x9315af6005be256865687c03d2305d78066916317e810086bb92baf428aed05d"
+      "size_bytes": 21368,
+      "ckb_data_hash": "0x7b1a3f66e71f5b553cbd7396825b98b41effec692ada19d3bb0f92ca5e71af74"
     },
     {
       "name": "morph-state-type",
       "file": "morph-state-type",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 188016,
-      "ckb_data_hash": "0x0980cef28b4e86225793edc0f26d5fcae74e62a033d1b371ce9b620d62e7ebfc"
+      "size_bytes": 187840,
+      "ckb_data_hash": "0x9aa4d60e73b84e0c579751864290404a96a3157db4b839698f4b98d95c86166b"
     },
     {
       "name": "morph-factory-type",
       "file": "morph-factory-type",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 223040,
-      "ckb_data_hash": "0x743a5b8004686f95db1600b6fae9f8b0136268725ba87a84bcbce96cfeac2052"
+      "size_bytes": 222872,
+      "ckb_data_hash": "0x190f6601f558a285f29cd8092956bc37428aecf7ce09d541187a57ded62d17c0"
     },
     {
       "name": "morph-factory-vault-lock",
       "file": "morph-factory-vault-lock",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 202672,
-      "ckb_data_hash": "0x9cdeb7c5094c244673c8506dcf0e2bd00eaccc63e7666a249c8bd5fdff9f8628"
+      "size_bytes": 202512,
+      "ckb_data_hash": "0xb271bd68b4f9b240e6ea151d9ac13398af6cf0a978ad47c52a179005e7dc366f"
     },
     {
       "name": "morph-vault-lock",
       "file": "morph-vault-lock",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 169464,
-      "ckb_data_hash": "0x95407465ea859e5ab62d305964c8dcc442b42a0f293fdbdee17e9193e74202a7"
+      "size_bytes": 169296,
+      "ckb_data_hash": "0x73d5dab44242b704f3a00da42c5b80a9cd74a92b9fdc1d52cbb325e8d919ebaf"
     },
     {
       "name": "morph-sponsor-lock",
       "file": "morph-sponsor-lock",
       "deployment_scope": "controlled_devnet",
-      "size_bytes": 24256,
-      "ckb_data_hash": "0x71659092fbbce1e8c4033c7f94801db6c3c1faf7322270e6a7605318c1f6c247"
+      "size_bytes": 24176,
+      "ckb_data_hash": "0x053cebae8c53a37cfbe66a151de1298d79d203095b02a2ee58749f3471ad4f5f"
     },
     {
       "name": "morph-devnet-xudt",
       "file": "morph-devnet-xudt",
       "deployment_scope": "devnet_only",
-      "size_bytes": 22104,
-      "ckb_data_hash": "0x0f11c12d816b4a905b04fabe49f8723f4454781d0ff6d7650c52a8d9c508df87"
+      "size_bytes": 22024,
+      "ckb_data_hash": "0x75ae655068fb86c449a6641f8f458a360c4cc9e51517f89b31d0f1108db71e02"
     }
   ]
 }

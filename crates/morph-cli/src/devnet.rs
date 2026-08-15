@@ -78,6 +78,12 @@ use crate::packages::{
     write_factory_reduced_rights_package, write_factory_state_cell_package, write_package,
     write_watch_cursor,
 };
+use crate::publication::{
+    FeeObservation, PublicationAttemptInput, PublicationProfile, PublicationReconciliationReport,
+    append_publication_attempt, fee_for_rate, initial_fee_rate, publication_attempt_record,
+    read_publication_profile, reconcile_publication_attempts, replacement_fee,
+    required_replacement_fee_from_error,
+};
 use crate::rpc::CkbRpcClient;
 use crate::splice_packages::{StoredSplicePackage, read_splice_package, write_splice_package};
 use crate::watch_alert::{
@@ -508,8 +514,6 @@ struct SettlementXudtUpdate {
 pub struct PublishLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
-    pub alice_private_key: String,
-    pub bob_private_key: String,
     pub state_out_point: String,
     pub sponsor_out_point: String,
     pub store_dir: PathBuf,
@@ -522,14 +526,14 @@ pub struct PublishLatestStatePackageOptions {
 pub struct WatchLatestStatePackageOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
-    pub alice_private_key: String,
-    pub bob_private_key: String,
     pub sponsor_out_point: Option<String>,
     pub store_dir: PathBuf,
     pub channel_id: String,
     pub from_block: u64,
     pub cursor_file: Option<PathBuf>,
     pub watch_policy: Option<PathBuf>,
+    pub publication_profile: Option<PathBuf>,
+    pub publication_attempt_log: Option<PathBuf>,
     pub alert_file: Option<PathBuf>,
     pub alert_webhook_url: Option<String>,
     pub ignore_cursor: bool,
@@ -543,9 +547,21 @@ pub struct WatchLatestStatePackageOptions {
 }
 
 #[derive(Debug, Clone)]
+struct PublicationRuntime {
+    profile: PublicationProfile,
+    attempt_log: Option<PathBuf>,
+    deadline: Instant,
+    intent_id: String,
+    channel_id: String,
+    funding_context_id: String,
+    target_state_number: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct FundSponsorOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
+    pub sponsor_change_pubkey: Option<String>,
     pub state_out_point: String,
     pub sponsor_capacity: u64,
     pub sponsor_min_state_number: u64,
@@ -1203,6 +1219,8 @@ pub struct PublishStateReport {
     pub status: String,
     pub block_number: Option<u64>,
     pub block_hash: Option<String>,
+    pub canonical_confirmations: u64,
+    pub canonical_confirmed: bool,
     pub channel_id: String,
     pub funding_anchor: String,
     pub old_state_number: u64,
@@ -1276,11 +1294,19 @@ pub struct WatchReorgRecoveryReport {
 #[derive(Debug, Serialize)]
 pub struct WatchLatestStatePackageReport {
     pub channel_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
     pub from_block: u64,
     pub effective_from_block: u64,
     pub scanned_to_block: u64,
     pub next_from_block: u64,
     pub detection_depth: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_profile: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_attempt_log: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub publication_reconciliation: Option<PublicationReconciliationReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_file: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1291,6 +1317,7 @@ pub struct WatchLatestStatePackageReport {
     pub loaded_cursor: Option<WatchCursor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reorg_recovery: Option<WatchReorgRecoveryReport>,
+    pub publication_retry_rescan: bool,
     pub selected_package: StatePackageRecord,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sponsor_top_up: Option<FundSponsorReport>,
@@ -1576,6 +1603,13 @@ struct SentTransactionReport {
     block_hash: Option<String>,
     metrics: TransactionMetrics,
     mined_blocks: Vec<String>,
+}
+
+struct PublicationSentReport {
+    report: SentTransactionReport,
+    fee: u64,
+    canonical_confirmations: u64,
+    canonical_confirmed: bool,
 }
 
 struct ContractBinary {
@@ -6845,7 +6879,7 @@ pub fn publish_state(
     rpc: &CkbRpcClient,
     options: PublishStateOptions,
 ) -> Result<PublishStateReport> {
-    publish_state_with_descriptor_update(rpc, options, None)
+    publish_state_with_descriptor_update_and_runtime(rpc, options, None, None)
 }
 
 fn validate_sponsor_policy_owner(
@@ -6871,6 +6905,23 @@ fn publish_state_with_descriptor_update(
     options: PublishStateOptions,
     descriptor_update: Option<&SettlementDescriptorUpdate>,
 ) -> Result<PublishStateReport> {
+    publish_state_with_descriptor_update_and_runtime(rpc, options, descriptor_update, None)
+}
+
+fn publish_state_with_publication_runtime(
+    rpc: &CkbRpcClient,
+    options: PublishStateOptions,
+    runtime: PublicationRuntime,
+) -> Result<PublishStateReport> {
+    publish_state_with_descriptor_update_and_runtime(rpc, options, None, Some(runtime))
+}
+
+fn publish_state_with_descriptor_update_and_runtime(
+    rpc: &CkbRpcClient,
+    options: PublishStateOptions,
+    descriptor_update: Option<&SettlementDescriptorUpdate>,
+    publication_runtime: Option<PublicationRuntime>,
+) -> Result<PublishStateReport> {
     ensure!(options.fee > 0, "fee must be non-zero");
 
     let owner_key = parse_privkey(&options.private_key)
@@ -6878,8 +6929,11 @@ fn publish_state_with_descriptor_update(
     let owner_lock = secp256k1_lock(&owner_key)?;
     let state_out_point = parse_out_point(&options.state_out_point)?;
     let sponsor_out_point = parse_out_point(&options.sponsor_out_point)?;
-    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
-    let sponsor_cell = load_live_cell(rpc, sponsor_out_point.clone())?;
+    // Publication and replacement are built from the canonical chain view. A pending
+    // transaction makes these cells appear dead in the pool-aware view even though a
+    // higher-fee conflicting transaction is exactly how CKB RBF is requested.
+    let state_cell = load_canonical_live_cell(rpc, state_out_point.clone())?;
+    let sponsor_cell = load_canonical_live_cell(rpc, sponsor_out_point.clone())?;
     let old_header = WireStateHeader::parse(state_cell.data.as_ref())
         .map_err(|err| anyhow!("state cell does not contain a valid Morph StateHeader: {err:?}"))?;
     let new_state_number = options
@@ -6897,6 +6951,12 @@ fn publish_state_with_descriptor_update(
         old_header.channel_id(),
         owner_lock.calc_script_hash().as_slice(),
     )?;
+    let sponsor_policy = WireSponsorPolicy::parse(sponsor_args.as_ref())
+        .map_err(|err| anyhow!("sponsor lock args are not a valid SponsorPolicy: {err:?}"))?;
+    let sponsor_remaining_budget = sponsor_policy
+        .max_total_fee()
+        .checked_sub(sponsor_policy.already_spent())
+        .ok_or_else(|| anyhow!("sponsor policy already_spent exceeds max_total_fee"))?;
 
     let (new_state_data, signature_witness, new_state_number, state_package) =
         if let Some(path) = &options.state_package {
@@ -6964,33 +7024,83 @@ fn publish_state_with_descriptor_update(
     let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
 
     ensure_output_capacity("state", &state_cell.output, new_state_data.len())?;
+    let build_transaction = |fee: u64| -> Result<ckb_types::core::TransactionView> {
+        ensure!(
+            fee <= sponsor_policy.max_fee_per_tx(),
+            "fee {fee} exceeds SponsorPolicy max_fee_per_tx {}",
+            sponsor_policy.max_fee_per_tx()
+        );
+        ensure!(
+            fee <= sponsor_remaining_budget,
+            "fee {fee} exceeds remaining SponsorPolicy budget {sponsor_remaining_budget}"
+        );
+        let sponsor_change_capacity = sponsor_cell
+            .capacity
+            .checked_sub(fee)
+            .ok_or_else(|| anyhow!("sponsor capacity cannot cover fee {fee}"))?;
+        ensure_change_capacity(&owner_lock, sponsor_change_capacity)?;
+        Ok(TransactionBuilder::default()
+            .cell_dep(state_lock_contract.cell_dep.clone())
+            .cell_dep(state_contract.cell_dep.clone())
+            .cell_dep(sponsor_contract.cell_dep.clone())
+            .input(CellInput::new(state_out_point.clone(), 0))
+            .input(CellInput::new(sponsor_out_point.clone(), 0))
+            .output(state_cell.output.clone())
+            .output(
+                CellOutput::new_builder()
+                    .capacity(sponsor_change_capacity)
+                    .lock(owner_lock.clone())
+                    .build(),
+            )
+            .output_data(Bytes::copy_from_slice(&new_state_data).pack())
+            .output_data(Bytes::new().pack())
+            .witness(witness_with_input_type(Bytes::copy_from_slice(
+                &signature_witness,
+            )))
+            .witness(empty_witness())
+            .build())
+    };
+
+    let (sent_hash, actual_fee, canonical_confirmations, canonical_confirmed) =
+        if let Some(runtime) = publication_runtime.as_ref() {
+            let observation = runtime.profile.observe_fee_market(rpc)?;
+            // The provisional transaction exists only to determine the fixed-layout
+            // serialized size. It must not inherit the legacy absolute fee because
+            // that value may legitimately exceed a tighter production profile.
+            let provisional = build_transaction(1)?;
+            let rate = initial_fee_rate(&runtime.profile.fee, &observation)?;
+            let dynamic_fee = fee_for_rate(rate, provisional.data().as_slice().len())?;
+            ensure!(
+                dynamic_fee <= runtime.profile.fee.max_fee,
+                "initial fee {dynamic_fee} exceeds operator maximum {}",
+                runtime.profile.fee.max_fee
+            );
+            let initial = build_transaction(dynamic_fee)?;
+            let sent = send_publication_attempts(
+                rpc,
+                initial,
+                dynamic_fee,
+                options.mine_blocks,
+                runtime,
+                &observation,
+                &build_transaction,
+            )?;
+            (
+                sent.report,
+                sent.fee,
+                sent.canonical_confirmations,
+                sent.canonical_confirmed,
+            )
+        } else {
+            let tx = build_transaction(options.fee)?;
+            let sent = send_and_mine(rpc, tx, options.mine_blocks)?;
+            let confirmations = transaction_confirmations(rpc, &sent)?;
+            (sent, options.fee, confirmations, confirmations > 0)
+        };
     let sponsor_change_capacity = sponsor_cell
         .capacity
-        .checked_sub(options.fee)
-        .ok_or_else(|| anyhow!("sponsor capacity cannot cover fee {}", options.fee))?;
-    ensure_change_capacity(&owner_lock, sponsor_change_capacity)?;
-
-    let tx = TransactionBuilder::default()
-        .cell_dep(state_lock_contract.cell_dep)
-        .cell_dep(state_contract.cell_dep)
-        .cell_dep(sponsor_contract.cell_dep)
-        .input(CellInput::new(state_out_point, 0))
-        .input(CellInput::new(sponsor_out_point, 0))
-        .output(state_cell.output.clone())
-        .output(
-            CellOutput::new_builder()
-                .capacity(sponsor_change_capacity)
-                .lock(owner_lock)
-                .build(),
-        )
-        .output_data(Bytes::from(new_state_data).pack())
-        .output_data(Bytes::new().pack())
-        .witness(witness_with_input_type(Bytes::copy_from_slice(
-            &signature_witness,
-        )))
-        .witness(empty_witness())
-        .build();
-    let sent_hash = send_and_mine(rpc, tx, options.mine_blocks)?;
+        .checked_sub(actual_fee)
+        .ok_or_else(|| anyhow!("sponsor capacity cannot cover fee {actual_fee}"))?;
     let new_state_tx_hash = sent_hash.tx_hash.clone();
 
     Ok(PublishStateReport {
@@ -6998,6 +7108,8 @@ fn publish_state_with_descriptor_update(
         status: sent_hash.status,
         block_number: sent_hash.block_number,
         block_hash: sent_hash.block_hash,
+        canonical_confirmations,
+        canonical_confirmed,
         channel_id: hex32(old_header.channel_id()),
         funding_anchor: hex32(old_header.funding_anchor()),
         old_state_number: old_header.state_number(),
@@ -7007,7 +7119,7 @@ fn publish_state_with_descriptor_update(
             index: 0,
         },
         sponsor_change_capacity,
-        fee: options.fee,
+        fee: actual_fee,
         state_package,
         metrics: sent_hash.metrics,
         mined_blocks: sent_hash.mined_blocks,
@@ -7456,8 +7568,8 @@ pub fn publish_latest_state_package(
         PublishStateOptions {
             contracts_dir: options.contracts_dir,
             private_key: options.private_key,
-            alice_private_key: options.alice_private_key,
-            bob_private_key: options.bob_private_key,
+            alice_private_key: String::new(),
+            bob_private_key: String::new(),
             state_out_point: options.state_out_point,
             sponsor_out_point: options.sponsor_out_point,
             state_number: None,
@@ -7470,6 +7582,72 @@ pub fn publish_latest_state_package(
         selected_package,
         publication,
     })
+}
+
+fn authorized_watch_fee(
+    publication_max_fee: Option<u64>,
+    funding_fee: u64,
+    auto_fund_sponsor: bool,
+) -> u64 {
+    let publication_fee = publication_max_fee.unwrap_or(funding_fee);
+    if auto_fund_sponsor {
+        publication_fee.max(funding_fee)
+    } else {
+        publication_fee
+    }
+}
+
+fn publication_runtime_budget_blocks(
+    profile: &PublicationProfile,
+    observed_confirmations: u64,
+) -> Result<u64> {
+    profile.validate()?;
+    let remaining_blocks = profile
+        .window
+        .configured_challenge_blocks
+        .checked_sub(observed_confirmations)
+        .ok_or_else(|| {
+            anyhow!(
+                "observed stale StateCell already has {observed_confirmations} confirmations, beyond the configured {}-block challenge window",
+                profile.window.configured_challenge_blocks
+            )
+        })?;
+    ensure!(
+        remaining_blocks > 0,
+        "observed stale StateCell has no remaining challenge-window budget"
+    );
+    let recovery_reserve = profile
+        .window
+        .reorg_budget_blocks
+        .checked_add(profile.window.failover_budget_blocks)
+        .and_then(|value| value.checked_add(profile.window.safety_margin_blocks))
+        .ok_or_else(|| anyhow!("publication recovery reserve overflow"))?;
+    let runtime_blocks = remaining_blocks
+        .checked_sub(recovery_reserve)
+        .ok_or_else(|| {
+            anyhow!(
+                "observed stale StateCell leaves fewer than {recovery_reserve} reserved reorg/failover/safety blocks"
+            )
+        })?;
+    ensure!(
+        runtime_blocks > profile.window.canonical_confirmation_blocks,
+        "observed stale StateCell leaves no execution time beyond the configured {} canonical-confirmation blocks",
+        profile.window.canonical_confirmation_blocks
+    );
+    Ok(runtime_blocks)
+}
+
+fn publication_deadline(
+    profile: &PublicationProfile,
+    observed_confirmations: u64,
+) -> Result<Instant> {
+    let runtime_blocks = publication_runtime_budget_blocks(profile, observed_confirmations)?;
+    let remaining_ms = runtime_blocks
+        .checked_mul(profile.window.conservative_block_ms)
+        .ok_or_else(|| anyhow!("publication challenge deadline overflow"))?;
+    Instant::now()
+        .checked_add(Duration::from_millis(remaining_ms))
+        .ok_or_else(|| anyhow!("publication challenge deadline exceeds platform clock range"))
 }
 
 pub fn watch_latest_state_package(
@@ -7492,6 +7670,23 @@ pub fn watch_latest_state_package(
         !options.auto_fund_sponsor || options.mine_blocks > 0,
         "auto sponsor funding requires --mine-blocks greater than zero on devnet"
     );
+    let publication_profile = options
+        .publication_profile
+        .as_ref()
+        .map(|path| read_publication_profile(path))
+        .transpose()?;
+    ensure!(
+        publication_profile.is_none() || options.publication_attempt_log.is_some(),
+        "a publication profile requires a durable publication attempt log"
+    );
+    let publication_reconciliation = if let (Some(profile), Some(path)) = (
+        publication_profile.as_ref(),
+        options.publication_attempt_log.as_ref(),
+    ) {
+        Some(reconcile_publication_attempts(rpc, path, profile)?)
+    } else {
+        None
+    };
     if let Some(path) = &options.watch_policy {
         let policy = read_watchtower_policy(path)?;
         policy.validate_run(&WatchPolicyRun {
@@ -7499,7 +7694,13 @@ pub fn watch_latest_state_package(
             detection_depth: options.detection_depth,
             timeout_secs: options.timeout_secs,
             poll_ms: options.poll_ms,
-            fee: options.fee,
+            fee: authorized_watch_fee(
+                publication_profile
+                    .as_ref()
+                    .map(|profile| profile.fee.max_fee),
+                options.fee,
+                options.auto_fund_sponsor,
+            ),
             mine_blocks: options.mine_blocks,
             sponsor_out_point_present: options.sponsor_out_point.is_some(),
             auto_fund_sponsor: options.auto_fund_sponsor,
@@ -7552,7 +7753,16 @@ pub fn watch_latest_state_package(
             )?,
         )?;
     }
-    let active_cursor = if reorg_recovery.is_some() {
+    let publication_retry_rescan = if reorg_recovery.is_none() {
+        loaded_cursor
+            .as_ref()
+            .map(|cursor| cursor_requires_publication_retry(rpc, cursor, &package_records))
+            .transpose()?
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    let active_cursor = if reorg_recovery.is_some() || publication_retry_rescan {
         None
     } else {
         loaded_cursor.as_ref()
@@ -7622,6 +7832,12 @@ pub fn watch_latest_state_package(
                 for observed in
                     observed_state_cells(&block, &channel_id, tip_number, &state_cell_filter)?
                 {
+                    let observed_out_point = parse_out_point(&observed.out_point)?;
+                    let canonical_cell =
+                        rpc.canonical_live_cell(observed_out_point.into(), false)?;
+                    if canonical_cell.status != "live" {
+                        continue;
+                    }
                     let previous_funding_anchor = current_funding_anchor.clone();
                     let previous_funding_context_id = current_funding_context_id.clone();
                     let splice_detected = previous_funding_context_id
@@ -7768,21 +7984,39 @@ pub fn watch_latest_state_package(
                             &observed,
                             selected_for_context_state_number,
                         )?;
-                        let publication = publish_state(
-                            rpc,
-                            PublishStateOptions {
-                                contracts_dir: options.contracts_dir.clone(),
-                                private_key: options.private_key.clone(),
-                                alice_private_key: options.alice_private_key.clone(),
-                                bob_private_key: options.bob_private_key.clone(),
-                                state_out_point: observed.out_point.clone(),
-                                sponsor_out_point,
-                                state_number: None,
-                                state_package: Some(selected_for_context.path.clone()),
-                                fee: options.fee,
-                                mine_blocks: options.mine_blocks,
-                            },
-                        )?;
+                        let publication_options = PublishStateOptions {
+                            contracts_dir: options.contracts_dir.clone(),
+                            private_key: options.private_key.clone(),
+                            alice_private_key: String::new(),
+                            bob_private_key: String::new(),
+                            state_out_point: observed.out_point.clone(),
+                            sponsor_out_point,
+                            state_number: None,
+                            state_package: Some(selected_for_context.path.clone()),
+                            fee: options.fee,
+                            mine_blocks: options.mine_blocks,
+                        };
+                        let publication = if let Some(profile) = publication_profile.clone() {
+                            let deadline = publication_deadline(&profile, observed.confirmations)?;
+                            publish_state_with_publication_runtime(
+                                rpc,
+                                publication_options,
+                                PublicationRuntime {
+                                    profile,
+                                    attempt_log: options.publication_attempt_log.clone(),
+                                    deadline,
+                                    intent_id: selected_for_context.package.signing_digest.clone(),
+                                    channel_id: channel_id.clone(),
+                                    funding_context_id: selected_for_context
+                                        .package
+                                        .funding_context_id
+                                        .clone(),
+                                    target_state_number: selected_for_context_state_number,
+                                },
+                            )?
+                        } else {
+                            publish_state(rpc, publication_options)?
+                        };
                         let publication_event = if splice_detected
                             || selected_for_context.package.funding_anchor
                                 != selected_package.package.funding_anchor
@@ -7831,16 +8065,23 @@ pub fn watch_latest_state_package(
                         )?;
                         return Ok(WatchLatestStatePackageReport {
                             channel_id,
+                            operator_id: publication_profile
+                                .as_ref()
+                                .map(|profile| profile.operator_id.clone()),
                             from_block: options.from_block,
                             effective_from_block,
                             scanned_to_block,
                             next_from_block,
                             detection_depth: options.detection_depth,
+                            publication_profile: options.publication_profile.clone(),
+                            publication_attempt_log: options.publication_attempt_log.clone(),
+                            publication_reconciliation,
                             cursor_file: Some(cursor_file),
                             alert_file: options.alert_file.clone(),
                             alert_webhook_url: options.alert_webhook_url.clone(),
                             loaded_cursor,
                             reorg_recovery,
+                            publication_retry_rescan,
                             selected_package: selected_for_context,
                             sponsor_top_up,
                             observed: Some(observed),
@@ -7891,16 +8132,23 @@ pub fn watch_latest_state_package(
             )?;
             return Ok(WatchLatestStatePackageReport {
                 channel_id,
+                operator_id: publication_profile
+                    .as_ref()
+                    .map(|profile| profile.operator_id.clone()),
                 from_block: options.from_block,
                 effective_from_block,
                 scanned_to_block,
                 next_from_block: next_block,
                 detection_depth: options.detection_depth,
+                publication_profile: options.publication_profile.clone(),
+                publication_attempt_log: options.publication_attempt_log.clone(),
+                publication_reconciliation,
                 cursor_file: Some(cursor_file),
                 alert_file: options.alert_file.clone(),
                 alert_webhook_url: options.alert_webhook_url.clone(),
                 loaded_cursor,
                 reorg_recovery,
+                publication_retry_rescan,
                 selected_package,
                 sponsor_top_up: None,
                 observed: last_observed,
@@ -7947,6 +8195,40 @@ fn latest_package_for_funding_anchor(
         .filter(|record| record.package.funding_anchor == funding_anchor)
         .cloned()
         .max_by(compare_state_package_records)
+}
+
+fn cursor_requires_publication_retry(
+    rpc: &CkbRpcClient,
+    cursor: &WatchCursor,
+    records: &[StatePackageRecord],
+) -> Result<bool> {
+    let Some(observed_state_number) = cursor.last_observed_state_number else {
+        return Ok(false);
+    };
+    let Some(observed_out_point) = cursor.last_observed_out_point.as_deref() else {
+        return Ok(false);
+    };
+    let selected = cursor
+        .current_funding_context_id
+        .as_deref()
+        .and_then(|context_id| latest_package_for_funding_context(records, context_id))
+        .or_else(|| {
+            cursor
+                .current_funding_anchor
+                .as_deref()
+                .and_then(|anchor| latest_package_for_funding_anchor(records, anchor))
+        });
+    let Some(selected) = selected else {
+        return Ok(false);
+    };
+    if selected.package.state_number <= observed_state_number {
+        return Ok(false);
+    }
+    let out_point = parse_out_point(observed_out_point).with_context(|| {
+        format!("watch cursor contains invalid last_observed_out_point {observed_out_point}")
+    })?;
+    let canonical = rpc.canonical_live_cell(out_point.into(), false)?;
+    Ok(canonical.status == "live")
 }
 
 fn compare_state_package_records(
@@ -8112,10 +8394,14 @@ fn sponsor_for_watch_publication(
         return Ok((out_point.clone(), None));
     }
 
-    let policy_fee = options
-        .fee
-        .checked_mul(2)
-        .ok_or_else(|| anyhow!("fee overflow while building auto sponsor policy"))?;
+    let policy_fee = if let Some(path) = options.publication_profile.as_ref() {
+        read_publication_profile(path)?.fee.max_fee
+    } else {
+        options
+            .fee
+            .checked_mul(2)
+            .ok_or_else(|| anyhow!("fee overflow while building auto sponsor policy"))?
+    };
     ensure!(
         policy_fee <= options.auto_sponsor_capacity,
         "auto sponsor capacity must cover the emergency policy budget"
@@ -8125,6 +8411,7 @@ fn sponsor_for_watch_publication(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: observed.out_point.clone(),
             sponsor_capacity: options.auto_sponsor_capacity,
             sponsor_min_state_number: selected_state_number,
@@ -8174,7 +8461,13 @@ pub fn fund_sponsor(rpc: &CkbRpcClient, options: FundSponsorOptions) -> Result<F
     let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
     let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
 
-    let change_lock_hash = owner_lock.calc_script_hash();
+    let sponsor_change_lock = if let Some(pubkey) = options.sponsor_change_pubkey.as_deref() {
+        let pubkey = parse_compressed_pubkey_hex(pubkey, "sponsor change pubkey")?;
+        secp256k1_lock_from_pubkey(&pubkey)?
+    } else {
+        owner_lock.clone()
+    };
+    let change_lock_hash = sponsor_change_lock.calc_script_hash();
     let channel_id: &[u8; 32] = header
         .channel_id()
         .try_into()
@@ -8918,6 +9211,7 @@ pub fn splice_smoke(rpc: &CkbRpcClient, options: SpliceSmokeOptions) -> Result<S
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: post_splice_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
@@ -9091,6 +9385,7 @@ pub fn xudt_splice_in_smoke(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: post_splice_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
@@ -9274,6 +9569,7 @@ pub fn xudt_splice_out_smoke(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: post_splice_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
@@ -10306,6 +10602,7 @@ pub fn supersede_smoke(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: stale_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: DEFAULT_SPONSOR_MIN_STATE_NUMBER,
@@ -10682,6 +10979,7 @@ pub fn sponsor_budget_negative_smoke(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: initial_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 1,
@@ -10788,6 +11086,7 @@ pub fn competing_spend_smoke(
         FundSponsorOptions {
             contracts_dir: options.contracts_dir.clone(),
             private_key: options.private_key.clone(),
+            sponsor_change_pubkey: None,
             state_out_point: initial_state_out_point.clone(),
             sponsor_capacity: options.sponsor_capacity,
             sponsor_min_state_number: 2,
@@ -11147,6 +11446,564 @@ fn send_and_mine(
         metrics,
         mined_blocks: Vec::new(),
     })
+}
+
+fn transaction_confirmations(rpc: &CkbRpcClient, report: &SentTransactionReport) -> Result<u64> {
+    if report.status != "Committed" {
+        return Ok(0);
+    }
+    let block_number = report
+        .block_number
+        .context("committed transaction report has no block number")?;
+    let block_hash = report
+        .block_hash
+        .as_deref()
+        .context("committed transaction report has no block hash")?;
+    let canonical = rpc
+        .block_by_number(block_number)?
+        .context("committed transaction block is no longer canonical")?;
+    ensure!(
+        format!("{:#x}", canonical.header.hash) == block_hash,
+        "committed transaction block {block_hash} is no longer canonical"
+    );
+    let tip_number = rpc.tip_header()?.number_value()?;
+    Ok(tip_number.saturating_sub(block_number).saturating_add(1))
+}
+
+fn send_publication_attempts<F>(
+    rpc: &CkbRpcClient,
+    initial_tx: ckb_types::core::TransactionView,
+    initial_fee: u64,
+    mine_blocks: u64,
+    runtime: &PublicationRuntime,
+    observation: &FeeObservation,
+    build_transaction: &F,
+) -> Result<PublicationSentReport>
+where
+    F: Fn(u64) -> Result<ckb_types::core::TransactionView>,
+{
+    runtime.profile.validate()?;
+    let initial_metrics = transaction_metrics(rpc, &initial_tx)?;
+    let mut tx = initial_tx;
+    let mut fee = initial_fee;
+    let mut replaces_tx_hash = None;
+    let started = Instant::now();
+
+    for attempt in 1..=runtime.profile.fee.max_attempts {
+        ensure!(
+            Instant::now() < runtime.deadline,
+            "publication challenge deadline expired before attempt {attempt}"
+        );
+        let tx_size_bytes = tx.data().as_slice().len();
+        let tx_hash = H256::from(tx.hash());
+        let tx_hash_string = format!("{tx_hash:#x}");
+        append_publication_attempt_if_requested(
+            rpc,
+            runtime,
+            attempt,
+            fee,
+            tx_size_bytes,
+            tx_hash_string.clone(),
+            replaces_tx_hash.clone(),
+            None,
+            "built",
+            None,
+            observation,
+            &started,
+        )?;
+
+        let json_tx: ckb_jsonrpc_types::Transaction = tx.data().into();
+        let sent_hash = match rpc.send_transaction(json_tx) {
+            Ok(hash) => hash,
+            Err(err) => {
+                // A transport timeout, or a duplicate response after an internal
+                // transport retry, does not prove that the node failed to accept
+                // the transaction. Reconcile the locally known hash before
+                // classifying the submission outcome.
+                let observed_after_error = rpc.transaction(tx_hash.clone());
+                if observed_after_error.as_ref().is_ok_and(|status| {
+                    matches!(
+                        status.tx_status.status,
+                        Status::Pending | Status::Proposed | Status::Committed
+                    )
+                }) {
+                    tx_hash.clone()
+                } else {
+                    let required_replacement_fee = required_replacement_fee_from_error(&err);
+                    let failure_disposition = submission_failure_disposition(
+                        required_replacement_fee,
+                        observed_after_error
+                            .as_ref()
+                            .ok()
+                            .map(|status| &status.tx_status.status),
+                    );
+                    let (authoritative_rejection, required_replacement_fee) =
+                        match failure_disposition {
+                            SubmissionFailureDisposition::ReplacementRequired(required_fee) => {
+                                (true, Some(required_fee))
+                            }
+                            SubmissionFailureDisposition::ExplicitRejection => (true, None),
+                            SubmissionFailureDisposition::Indeterminate => (false, None),
+                        };
+                    append_publication_attempt_if_requested(
+                        rpc,
+                        runtime,
+                        attempt,
+                        fee,
+                        tx_size_bytes,
+                        tx_hash_string,
+                        replaces_tx_hash.clone(),
+                        required_replacement_fee,
+                        if authoritative_rejection {
+                            "rejected"
+                        } else {
+                            "submission_unknown"
+                        },
+                        Some(if required_replacement_fee.is_some() {
+                            "rbf_fee_too_low"
+                        } else if authoritative_rejection {
+                            "rpc_submission_rejected"
+                        } else {
+                            "rpc_submission_unknown"
+                        }),
+                        observation,
+                        &started,
+                    )?;
+                    if let Some(required_fee) = required_replacement_fee
+                        && attempt < runtime.profile.fee.max_attempts
+                    {
+                        fee = replacement_fee(
+                            &runtime.profile.fee,
+                            fee,
+                            tx_size_bytes,
+                            observation.pool_min_rbf_rate,
+                            Some(required_fee),
+                        )?;
+                        tx = build_transaction(fee)?;
+                        continue;
+                    }
+                    let reconciliation_context = observed_after_error
+                        .err()
+                        .map(|status_error| {
+                            format!(
+                                "; transaction-status reconciliation also failed: {status_error:#}"
+                            )
+                        })
+                        .unwrap_or_default();
+                    return Err(err).with_context(|| {
+                        format!("publication transaction submission failed{reconciliation_context}")
+                    });
+                }
+            }
+        };
+        ensure!(
+            sent_hash == tx_hash,
+            "node returned tx hash {sent_hash:#x}, but locally built {tx_hash:#x}"
+        );
+
+        let accepted = rpc.transaction(sent_hash.clone())?;
+        let accepted_status = format!("{:?}", accepted.tx_status.status);
+        append_publication_attempt_if_requested(
+            rpc,
+            runtime,
+            attempt,
+            fee,
+            tx_size_bytes,
+            format!("{sent_hash:#x}"),
+            replaces_tx_hash.clone(),
+            accepted.min_replace_fee.map(|value| value.value()),
+            &accepted_status.to_ascii_lowercase(),
+            None,
+            observation,
+            &started,
+        )?;
+
+        if mine_blocks > 0 {
+            return wait_and_record_canonical_publication(
+                rpc,
+                runtime,
+                attempt,
+                fee,
+                tx_size_bytes,
+                sent_hash,
+                replaces_tx_hash,
+                observation,
+                &started,
+                mine_blocks,
+                initial_metrics.estimated_cycles,
+            );
+        }
+        match accepted.tx_status.status {
+            Status::Rejected => {
+                return Err(anyhow!(
+                    "publication transaction {sent_hash:#x} rejected: {}",
+                    accepted
+                        .tx_status
+                        .reason
+                        .as_deref()
+                        .unwrap_or("node did not report a rejection reason")
+                ));
+            }
+            Status::Unknown => {
+                return Err(anyhow!(
+                    "publication transaction {sent_hash:#x} is unknown after submission"
+                ));
+            }
+            Status::Proposed | Status::Committed => {
+                return publication_report_from_status(
+                    rpc,
+                    sent_hash,
+                    accepted,
+                    fee,
+                    tx_size_bytes,
+                    initial_metrics.estimated_cycles,
+                    runtime.profile.window.canonical_confirmation_blocks,
+                );
+            }
+            Status::Pending if attempt == runtime.profile.fee.max_attempts => {
+                return publication_report_from_status(
+                    rpc,
+                    sent_hash,
+                    accepted,
+                    fee,
+                    tx_size_bytes,
+                    initial_metrics.estimated_cycles,
+                    runtime.profile.window.canonical_confirmation_blocks,
+                );
+            }
+            Status::Pending => {}
+        }
+
+        let bump_delay = Duration::from_millis(runtime.profile.fee.bump_after_ms);
+        ensure!(
+            Instant::now()
+                .checked_add(bump_delay)
+                .is_some_and(|wake| wake < runtime.deadline),
+            "publication retry delay would exceed the challenge deadline"
+        );
+        std::thread::sleep(bump_delay);
+        let pending = rpc.transaction(sent_hash.clone())?;
+        let pending_status = format!("{:?}", pending.tx_status.status);
+        append_publication_attempt_if_requested(
+            rpc,
+            runtime,
+            attempt,
+            fee,
+            tx_size_bytes,
+            format!("{sent_hash:#x}"),
+            replaces_tx_hash.clone(),
+            pending.min_replace_fee.map(|value| value.value()),
+            &pending_status.to_ascii_lowercase(),
+            None,
+            observation,
+            &started,
+        )?;
+        if pending.tx_status.status != Status::Pending {
+            return publication_report_from_status(
+                rpc,
+                sent_hash,
+                pending,
+                fee,
+                tx_size_bytes,
+                initial_metrics.estimated_cycles,
+                runtime.profile.window.canonical_confirmation_blocks,
+            );
+        }
+        let node_min_replace_fee = pending.min_replace_fee.map(|value| value.value());
+        let next_fee = replacement_fee(
+            &runtime.profile.fee,
+            fee,
+            tx_size_bytes,
+            observation.pool_min_rbf_rate,
+            node_min_replace_fee,
+        )?;
+        replaces_tx_hash = Some(format!("{sent_hash:#x}"));
+        fee = next_fee;
+        tx = build_transaction(fee)?;
+    }
+
+    Err(anyhow!("publication attempt loop ended without a result"))
+}
+
+fn publication_report_from_status(
+    rpc: &CkbRpcClient,
+    tx_hash: H256,
+    status: ckb_jsonrpc_types::TransactionWithStatusResponse,
+    fee: u64,
+    tx_size_bytes: usize,
+    estimated_cycles: u64,
+    required_confirmations: u64,
+) -> Result<PublicationSentReport> {
+    if publication_status_disposition(&status.tx_status.status)
+        == PublicationStatusDisposition::Failure
+    {
+        match status.tx_status.status {
+            Status::Rejected => {
+                return Err(anyhow!(
+                    "publication transaction {tx_hash:#x} rejected: {}",
+                    status
+                        .tx_status
+                        .reason
+                        .as_deref()
+                        .unwrap_or("node did not report a rejection reason")
+                ));
+            }
+            Status::Unknown => {
+                return Err(anyhow!(
+                    "publication transaction {tx_hash:#x} is unknown after submission"
+                ));
+            }
+            Status::Pending | Status::Proposed | Status::Committed => {
+                unreachable!("non-failure status classified as a failure")
+            }
+        }
+    }
+    let report = SentTransactionReport {
+        tx_hash: format!("{tx_hash:#x}"),
+        status: format!("{:?}", status.tx_status.status),
+        block_number: status.tx_status.block_number.map(|number| number.value()),
+        block_hash: status.tx_status.block_hash.map(|hash| format!("{hash:#x}")),
+        metrics: TransactionMetrics {
+            estimated_cycles,
+            tx_size_bytes,
+        },
+        mined_blocks: Vec::new(),
+    };
+    let canonical_confirmations = transaction_confirmations(rpc, &report)?;
+    Ok(PublicationSentReport {
+        report,
+        fee,
+        canonical_confirmations,
+        canonical_confirmed: canonical_confirmations >= required_confirmations,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PublicationStatusDisposition {
+    Nonterminal,
+    CanonicalCandidate,
+    Failure,
+}
+
+fn publication_status_disposition(status: &Status) -> PublicationStatusDisposition {
+    match status {
+        Status::Pending | Status::Proposed => PublicationStatusDisposition::Nonterminal,
+        Status::Committed => PublicationStatusDisposition::CanonicalCandidate,
+        Status::Rejected | Status::Unknown => PublicationStatusDisposition::Failure,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubmissionFailureDisposition {
+    ReplacementRequired(u64),
+    ExplicitRejection,
+    Indeterminate,
+}
+
+fn submission_failure_disposition(
+    required_replacement_fee: Option<u64>,
+    observed_status: Option<&Status>,
+) -> SubmissionFailureDisposition {
+    if let Some(required_fee) = required_replacement_fee {
+        SubmissionFailureDisposition::ReplacementRequired(required_fee)
+    } else if observed_status == Some(&Status::Rejected) {
+        SubmissionFailureDisposition::ExplicitRejection
+    } else {
+        SubmissionFailureDisposition::Indeterminate
+    }
+}
+
+struct CanonicalPublicationStatus {
+    status: ckb_jsonrpc_types::TransactionWithStatusResponse,
+    confirmations: u64,
+    blocks: Vec<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wait_and_record_canonical_publication(
+    rpc: &CkbRpcClient,
+    runtime: &PublicationRuntime,
+    attempt: u16,
+    fee: u64,
+    tx_size_bytes: usize,
+    sent_hash: H256,
+    replaces_tx_hash: Option<String>,
+    observation: &FeeObservation,
+    started: &Instant,
+    mine_blocks: u64,
+    estimated_cycles: u64,
+) -> Result<PublicationSentReport> {
+    let confirmed = wait_for_canonical_publication(
+        rpc,
+        sent_hash.clone(),
+        runtime.profile.window.canonical_confirmation_blocks,
+        mine_blocks,
+        runtime.deadline,
+    )?;
+    append_publication_attempt_if_requested(
+        rpc,
+        runtime,
+        attempt,
+        fee,
+        tx_size_bytes,
+        format!("{sent_hash:#x}"),
+        replaces_tx_hash,
+        confirmed.status.min_replace_fee.map(|value| value.value()),
+        "committed",
+        None,
+        observation,
+        started,
+    )?;
+    Ok(PublicationSentReport {
+        report: SentTransactionReport {
+            tx_hash: format!("{sent_hash:#x}"),
+            status: format!("{:?}", confirmed.status.tx_status.status),
+            block_number: confirmed
+                .status
+                .tx_status
+                .block_number
+                .map(|number| number.value()),
+            block_hash: confirmed
+                .status
+                .tx_status
+                .block_hash
+                .map(|hash| format!("{hash:#x}")),
+            metrics: TransactionMetrics {
+                estimated_cycles,
+                tx_size_bytes,
+            },
+            mined_blocks: confirmed.blocks,
+        },
+        fee,
+        canonical_confirmations: confirmed.confirmations,
+        canonical_confirmed: true,
+    })
+}
+
+fn wait_for_canonical_publication(
+    rpc: &CkbRpcClient,
+    tx_hash: H256,
+    required_confirmations: u64,
+    mine_blocks: u64,
+    deadline: Instant,
+) -> Result<CanonicalPublicationStatus> {
+    ensure!(
+        required_confirmations > 0,
+        "canonical confirmation depth must be non-zero"
+    );
+    let mut blocks = Vec::new();
+    loop {
+        let status = rpc.transaction(tx_hash.clone())?;
+        match status.tx_status.status {
+            Status::Committed => {
+                let block_number = status
+                    .tx_status
+                    .block_number
+                    .as_ref()
+                    .context("committed publication has no block number")?
+                    .value();
+                let block_hash = status
+                    .tx_status
+                    .block_hash
+                    .as_ref()
+                    .context("committed publication has no block hash")?;
+                let canonical = rpc
+                    .block_by_number(block_number)?
+                    .context("committed publication block disappeared from the canonical chain")?;
+                ensure!(
+                    &canonical.header.hash == block_hash,
+                    "committed publication block {block_hash:#x} is no longer canonical"
+                );
+                let tip_number = rpc.tip_header()?.number_value()?;
+                let confirmations = tip_number.saturating_sub(block_number).saturating_add(1);
+                if confirmations >= required_confirmations {
+                    return Ok(CanonicalPublicationStatus {
+                        status,
+                        confirmations,
+                        blocks,
+                    });
+                }
+            }
+            Status::Rejected => {
+                return Err(anyhow!(
+                    "publication transaction {tx_hash:#x} rejected: {}",
+                    status
+                        .tx_status
+                        .reason
+                        .as_deref()
+                        .unwrap_or("node did not report a rejection reason")
+                ));
+            }
+            Status::Unknown => {
+                return Err(anyhow!(
+                    "publication transaction {tx_hash:#x} is unknown; canonical confirmation cannot be established"
+                ));
+            }
+            Status::Pending | Status::Proposed => {}
+        }
+
+        ensure!(
+            Instant::now() < deadline,
+            "publication transaction {tx_hash:#x} did not reach {required_confirmations} canonical confirmations before the challenge deadline"
+        );
+        if mine_blocks > 0 {
+            for _ in 0..mine_blocks.max(1) {
+                ensure!(
+                    Instant::now() < deadline,
+                    "publication challenge deadline expired while mining confirmations"
+                );
+                blocks.push(rpc.generate_block()?);
+            }
+        } else {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            std::thread::sleep(remaining.min(Duration::from_millis(500)));
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_publication_attempt_if_requested(
+    rpc: &CkbRpcClient,
+    runtime: &PublicationRuntime,
+    attempt: u16,
+    fee: u64,
+    tx_size_bytes: usize,
+    tx_hash: String,
+    replaces_tx_hash: Option<String>,
+    node_min_replace_fee: Option<u64>,
+    status: &str,
+    error_class: Option<&str>,
+    observation: &FeeObservation,
+    started: &Instant,
+) -> Result<()> {
+    let Some(path) = runtime.attempt_log.as_ref() else {
+        return Ok(());
+    };
+    let tip = rpc.tip_header()?;
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis())
+        .context("publication attempt elapsed time exceeds u64")?;
+    let record = publication_attempt_record(
+        &runtime.profile,
+        PublicationAttemptInput {
+            fee_observation: observation.clone(),
+            intent_id: runtime.intent_id.clone(),
+            channel_id: runtime.channel_id.clone(),
+            funding_context_id: runtime.funding_context_id.clone(),
+            target_state_number: runtime.target_state_number,
+            attempt,
+            fee,
+            tx_size_bytes,
+            tx_hash,
+            replaces_tx_hash,
+            node_min_replace_fee,
+            status: status.to_string(),
+            error_class: error_class.map(str::to_string),
+            elapsed_ms,
+            tip_number: tip.number_value()?,
+            tip_hash: tip.hash,
+        },
+    )?;
+    append_publication_attempt(path, &record)
 }
 
 fn mine_relative_since_maturity(rpc: &CkbRpcClient, finalise_since: u64) -> Result<()> {
@@ -11553,6 +12410,18 @@ fn find_largest_live_cell(
 
 fn load_live_cell(rpc: &CkbRpcClient, out_point: OutPoint) -> Result<LiveCellDetails> {
     let live = rpc.live_cell(out_point.clone().into(), true)?;
+    live_cell_details(out_point, live)
+}
+
+fn load_canonical_live_cell(rpc: &CkbRpcClient, out_point: OutPoint) -> Result<LiveCellDetails> {
+    let live = rpc.canonical_live_cell(out_point.clone().into(), true)?;
+    live_cell_details(out_point, live)
+}
+
+fn live_cell_details(
+    out_point: OutPoint,
+    live: ckb_jsonrpc_types::CellWithStatus,
+) -> Result<LiveCellDetails> {
     ensure!(
         live.status == "live",
         "cell {} is not live; status={}",
@@ -11650,6 +12519,61 @@ fn compressed_pubkey(privkey: &Privkey) -> Result<[u8; 33]> {
     let mut out = [0u8; 33];
     out.copy_from_slice(&serialized);
     Ok(out)
+}
+
+pub fn compressed_pubkey_hex_from_private(value: &str) -> Result<String> {
+    let key = parse_privkey(value).context("invalid secp256k1 private key")?;
+    Ok(hex_prefixed(&compressed_pubkey(&key)?))
+}
+
+pub fn canonical_state_challenge_blocks(
+    rpc: &CkbRpcClient,
+    contracts_dir: &Path,
+    state_out_point: &str,
+) -> Result<u64> {
+    let out_point = parse_out_point(state_out_point)?;
+    let cell = load_canonical_live_cell(rpc, out_point)?;
+    let state_type = cell
+        .output
+        .type_()
+        .to_opt()
+        .ok_or_else(|| anyhow!("challenge-window StateCell has no type script"))?;
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let contracts = find_deployed_contracts(rpc, contracts_dir, tip_number)?;
+    let state_type_contract = contract_by_name(&contracts, "morph-state-type")?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
+    ensure!(
+        script_uses_data1_code_hash(&state_type, &state_type_contract.data_hash),
+        "challenge-window cell does not use the deployed morph-state-type"
+    );
+    ensure_type_bound_state_lock(
+        &cell.output,
+        &state_type,
+        &state_lock_contract,
+        "challenge-window StateCell",
+    )?;
+    let header = WireStateHeader::parse(cell.data.as_ref()).map_err(|err| {
+        anyhow!("challenge-window StateCell does not contain a valid StateHeader: {err:?}")
+    })?;
+    let args = state_type.args().raw_data();
+    ensure!(
+        matches!(args.len(), 40 | 72),
+        "challenge-window StateType args must be bilateral or FactoryProof layout"
+    );
+    ensure!(
+        header.funding_anchor() == &args[..BYTE32_LEN],
+        "challenge-window StateHeader funding anchor does not match StateType args"
+    );
+    let since_offset = args.len() - 8;
+    let mut since_bytes = [0u8; 8];
+    since_bytes.copy_from_slice(&args[since_offset..]);
+    let encoded_since = u64::from_le_bytes(since_bytes);
+    let blocks = encoded_since & 0x00ff_ffff_ffff_ffff;
+    ensure!(
+        relative_block_since_arg(blocks)? == encoded_since,
+        "StateType finalise_since is not canonical relative-block since"
+    );
+    Ok(blocks)
 }
 
 fn k256_signing_key(value: &str) -> Result<SigningKey> {
@@ -13949,6 +14873,74 @@ fn byte32_to_h256(value: ckb_types::packed::Byte32) -> H256 {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn watch_policy_covers_auto_funding_and_publication_fees() {
+        assert_eq!(authorized_watch_fee(Some(20), 30, true), 30);
+        assert_eq!(authorized_watch_fee(Some(40), 30, true), 40);
+        assert_eq!(authorized_watch_fee(Some(20), 30, false), 20);
+    }
+
+    #[test]
+    fn publication_deadline_rejects_exhausted_challenge_window() {
+        let profile = crate::publication::fixture_publication_profile();
+        let error =
+            publication_deadline(&profile, profile.window.configured_challenge_blocks).unwrap_err();
+        assert!(error.to_string().contains("no remaining challenge-window"));
+    }
+
+    #[test]
+    fn publication_deadline_reserves_reorg_failover_and_safety_blocks() {
+        let profile = crate::publication::fixture_publication_profile();
+        assert_eq!(publication_runtime_budget_blocks(&profile, 1).unwrap(), 8);
+
+        let error = publication_runtime_budget_blocks(&profile, 5).unwrap_err();
+        assert!(error.to_string().contains("no execution time"));
+    }
+
+    #[test]
+    fn publication_statuses_have_explicit_terminal_dispositions() {
+        assert_eq!(
+            publication_status_disposition(&Status::Pending),
+            PublicationStatusDisposition::Nonterminal
+        );
+        assert_eq!(
+            publication_status_disposition(&Status::Proposed),
+            PublicationStatusDisposition::Nonterminal
+        );
+        assert_eq!(
+            publication_status_disposition(&Status::Committed),
+            PublicationStatusDisposition::CanonicalCandidate
+        );
+        assert_eq!(
+            publication_status_disposition(&Status::Rejected),
+            PublicationStatusDisposition::Failure
+        );
+        assert_eq!(
+            publication_status_disposition(&Status::Unknown),
+            PublicationStatusDisposition::Failure
+        );
+    }
+
+    #[test]
+    fn generic_rpc_errors_remain_indeterminate() {
+        assert_eq!(
+            submission_failure_disposition(None, None),
+            SubmissionFailureDisposition::Indeterminate
+        );
+        assert_eq!(
+            submission_failure_disposition(None, Some(&Status::Unknown)),
+            SubmissionFailureDisposition::Indeterminate
+        );
+        assert_eq!(
+            submission_failure_disposition(None, Some(&Status::Rejected)),
+            SubmissionFailureDisposition::ExplicitRejection
+        );
+        assert_eq!(
+            submission_failure_disposition(Some(42), None),
+            SubmissionFailureDisposition::ReplacementRequired(42)
+        );
+    }
 
     #[test]
     fn parses_ckb_script_failure() {

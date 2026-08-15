@@ -1,9 +1,11 @@
+use std::fmt;
+use std::io::Read;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use ckb_jsonrpc_types::{
-    BlockView, CellWithStatus, EstimateCycles, OutPoint as JsonOutPoint, Transaction,
-    TransactionWithStatusResponse,
+    BlockView, CellWithStatus, EstimateCycles, FeeRateStatistics, OutPoint as JsonOutPoint,
+    Transaction, TransactionWithStatusResponse, TxPoolInfo, Uint64,
 };
 use ckb_types::H256;
 use reqwest::blocking::Client;
@@ -19,6 +21,8 @@ const CKB_RPC_TRANSPORT_MAX_ATTEMPTS: usize = 4;
 const CKB_RPC_RETRYABLE_STATUS_MAX_ATTEMPTS: usize = 32;
 const CKB_RPC_RETRY_BASE_DELAY_MS: u64 = 250;
 const CKB_RPC_RETRY_MAX_DELAY_MS: u64 = 2_000;
+const MAX_CKB_RPC_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_RPC_ERROR_DIAGNOSTIC_CHARS: usize = 4 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct CkbRpcClient {
@@ -39,6 +43,39 @@ struct RpcResponse<T> {
 struct RpcError {
     code: i64,
     message: String,
+}
+
+#[derive(Debug)]
+pub struct RpcMethodError {
+    method: String,
+    code: i64,
+    message: String,
+}
+
+impl RpcMethodError {
+    pub fn code(&self) -> i64 {
+        self.code
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for RpcMethodError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "CKB RPC error {} on {}: {}",
+            self.code, self.method, self.message
+        )
+    }
+}
+
+impl std::error::Error for RpcMethodError {}
+
+pub fn rpc_method_error(error: &anyhow::Error) -> Option<&RpcMethodError> {
+    error.downcast_ref::<RpcMethodError>()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +100,7 @@ pub struct LocalNodeInfo {
     pub active: bool,
     pub node_id: String,
     pub connections: String,
+    pub version: String,
 }
 
 #[derive(Debug, Clone)]
@@ -135,8 +173,15 @@ impl CkbRpcClient {
         )
     }
 
+    pub fn truncate(&self, target_tip_hash: H256) -> Result<()> {
+        self.call_null("truncate", json!([target_tip_hash]))
+            .with_context(
+                || "truncate failed; ensure the node exposes CKB integration-test RPC methods",
+            )
+    }
+
     pub fn block_by_number(&self, number: u64) -> Result<Option<BlockView>> {
-        self.call(
+        self.call_nullable(
             "get_block_by_number",
             json!([format_quantity(number), format_quantity(2), false]),
         )
@@ -144,6 +189,14 @@ impl CkbRpcClient {
 
     pub fn live_cell(&self, out_point: JsonOutPoint, with_data: bool) -> Result<CellWithStatus> {
         self.call("get_live_cell", json!([out_point, with_data, true]))
+    }
+
+    pub fn canonical_live_cell(
+        &self,
+        out_point: JsonOutPoint,
+        with_data: bool,
+    ) -> Result<CellWithStatus> {
+        self.call("get_live_cell", json!([out_point, with_data, false]))
     }
 
     pub fn send_transaction(&self, transaction: Transaction) -> Result<H256> {
@@ -159,6 +212,22 @@ impl CkbRpcClient {
             "get_transaction",
             json!([tx_hash, format_quantity(2), null]),
         )
+    }
+
+    pub fn estimate_fee_rate(&self) -> Result<u64> {
+        let rate: Uint64 = self.call("estimate_fee_rate", json!(["no_priority", true]))?;
+        Ok(rate.value())
+    }
+
+    pub fn fee_rate_statistics(&self, target: Option<u64>) -> Result<Option<FeeRateStatistics>> {
+        let params = target
+            .map(|value| json!([format_quantity(value)]))
+            .unwrap_or_else(|| json!([]));
+        self.call_nullable("get_fee_rate_statistics", params)
+    }
+
+    pub fn tx_pool_info(&self) -> Result<TxPoolInfo> {
+        self.call("tx_pool_info", json!([]))
     }
 
     pub fn wait_for_tip(
@@ -184,6 +253,29 @@ impl CkbRpcClient {
     }
 
     fn call<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T> {
+        self.call_nullable(method, params)?
+            .ok_or_else(|| anyhow!("CKB RPC response for {method} has no result"))
+    }
+
+    fn call_nullable<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<Option<T>> {
+        let value = self.call_value(method, params)?;
+        value
+            .map(|value| {
+                serde_json::from_value(value)
+                    .with_context(|| format!("invalid JSON-RPC result for method {method}"))
+            })
+            .transpose()
+    }
+
+    fn call_null(&self, method: &str, params: Value) -> Result<()> {
+        let result = self.call_value(method, params)?;
+        if result.is_some() {
+            bail!("CKB RPC response for {method} should be null");
+        }
+        Ok(())
+    }
+
+    fn call_value(&self, method: &str, params: Value) -> Result<Option<Value>> {
         let request = json!({
             "id": 1,
             "jsonrpc": "2.0",
@@ -206,29 +298,41 @@ impl CkbRpcClient {
                 }
             };
             let status = response.status();
-            let body = response
-                .text()
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_CKB_RPC_RESPONSE_BYTES as u64)
+            {
+                bail!(
+                    "CKB RPC response for {method} exceeds the {MAX_CKB_RPC_RESPONSE_BYTES}-byte limit"
+                );
+            }
+            let body = read_bounded_rpc_body(response, MAX_CKB_RPC_RESPONSE_BYTES)
                 .context("failed to read CKB RPC response body")?;
             if !status.is_success() {
                 if is_retryable_rpc_status(status) && attempt < self.retryable_status_max_attempts {
                     sleep_before_rpc_retry(attempt);
                     continue;
                 }
-                bail!("CKB RPC HTTP error {status}: {body}");
-            }
-            let response: RpcResponse<T> = serde_json::from_str(&body).with_context(|| {
-                format!("invalid JSON-RPC response for method {method}: {body}")
-            })?;
-            if let Some(error) = response.error {
                 bail!(
-                    "CKB RPC error {} on {method}: {}",
-                    error.code,
-                    error.message
+                    "CKB RPC HTTP error {status}: {}",
+                    bounded_rpc_diagnostic(&body)
                 );
             }
-            return response
-                .result
-                .ok_or_else(|| anyhow!("CKB RPC response for {method} has no result"));
+            let response: RpcResponse<Value> = serde_json::from_str(&body).with_context(|| {
+                format!(
+                    "invalid JSON-RPC response for method {method}: {}",
+                    bounded_rpc_diagnostic(&body)
+                )
+            })?;
+            if let Some(error) = response.error {
+                return Err(RpcMethodError {
+                    method: method.to_string(),
+                    code: error.code,
+                    message: error.message,
+                }
+                .into());
+            }
+            return Ok(response.result);
         }
 
         anyhow::bail!(
@@ -237,6 +341,26 @@ impl CkbRpcClient {
             attempts = self.max_attempts
         )
     }
+}
+
+fn read_bounded_rpc_body<R: Read>(reader: R, limit: usize) -> Result<String> {
+    let read_limit = u64::try_from(limit)
+        .context("CKB RPC response limit exceeds u64")?
+        .checked_add(1)
+        .context("CKB RPC response limit overflow")?;
+    let mut bytes = Vec::new();
+    reader
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .context("failed to stream CKB RPC response body")?;
+    if bytes.len() > limit {
+        bail!("CKB RPC response exceeds the {limit}-byte limit");
+    }
+    String::from_utf8(bytes).context("CKB RPC response body is not UTF-8")
+}
+
+fn bounded_rpc_diagnostic(body: &str) -> String {
+    body.chars().take(MAX_RPC_ERROR_DIAGNOSTIC_CHARS).collect()
 }
 
 fn is_retryable_rpc_transport_error(error: &reqwest::Error) -> bool {
@@ -291,4 +415,23 @@ fn parse_quantity(value: &str) -> Result<u64> {
 
 fn format_quantity(value: u64) -> String {
     format!("0x{value:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    #[test]
+    fn bounded_rpc_body_accepts_body_at_limit() {
+        let body = read_bounded_rpc_body(Cursor::new(b"1234"), 4).unwrap();
+        assert_eq!(body, "1234");
+    }
+
+    #[test]
+    fn bounded_rpc_body_rejects_body_over_limit() {
+        let error = read_bounded_rpc_body(Cursor::new(b"12345"), 4).unwrap_err();
+        assert!(error.to_string().contains("exceeds the 4-byte limit"));
+    }
 }

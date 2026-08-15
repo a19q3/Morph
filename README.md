@@ -4,6 +4,8 @@ Morph Channel is a CKB-native channel prototype. It shows how two people, or a
 small factory of people, can move channel state off chain while CKB keeps the
 enforceable evidence on chain.
 
+Current source release: **v1.10.0 — Publication Reliability Hardening**.
+
 The short version is:
 
 - channel value stays in vault cells;
@@ -324,6 +326,21 @@ cargo run -p morph-cli --features devnet -- devnet --devnet-only watch-config-on
   --json
 ```
 
+Run the production-publication reliability rehearsal against a fresh local CKB
+devnet (no CI/CD integration is implied):
+
+```sh
+CKB_BIN=../ckb/target/debug/ckb \
+  scripts/devnet-publication-reliability.sh
+```
+
+This exercises fee-floor rejection, two least-privilege process/key scopes on
+one host and one loopback RPC,
+cross-operator CKB RBF contention, durable attempt reconciliation, mempool
+eviction without a reorg, duplicate rebroadcast, injected delay, and an
+IntegrationTest `truncate` reorg. The local report intentionally does not
+satisfy the production requirement for 1000 fresh public-network samples.
+
 Compare smoke reports:
 
 ```sh
@@ -345,6 +362,9 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [Roadmap](docs/roadmap.md): milestone status and deferred work.
 - [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
   production or real-assets claim.
+- [Publication reliability hardening](docs/hardening/production-publication-reliability/hardening.md):
+  fee pressure, CKB/Fiber comparison, RBF, challenge-window measurement, reorg,
+  and dual-operator design and gates.
 - [RGB++ / Agent / Fiber integration plan](docs/rgbpp-agent-fiber-integration-plan.md):
   the sovereign Factory-to-channel-to-provider-edge design and its release
   gate.

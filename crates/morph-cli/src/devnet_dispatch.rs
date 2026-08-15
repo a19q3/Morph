@@ -1,4 +1,5 @@
 use super::*;
+use crate::packages::canonical_hex32;
 
 pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
     let rpc = CkbRpcClient::new(rpc_url)?;
@@ -17,6 +18,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         "epoch": status.chain.epoch,
                         "node_active": status.node.active,
                         "node_id": status.node.node_id,
+                        "ckb_version": status.node.version,
                         "connections": status.node.connections,
                         "connection_count": status.node.connection_count()?,
                         "tip": tip_json(&status.tip)?,
@@ -33,6 +35,169 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("node_id={}", status.node.node_id);
                 println!("connections={}", status.node.connection_count()?);
                 print_tip(&status.tip)?;
+            }
+        }
+        DevnetCommand::PublicationProfileFixture { json: _ } => {
+            let profile = publication::fixture_publication_profile();
+            println!("{}", serde_json::to_string_pretty(&profile)?);
+        }
+        DevnetCommand::FeeMarket { profile, json } => {
+            let profile = profile
+                .as_ref()
+                .map(|path| publication::read_publication_profile(path))
+                .transpose()?
+                .unwrap_or_else(publication::fixture_publication_profile);
+            let observation = profile.observe_fee_market(&rpc)?;
+            let selected_rate = publication::initial_fee_rate(&profile.fee, &observation)?;
+            let profile_digest = publication::publication_profile_digest(&profile)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "profile": profile,
+                        "observation": observation,
+                        "selected_initial_fee_rate": selected_rate,
+                        "profile_digest": profile_digest,
+                    }))?
+                );
+            } else {
+                println!("operator_id={}", profile.operator_id);
+                println!("pool_min_fee_rate={}", observation.pool_min_fee_rate);
+                println!("pool_min_rbf_rate={}", observation.pool_min_rbf_rate);
+                println!("rbf_enabled={}", observation.rbf_enabled);
+                println!("estimator_fee_rate={}", observation.estimator_fee_rate);
+                println!("selected_initial_fee_rate={selected_rate}");
+                println!("profile_digest={profile_digest}");
+            }
+        }
+        DevnetCommand::DeriveOperatorPubkey { private_key, json } => {
+            let pubkey = devnet::compressed_pubkey_hex_from_private(&private_key)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "pubkey_sec1": pubkey,
+                    }))?
+                );
+            } else {
+                println!("pubkey_sec1={pubkey}");
+            }
+        }
+        DevnetCommand::AssessChallengeWindow {
+            contracts_dir,
+            profile,
+            dataset,
+            expected_dataset_sha256,
+            state_out_point,
+            production,
+            json,
+        } => {
+            let profile = publication::read_publication_profile(&profile)?;
+            ensure!(
+                !production || expected_dataset_sha256.is_some(),
+                "--production requires --expected-dataset-sha256 to bind the exact input bytes"
+            );
+            if let Some(expected_digest) = expected_dataset_sha256.as_deref() {
+                let expected_digest = canonical_hex32(expected_digest)
+                    .context("--expected-dataset-sha256 must be canonical hex32")?;
+                let actual_digest = publication::challenge_window_dataset_sha256(&dataset)?;
+                ensure!(
+                    actual_digest == expected_digest,
+                    "challenge-window dataset SHA-256 {actual_digest} does not match expected digest {expected_digest}"
+                );
+            }
+            let dataset = publication::read_challenge_window_dataset(&dataset)?;
+            let genesis = rpc
+                .block_by_number(0)?
+                .context("CKB genesis block is unavailable")?;
+            ensure!(
+                dataset.genesis_hash == format!("{:#x}", genesis.header.hash),
+                "challenge-window dataset genesis {} does not match connected node genesis {:#x}",
+                dataset.genesis_hash,
+                genesis.header.hash
+            );
+            let chain = rpc.chain_info()?;
+            ensure!(
+                dataset.network == chain.chain,
+                "challenge-window dataset network {} does not match connected node network {}",
+                dataset.network,
+                chain.chain
+            );
+            let node = rpc.local_node_info()?;
+            ensure!(
+                dataset.ckb_version == node.version,
+                "challenge-window dataset CKB version {} does not match connected node version {}",
+                dataset.ckb_version,
+                node.version
+            );
+            ensure!(
+                !production || state_out_point.is_some(),
+                "--production requires --state-out-point to bind the measured window to the deployed StateType"
+            );
+            let deployed_challenge_blocks = state_out_point
+                .as_deref()
+                .map(|out_point| {
+                    devnet::canonical_state_challenge_blocks(&rpc, &contracts_dir, out_point)
+                })
+                .transpose()?;
+            let now_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .context("system clock is before Unix epoch")?
+                .as_millis();
+            let now_unix_ms =
+                u64::try_from(now_unix_ms).context("Unix timestamp does not fit in u64")?;
+            let assessment = publication::assess_challenge_window(
+                &profile,
+                &dataset,
+                production,
+                deployed_challenge_blocks,
+                now_unix_ms,
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&assessment)?);
+            } else {
+                println!("samples={}", assessment.sample_count);
+                println!("overall_p999_ms={}", assessment.p999_end_to_end_ms);
+                println!(
+                    "effective_p999_ms={}",
+                    assessment.effective_p999_end_to_end_ms
+                );
+                println!(
+                    "required_challenge_blocks={}",
+                    assessment.required_challenge_blocks
+                );
+                println!(
+                    "configured_challenge_blocks={}",
+                    assessment.configured_challenge_blocks
+                );
+                println!("fresh={}", assessment.fresh);
+                println!("sufficient_samples={}", assessment.sufficient_samples);
+                println!(
+                    "production_provenance_verified={}",
+                    assessment.production_provenance_verified
+                );
+                println!("passes={}", assessment.passes);
+            }
+            ensure!(
+                assessment.passes,
+                "challenge-window assessment did not pass"
+            );
+        }
+        DevnetCommand::Truncate {
+            target_tip_hash,
+            json,
+        } => {
+            let target_tip_hash = target_tip_hash
+                .strip_prefix("0x")
+                .unwrap_or(&target_tip_hash)
+                .parse::<H256>()
+                .context("target tip hash must be a canonical H256")?;
+            rpc.truncate(target_tip_hash)?;
+            let tip = rpc.tip_header()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&tip_json(&tip)?)?);
+            } else {
+                print_tip(&tip)?;
             }
         }
         DevnetCommand::Tip { json } => {
@@ -2271,8 +2436,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::PublishLatestPackage {
             contracts_dir,
             private_key,
-            alice_private_key,
-            bob_private_key,
             state_out_point,
             sponsor_out_point,
             store_dir,
@@ -2286,8 +2449,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 PublishLatestStatePackageOptions {
                     contracts_dir,
                     private_key,
-                    alice_private_key,
-                    bob_private_key,
                     state_out_point,
                     sponsor_out_point,
                     store_dir,
@@ -2319,14 +2480,14 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
-            alice_private_key,
-            bob_private_key,
             sponsor_out_point,
             store_dir,
             channel_id,
             from_block,
             cursor_file,
             watch_policy,
+            publication_profile,
+            publication_attempt_log,
             alert_file,
             alert_webhook_url,
             ignore_cursor,
@@ -2348,14 +2509,14 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
-                    alice_private_key,
-                    bob_private_key,
                     sponsor_out_point,
                     store_dir,
                     channel_id,
                     from_block,
                     cursor_file,
                     watch_policy,
+                    publication_profile,
+                    publication_attempt_log,
                     alert_file,
                     alert_webhook_url,
                     ignore_cursor,
@@ -2413,11 +2574,17 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                     println!("observed_confirmations={}", observed.confirmations);
                 }
                 if let Some(publication) = &report.publication {
-                    println!("published=true");
+                    println!("submitted=true");
+                    println!("published={}", publication.canonical_confirmed);
                     println!("tx_hash={}", publication.tx_hash);
                     println!("status={}", publication.status);
+                    println!(
+                        "canonical_confirmations={}",
+                        publication.canonical_confirmations
+                    );
                     print_metrics(&publication.metrics);
                 } else {
+                    println!("submitted=false");
                     println!("published=false");
                 }
             }
@@ -2426,8 +2593,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
-            alice_private_key,
-            bob_private_key,
             config,
             json,
         } => {
@@ -2443,8 +2608,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
-                    alice_private_key,
-                    bob_private_key,
                 },
             )?;
             if json {
@@ -2469,8 +2632,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
-            alice_private_key,
-            bob_private_key,
             config,
             passes,
             sleep_ms,
@@ -2489,8 +2650,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
-                    alice_private_key,
-                    bob_private_key,
                 },
                 watch_config::WatchtowerConfigLoopOptions {
                     passes,
@@ -2525,8 +2684,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             contracts_dir,
             private_key,
             private_key_file,
-            alice_private_key,
-            bob_private_key,
             config,
             max_passes,
             sleep_ms,
@@ -2549,8 +2706,6 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         private_key,
                         private_key_file,
                     )?,
-                    alice_private_key,
-                    bob_private_key,
                 },
                 watch_config::WatchtowerConfigServiceOptions {
                     max_passes,
@@ -2586,6 +2741,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
         DevnetCommand::FundSponsor {
             contracts_dir,
             private_key,
+            sponsor_change_pubkey,
             state_out_point,
             sponsor_capacity,
             sponsor_min_state_number,
@@ -2602,6 +2758,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 FundSponsorOptions {
                     contracts_dir,
                     private_key,
+                    sponsor_change_pubkey,
                     state_out_point,
                     sponsor_capacity,
                     sponsor_min_state_number,

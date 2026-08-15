@@ -585,6 +585,7 @@ fn signed_splice_out_bundle_with_payload(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signed_splice_out_bundle_with_payloads(
     old_anchor: [u8; BYTE32_LEN],
     new_anchor: [u8; BYTE32_LEN],
@@ -649,6 +650,7 @@ fn signed_splice_out_bundle_with_channel_and_payload(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn signed_splice_ckb_bundle(
     kind: u8,
     anchors: ([u8; BYTE32_LEN], [u8; BYTE32_LEN]),
@@ -765,6 +767,7 @@ fn signed_splice_signature_witness(
     witness
 }
 
+#[allow(clippy::too_many_arguments)]
 fn splice_header_bytes(
     kind: u8,
     old_anchor: [u8; BYTE32_LEN],

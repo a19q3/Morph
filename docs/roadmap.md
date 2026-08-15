@@ -29,7 +29,7 @@ acceptance gates exist locally. Production work remains open.
 | M3: Assets and splice | Implemented locally | CKB+xUDT settlement, splice-in/out, funding epoch, vault-set commitment, package validation, and devnet smokes. |
 | M4: Factory mode | Implemented narrowly | Conservative factory updates, local exits, reduced-rights proof, sparse-Merkle update, reduced exit, factory splice, and reduced splice through `WitnessEnvelope`. |
 | M5: Watchtower and audit gates | Implemented locally | Watch config, policy checks, JSONL/webhook alerts, stale-package guard, smoke assertions, stateful assertions, and budget profiles. |
-| M6: Production readiness | Controlled-devnet candidate; production open | Factory now has a checked manifest/envelope, runbooks, CI release provenance configuration, and canonical-cursor reorg recovery. External review, successful independent rebuild, mainnet-like fee/reorg runs, and multi-operator evidence remain open. |
+| M6: Production readiness | Controlled-devnet candidate; production open | Factory has a checked manifest/envelope and runbooks. Publication now has bounded node-informed fees, CKB RBF, least-privilege two-operator local evidence, and induced-reorg recovery. External review, independent rebuild/operators, and repeated public-network measurements remain open. |
 
 ## Current Factory Witness Baseline
 
@@ -53,8 +53,8 @@ authorisation boundary.
 | Factory proofs | Multi-right reduced updates. | Current reduced paths intentionally prove one touched right. |
 | Factory proofs | Variable-depth or dynamic proof profiles. | Current CKB body is bounded and fixed-layout for script simplicity. |
 | Factory membership | Larger participant sets with production ergonomics. | Needs proof-size, fee, and UX evidence. |
-| Watchtower | Multi-operator deployment evidence. | Current evidence is local and single-environment. |
-| Network conditions | Reorg and fee-pressure runs. | Requires repeated mainnet-like devnet/testnet scenarios. |
+| Watchtower | Independent multi-operator deployment evidence. | Two isolated local operator scopes pass; distinct hosts, administrators, RPC providers, and alert paths still require rehearsal. |
+| Network conditions | Repeated public-network reorg, delay, and fee-pressure runs. | A deterministic local fault-injection gate passes, but one devnet sample is not a production measurement. |
 | Release process | Independent reproduction and main-branch provenance completion. | Deterministic bundles, reviewed ELF hashes, CI upload/attestation configuration, and staging cleanup exist; a successful independent rebuild and release-owner sign-off remain open. |
 | Policy | Value-limit policy and operator runbooks. | Needed before any real-assets claim. |
 

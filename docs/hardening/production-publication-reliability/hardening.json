@@ -1,0 +1,89 @@
+{
+  "schema": "morph.security_hardening",
+  "version": 1,
+  "generated_at": "2026-08-15",
+  "subject": "production-publication-reliability",
+  "baseline": {
+    "morph": "790bf1c18a55b1186669a3833c5fcf7dd17177c1",
+    "ckb": "82c0bb640f406c9f7d5395157073005c7e583c89",
+    "fiber": "de9071a3601ea6a3b8853d53b9f2f67184cab9a7"
+  },
+  "constraints": {
+    "wire_format_change": false,
+    "contract_change": false,
+    "cicd_change": false,
+    "devnet_validation_required": true
+  },
+  "evidence_scope": {
+    "local_harness": "one host, one loopback RPC, two process/key scopes",
+    "production_independence_proven": false,
+    "trusted_receipt_verifier_implemented": false,
+    "external_receipts_required": true
+  },
+  "proposals": [
+    {
+      "id": "PUB-01",
+      "title": "Node-informed bounded fee and RBF controller",
+      "priority": "P0",
+      "status": "implemented_local_devnet",
+      "invariants": [
+        "participant-signed state bytes remain unchanged across fee attempts",
+        "fee never exceeds sponsor-script or operator-policy caps",
+        "replacement fee is at least the node-reported min_replace_fee",
+        "the runtime deadline deducts observed confirmations and preserves reorg, failover, safety, and canonical-confirmation budgets",
+        "every attempt is durably attributable to an operator and publication intent"
+      ]
+    },
+    {
+      "id": "PUB-02",
+      "title": "Measured challenge-window gate",
+      "priority": "P0",
+      "status": "implemented_local_devnet",
+      "invariants": [
+        "configured challenge window is not shorter than the measured latency budget",
+        "reorg, confirmation, failover, and safety margins are explicit",
+        "insufficient or stale measurements fail closed for production profiles",
+        "the window uses the maximum of overall and per-fault-family P99.9 latency",
+        "an operator-supplied SHA-256 binds the decision to exact dataset bytes without claiming provenance"
+      ]
+    },
+    {
+      "id": "PUB-03",
+      "title": "Induced reorg and delay rehearsal",
+      "priority": "P0",
+      "status": "implemented_local_devnet",
+      "invariants": [
+        "orphaned cursor context is cleared",
+        "rescan begins at or before channel creation",
+        "publication outcome is reconciled against canonical StateCell state",
+        "mempool eviction without a reorg cannot strand an intent behind an advanced cursor"
+      ]
+    },
+    {
+      "id": "PUB-04",
+      "title": "Two independent least-privilege watchtower operators",
+      "priority": "P0",
+      "status": "implemented_local_devnet",
+      "invariants": [
+        "watchtower publication does not require participant private keys",
+        "local operators have distinct identities, keys, sponsor budgets, cursors, stores, profiles, and attempt logs",
+        "production additionally requires independent RPCs, hosts, administration, health and alert sinks, and receipts",
+        "duplicate publication is idempotent and safe under StateCell single-spend"
+      ]
+    },
+    {
+      "id": "PUB-05",
+      "title": "Adversarial mempool and RBF acceptance matrix",
+      "priority": "P0",
+      "status": "implemented_local_devnet",
+      "invariants": [
+        "below-floor publication is rejected",
+        "insufficient replacement is rejected",
+        "valid higher-fee replacement commits",
+        "the replaced transaction is reported as RBFRejected",
+        "the canonical successor contains the intended latest signed state",
+        "duplicate rebroadcast is reconciled by deterministic transaction hash"
+      ]
+    }
+  ]
+}

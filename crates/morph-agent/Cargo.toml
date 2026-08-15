@@ -1,6 +1,6 @@
 [package]
 name = "morph-agent"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -21,7 +21,7 @@ ckb-types.workspace = true
 clap.workspace = true
 hex.workspace = true
 k256.workspace = true
-morph-core = { version = "0.1.0", path = "../morph-core" }
+morph-core = { version = "1.10.0", path = "../morph-core" }
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true

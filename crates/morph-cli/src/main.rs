@@ -9,6 +9,8 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
+#[cfg(feature = "devnet")]
+use ckb_types::H256;
 use clap::{Parser, Subcommand, ValueEnum};
 #[cfg(feature = "devnet")]
 use devnet::{
@@ -43,6 +45,8 @@ mod factory_packages;
 mod hub;
 mod packages;
 mod preproduction;
+#[cfg_attr(not(feature = "devnet"), allow(dead_code))]
+mod publication;
 mod release;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
 mod rpc;
@@ -59,6 +63,7 @@ mod watch_policy;
 #[derive(Debug, Parser)]
 #[command(name = "morph")]
 #[command(about = "Morph Channel devnet and invariant tooling")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -524,6 +529,64 @@ enum HubCommand {
 enum DevnetCommand {
     /// Print chain, node, and tip status.
     Check {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a validated publication profile fixture.
+    PublicationProfileFixture {
+        /// Emit machine-readable JSON (the fixture is always JSON).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect the node fee estimator and transaction-pool policy.
+    FeeMarket {
+        /// Optional publication profile to validate against the node.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Derive the compressed public key used for an operator sponsor-change lock.
+    DeriveOperatorPubkey {
+        /// Operator secp256k1 private key. The command prints only its public key.
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
+        private_key: String,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assess measured publication latency against a challenge-window profile.
+    AssessChallengeWindow {
+        /// Directory containing the exact built RISC-V contracts expected on chain.
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: PathBuf,
+        /// Publication profile JSON.
+        #[arg(long)]
+        profile: PathBuf,
+        /// Challenge-window measurement dataset JSON.
+        #[arg(long)]
+        dataset: PathBuf,
+        /// Out-of-band SHA-256 digest of the exact dataset bytes. Required with --production.
+        #[arg(long)]
+        expected_dataset_sha256: Option<String>,
+        /// Canonical live StateCell whose deployed finalise_since is assessed.
+        /// Required with --production.
+        #[arg(long)]
+        state_out_point: Option<String>,
+        /// Enforce production structural requirements. This remains fail-closed
+        /// until trusted measurement-receipt verification is implemented.
+        #[arg(long)]
+        production: bool,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Truncate a local devnet to a previous tip for deterministic reorg tests.
+    Truncate {
+        /// Canonical block hash that should become the new tip.
+        target_tip_hash: String,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -2016,12 +2079,6 @@ enum DevnetCommand {
         /// Secp256k1 private key that controls the sponsor change lock.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
-        /// Devnet Alice channel key used by the saved package signatures.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
-        alice_private_key: String,
-        /// Devnet Bob channel key used by the saved package signatures.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
         /// Current StateCell out point, formatted as <tx-hash>:<index>.
         #[arg(long)]
         state_out_point: String,
@@ -2055,12 +2112,6 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE", hide_env_values = true)]
         private_key_file: Option<PathBuf>,
-        /// Devnet Alice channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
-        alice_private_key: String,
-        /// Devnet Bob channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
         /// SponsorCell out point, formatted as <tx-hash>:<index>.
         /// Required unless --auto-fund-sponsor is set.
         #[arg(long)]
@@ -2080,6 +2131,12 @@ enum DevnetCommand {
         /// Optional watchtower policy JSON that bounds this run.
         #[arg(long)]
         watch_policy: Option<std::path::PathBuf>,
+        /// Publication fee/RBF/window profile JSON.
+        #[arg(long)]
+        publication_profile: Option<std::path::PathBuf>,
+        /// Durable JSONL publication-attempt log. Required with --publication-profile.
+        #[arg(long)]
+        publication_attempt_log: Option<std::path::PathBuf>,
         /// Optional JSONL alert sink for watchtower events.
         #[arg(long)]
         alert_file: Option<std::path::PathBuf>,
@@ -2125,12 +2182,6 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE", hide_env_values = true)]
         private_key_file: Option<PathBuf>,
-        /// Devnet Alice channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
-        alice_private_key: String,
-        /// Devnet Bob channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2149,12 +2200,6 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE", hide_env_values = true)]
         private_key_file: Option<PathBuf>,
-        /// Devnet Alice channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
-        alice_private_key: String,
-        /// Devnet Bob channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2182,12 +2227,6 @@ enum DevnetCommand {
         /// File containing the sponsor private key. Prefer this for watchtower processes.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY_FILE", hide_env_values = true)]
         private_key_file: Option<PathBuf>,
-        /// Devnet Alice channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
-        alice_private_key: String,
-        /// Devnet Bob channel key used by saved package signatures.
-        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
-        bob_private_key: String,
         /// Watchtower config JSON path.
         #[arg(long)]
         config: std::path::PathBuf,
@@ -2224,6 +2263,9 @@ enum DevnetCommand {
         /// Secp256k1 private key funding the SponsorCell and receiving change.
         #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
         private_key: String,
+        /// Compressed secp256k1 pubkey whose lock receives later SponsorCell change.
+        #[arg(long)]
+        sponsor_change_pubkey: Option<String>,
         /// StateCell out point whose channel id should be sponsored.
         #[arg(long)]
         state_out_point: String,
