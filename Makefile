@@ -38,6 +38,7 @@ fmt-check:
 source-hygiene:
 	bash -n scripts/*.sh
 	! grep -n "registry.npmmirror.com" sdk/typescript/package-lock.json ui/morph-hub/package-lock.json
+	! grep -R -n "VITE_MORPH_HUB_AUTH_TOKEN" ui/morph-hub/src
 	$(CARGO) clippy --workspace --all-features --bins --lib -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 
 audit:

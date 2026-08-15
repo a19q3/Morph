@@ -1,7 +1,9 @@
 # Morph v1.10.0 publication reliability hardening
 
 Status: implemented and locally devnet-verified; production evidence gates remain open
-Decision: no signed-state, witness-envelope, or contract wire-format change
+Decision for this workstream: no signed-state, witness-envelope, or contract
+wire-format change. The encompassing `v1.10.0` tag also includes the earlier
+withdrawal-destination wire update from `1cc830f`; see `CHANGELOG.md`.
 
 ## Executive decision
 

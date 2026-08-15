@@ -24,6 +24,7 @@ const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
 const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_EVENTS: usize = 128;
 const MAX_WATCHTOWER_ALERTS: usize = 32;
 const WATCHTOWER_ALERT_SCHEMA: &str = "morph.watchtower_alert";
@@ -1294,7 +1295,11 @@ fn handle_connection(mut stream: TcpStream, server: &HubServer) -> Result<()> {
     stream
         .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
         .context("failed to set Morph Hub response write timeout")?;
-    let mut reader = BufReader::new(&mut stream);
+    let deadline = Instant::now()
+        .checked_add(REQUEST_TOTAL_TIMEOUT)
+        .ok_or_else(|| anyhow!("Morph Hub request deadline exceeds platform clock range"))?;
+    let mut reader =
+        RequestReader::with_deadline(&mut stream, deadline, Some(set_tcp_stream_read_timeout));
     let (mut request, content_length) = read_request_head_from_reader(&mut reader)?;
     if request.method != "OPTIONS" && (request.path.starts_with("/api/") || request.path == "/api")
     {
@@ -2524,13 +2529,90 @@ fn parse_bytes32(label: &str, value: &str) -> Result<Bytes32> {
 
 #[cfg(test)]
 fn read_request_from_reader(reader: impl Read) -> Result<HttpRequest> {
-    let mut reader = BufReader::new(reader);
+    let mut reader = RequestReader::without_deadline(reader);
     let (mut request, content_length) = read_request_head_from_reader(&mut reader)?;
     read_request_body(&mut reader, &mut request, content_length)?;
     Ok(request)
 }
 
-fn read_request_head_from_reader(reader: &mut impl BufRead) -> Result<(HttpRequest, usize)> {
+type ReadTimeoutSetter<R> = fn(&mut R, Duration) -> std::io::Result<()>;
+
+struct RequestReader<R> {
+    inner: BufReader<R>,
+    deadline: Option<Instant>,
+    timeout_setter: Option<ReadTimeoutSetter<R>>,
+}
+
+impl<R: Read> RequestReader<R> {
+    #[cfg(test)]
+    fn without_deadline(inner: R) -> Self {
+        Self {
+            inner: BufReader::new(inner),
+            deadline: None,
+            timeout_setter: None,
+        }
+    }
+
+    fn with_deadline(
+        inner: R,
+        deadline: Instant,
+        timeout_setter: Option<ReadTimeoutSetter<R>>,
+    ) -> Self {
+        Self {
+            inner: BufReader::new(inner),
+            deadline: Some(deadline),
+            timeout_setter,
+        }
+    }
+
+    fn prepare_read(&mut self) -> Result<()> {
+        let Some(deadline) = self.deadline else {
+            return Ok(());
+        };
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| anyhow!("Morph Hub request exceeded its total read deadline"))?;
+        if let Some(set_timeout) = self.timeout_setter {
+            set_timeout(self.inner.get_mut(), remaining.min(REQUEST_IO_TIMEOUT))
+                .context("failed to update Morph Hub request read timeout")?;
+        }
+        Ok(())
+    }
+
+    fn fill_buf(&mut self) -> Result<&[u8]> {
+        self.prepare_read()?;
+        self.inner.fill_buf().context("failed to read HTTP line")
+    }
+
+    fn consume(&mut self, amount: usize) {
+        self.inner.consume(amount);
+    }
+
+    fn read_exact(&mut self, mut buf: &mut [u8]) -> Result<()> {
+        while !buf.is_empty() {
+            self.prepare_read()?;
+            let read = self
+                .inner
+                .read(buf)
+                .context("failed to read HTTP request body")?;
+            ensure!(read > 0, "unexpected EOF while reading HTTP request body");
+            buf = &mut buf[read..];
+        }
+        Ok(())
+    }
+}
+
+fn set_tcp_stream_read_timeout(
+    stream: &mut &mut TcpStream,
+    timeout: Duration,
+) -> std::io::Result<()> {
+    stream.set_read_timeout(Some(timeout))
+}
+
+fn read_request_head_from_reader<R: Read>(
+    reader: &mut RequestReader<R>,
+) -> Result<(HttpRequest, usize)> {
     let (request_line, mut header_bytes) = read_limited_line(reader, MAX_REQUEST_LINE_BYTES)?;
     let mut parts = request_line.split_whitespace();
     let method = parts
@@ -2610,8 +2692,8 @@ fn read_request_head_from_reader(reader: &mut impl BufRead) -> Result<(HttpReque
     ))
 }
 
-fn read_request_body(
-    reader: &mut impl Read,
+fn read_request_body<R: Read>(
+    reader: &mut RequestReader<R>,
     request: &mut HttpRequest,
     content_length: usize,
 ) -> Result<()> {
@@ -2623,10 +2705,13 @@ fn read_request_body(
     Ok(())
 }
 
-fn read_limited_line(reader: &mut impl BufRead, max_bytes: usize) -> Result<(String, usize)> {
+fn read_limited_line<R: Read>(
+    reader: &mut RequestReader<R>,
+    max_bytes: usize,
+) -> Result<(String, usize)> {
     let mut buf = Vec::new();
     loop {
-        let available = reader.fill_buf().context("failed to read HTTP line")?;
+        let available = reader.fill_buf()?;
         ensure!(
             !available.is_empty(),
             "unexpected EOF while reading HTTP line"
@@ -3319,11 +3404,59 @@ mod tests {
     #[test]
     fn request_head_can_be_authenticated_before_body_is_read() {
         let headers = b"POST /api/peers HTTP/1.1\r\nContent-Length: 1024\r\n\r\n";
-        let mut reader = BufReader::new(Cursor::new(headers));
+        let mut reader = RequestReader::without_deadline(Cursor::new(headers));
         let (request, content_length) = read_request_head_from_reader(&mut reader).unwrap();
         assert_eq!(request.path, "/api/peers");
         assert_eq!(content_length, 1024);
         assert!(request.body.is_empty());
+    }
+
+    #[test]
+    fn request_reader_rejects_an_expired_total_deadline() {
+        let valid = b"GET /api/state HTTP/1.1\r\nHost: morph.local\r\n\r\n";
+        let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let mut reader = RequestReader::with_deadline(Cursor::new(valid), expired, None);
+        let err = read_request_head_from_reader(&mut reader)
+            .expect_err("an expired request deadline should fail before parsing");
+        assert!(
+            err.to_string().contains("total read deadline"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn request_reader_enforces_total_deadline_across_partial_reads() {
+        struct SlowOneByteReader {
+            bytes: &'static [u8],
+            offset: usize,
+        }
+
+        impl Read for SlowOneByteReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.offset == self.bytes.len() || buf.is_empty() {
+                    return Ok(0);
+                }
+                thread::sleep(Duration::from_millis(20));
+                buf[0] = self.bytes[self.offset];
+                self.offset += 1;
+                Ok(1)
+            }
+        }
+
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(5))
+            .unwrap();
+        let slow = SlowOneByteReader {
+            bytes: b"GET /api/state HTTP/1.1\r\n\r\n",
+            offset: 0,
+        };
+        let mut reader = RequestReader::with_deadline(slow, deadline, None);
+        let err = read_request_head_from_reader(&mut reader)
+            .expect_err("partial reads must not reset the total request deadline");
+        assert!(
+            err.to_string().contains("total read deadline"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]

@@ -7998,7 +7998,10 @@ pub fn watch_latest_state_package(
                             mine_blocks: options.mine_blocks,
                         };
                         let publication = if let Some(profile) = publication_profile.clone() {
-                            let deadline = publication_deadline(&profile, observed.confirmations)?;
+                            let current_tip_number = rpc.tip_header()?.number_value()?;
+                            let current_confirmations =
+                                block_confirmations(observed.block_number, current_tip_number)?;
+                            let deadline = publication_deadline(&profile, current_confirmations)?;
                             publish_state_with_publication_runtime(
                                 rpc,
                                 publication_options,
@@ -12102,7 +12105,7 @@ fn observed_state_cells(
 ) -> Result<Vec<ObservedStateCellReport>> {
     let block_number = block.header.inner.number.value();
     let block_hash = format!("{:#x}", block.header.hash);
-    let confirmations = tip_number.saturating_sub(block_number).saturating_add(1);
+    let confirmations = block_confirmations(block_number, tip_number)?;
     let mut observed = Vec::new();
     for tx in &block.transactions {
         for (index, data) in tx.inner.outputs_data.iter().enumerate() {
@@ -12138,6 +12141,15 @@ fn observed_state_cells(
         }
     }
     Ok(observed)
+}
+
+fn block_confirmations(block_number: u64, tip_number: u64) -> Result<u64> {
+    tip_number
+        .checked_sub(block_number)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| {
+            anyhow!("observed block {block_number} is above current canonical tip {tip_number}")
+        })
 }
 
 fn is_authentic_observed_state_cell(
@@ -14897,6 +14909,15 @@ mod tests {
 
         let error = publication_runtime_budget_blocks(&profile, 5).unwrap_err();
         assert!(error.to_string().contains("no execution time"));
+    }
+
+    #[test]
+    fn block_confirmations_follow_the_latest_tip() {
+        assert_eq!(block_confirmations(100, 100).unwrap(), 1);
+        assert_eq!(block_confirmations(100, 107).unwrap(), 8);
+
+        let error = block_confirmations(108, 107).unwrap_err();
+        assert!(error.to_string().contains("above current canonical tip"));
     }
 
     #[test]

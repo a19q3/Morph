@@ -20,7 +20,6 @@ export interface RestoreStateSummary {
 }
 
 const apiBase = import.meta.env.VITE_MORPH_HUB_API_URL ?? '';
-const bundledApiToken = import.meta.env.VITE_MORPH_HUB_AUTH_TOKEN ?? '';
 const tokenStorageKey = 'morph-hub-api-token';
 const requestTimeoutMs = 12_000;
 
@@ -170,7 +169,7 @@ async function readError(response: Response): Promise<ApiRequestError> {
 }
 
 function currentApiToken(): string {
-  return sessionApiToken || bundledApiToken.trim();
+  return sessionApiToken;
 }
 
 function readStoredToken(): string {

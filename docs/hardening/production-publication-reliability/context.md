@@ -10,7 +10,9 @@ Fiber comparison baseline: `de9071a3601ea6a3b8853d53b9f2f67184cab9a7`
 Close the operational liveness gaps around fee pressure, CKB transaction-pool
 replacement, challenge-window sizing, delayed observation, reorg recovery, and
 two independent watchtower operators without changing Morph's signed state or
-contract wire formats.
+contract wire formats in this workstream. The encompassing `v1.10.0` tag also
+contains the earlier withdrawal-destination wire update from `1cc830f`; see the
+release boundary in `CHANGELOG.md`.
 
 ## Inputs reviewed
 

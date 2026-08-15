@@ -9,10 +9,16 @@
     "fiber": "de9071a3601ea6a3b8853d53b9f2f67184cab9a7"
   },
   "constraints": {
+    "scope": "publication-reliability-workstream",
     "wire_format_change": false,
     "contract_change": false,
     "cicd_change": false,
     "devnet_validation_required": true
+  },
+  "release_boundary": {
+    "tag": "v1.10.0",
+    "includes_prior_wire_change": "1cc830f",
+    "note": "The enclosing tag includes the earlier withdrawal-destination wire update; the constraints above apply only to this publication-reliability workstream."
   },
   "evidence_scope": {
     "local_harness": "one host, one loopback RPC, two process/key scopes",

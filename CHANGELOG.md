@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Security and reliability follow-up
+
+- Bound Morph Hub request-head and request-body reads by a 30-second total
+  deadline in addition to the existing per-I/O timeout, preventing unauthenticated
+  slow connections from retaining all server slots indefinitely.
+- Remove the Hub UI's build-time bearer-token fallback; browser tokens now come
+  only from the operator's per-tab session storage.
+- Refresh the canonical CKB tip immediately before deriving a watchtower
+  publication deadline, so catch-up scans cannot reclaim already-consumed
+  challenge-window blocks.
+- Correct the v1.10.0 release boundary to record its included splice wire-format
+  update explicitly.
+
 ## v1.11.0 — 2026-08-15
 
 ### Publication verification follow-up
@@ -56,12 +71,19 @@ prototype.
 
 ### Release boundary
 
-The seven CKB contract sources and wire formats are unchanged by this
-host/watchtower hardening release; their crate version remains `0.1.0`. Their
-reviewed ELF Data Hashes are refreshed once because the release build now remaps
-machine-specific source paths and rejects restored-target contamination. The
-resulting hashes are stable across local and GitHub runners but require a fresh
-devnet deployment.
+The publication-controller and host/watchtower hardening itself does not alter
+the contract wire. However, the `v1.10.0` tag also contains the earlier
+withdrawal-destination binding from commit `1cc830f`. That change deliberately
+extends `SpliceHeader` from 453 to 485 bytes and `FactorySpliceHeader` from 437
+to 469 bytes, and bumps the affected splice witness body versions to 2. It is an
+unpublished wire-format break and requires a fresh devnet deployment; pre-v1.10
+splice packages and witnesses are not compatible.
+
+The seven contract crate versions remain `0.1.0`. Their reviewed ELF Data Hashes
+are refreshed because the withdrawal binding changed the scripts and because
+the release build now remaps machine-specific source paths and rejects
+restored-target contamination. The resulting hashes are stable across local and
+GitHub runners.
 
 v1.10.0 remains controlled-devnet research software. It is not approved for
 mainnet or real assets. Trusted public-network measurements, independently
