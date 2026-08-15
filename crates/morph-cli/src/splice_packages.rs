@@ -125,6 +125,7 @@ pub struct StoredSplicePackage {
     pub new_vault_materialisation_root: String,
     pub old_vault_outpoint_commitment: String,
     pub new_vault_outpoint_commitment: String,
+    pub withdrawal_lock_hash: String,
     pub challenge_policy_commitment: String,
     pub signing_digest: String,
     pub current_state: StoredSpliceStateRef,
@@ -154,6 +155,7 @@ pub struct SplicePackageSummary {
     pub withdrawals: usize,
     pub withdrawal_payout_policy: String,
     pub withdrawal_participant_pubkey_sec1: Option<String>,
+    pub withdrawal_lock_hash: String,
     pub remaining_settlement_assets: usize,
     pub contract_witness_len: usize,
     pub contract_witness_hex: String,
@@ -228,6 +230,7 @@ impl StoredSplicePackage {
             new_vault_outpoint_commitment: hex_prefixed(
                 &transition.header.new_vault_outpoint_commitment,
             ),
+            withdrawal_lock_hash: hex_prefixed(&transition.header.withdrawal_lock_hash),
             challenge_policy_commitment: hex_prefixed(
                 &transition.header.challenge_policy_commitment,
             ),
@@ -330,6 +333,10 @@ impl StoredSplicePackage {
             self.new_vault_outpoint_commitment
                 == canonical_hex32(&self.new_vault_outpoint_commitment)?,
             "new_vault_outpoint_commitment must be canonical"
+        );
+        ensure!(
+            self.withdrawal_lock_hash == canonical_hex32(&self.withdrawal_lock_hash)?,
+            "withdrawal_lock_hash must be canonical"
         );
         ensure!(
             self.challenge_policy_commitment == canonical_hex32(&self.challenge_policy_commitment)?,
@@ -442,6 +449,7 @@ impl StoredSplicePackage {
             withdrawals: self.withdrawals.len(),
             withdrawal_payout_policy,
             withdrawal_participant_pubkey_sec1,
+            withdrawal_lock_hash: self.withdrawal_lock_hash.clone(),
             remaining_settlement_assets: self.remaining_settlement.len(),
             contract_witness_len: contract_witness.len(),
             contract_witness_hex: hex_prefixed(&contract_witness),
@@ -515,6 +523,7 @@ impl StoredSplicePackage {
             new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
             old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
             new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
+            withdrawal_lock_hash: hex32_bytes(&self.withdrawal_lock_hash)?,
             challenge_policy_commitment: hex32_bytes(&self.challenge_policy_commitment)?,
         };
         let mut next_state = current_state.clone();
@@ -887,6 +896,10 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
         old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
         new_vault_outpoint_commitment: [0; 32],
+        withdrawal_lock_hash: match header_kind {
+            SpliceKind::In => [0; 32],
+            SpliceKind::Out => bytes32(96),
+        },
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let digest = header.signing_digest();
@@ -928,6 +941,7 @@ pub fn fixture_package_with_kind(kind: FixtureSpliceKind) -> Result<StoredSplice
         new_vault_materialisation_root: hex_prefixed(&header.new_vault_materialisation_root),
         old_vault_outpoint_commitment: hex_prefixed(&header.old_vault_outpoint_commitment),
         new_vault_outpoint_commitment: hex_prefixed(&header.new_vault_outpoint_commitment),
+        withdrawal_lock_hash: hex_prefixed(&header.withdrawal_lock_hash),
         challenge_policy_commitment: hex_prefixed(&header.challenge_policy_commitment),
         signing_digest: hex_prefixed(&digest),
         current_state: StoredSpliceStateRef::from_state_cell(&current_state),
@@ -1370,6 +1384,7 @@ fn splice_header_wire_bytes(header: &SpliceHeader) -> [u8; SPLICE_HEADER_LEN] {
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
     raw[389..421].copy_from_slice(&header.old_vault_outpoint_commitment);
     raw[421..453].copy_from_slice(&header.new_vault_outpoint_commitment);
+    raw[453..485].copy_from_slice(&header.withdrawal_lock_hash);
     raw
 }
 

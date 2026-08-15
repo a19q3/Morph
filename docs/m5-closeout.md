@@ -16,7 +16,8 @@ The accepted conservative design is:
 - explicit funding-epoch semantics, with `StateHeader` as the active channel
   wire target;
 - bounded CKB and CKB+xUDT asset delta descriptors;
-- participant-owned splice-out withdrawals, with arbitrary payout locks deferred
+- participant-owned splice-out withdrawals whose canonical participant lock
+  hash is included in the signed header; arbitrary payout locks remain deferred
   beyond this conservative scope.
 
 ## Done
@@ -28,6 +29,9 @@ The accepted conservative design is:
 - `morph-script-common` exposes bounded parsers for the splice header,
   splice witness, old/new vault descriptors, asset deltas, bundled splice
   witness, and `StateHeader`.
+- The signed splice header commits the exact participant withdrawal lock, and
+  the vault lock requires an exact CKB/xUDT withdrawal output for every
+  nonzero splice-out delta.
 - `verify_splice_state_transition_bundle` covers the explicit-epoch target by
   binding old/new funding epochs to old/new vault-set commitments.
 - `morph-state-type` and `morph-vault-lock` accept the conservative
@@ -44,7 +48,7 @@ The accepted conservative design is:
   alerts for detected splices, stale packages, and splice-aware publication.
 - Package and apply JSON artifacts expose the conservative participant-owned
   withdrawal rule through `withdrawal_payout_policy`, the participant pubkey,
-  and the live withdrawal lock hash.
+  and the signed live withdrawal lock hash.
 - Default smoke assertion now requires splice apply artifacts for all four
   splice smokes and verifies splice-out payout evidence stays
   `participant_signature_pubkey` with a concrete participant pubkey, lock hash,

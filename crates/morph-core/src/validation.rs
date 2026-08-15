@@ -274,7 +274,7 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     {
         return Err(MorphError::SpliceCarrierCapacityMismatch);
     }
-    if current.phase != Phase::Active {
+    if current.phase != Phase::Active || splice.next_state.header.phase != Phase::Active {
         return Err(MorphError::SpliceStateNotActive);
     }
     if current.vault_outpoint_commitment == [0; 32]
@@ -317,6 +317,15 @@ pub fn validate_splice_transition(splice: &SpliceTransition) -> Result<()> {
     }
     if splice_asset_delta_commitment(&splice.deltas) != splice.header.asset_delta_commitment {
         return Err(MorphError::SpliceDeltaCommitmentMismatch);
+    }
+    match splice.header.kind {
+        SpliceKind::In if splice.header.withdrawal_lock_hash != [0; 32] => {
+            return Err(MorphError::SpliceDeltaCommitmentMismatch);
+        }
+        SpliceKind::Out if splice.header.withdrawal_lock_hash == [0; 32] => {
+            return Err(MorphError::SpliceDeltaCommitmentMismatch);
+        }
+        _ => {}
     }
     if !wire_asset_amounts_are_canonical(&splice.old_vault.assets, false)
         || !wire_asset_amounts_are_canonical(&splice.new_vault.assets, false)
@@ -615,6 +624,15 @@ pub fn validate_factory_splice_transition(splice: &FactorySpliceTransition) -> R
     {
         return Err(MorphError::VaultOutPointBindingInvalid);
     }
+    match splice.header.kind {
+        FactorySpliceKind::In if splice.header.withdrawal_lock_hash != [0; 32] => {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+        FactorySpliceKind::Out if splice.header.withdrawal_lock_hash == [0; 32] => {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+        _ => {}
+    }
     let computed_old_root = factory_right_sparse_root(&splice.update.before)?;
     let computed_new_root = factory_right_sparse_root(&splice.update.after)?;
     if splice.header.old_state_root != computed_old_root
@@ -720,6 +738,20 @@ pub fn validate_factory_reduced_splice_transition(
 
     if splice.header.new_update_number <= splice.header.old_update_number {
         return Err(MorphError::FactorySpliceUpdateNotAdvanced);
+    }
+    if splice.header.old_vault_outpoint_commitment == [0; 32]
+        || splice.header.new_vault_outpoint_commitment != [0; 32]
+    {
+        return Err(MorphError::VaultOutPointBindingInvalid);
+    }
+    match splice.header.kind {
+        FactorySpliceKind::In if splice.header.withdrawal_lock_hash != [0; 32] => {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+        FactorySpliceKind::Out if splice.header.withdrawal_lock_hash == [0; 32] => {
+            return Err(MorphError::FactorySpliceVaultDeltaMismatch);
+        }
+        _ => {}
     }
     if splice.header.old_state_root != splice.update.before_root
         || splice.header.new_state_root != splice.update.after_root

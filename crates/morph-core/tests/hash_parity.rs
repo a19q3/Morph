@@ -186,6 +186,7 @@ fn splice_header_signing_digest_matches_script_common() {
         new_vault_materialisation_root: bytes32(15),
         old_vault_outpoint_commitment: bytes32(16),
         new_vault_outpoint_commitment: bytes32(17),
+        withdrawal_lock_hash: [0; 32],
         challenge_policy_commitment: bytes32(13),
     };
     let mut raw = [0u8; wire::SPLICE_HEADER_LEN];
@@ -209,6 +210,7 @@ fn splice_header_signing_digest_matches_script_common() {
     raw[357..389].copy_from_slice(&header.challenge_policy_commitment);
     raw[389..421].copy_from_slice(&header.old_vault_outpoint_commitment);
     raw[421..453].copy_from_slice(&header.new_vault_outpoint_commitment);
+    raw[453..485].copy_from_slice(&header.withdrawal_lock_hash);
     let wire_header = wire::SpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());
@@ -235,6 +237,7 @@ fn factory_splice_header_signing_digest_matches_script_common() {
         new_vault_materialisation_root: bytes32(13),
         old_vault_outpoint_commitment: bytes32(14),
         new_vault_outpoint_commitment: bytes32(15),
+        withdrawal_lock_hash: bytes32(16),
     };
     let mut raw = [0u8; wire::FACTORY_SPLICE_HEADER_LEN];
     put_u16(&mut raw, 0, header.protocol_version);
@@ -255,6 +258,7 @@ fn factory_splice_header_signing_digest_matches_script_common() {
     raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
     raw[373..405].copy_from_slice(&header.old_vault_outpoint_commitment);
     raw[405..437].copy_from_slice(&header.new_vault_outpoint_commitment);
+    raw[437..469].copy_from_slice(&header.withdrawal_lock_hash);
     let wire_header = wire::FactorySpliceHeader::parse(&raw).unwrap();
 
     assert_eq!(header.signing_digest(), wire_header.signing_digest());

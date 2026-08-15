@@ -12,13 +12,13 @@
 // part of the audited transaction shape:
 //
 // - StateHeader: 346 bytes
-// - SpliceHeader: 453 bytes
+// - SpliceHeader: 485 bytes
 // - SpliceSignatureWitness: 198 bytes
 // - SpliceVaultAssetAmount: 49 bytes
 // - SpliceVaultDescriptor: 132 bytes
 // - SpliceAssetDelta: 113 bytes
 // - SpliceAssetDeltas: 228 bytes
-// - SpliceStateTransitionWitness: 1145 bytes
+// - SpliceStateTransitionWitness: 1177 bytes
 // - FactoryStateHeader: 302 bytes
 // - BilateralSignatureWitness: 198 bytes
 // - FactorySignatureWitness (N=2..16): 4 + N*129 bytes
@@ -27,7 +27,7 @@
 // - FactoryMerkleUpdateWitness: 8 + N*130 + 32 + 2*114 + 256*32 bytes
 // - FactoryReducedExitWitness: participant-dependent; see morph-script-common
 // - FactoryLocalExitWitness: participant-dependent; see morph-script-common
-// - FactorySpliceHeader: 437 bytes
+// - FactorySpliceHeader: 469 bytes
 // - FactoryVaultDescriptor: 132 bytes
 // - FactoryVaultDelta: 97 bytes
 // - FactoryVaultDeltas: 196 bytes
@@ -117,6 +117,7 @@ struct SpliceHeader {
     challenge_policy_commitment: Byte32,
     old_vault_outpoint_commitment: Byte32,
     new_vault_outpoint_commitment: Byte32,
+    withdrawal_lock_hash: Byte32,
 }
 
 struct SpliceSignatureWitness {
@@ -278,6 +279,7 @@ struct FactorySpliceHeader {
     new_vault_materialisation_root: Byte32,
     old_vault_outpoint_commitment: Byte32,
     new_vault_outpoint_commitment: Byte32,
+    withdrawal_lock_hash: Byte32,
 }
 
 struct FactoryVaultAssetAmount {

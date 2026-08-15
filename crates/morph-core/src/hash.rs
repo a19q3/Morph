@@ -152,6 +152,7 @@ impl SigningBytes for SpliceHeader {
         out.extend_from_slice(&self.challenge_policy_commitment);
         out.extend_from_slice(&self.old_vault_outpoint_commitment);
         out.extend_from_slice(&self.new_vault_outpoint_commitment);
+        out.extend_from_slice(&self.withdrawal_lock_hash);
     }
 }
 
@@ -184,6 +185,7 @@ impl SigningBytes for FactorySpliceHeader {
         out.extend_from_slice(&self.new_vault_materialisation_root);
         out.extend_from_slice(&self.old_vault_outpoint_commitment);
         out.extend_from_slice(&self.new_vault_outpoint_commitment);
+        out.extend_from_slice(&self.withdrawal_lock_hash);
     }
 }
 

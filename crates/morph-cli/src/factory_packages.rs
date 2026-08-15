@@ -186,6 +186,7 @@ pub struct StoredFactorySplicePackage {
     pub new_vault_materialisation_root: String,
     pub old_vault_outpoint_commitment: String,
     pub new_vault_outpoint_commitment: String,
+    pub withdrawal_lock_hash: String,
     pub signing_digest: String,
     pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
     pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
@@ -217,6 +218,7 @@ pub struct StoredFactoryReducedSplicePackage {
     pub new_vault_materialisation_root: String,
     pub old_vault_outpoint_commitment: String,
     pub new_vault_outpoint_commitment: String,
+    pub withdrawal_lock_hash: String,
     pub signing_digest: String,
     pub old_vault: Vec<StoredFactoryVaultAssetAmount>,
     pub new_vault: Vec<StoredFactoryVaultAssetAmount>,
@@ -306,6 +308,7 @@ pub struct FactorySplicePackageSummary {
     pub vault_new_amount: Amount,
     pub external_input: Amount,
     pub withdrawal: Amount,
+    pub withdrawal_lock_hash: String,
     pub signature_threshold: u8,
     pub signatures: usize,
     pub contract_witness_len: usize,
@@ -336,6 +339,7 @@ pub struct FactoryReducedSplicePackageSummary {
     pub vault_new_amount: Amount,
     pub external_input: Amount,
     pub withdrawal: Amount,
+    pub withdrawal_lock_hash: String,
     pub participant_keys: usize,
     pub signature_threshold: u8,
     pub signatures: usize,
@@ -1192,6 +1196,7 @@ impl StoredFactorySplicePackage {
             new_vault_outpoint_commitment: hex_prefixed(
                 &transition.header.new_vault_outpoint_commitment,
             ),
+            withdrawal_lock_hash: hex_prefixed(&transition.header.withdrawal_lock_hash),
             signing_digest: String::new(),
             old_vault: transition
                 .old_vault
@@ -1441,6 +1446,7 @@ impl StoredFactorySplicePackage {
             vault_new_amount: delta.new_amount,
             external_input: delta.external_input,
             withdrawal: delta.withdrawal,
+            withdrawal_lock_hash: self.withdrawal_lock_hash.clone(),
             signature_threshold: self.signature_threshold,
             signatures: self.signatures.len(),
             contract_witness_len: contract_witness.len(),
@@ -1463,6 +1469,7 @@ impl StoredFactorySplicePackage {
             canonical_hex32(&self.new_vault_materialisation_root)?;
         self.old_vault_outpoint_commitment = canonical_hex32(&self.old_vault_outpoint_commitment)?;
         self.new_vault_outpoint_commitment = canonical_hex32(&self.new_vault_outpoint_commitment)?;
+        self.withdrawal_lock_hash = canonical_hex32(&self.withdrawal_lock_hash)?;
         if !self.signing_digest.is_empty() {
             self.signing_digest = canonical_hex32(&self.signing_digest)?;
         }
@@ -1513,6 +1520,7 @@ impl StoredFactorySplicePackage {
             new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
             old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
             new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
+            withdrawal_lock_hash: hex32_bytes(&self.withdrawal_lock_hash)?,
         })
     }
 }
@@ -1597,6 +1605,7 @@ impl StoredFactoryReducedSplicePackage {
             new_vault_outpoint_commitment: hex_prefixed(
                 &transition.header.new_vault_outpoint_commitment,
             ),
+            withdrawal_lock_hash: hex_prefixed(&transition.header.withdrawal_lock_hash),
             signing_digest: String::new(),
             old_vault: transition
                 .old_vault
@@ -1872,6 +1881,7 @@ impl StoredFactoryReducedSplicePackage {
             vault_new_amount: delta.new_amount,
             external_input: delta.external_input,
             withdrawal: delta.withdrawal,
+            withdrawal_lock_hash: self.withdrawal_lock_hash.clone(),
             participant_keys: self.participant_keys.len(),
             signature_threshold: self.signature_threshold,
             signatures: self.signatures.len(),
@@ -1896,6 +1906,7 @@ impl StoredFactoryReducedSplicePackage {
             canonical_hex32(&self.new_vault_materialisation_root)?;
         self.old_vault_outpoint_commitment = canonical_hex32(&self.old_vault_outpoint_commitment)?;
         self.new_vault_outpoint_commitment = canonical_hex32(&self.new_vault_outpoint_commitment)?;
+        self.withdrawal_lock_hash = canonical_hex32(&self.withdrawal_lock_hash)?;
         if !self.signing_digest.is_empty() {
             self.signing_digest = canonical_hex32(&self.signing_digest)?;
         }
@@ -1942,6 +1953,7 @@ impl StoredFactoryReducedSplicePackage {
             new_vault_materialisation_root: hex32_bytes(&self.new_vault_materialisation_root)?,
             old_vault_outpoint_commitment: hex32_bytes(&self.old_vault_outpoint_commitment)?,
             new_vault_outpoint_commitment: hex32_bytes(&self.new_vault_outpoint_commitment)?,
+            withdrawal_lock_hash: hex32_bytes(&self.withdrawal_lock_hash)?,
         })
     }
 }
@@ -2347,6 +2359,10 @@ pub fn fixture_factory_splice_package_with_participant_count(
         new_vault_materialisation_root: bytes32(94),
         old_vault_outpoint_commitment: bytes32(95),
         new_vault_outpoint_commitment: [0; 32],
+        withdrawal_lock_hash: match splice_kind {
+            FactorySpliceKind::In => [0; 32],
+            FactorySpliceKind::Out => bytes32(96),
+        },
     };
     let update_package = StoredFactoryUpdatePackage::from_update(
         header.factory_id,
@@ -3092,6 +3108,7 @@ fn factory_splice_header_wire_bytes(
     raw[341..373].copy_from_slice(&header.new_vault_materialisation_root);
     raw[373..405].copy_from_slice(&header.old_vault_outpoint_commitment);
     raw[405..437].copy_from_slice(&header.new_vault_outpoint_commitment);
+    raw[437..469].copy_from_slice(&header.withdrawal_lock_hash);
     raw
 }
 

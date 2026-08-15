@@ -122,18 +122,30 @@ fn main() -> Result<()> {
         WITNESS_ENVELOPE_KIND_FACTORY_SPLICE => {
             let witness = FactorySpliceWitness::parse(input_type_raw)?;
             verify_factory_splice_update(&old_header, &new_header, &witness)?;
+            let header = witness.header()?;
             let old_vault = witness.old_vault()?;
             let new_vault = witness.new_vault()?;
             let deltas = witness.deltas()?;
-            validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
+            validate_factory_splice_vault_deltas(
+                &old_vault,
+                &new_vault,
+                &deltas,
+                header.withdrawal_lock_hash(),
+            )?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE => {
             let witness = FactoryReducedSpliceWitness::parse(input_type_raw)?;
             verify_factory_reduced_splice_update(&old_header, &new_header, &witness)?;
+            let header = witness.header()?;
             let old_vault = witness.old_vault()?;
             let new_vault = witness.new_vault()?;
             let deltas = witness.deltas()?;
-            validate_factory_splice_vault_deltas(&old_vault, &new_vault, &deltas)?;
+            validate_factory_splice_vault_deltas(
+                &old_vault,
+                &new_vault,
+                &deltas,
+                header.withdrawal_lock_hash(),
+            )?;
         }
         _ => return Err(ScriptError::WitnessEnvelopeEncoding),
     }
@@ -335,6 +347,7 @@ fn validate_factory_splice_vault_deltas(
     old_vault: &FactoryVaultDescriptor,
     new_vault: &FactoryVaultDescriptor,
     deltas: &FactoryVaultDeltas,
+    withdrawal_lock_hash: &[u8],
 ) -> Result<()> {
     let input_capacity = single_group_capacity(Source::GroupInput)?;
     let input_type =
@@ -374,6 +387,63 @@ fn validate_factory_splice_vault_deltas(
             output_type.as_ref().map(|hash| hash.as_slice()),
             output_data.as_slice(),
         )?;
+        if delta.withdrawal() != 0 {
+            validate_factory_splice_withdrawal_output(withdrawal_lock_hash, &delta)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_factory_splice_withdrawal_output(
+    expected_lock_hash: &[u8],
+    delta: &FactoryVaultDelta,
+) -> Result<()> {
+    let mut found = false;
+    let mut index = 0;
+    loop {
+        match load_cell_lock_hash(index, Source::Output) {
+            Ok(lock_hash) => {
+                if lock_hash.as_slice() == expected_lock_hash {
+                    let matches = match delta.asset_kind() {
+                        VAULT_ASSET_KIND_CKB => {
+                            let capacity_matches = u128::from(
+                                load_cell_capacity(index, Source::Output)
+                                    .map_err(|_| ScriptError::Encoding)?,
+                            ) == delta.withdrawal();
+                            let type_hash = load_cell_type_hash(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            let data = load_cell_data(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            capacity_matches && type_hash.is_none() && data.is_empty()
+                        }
+                        VAULT_ASSET_KIND_XUDT => {
+                            let type_hash = load_cell_type_hash(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            let data = load_cell_data(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            type_hash.as_ref().map(|hash| hash.as_slice())
+                                == Some(delta.asset_type())
+                                && data.len() == 16
+                                && read_u128(data.as_slice(), 0) == delta.withdrawal()
+                        }
+                        _ => return Err(ScriptError::FactorySpliceProofEncoding),
+                    };
+                    if matches {
+                        if found {
+                            return Err(ScriptError::FactorySpliceProofMismatch);
+                        }
+                        found = true;
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    if !found {
+        return Err(ScriptError::FactorySpliceProofMismatch);
     }
     Ok(())
 }

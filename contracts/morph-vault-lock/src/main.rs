@@ -19,10 +19,11 @@ use ckb_std::{default_alloc, entry};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BYTE32_LEN,
     BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor, PHASE_ACTIVE,
-    PHASE_SETTLING, Result, ScriptError, SpliceStateTransitionWitness, SpliceVaultDescriptor,
-    StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT,
-    read_u64, read_u128, validate_relative_block_since, vault_cell_commitment,
-    vault_outpoint_commitment, verify_splice_state_transition_bundle,
+    PHASE_SETTLING, Result, ScriptError, SpliceAssetDelta, SpliceAssetDeltas, SpliceHeader,
+    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
+    UNBOUND_VAULT_OUTPOINT_COMMITMENT, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, read_u64,
+    read_u128, validate_relative_block_since, vault_cell_commitment, vault_outpoint_commitment,
+    verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -108,6 +109,7 @@ fn main() -> Result<()> {
             {
                 return Err(ScriptError::SettlementDescriptorMismatch);
             }
+            ensure_no_group_xudt(Source::GroupInput)?;
             let vault_capacity = sum_group_capacity(Source::GroupInput)?;
             if descriptor.checked_total_capacity()? != vault_capacity {
                 return Err(ScriptError::SettlementOutputMismatch);
@@ -400,6 +402,76 @@ fn validate_splice_vault_spend(
     validate_old_vault_inputs(&old_vault)?;
     let new_vault_commitment = validate_new_vault_output(current_script, &new_vault)?;
     if new_header.vault_materialisation_root() != new_vault_commitment.as_slice() {
+        return Err(ScriptError::SpliceProofMismatch);
+    }
+    let deltas = witness.deltas()?;
+    validate_splice_withdrawal_outputs(&splice_header, &deltas)?;
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_withdrawal_outputs(
+    header: &SpliceHeader,
+    deltas: &SpliceAssetDeltas,
+) -> Result<()> {
+    for index in 0..deltas.delta_count() as usize {
+        let delta = deltas.delta(index)?;
+        if delta.withdrawal() != 0 {
+            validate_splice_withdrawal_output(header.withdrawal_lock_hash(), &delta)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn validate_splice_withdrawal_output(
+    expected_lock_hash: &[u8],
+    delta: &SpliceAssetDelta,
+) -> Result<()> {
+    let mut found = false;
+    let mut index = 0;
+    loop {
+        match load_cell_lock_hash(index, Source::Output) {
+            Ok(lock_hash) => {
+                if lock_hash.as_slice() == expected_lock_hash {
+                    let matches = match delta.asset_kind() {
+                        VAULT_ASSET_KIND_CKB => {
+                            let capacity_matches = u128::from(
+                                load_cell_capacity(index, Source::Output)
+                                    .map_err(|_| ScriptError::Encoding)?,
+                            ) == delta.withdrawal();
+                            let type_hash = load_cell_type_hash(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            let data = load_cell_data(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            capacity_matches && type_hash.is_none() && data.is_empty()
+                        }
+                        VAULT_ASSET_KIND_XUDT => {
+                            let type_hash = load_cell_type_hash(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            let data = load_cell_data(index, Source::Output)
+                                .map_err(|_| ScriptError::Encoding)?;
+                            type_hash.as_ref().map(|hash| hash.as_slice())
+                                == Some(delta.asset_type())
+                                && data.len() == 16
+                                && read_u128(data.as_slice(), 0) == delta.withdrawal()
+                        }
+                        _ => return Err(ScriptError::SpliceProofEncoding),
+                    };
+                    if matches {
+                        if found {
+                            return Err(ScriptError::SpliceProofMismatch);
+                        }
+                        found = true;
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    if !found {
         return Err(ScriptError::SpliceProofMismatch);
     }
     Ok(())

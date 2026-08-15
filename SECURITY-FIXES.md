@@ -31,6 +31,36 @@ Implementation safety-boundary baseline: `8944bf7`.
   `state_type_rejects_factory_exit_without_bound_factory_authority`.
 - Current boundary: bilateral StateType args are exactly 40 bytes and Factory
   child args are exactly 72 bytes. Unpublished shorter forms are rejected.
+- Trust boundary: the child StateType delegates authorisation to the exact
+  FactoryType script hash committed in those 72-byte args; it does not
+  independently repeat the Factory witness signature checks. Deployments must
+  therefore pin an audited FactoryType code identity. Committing a permissive
+  script can create only a fresh, separately addressed child authority and does
+  not grant access to children committed to the audited FactoryType.
+
+## Signed splice withdrawal destinations (2026-08-15)
+
+- Issue: bilateral, full-factory, and reduced-factory splice-out signatures
+  committed withdrawal amounts but not the output lock, allowing a transaction
+  assembler to redirect the payout.
+- Fix: `SpliceHeader` and `FactorySpliceHeader` now include a signed
+  `withdrawal_lock_hash`. Vault scripts require every nonzero CKB/xUDT
+  withdrawal delta to have exactly one output with that lock, asset type, and
+  amount. Splice-in requires a zero target; splice-out requires a nonzero
+  target. This is an intentional unpublished wire-format break: header lengths
+  are now 485/469 bytes and the affected witness body versions are 2.
+- Negative tests:
+  `vault_lock_rejects_splice_out_with_substituted_withdrawal_lock` and
+  `factory_vault_rejects_reduced_splice_out_with_substituted_withdrawal_lock`.
+
+## Settlement and host/script parity fixes (2026-08-15)
+
+- Plain CKB settlement rejects typed Vault inputs, matching the CKB-only
+  descriptor profile. Negative test:
+  `vault_lock_rejects_ckb_only_settlement_with_typed_vault_input`.
+- Host splice validation now requires both current and successor states to be
+  Active, and reduced Factory splice validation requires a bound old Vault
+  outpoint plus an unbound successor, matching the on-chain scripts.
 
 ## Agent and remote HTTP boundaries (2026-08-13)
 

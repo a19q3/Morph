@@ -374,6 +374,10 @@ fn splice_transition(kind: SpliceKind) -> SpliceTransition {
         new_vault_materialisation_root: vault_descriptor_commitment(&new_vault),
         old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
         new_vault_outpoint_commitment: [0; 32],
+        withdrawal_lock_hash: match kind {
+            SpliceKind::In => [0; 32],
+            SpliceKind::Out => bytes32(96),
+        },
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     let witness = splice_witness_for(&mut header);
@@ -564,6 +568,10 @@ fn factory_splice_transition(
         new_vault_materialisation_root: bytes32(94),
         old_vault_outpoint_commitment: bytes32(95),
         new_vault_outpoint_commitment: [0; 32],
+        withdrawal_lock_hash: match kind {
+            FactorySpliceKind::In => [0; 32],
+            FactorySpliceKind::Out => bytes32(96),
+        },
     };
     let witness = factory_splice_witness_for(&mut header);
     FactorySpliceTransition {
@@ -800,8 +808,14 @@ fn splice_signing_digest_is_state_and_vault_sensitive() {
     let splice = splice_transition(SpliceKind::In);
     let mut changed = splice.header.clone();
     changed.new_funding_epoch += 1;
+    let mut changed_withdrawal_target = splice.header.clone();
+    changed_withdrawal_target.withdrawal_lock_hash = bytes32(99);
 
     assert_ne!(splice.header.signing_digest(), changed.signing_digest());
+    assert_ne!(
+        splice.header.signing_digest(),
+        changed_withdrawal_target.signing_digest()
+    );
     assert_ne!(
         splice.header.old_vault_commitment,
         splice.header.new_vault_commitment
@@ -827,6 +841,34 @@ fn accepts_valid_xudt_splice_out_transition() {
     let splice = xudt_splice_out_transition();
 
     validate_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn splice_rejects_non_active_successor() {
+    let mut splice = splice_transition(SpliceKind::In);
+    splice.next_state.header.phase = Phase::Settling;
+
+    let err = validate_splice_transition(&splice).unwrap_err();
+    assert_eq!(err, MorphError::SpliceStateNotActive);
+}
+
+#[test]
+fn splice_rejects_missing_or_unexpected_withdrawal_target() {
+    let mut splice_out = splice_transition(SpliceKind::Out);
+    splice_out.header.withdrawal_lock_hash = [0; 32];
+    splice_out.witness = splice_witness_for(&mut splice_out.header);
+    assert_eq!(
+        validate_splice_transition(&splice_out).unwrap_err(),
+        MorphError::SpliceDeltaCommitmentMismatch
+    );
+
+    let mut splice_in = splice_transition(SpliceKind::In);
+    splice_in.header.withdrawal_lock_hash = bytes32(99);
+    splice_in.witness = splice_witness_for(&mut splice_in.header);
+    assert_eq!(
+        validate_splice_transition(&splice_in).unwrap_err(),
+        MorphError::SpliceDeltaCommitmentMismatch
+    );
 }
 
 #[test]
@@ -1112,6 +1154,44 @@ fn accepts_valid_reduced_factory_splice_transition() {
     let splice = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
 
     validate_factory_reduced_splice_transition(&splice).unwrap();
+}
+
+#[test]
+fn reduced_factory_splice_rejects_unbound_vault_lifecycle() {
+    let mut missing_old = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    missing_old.header.old_vault_outpoint_commitment = [0; 32];
+    missing_old.witness = factory_reduced_splice_witness_for(&mut missing_old.header);
+    assert_eq!(
+        validate_factory_reduced_splice_transition(&missing_old).unwrap_err(),
+        MorphError::VaultOutPointBindingInvalid
+    );
+
+    let mut bound_new = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    bound_new.header.new_vault_outpoint_commitment = bytes32(99);
+    bound_new.witness = factory_reduced_splice_witness_for(&mut bound_new.header);
+    assert_eq!(
+        validate_factory_reduced_splice_transition(&bound_new).unwrap_err(),
+        MorphError::VaultOutPointBindingInvalid
+    );
+}
+
+#[test]
+fn factory_splice_rejects_missing_or_unexpected_withdrawal_target() {
+    let mut full_out = factory_splice_transition(FactorySpliceKind::Out, VaultAsset::Ckb);
+    full_out.header.withdrawal_lock_hash = [0; 32];
+    full_out.witness = factory_splice_witness_for(&mut full_out.header);
+    assert_eq!(
+        validate_factory_splice_transition(&full_out).unwrap_err(),
+        MorphError::FactorySpliceVaultDeltaMismatch
+    );
+
+    let mut reduced_in = factory_reduced_splice_transition(FactorySpliceKind::In, VaultAsset::Ckb);
+    reduced_in.header.withdrawal_lock_hash = bytes32(99);
+    reduced_in.witness = factory_reduced_splice_witness_for(&mut reduced_in.header);
+    assert_eq!(
+        validate_factory_reduced_splice_transition(&reduced_in).unwrap_err(),
+        MorphError::FactorySpliceVaultDeltaMismatch
+    );
 }
 
 #[test]

@@ -11,7 +11,7 @@ pub const WITNESS_ENVELOPE_MAGIC: &[u8; 8] = b"MORPHW!!";
 pub const WITNESS_ENVELOPE_LEN: usize = 8 + 2 + 2 + 2 + 4 + BYTE32_LEN;
 pub const FACTORY_STATE_HEADER_LEN: usize = 302;
 pub const SPONSOR_POLICY_LEN: usize = 136;
-pub const SPLICE_HEADER_LEN: usize = 453;
+pub const SPLICE_HEADER_LEN: usize = 485;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
@@ -44,7 +44,7 @@ pub const FACTORY_REDUCED_RIGHTS_COUNT: u8 = 10;
 pub const FACTORY_REDUCED_EXIT_RIGHTS_COUNT: u8 = 12;
 pub const FACTORY_MERKLE_UPDATE_RIGHT_COUNT: u8 = 1;
 pub const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
-pub const FACTORY_SPLICE_HEADER_LEN: usize = 437;
+pub const FACTORY_SPLICE_HEADER_LEN: usize = 469;
 pub const FACTORY_VAULT_ASSET_AMOUNT_LEN: usize = 1 + BYTE32_LEN + 16;
 pub const FACTORY_VAULT_DESCRIPTOR_MAX_ASSETS: u8 = 2;
 pub const FACTORY_VAULT_DESCRIPTOR_LEN: usize = BYTE32_LEN + 2 + 2 * FACTORY_VAULT_ASSET_AMOUNT_LEN;
@@ -126,7 +126,7 @@ pub const BILATERAL_SIGNATURE_COUNT: u8 = 2;
 pub const SPLICE_SIGNATURE_WITNESS_VERSION: u16 = 1;
 pub const SPLICE_SIGNATURE_THRESHOLD: u8 = 2;
 pub const SPLICE_SIGNATURE_COUNT: u8 = 2;
-pub const SPLICE_STATE_TRANSITION_WITNESS_VERSION: u16 = 1;
+pub const SPLICE_STATE_TRANSITION_WITNESS_VERSION: u16 = 2;
 pub const FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT: u8 = 1;
 pub const FACTORY_RIGHT_KIND_BALANCE: u8 = 0;
 pub const FACTORY_RIGHT_KIND_RESERVE_CLAIM: u8 = 1;
@@ -138,8 +138,8 @@ pub const FACTORY_REDUCED_RIGHTS_WITNESS_VERSION: u16 = 1;
 pub const FACTORY_MERKLE_UPDATE_WITNESS_VERSION: u16 = 1;
 pub const FACTORY_REDUCED_EXIT_WITNESS_VERSION: u16 = 1;
 pub const FACTORY_LOCAL_EXIT_WITNESS_VERSION: u16 = 1;
-pub const FACTORY_SPLICE_WITNESS_VERSION: u16 = 1;
-pub const FACTORY_REDUCED_SPLICE_WITNESS_VERSION: u16 = 1;
+pub const FACTORY_SPLICE_WITNESS_VERSION: u16 = 2;
+pub const FACTORY_REDUCED_SPLICE_WITNESS_VERSION: u16 = 2;
 pub const WITNESS_ENVELOPE_FORMAT: u16 = 1;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE: u16 = 1;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS: u16 = 2;
@@ -806,6 +806,10 @@ impl<'a> SpliceHeader<'a> {
         field(self.raw, 421, BYTE32_LEN)
     }
 
+    pub fn withdrawal_lock_hash(&self) -> &'a [u8] {
+        field(self.raw, 453, BYTE32_LEN)
+    }
+
     pub fn signing_digest(&self) -> [u8; 32] {
         blake2b256(&[SPLICE_HEADER_DOMAIN, self.raw])
     }
@@ -993,6 +997,13 @@ pub fn verify_splice_state_transition(
     current_state.validate_profile()?;
     next_state.validate_profile()?;
     if current_state.phase() != PHASE_ACTIVE || next_state.phase() != PHASE_ACTIVE {
+        return Err(ScriptError::SpliceProofMismatch);
+    }
+    if (splice_header.kind() == SPLICE_KIND_IN
+        && splice_header.withdrawal_lock_hash() != [0u8; BYTE32_LEN])
+        || (splice_header.kind() == SPLICE_KIND_OUT
+            && splice_header.withdrawal_lock_hash() == [0u8; BYTE32_LEN])
+    {
         return Err(ScriptError::SpliceProofMismatch);
     }
     if !current_state.vault_is_bound() || next_state.vault_is_bound() {
@@ -2516,6 +2527,10 @@ impl<'a> FactorySpliceHeader<'a> {
         field(self.raw, 405, BYTE32_LEN)
     }
 
+    pub fn withdrawal_lock_hash(&self) -> &'a [u8] {
+        field(self.raw, 437, BYTE32_LEN)
+    }
+
     pub fn signing_digest(&self) -> [u8; 32] {
         blake2b256(&[FACTORY_SPLICE_HEADER_DOMAIN, self.raw])
     }
@@ -2955,6 +2970,13 @@ pub fn verify_factory_splice_update(
     {
         return Err(ScriptError::FactorySpliceProofMismatch);
     }
+    if (splice_header.kind() == SPLICE_KIND_IN
+        && splice_header.withdrawal_lock_hash() != [0u8; BYTE32_LEN])
+        || (splice_header.kind() == SPLICE_KIND_OUT
+            && splice_header.withdrawal_lock_hash() == [0u8; BYTE32_LEN])
+    {
+        return Err(ScriptError::FactorySpliceProofMismatch);
+    }
     if old_vault.factory_id() != splice_header.factory_id()
         || new_vault.factory_id() != splice_header.factory_id()
         || deltas.commitment()?.as_slice() != splice_header.vault_delta_commitment()
@@ -2993,6 +3015,13 @@ pub fn verify_factory_reduced_splice_update(
         || !splice_header.matches_factory_update(old_header, new_header)
         || !old_header.vault_is_bound()
         || new_header.vault_is_bound()
+    {
+        return Err(ScriptError::FactorySpliceProofMismatch);
+    }
+    if (splice_header.kind() == SPLICE_KIND_IN
+        && splice_header.withdrawal_lock_hash() != [0u8; BYTE32_LEN])
+        || (splice_header.kind() == SPLICE_KIND_OUT
+            && splice_header.withdrawal_lock_hash() == [0u8; BYTE32_LEN])
     {
         return Err(ScriptError::FactorySpliceProofMismatch);
     }
@@ -4806,6 +4835,9 @@ mod tests {
         raw[357..389].fill(9);
         raw[389..421].fill(10);
         raw[421..453].fill(0);
+        if kind == SPLICE_KIND_OUT {
+            raw[453..485].fill(11);
+        }
         raw
     }
 
@@ -5014,6 +5046,9 @@ mod tests {
         raw[341..373].copy_from_slice(new_header.vault_materialisation_root());
         raw[373..405].copy_from_slice(old_header.vault_outpoint_commitment());
         raw[405..437].copy_from_slice(new_header.vault_outpoint_commitment());
+        if kind == SPLICE_KIND_OUT {
+            raw[437..469].fill(11);
+        }
         raw
     }
 
@@ -5647,7 +5682,7 @@ mod tests {
             &new_vault_raw,
             &deltas_raw,
         );
-        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1145);
+        assert_eq!(SPLICE_STATE_TRANSITION_WITNESS_LEN, 1177);
         let bundle = SpliceStateTransitionWitness::parse(&bundle_raw).unwrap();
         assert_eq!(bundle.version(), SPLICE_STATE_TRANSITION_WITNESS_VERSION);
         assert_eq!(bundle.raw().len(), SPLICE_STATE_TRANSITION_WITNESS_LEN);
@@ -5664,7 +5699,7 @@ mod tests {
         verify_splice_state_transition_bundle(&current, &next, &bundle).unwrap();
 
         let mut wrong_version = bundle_raw;
-        put_u16(&mut wrong_version, 0, 2);
+        put_u16(&mut wrong_version, 0, 1);
         assert_eq!(
             SpliceStateTransitionWitness::parse(&wrong_version).unwrap_err(),
             ScriptError::SpliceProofEncoding

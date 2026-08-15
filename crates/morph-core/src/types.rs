@@ -260,6 +260,7 @@ pub struct FactorySpliceHeader {
     pub new_vault_materialisation_root: Bytes32,
     pub old_vault_outpoint_commitment: Bytes32,
     pub new_vault_outpoint_commitment: Bytes32,
+    pub withdrawal_lock_hash: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,6 +526,7 @@ pub struct SpliceHeader {
     pub challenge_policy_commitment: Bytes32,
     pub old_vault_outpoint_commitment: Bytes32,
     pub new_vault_outpoint_commitment: Bytes32,
+    pub withdrawal_lock_hash: Bytes32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

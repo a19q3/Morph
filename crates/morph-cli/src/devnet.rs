@@ -2739,6 +2739,17 @@ pub fn save_factory_splice_package(
         DevnetSpliceKind::SpliceIn => FactorySpliceKind::In,
         DevnetSpliceKind::SpliceOut => FactorySpliceKind::Out,
     };
+    let withdrawal_lock_hash = match splice_kind {
+        FactorySpliceKind::In => [0; BYTE32_LEN],
+        FactorySpliceKind::Out => {
+            let (_, pubkey, _) = participant_entries
+                .first()
+                .ok_or_else(|| anyhow!("factory splice requires a touched participant"))?;
+            secp256k1_lock_from_pubkey(pubkey)?
+                .calc_script_hash()
+                .unpack()
+        }
+    };
     let (asset, old_amount, new_amount, external_input, withdrawal) = match options.asset {
         DevnetSpliceAsset::Ckb => {
             ensure!(options.ckb_amount > 0, "ckb_amount must be non-zero");
@@ -2879,6 +2890,7 @@ pub fn save_factory_splice_package(
             old_header.vault_outpoint_commitment(),
         )?,
         new_vault_outpoint_commitment: [0; BYTE32_LEN],
+        withdrawal_lock_hash,
     };
     let transition = FactorySpliceTransition {
         header,
@@ -2991,6 +3003,17 @@ pub fn save_factory_reduced_splice_package(
     let splice_kind = match options.kind {
         DevnetSpliceKind::SpliceIn => FactorySpliceKind::In,
         DevnetSpliceKind::SpliceOut => FactorySpliceKind::Out,
+    };
+    let withdrawal_lock_hash = match splice_kind {
+        FactorySpliceKind::In => [0; BYTE32_LEN],
+        FactorySpliceKind::Out => {
+            let (_, pubkey, _) = participant_entries
+                .first()
+                .ok_or_else(|| anyhow!("reduced factory splice requires a touched participant"))?;
+            secp256k1_lock_from_pubkey(pubkey)?
+                .calc_script_hash()
+                .unpack()
+        }
     };
     let (asset, old_amount, new_amount, external_input, withdrawal) = match options.asset {
         DevnetSpliceAsset::Ckb => {
@@ -3139,6 +3162,7 @@ pub fn save_factory_reduced_splice_package(
             old_header.vault_outpoint_commitment(),
         )?,
         new_vault_outpoint_commitment: [0; BYTE32_LEN],
+        withdrawal_lock_hash,
     };
     let update = FactorySingleRightMerkleUpdate {
         before_root: old_state_root,
@@ -3460,6 +3484,13 @@ pub fn apply_factory_splice(
     )?;
 
     let withdrawal_target = factory_splice_participant_withdrawal_target(&package, &transition)?;
+    let withdrawal_lock_hash: [u8; BYTE32_LEN] = withdrawal_target.lock.calc_script_hash().unpack();
+    if matches!(transition.header.kind, FactorySpliceKind::Out) {
+        ensure!(
+            transition.header.withdrawal_lock_hash == withdrawal_lock_hash,
+            "factory splice payout lock does not match the signed withdrawal_lock_hash"
+        );
+    }
     let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep.clone())
         .cell_dep(state_lock_contract.cell_dep.clone())
@@ -3911,6 +3942,13 @@ pub fn apply_factory_reduced_splice(
 
     let withdrawal_target =
         factory_reduced_splice_participant_withdrawal_target(&package, &transition)?;
+    let withdrawal_lock_hash: [u8; BYTE32_LEN] = withdrawal_target.lock.calc_script_hash().unpack();
+    if matches!(transition.header.kind, FactorySpliceKind::Out) {
+        ensure!(
+            transition.header.withdrawal_lock_hash == withdrawal_lock_hash,
+            "reduced factory splice payout lock does not match the signed withdrawal_lock_hash"
+        );
+    }
     let mut builder = TransactionBuilder::default()
         .cell_dep(secp_dep.clone())
         .cell_dep(state_lock_contract.cell_dep.clone())
@@ -7117,6 +7155,13 @@ pub fn save_splice_package(
         DevnetSpliceKind::SpliceIn => SpliceKind::In,
         DevnetSpliceKind::SpliceOut => SpliceKind::Out,
     };
+    let withdrawal_lock_hash = match splice_kind {
+        SpliceKind::In => [0; BYTE32_LEN],
+        SpliceKind::Out => splice_withdrawal_lock_hash_from_keys(
+            &options.alice_private_key,
+            &options.bob_private_key,
+        )?,
+    };
 
     match options.asset {
         DevnetSpliceAsset::Ckb => {
@@ -7316,6 +7361,7 @@ pub fn save_splice_package(
         new_vault_materialisation_root,
         old_vault_outpoint_commitment: current_state.header.vault_outpoint_commitment,
         new_vault_outpoint_commitment: [0; BYTE32_LEN],
+        withdrawal_lock_hash,
         challenge_policy_commitment: current_state.header.challenge_policy_commitment,
     };
     header.old_vault_commitment = vault_descriptor_commitment(&old_vault);
@@ -8372,6 +8418,16 @@ pub fn apply_splice(rpc: &CkbRpcClient, options: ApplySpliceOptions) -> Result<A
     let mut next_state_header = package.next_state_header_bytes()?;
     let splice_witness = package.contract_witness_bytes()?;
     let participant_withdrawal_target = splice_participant_withdrawal_target(&transition)?;
+    let withdrawal_lock_hash: [u8; BYTE32_LEN] = participant_withdrawal_target
+        .lock
+        .calc_script_hash()
+        .unpack();
+    if matches!(transition.header.kind, SpliceKind::Out) {
+        ensure!(
+            transition.header.withdrawal_lock_hash == withdrawal_lock_hash,
+            "splice payout lock does not match the signed withdrawal_lock_hash"
+        );
+    }
 
     let state_out_point = parse_out_point(&options.state_out_point)?;
     let vault_out_point = parse_out_point(&options.vault_out_point)?;
@@ -11684,6 +11740,23 @@ fn splice_witness_from_keys(
     })
 }
 
+fn splice_withdrawal_lock_hash_from_keys(
+    alice_private_key: &str,
+    bob_private_key: &str,
+) -> Result<[u8; BYTE32_LEN]> {
+    let alice_key = k256_signing_key(alice_private_key)?;
+    let bob_key = k256_signing_key(bob_private_key)?;
+    let mut participant_pubkeys = [k256_pubkey(&alice_key), k256_pubkey(&bob_key)];
+    participant_pubkeys.sort();
+    secp256k1_lock_hash(&participant_pubkeys[0])
+}
+
+fn secp256k1_lock_hash(pubkey: &[u8; COMPRESSED_SECP256K1_PUBKEY_LEN]) -> Result<[u8; BYTE32_LEN]> {
+    Ok(secp256k1_lock_from_pubkey(pubkey)?
+        .calc_script_hash()
+        .unpack())
+}
+
 fn factory_signature_witness(
     factory_header: &[u8],
     alice_private_key: &str,
@@ -13904,6 +13977,16 @@ mod tests {
         let lock_from_pubkey = secp256k1_lock_from_pubkey(&pubkey).unwrap();
 
         assert_eq!(lock_from_pubkey, lock_from_key);
+    }
+
+    #[test]
+    fn splice_withdrawal_target_uses_canonical_participant_order() {
+        let alice = private_key_from_scalar(1);
+        let bob = private_key_from_scalar(2);
+        let target = splice_withdrawal_lock_hash_from_keys(&alice, &bob).unwrap();
+        let reversed = splice_withdrawal_lock_hash_from_keys(&bob, &alice).unwrap();
+
+        assert_eq!(target, reversed);
     }
 
     #[test]
