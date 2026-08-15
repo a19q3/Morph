@@ -27,6 +27,7 @@ import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getState, hasApiToken, openEventStream, setApiToken } from './api';
+import { useModalFocus } from './components';
 import {
   Asset,
   Balance,
@@ -93,6 +94,7 @@ type FactoryActionTarget = {
 };
 const LIVE_POLL_INTERVAL_MS = 5_000;
 const DRAWER_COLLAPSED_STORAGE_KEY = 'morph-hub.drawer-collapsed';
+const ACTIVE_ACTION_STORAGE_KEY = 'morph-hub.active-action';
 
 function formatAssetPortfolio(balances: Balance[]): string {
   const totals = new Map<string, { asset: Asset; amount: bigint }>();
@@ -151,7 +153,7 @@ type SectionKey = keyof typeof sectionIds;
 
 export function App() {
   const [state, setState] = useState<NodeState>(emptyState);
-  const [activeAction, setActiveAction] = useState<ActionPanel>('invoice');
+  const [activeAction, setActiveAction] = useState<ActionPanel>(initialActionPanel);
   const [drawerCollapsed, setDrawerCollapsed] = useState(() => initialDrawerCollapsed());
   const [status, setStatus] = useState('Loading Morph Hub API');
   const [lastRefreshMs, setLastRefreshMs] = useState<number | null>(null);
@@ -165,7 +167,7 @@ export function App() {
   const [requiresToken, setRequiresToken] = useState(false);
   const [tokenDraft, setTokenDraft] = useState('');
   const [initialStateLoaded, setInitialStateLoaded] = useState(false);
-  const [activeSection, setActiveSection] = useState<SectionKey>('overview');
+  const [activeSection, setActiveSection] = useState<SectionKey>(initialSection);
   const [recordQuery, setRecordQuery] = useState('');
   const [factoryActionTarget, setFactoryActionTarget] = useState<FactoryActionTarget | null>(null);
   const workspaceRef = useRef<HTMLElement | null>(null);
@@ -222,9 +224,20 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const section = initialSection();
+    const frame = window.requestAnimationFrame(() => {
+      workspaceRef.current
+        ?.querySelector<HTMLElement>(`#${sectionIds[section]}`)
+        ?.scrollIntoView({ block: 'start' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT';
+      if (document.querySelector('[role="dialog"]')) return;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setCommandOpen(true);
@@ -234,9 +247,6 @@ export function App() {
         event.preventDefault();
         const search = document.querySelector<HTMLInputElement>('[data-testid="operator-search"]');
         search?.focus();
-      }
-      if (event.key === 'Escape') {
-        setCommandOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -316,7 +326,11 @@ export function App() {
         if (visible[0]) {
           const id = (visible[0].target as HTMLElement).id;
           const match = (Object.keys(sectionIds) as SectionKey[]).find(key => sectionIds[key] === id);
-          if (match) setActiveSection(match);
+          if (match) {
+            setActiveSection(match);
+            const nextHash = `#${sectionIds[match]}`;
+            if (window.location.hash !== nextHash) window.history.replaceState(null, '', nextHash);
+          }
         }
       },
       { root, rootMargin: '-20% 0px -60% 0px', threshold: [0, 0.25, 0.5, 1] }
@@ -340,7 +354,6 @@ export function App() {
       replaceToast(toastId, { tone: 'ok', title: `${label} accepted`, body: 'Morph Hub state refreshed.' });
     } catch (err) {
       const message = formatActionError(label, err);
-      setError(message);
       setStatus(`${label} rejected`);
       replaceToast(toastId, { tone: 'bad', title: `${label} rejected`, body: message }, 8_000);
     } finally {
@@ -432,10 +445,12 @@ export function App() {
     const el = root?.querySelector(`#${sectionIds[key]}`) as HTMLElement | null;
     el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setActiveSection(key);
+    window.history.replaceState(null, '', `#${sectionIds[key]}`);
   };
 
   const selectAction = (key: ActionPanel) => {
     setActiveAction(key);
+    sessionStorage.setItem(ACTIVE_ACTION_STORAGE_KEY, key);
     setDrawerCollapsed(false);
     setError('');
     const label = actionItems.find(item => item.key === key)?.label ?? 'Operator';
@@ -445,6 +460,7 @@ export function App() {
   const openFactoryMaterialise = (factoryId: Hex32) => {
     setFactoryActionTarget({ factoryId, intent: 'materialise', nonce: Date.now() });
     setActiveAction('factory');
+    sessionStorage.setItem(ACTIVE_ACTION_STORAGE_KEY, 'factory');
     setError('');
     setStatus(`Materialise child controls selected for ${shortHex(factoryId)}`);
   };
@@ -612,9 +628,15 @@ export function App() {
           </div>
         </header>
 
-        <NodeInfoStrip state={state} liveMode={liveMode} flowDataLoaded={flowDataLoaded} />
+        <NodeInfoStrip state={state} flowDataLoaded={flowDataLoaded} />
 
-        {error && <div className="error banner"><AlertTriangle size={15} />{error}</div>}
+        {error && (
+          <div className="error banner" role="alert">
+            <AlertTriangle size={15} />
+            <span>{error}</span>
+            <button type="button" title="Dismiss error" aria-label="Dismiss error" onClick={() => setError('')}><X size={13} /></button>
+          </div>
+        )}
         {requiresToken && (
           <form className="auth-banner" onSubmit={submitApiToken}>
             <ShieldCheck size={15} />
@@ -680,7 +702,7 @@ export function App() {
             />
           </div>
           <div id={sectionIds.invoices}>
-            <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} onOpenAction={() => selectAction('invoice')} />
+            <InvoicePanel invoices={filteredInvoices} totalCount={state.invoices.length} searchActive={searchActive} onOpenAction={() => selectAction('invoice')} nowMs={clockMs} />
           </div>
           <div id={sectionIds.peers}>
             <PeerPanel state={state} peers={filteredPeers} totalCount={orderedPeers.length} searchActive={searchActive} runAction={runAction} busy={busy} onOpenAction={() => selectAction('peer')} />
@@ -733,7 +755,6 @@ export function App() {
               title={label}
               aria-label={label}
               data-testid={`action-${key}`}
-              disabled={busy}
             >
               <Icon size={15} />
             </button>
@@ -755,6 +776,18 @@ function initialDrawerCollapsed(): boolean {
   const stored = sessionStorage.getItem(DRAWER_COLLAPSED_STORAGE_KEY);
   if (stored != null) return stored === 'true';
   return window.innerWidth < 1280 && window.innerWidth > 1120;
+}
+
+function initialActionPanel(): ActionPanel {
+  if (typeof window === 'undefined') return 'invoice';
+  const stored = sessionStorage.getItem(ACTIVE_ACTION_STORAGE_KEY);
+  return actionItems.some(item => item.key === stored) ? stored as ActionPanel : 'invoice';
+}
+
+function initialSection(): SectionKey {
+  if (typeof window === 'undefined') return 'overview';
+  const hash = window.location.hash.replace(/^#/, '');
+  return (Object.keys(sectionIds) as SectionKey[]).find(key => sectionIds[key] === hash) ?? 'overview';
 }
 
 function NavButton({
@@ -829,6 +862,9 @@ function CommandPalette({
   onOpenAction: (panel: ActionPanel) => void;
   onScroll: (section: SectionKey) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(0);
+  const dialogRef = useModalFocus(onClose);
   const commands: { label: string; detail: string; Icon: LucideIcon; action: () => void; disabled?: boolean }[] = [
     { label: 'Filter records', detail: 'Focus the global record search', Icon: Search, action: onSearch },
     { label: 'Refresh API state', detail: 'Fetch the latest Hub state', Icon: RefreshCw, action: onRefresh, disabled: busy },
@@ -840,10 +876,38 @@ function CommandPalette({
     { label: 'Watchtower feed', detail: 'Jump to watchtower evidence', Icon: RadioTower, action: () => onScroll('watchtower') },
     { label: 'Events', detail: 'Jump to API event log', Icon: Bell, action: () => onScroll('events') },
   ];
+  const tokens = queryTokens(query);
+  const visibleCommands = commands.filter(command => {
+    const text = `${command.label} ${command.detail}`.toLowerCase();
+    return tokens.every(token => text.includes(token));
+  });
+  const boundedActiveIndex = Math.min(activeIndex, Math.max(visibleCommands.length - 1, 0));
+  const runCommand = (index: number) => {
+    const command = visibleCommands[index];
+    if (command && !command.disabled) command.action();
+  };
+  const onPaletteKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      if (visibleCommands.length === 0) return;
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      let next = boundedActiveIndex;
+      do {
+        next = (next + direction + visibleCommands.length) % visibleCommands.length;
+      } while (visibleCommands[next].disabled && next !== boundedActiveIndex);
+      setActiveIndex(next);
+      dialogRef.current?.querySelector<HTMLButtonElement>(`[data-command-index="${next}"]`)?.focus();
+      return;
+    }
+    if (event.key === 'Enter' && event.target instanceof HTMLInputElement) {
+      event.preventDefault();
+      runCommand(boundedActiveIndex);
+    }
+  };
 
   return (
     <div className="modal-backdrop command-backdrop" role="presentation" onMouseDown={onClose}>
-      <div className="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" onMouseDown={event => event.stopPropagation()}>
+      <div ref={dialogRef} className="command-dialog" role="dialog" aria-modal="true" aria-labelledby="command-palette-title" tabIndex={-1} onKeyDown={onPaletteKeyDown} onMouseDown={event => event.stopPropagation()}>
         <div className="command-head">
           <div>
             <span>Command palette</span>
@@ -853,9 +917,33 @@ function CommandPalette({
             <X size={15} />
           </button>
         </div>
+        <label className="command-search">
+          <Search size={15} />
+          <span className="sr-only">Filter operator actions</span>
+          <input
+            data-autofocus
+            value={query}
+            onChange={event => {
+              setQuery(event.target.value);
+              setActiveIndex(0);
+            }}
+            placeholder="Type an action…"
+            aria-label="Filter operator actions"
+          />
+          <kbd>Esc</kbd>
+        </label>
         <div className="command-list">
-          {commands.map(({ label, detail, Icon, action, disabled }) => (
-            <button type="button" key={label} onClick={action} disabled={disabled}>
+          {visibleCommands.map(({ label, detail, Icon, action, disabled }, index) => (
+            <button
+              type="button"
+              className={index === boundedActiveIndex ? 'active' : ''}
+              data-command-index={index}
+              key={label}
+              onMouseEnter={() => setActiveIndex(index)}
+              onFocus={() => setActiveIndex(index)}
+              onClick={action}
+              disabled={disabled}
+            >
               <Icon size={15} />
               <span>
                 <strong>{label}</strong>
@@ -863,6 +951,7 @@ function CommandPalette({
               </span>
             </button>
           ))}
+          {visibleCommands.length === 0 && <div className="command-empty">No operator actions match “{query}”.</div>}
         </div>
       </div>
     </div>
@@ -871,11 +960,9 @@ function CommandPalette({
 
 function NodeInfoStrip({
   state,
-  liveMode,
   flowDataLoaded,
 }: {
   state: NodeState;
-  liveMode: LiveMode;
   flowDataLoaded: boolean;
 }) {
   const flowsValue = flowDataLoaded ? `${state.completed_flows.length}/${state.required_flows.length}` : 'not loaded';
@@ -898,8 +985,6 @@ function NodeInfoStrip({
         tone={state.watchtower.last_error ? 'bad' : state.watchtower.alerts.length > 0 ? 'warn' : 'neutral'}
       />
       <span className="node-info-separator" />
-      <NodeInfoPill Icon={ShieldCheck} label="RPC" value={rpcLabel(state)} title={rpcDetail(state)} tone={rpcTone(state.rpc.status)} />
-      <NodeInfoPill Icon={RadioTower} label="Live" value={liveLabel(liveMode).replace('live ', '')} tone={liveTone(liveMode)} />
       <NodeInfoPill Icon={FileJson} label="State" value={stateFile} title={state.state_path} monospace />
     </div>
   );

@@ -86,7 +86,7 @@ sdk-check:
 	cd sdk/typescript && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run check && npm test
 
 hub-ui-check:
-	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm run build
+	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm test && npm run build
 
 build-contracts:
 	$(CONTRACT_CARGO) build --locked --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt

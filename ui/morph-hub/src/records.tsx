@@ -1,9 +1,11 @@
 import { Activity, AlertTriangle, BadgeCheck, Bell, Copy, Factory, GitBranch, Network, Plus, RadioTower, ReceiptText, RefreshCw, ShieldCheck, Split, Users } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type React from 'react';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { connectPeer, postAction } from './api';
+import { ConfirmActionDialog, ValidatedInput } from './components';
 import {
+  Balance,
   ChannelRecord,
   FactoryRecord,
   Hex32,
@@ -23,6 +25,16 @@ import {
   hasHubScope,
   shortHex,
 } from './domain';
+import {
+  balanceTotal,
+  copyTextToClipboard,
+  invoiceExpiryLabel,
+  randomHex32,
+  requiredText,
+  sortInvoicesNewestFirst,
+  sortWatchtowerAlertsNewestFirst,
+  withinTimeWindow,
+} from './state';
 
 type RunAction = (label: string, action: () => Promise<NodeState>) => Promise<void>;
 type TimeFilter = 'all' | '1h' | '24h' | '7d';
@@ -32,6 +44,8 @@ type WatchSeverityFilter = 'all' | WatchAlertSeverity;
 const MAX_PEER_ALIAS_LEN = 80;
 const SIDE_PANEL_PREVIEW_LIMIT = 5;
 const EVENT_PREVIEW_LIMIT = 10;
+const CHANNEL_PAGE_SIZE = 25;
+type ChannelOrder = 'operator' | 'state' | 'funding' | 'phase' | 'channel';
 
 export function ChannelTable({
   channels,
@@ -50,11 +64,39 @@ export function ChannelTable({
   canWrite: boolean;
   onOpenAction: () => void;
 }) {
+  const [order, setOrder] = useState<ChannelOrder>('operator');
+  const [page, setPage] = useState(0);
+  const orderedChannels = useMemo(() => {
+    if (order === 'operator') return channels;
+    return [...channels].sort((left, right) => {
+      if (order === 'state') return right.state_number - left.state_number || right.channel_id.localeCompare(left.channel_id);
+      if (order === 'funding') return right.funding_epoch - left.funding_epoch || right.channel_id.localeCompare(left.channel_id);
+      if (order === 'phase') return left.phase.localeCompare(right.phase) || right.state_number - left.state_number;
+      return left.channel_id.localeCompare(right.channel_id);
+    });
+  }, [channels, order]);
+  const pageCount = Math.max(1, Math.ceil(orderedChannels.length / CHANNEL_PAGE_SIZE));
+  const boundedPage = Math.min(page, pageCount - 1);
+  const visibleChannels = orderedChannels.slice(boundedPage * CHANNEL_PAGE_SIZE, (boundedPage + 1) * CHANNEL_PAGE_SIZE);
+  useEffect(() => setPage(0), [channels, order]);
+
   return (
     <section className="panel table-panel">
       <div className="section-head">
         <h2>Channels</h2>
-        <span className="badge">{searchActive ? `${channels.length}/${totalCount} tracked` : `${channels.length} tracked`}</span>
+        <div className="section-head-actions">
+          <label className="table-order">
+            <span>Sort</span>
+            <select value={order} onChange={event => setOrder(event.target.value as ChannelOrder)}>
+              <option value="operator">Operator priority</option>
+              <option value="state">State number</option>
+              <option value="funding">Funding epoch</option>
+              <option value="phase">Phase</option>
+              <option value="channel">Channel id</option>
+            </select>
+          </label>
+          <span className="badge">{searchActive ? `${channels.length}/${totalCount} tracked` : `${channels.length} tracked`}</span>
+        </div>
       </div>
       <table>
         <thead>
@@ -88,7 +130,7 @@ export function ChannelTable({
               </td>
             </tr>
           )}
-          {channels.map(channel => (
+          {visibleChannels.map(channel => (
             <tr key={channel.channel_id}>
               <td>
                 <span className="copy-line"><strong>{shortHex(channel.channel_id)}</strong><CopyButton value={channel.channel_id} label="Copy channel id" /></span>
@@ -101,7 +143,7 @@ export function ChannelTable({
                 <strong>epoch {channel.funding_epoch}</strong>
                 <span className="copy-line muted"><small>{shortHex(channel.funding_context_id)}</small><CopyButton value={channel.funding_context_id} label="Copy funding context id" /></span>
               </td>
-              <td className="mono">{formatBalance(channel.balances[0])}</td>
+              <td><AssetBalancePortfolio balances={channel.balances} /></td>
               <td className="mono">{formatAmount(channel.sponsor_budget, { kind: 'ckb' })}</td>
               <td><ProvenanceBadge provenance={channel.provenance} /></td>
               <td>
@@ -111,6 +153,13 @@ export function ChannelTable({
           ))}
         </tbody>
       </table>
+      {pageCount > 1 && (
+        <div className="table-pagination" aria-label="Channel pages">
+          <button type="button" className="copy-button" disabled={boundedPage === 0} onClick={() => setPage(current => Math.max(0, current - 1))}>Previous</button>
+          <span>Page {boundedPage + 1} of {pageCount}</span>
+          <button type="button" className="copy-button" disabled={boundedPage + 1 >= pageCount} onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))}>Next</button>
+        </div>
+      )}
     </section>
   );
 }
@@ -230,51 +279,18 @@ function ChannelRowActions({
   );
 }
 
-function ConfirmActionDialog({
-  title,
-  detail,
-  confirmLabel,
-  confirmTestId = 'confirm-action',
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  detail: string;
-  confirmLabel: string;
-  confirmTestId?: string;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <div className="modal-backdrop" role="presentation">
-      <div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title">
-        <div>
-          <h3 id="confirm-dialog-title">{title}</h3>
-          <p>{detail}</p>
-        </div>
-        <div className="confirm-dialog-actions">
-          <button type="button" className="copy-button" onClick={onCancel} disabled={busy}>Cancel</button>
-          <button type="button" className="danger-button" data-testid={confirmTestId} onClick={onConfirm} disabled={busy}>
-            <BadgeCheck size={15} /> {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function InvoicePanel({
   invoices,
   totalCount,
   searchActive,
   onOpenAction,
+  nowMs,
 }: {
   invoices: InvoiceRecord[];
   totalCount: number;
   searchActive: boolean;
   onOpenAction: () => void;
+  nowMs: number;
 }) {
   const [showAll, setShowAll] = useState(false);
   const orderedInvoices = sortInvoicesNewestFirst(invoices);
@@ -303,7 +319,7 @@ export function InvoicePanel({
               <div>
                 <span className="copy-line"><strong>{invoice.description || shortHex(invoice.invoice_id)}</strong><CopyButton value={invoice.encoded_invoice} label="Copy encoded invoice" /></span>
                 <span className="copy-line muted"><small>{formatAmount(invoice.amount, invoice.asset)} · {assetLabel(invoice.asset)} · {shortHex(invoice.payment_hash)}</small><CopyButton value={invoice.payment_hash} label="Copy payment hash" /></span>
-                <small>expires {formatTime(invoice.expires_at_unix)}</small>
+                <small title={`Expires ${formatTime(invoice.expires_at_unix)}`}>{invoiceExpiryLabel(invoice.expires_at_unix, nowMs)} · {formatTime(invoice.expires_at_unix)}</small>
               </div>
               <div className="row-badges">
                 <span className={`status ${invoice.status}`}>{invoice.status}</span>
@@ -476,7 +492,7 @@ export function FactoryPanel({
               <small>update {factory.update_number} · {factory.materialised_child_channels.length} children</small>
             </div>
             <div className="row-badges">
-              <span className="amount">{formatBalance(factory.reserve_balances[0])}</span>
+              <AssetBalancePortfolio balances={factory.reserve_balances} compact />
               <ProvenanceBadge provenance={factory.provenance} />
               <FactoryRowActions factory={factory} runAction={runAction} busy={busy} canWrite={canWrite} onMaterialise={onMaterialise} />
             </div>
@@ -491,13 +507,12 @@ export function FactoryPanel({
 function FactoryEvidenceInspector({ factory }: { factory: FactoryRecord }) {
   const childPreview = factory.materialised_child_channels.slice(0, 3);
   const participantPreview = factory.participant_node_ids.slice(0, 2);
-  const reserve = factory.reserve_balances[0];
   return (
     <div className="evidence-inspector factory-evidence" data-testid="factory-evidence-inspector">
       <EvidenceField label="Proof scope" value="local factory record" />
       <EvidenceField label="Update" value={`#${factory.update_number}`} mono />
       <EvidenceField label="Participants" value={`${factory.participant_node_ids.length} nodes`} />
-      <EvidenceField label="Reserve" value={reserve ? formatBalance(reserve) : undefined} mono />
+      <EvidenceField label="Reserve assets" value={<AssetBalancePortfolio balances={factory.reserve_balances} />} />
       <div className="evidence-field wide">
         <span>Materialised children</span>
         <div className="evidence-chips">
@@ -933,6 +948,43 @@ function RichEmptyState({
   );
 }
 
+function AssetBalancePortfolio({ balances, compact = false }: { balances: Balance[]; compact?: boolean }) {
+  if (balances.length === 0) return <span className="balance-empty">No recorded assets</span>;
+  return (
+    <span className={`balance-portfolio ${compact ? 'compact' : ''}`}>
+      {balances.map((balance, index) => {
+        const total = balanceTotal(balance);
+        const local = BigInt(balance.local);
+        const remote = BigInt(balance.remote);
+        const pending = BigInt(balance.pending);
+        const key = balance.asset.kind === 'ckb'
+          ? `ckb-${index}`
+          : `${balance.asset.type_hash ?? 'unknown'}-${index}`;
+        return (
+          <span className="asset-balance" key={key}>
+            <span className="asset-balance-value mono">{formatBalance(balance)}</span>
+            <span className="asset-balance-label" title={balance.asset.type_hash}>{assetLabel(balance.asset)}</span>
+            <span
+              className="capacity-bar"
+              role="img"
+              aria-label={`${assetLabel(balance.asset)} allocation: local ${balance.local}, remote ${balance.remote}, pending ${balance.pending}`}
+            >
+              <span className="capacity-local" style={{ width: balanceShare(local, total) }} />
+              <span className="capacity-remote" style={{ width: balanceShare(remote, total) }} />
+              <span className="capacity-pending" style={{ width: balanceShare(pending, total) }} />
+            </span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+function balanceShare(value: bigint, total: bigint): string {
+  if (total <= 0n || value <= 0n) return '0%';
+  return `${Number((value * 10_000n) / total) / 100}%`;
+}
+
 function CopyButton({ value, label }: { value: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -983,108 +1035,4 @@ function EvidenceField({
       </strong>
     </div>
   );
-}
-
-function ValidatedInput({
-  label,
-  value,
-  onChange,
-  validate,
-  testId,
-  className,
-  maxLength,
-  disabled,
-}: {
-  label: React.ReactNode;
-  value: string;
-  onChange: (value: string) => void;
-  validate: (value: string) => void;
-  testId?: string;
-  className?: string;
-  maxLength?: number;
-  disabled?: boolean;
-}) {
-  const [touched, setTouched] = useState(false);
-  const error = touched ? validationError(value, validate) : '';
-  return (
-    <label>
-      {label}
-      <input
-        className={((className ?? '') + ' ' + (error ? 'invalid' : '')).trim()}
-        data-testid={testId}
-        value={value}
-        maxLength={maxLength}
-        disabled={disabled}
-        onBlur={() => setTouched(true)}
-        onChange={event => onChange(event.target.value)}
-      />
-      {error && <small className="field-error">{error}</small>}
-    </label>
-  );
-}
-
-function validationError(value: string, validate: (value: string) => void): string {
-  try {
-    validate(value);
-    return '';
-  } catch (err) {
-    return String((err as Error).message);
-  }
-}
-
-function requiredText(value: string, label: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) throw new Error(label + ' is required.');
-  return trimmed;
-}
-
-function randomHex32(): Hex32 {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return ('0x' + Array.from(bytes).map(byte => byte.toString(16).padStart(2, '0')).join('')) as Hex32;
-}
-
-function sortInvoicesNewestFirst(invoices: InvoiceRecord[]): InvoiceRecord[] {
-  return [...invoices].sort((left, right) => {
-    const byCreated = right.created_at_unix - left.created_at_unix;
-    return byCreated || left.invoice_id.localeCompare(right.invoice_id);
-  });
-}
-
-function sortWatchtowerAlertsNewestFirst(alerts: WatchtowerAlertRecord[]): WatchtowerAlertRecord[] {
-  return [...alerts].sort((left, right) => {
-    const byCreated = right.created_unix_ms - left.created_unix_ms;
-    return byCreated || left.channel_id.localeCompare(right.channel_id);
-  });
-}
-
-function withinTimeWindow(timestampMs: number, filter: TimeFilter): boolean {
-  if (filter === 'all') return true;
-  const ageMs = Date.now() - timestampMs;
-  if (ageMs < 0) return true;
-  switch (filter) {
-    case '1h':
-      return ageMs <= 60 * 60 * 1000;
-    case '24h':
-      return ageMs <= 24 * 60 * 60 * 1000;
-    case '7d':
-      return ageMs <= 7 * 24 * 60 * 60 * 1000;
-  }
-}
-
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  const ok = document.execCommand('copy');
-  document.body.removeChild(textarea);
-  if (!ok) throw new Error('clipboard copy failed');
 }
