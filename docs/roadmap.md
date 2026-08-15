@@ -55,7 +55,7 @@ authorisation boundary.
 | Factory membership | Larger participant sets with production ergonomics. | Needs proof-size, fee, and UX evidence. |
 | Watchtower | Independent multi-operator deployment evidence. | Two isolated local operator scopes pass; distinct hosts, administrators, RPC providers, and alert paths still require rehearsal. |
 | Network conditions | Repeated public-network reorg, delay, and fee-pressure runs. | A deterministic local fault-injection gate passes, but one devnet sample is not a production measurement. |
-| Release process | Independent reproduction and main-branch provenance completion. | Deterministic bundles, reviewed ELF hashes, CI upload/attestation configuration, and staging cleanup exist; a successful independent rebuild and release-owner sign-off remain open. |
+| Release process | Independent reproduction and release-owner sign-off. | Deterministic bundles, reviewed ELF hashes, successful main-branch CI upload/attestation, and staging cleanup exist; a successful independent external rebuild and release-owner sign-off remain open. |
 | Policy | Value-limit policy and operator runbooks. | Needed before any real-assets claim. |
 
 ## Next Engineering Slice

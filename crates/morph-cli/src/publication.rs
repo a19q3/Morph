@@ -405,6 +405,24 @@ pub fn effective_fee_rate(fee: u64, tx_size_bytes: usize) -> Result<u64> {
         .map_err(|_| anyhow!("effective fee rate exceeds u64"))
 }
 
+pub fn verify_initial_fee_convergence(
+    selected_fee_rate: u64,
+    fee: u64,
+    final_tx_size_bytes: usize,
+) -> Result<u64> {
+    let expected_fee = fee_for_rate(selected_fee_rate, final_tx_size_bytes)?;
+    ensure!(
+        fee == expected_fee,
+        "rebuilt publication fee {fee} did not converge for final transaction size {final_tx_size_bytes}; expected {expected_fee} at selected fee rate {selected_fee_rate}"
+    );
+    let effective_rate = effective_fee_rate(fee, final_tx_size_bytes)?;
+    ensure!(
+        effective_rate >= selected_fee_rate,
+        "rebuilt publication effective fee rate {effective_rate} is below selected fee rate {selected_fee_rate}"
+    );
+    Ok(effective_rate)
+}
+
 pub fn replacement_fee(
     policy: &PublicationFeePolicy,
     old_fee: u64,
@@ -1328,6 +1346,21 @@ mod tests {
     fn fee_calculation_rounds_up() {
         assert_eq!(fee_for_rate(1_001, 1_001).unwrap(), 1_003);
         assert_eq!(effective_fee_rate(1_003, 1_001).unwrap(), 1_001);
+    }
+
+    #[test]
+    fn initial_fee_convergence_checks_the_rebuilt_transaction_size() {
+        let selected_fee_rate = 1_001;
+        let converged_fee = fee_for_rate(selected_fee_rate, 1_001).unwrap();
+        assert_eq!(
+            verify_initial_fee_convergence(selected_fee_rate, converged_fee, 1_001).unwrap(),
+            selected_fee_rate
+        );
+
+        let provisional_fee = fee_for_rate(selected_fee_rate, 1_000).unwrap();
+        let error =
+            verify_initial_fee_convergence(selected_fee_rate, provisional_fee, 1_001).unwrap_err();
+        assert!(error.to_string().contains("did not converge"));
     }
 
     #[test]

@@ -4,7 +4,7 @@ Morph Channel is a CKB-native channel prototype. It shows how two people, or a
 small factory of people, can move channel state off chain while CKB keeps the
 enforceable evidence on chain.
 
-Current source release: **v1.10.0 — Publication Reliability Hardening**.
+Current source release: **v1.11.0 — Publication Verification Follow-up**.
 
 The short version is:
 

@@ -46,3 +46,8 @@ was refreshed for the v1.10.0 deterministic path-remapped build. Any archive
 produced before this manifest is stale and must not be used;
 `make package-contract-release` always builds a fresh archive from the reviewed
 files in this directory.
+
+The v1.11.0 host, Fiber-adapter, SDK, and Hub follow-up does not change any CKB
+contract source, wire format, reviewed Data Hash, or envelope rule. A v1.11.0
+archive must still be rebuilt from the tagged source and verified against this
+unchanged manifest.

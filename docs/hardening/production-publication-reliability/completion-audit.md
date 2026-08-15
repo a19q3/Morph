@@ -30,8 +30,9 @@ SHA-256. The run proves:
 - below-floor and over-cap attempts failed without consuming the SponsorCell;
 - participant keys were absent from watcher processes, and operator A/B signing
   keys were asserted distinct before use;
-- a watcher child environment probe verified that all four private-key variables
-  were absent;
+- the key-scrubbing wrapper used for every watcher launch was exercised through
+  a child environment probe, which verified that all four private-key variables
+  were absent at that launch boundary;
 - each watcher received only its own operator key while builds received no key;
 - the operators used distinct identities, SponsorCells, stores, cursors,
   profiles, and attempt logs;
