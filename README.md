@@ -625,6 +625,7 @@ for tagged artifacts.
 | Reader | Start here | Then read |
 | --- | --- | --- |
 | New contributor | [English tutorial](docs/morph-channel-tutorial.md) or [中文教程](docs/morph-channel-tutorial.zh.md) | [Implementation Notes](docs/implementation.md) |
+| v2.0 architect or contributor | [v2.0 Roadmap](docs/roadmap.md) | [RGB++ / Agent / Fiber Plan](docs/rgbpp-agent-fiber-integration-plan.md), [Mainnet Readiness](docs/mainnet-readiness.md) |
 | Protocol/script reviewer | [Implementation Notes](docs/implementation.md) | [Security Fixes](SECURITY-FIXES.md), [latest audit](docs/swarm-audit-glm-2026-08-15.md) |
 | Devnet operator | [Devnet Guide](docs/devnet.md) | [Operator Runbooks](docs/runbooks/README.md), [Fiber/Morph runbook](docs/fiber-morph-devnet-runbook.md) |
 | Release reviewer | [Pre-production Envelope](docs/preproduction-envelope.md) | [Factory release profile](release/factory-preproduction/README.md), [Mainnet Readiness](docs/mainnet-readiness.md) |
