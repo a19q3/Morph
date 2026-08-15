@@ -89,7 +89,7 @@ hub-ui-check:
 	cd ui/morph-hub && npm ci && npm audit --registry=https://registry.npmjs.org --audit-level=high && npm test && npm run build
 
 build-contracts:
-	$(CONTRACT_CARGO) build --locked --release --target riscv64imac-unknown-none-elf -p morph-state-lock -p morph-state-type -p morph-factory-type -p morph-factory-vault-lock -p morph-vault-lock -p morph-sponsor-lock -p morph-devnet-xudt
+	CARGO="$(CONTRACT_CARGO)" scripts/build-contracts.sh
 
 contract-tests: build-contracts
 	$(CARGO) test -p morph-core --test contract_scripts -- --ignored --test-threads=1

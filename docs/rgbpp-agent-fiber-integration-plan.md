@@ -429,7 +429,9 @@ Until then, documentation and APIs must distinguish:
 - current public Fiber RPC does not expose the sender's learned preimage or a
   receiver RPC for final-hop custom records; Morph therefore uses
   challenge-bound payer identity until a minimal proof hook is available;
-- Morph watchtower lacks canonical-block rollback;
+- Morph watchtower now persists canonical block hashes, resets orphanable
+  context, and rescans from the channel floor after a mismatch; repeated public
+  network reorg evidence remains open;
 - deployed State args do not yet pin the full trusted script code set on chain;
 - real Bitcoin SPV/proof-program integration and leap lifecycle are absent;
 - Factory reservation roots still need to be fetched and matched against a

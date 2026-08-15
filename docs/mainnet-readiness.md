@@ -34,9 +34,9 @@ is necessary evidence, but it is not enough for mainnet.
 | RGB++ proof and reorg pipeline | Bitcoin proof, CKB binding/leap, confirmation, quarantine, and rollback evidence for admitted RGB++ assets. | Open. |
 | Reproducible release artefacts | CI-built script ELFs, data hashes, signed release manifests, and clean rebuild instructions. | Implemented for the bounded Factory devnet candidate: committed CKB data-hash manifest, deterministic bundle, CI upload, and main-branch provenance attestation. A successful clean main-branch run and independent rebuild remain required evidence. |
 | Supply-chain warning closure | Remove or formally review current upstream warnings (`memmap2` and `lru 0.7` through dev-only `ckb-testtool` and unmaintained `proc-macro-error2`). | Open; policy gates pass with narrow reviewed waivers, but upstream warnings remain. |
-| Mainnet-like fee evidence | Repeated runs under realistic fee pressure and transaction-size budgets. | Open. |
-| Reorg and delay evidence | Watchtower and publication behaviour under delayed observations and chain reorg scenarios. | Canonical cursor-hash verification, critical reorg alerting, context reset, and rescan-from-floor are implemented and unit tested. Repeated induced-reorg and public-network delay evidence remains open. |
-| Multi-operator watchtower evidence | At least two independent operators following documented procedures. | Open. |
+| Mainnet-like fee evidence | Repeated runs under realistic fee pressure and transaction-size budgets. | A deterministic local gate now reads the CKB estimator/pool floor, rejects below-floor submissions, and proves bounded RBF. Repeated public-network measurements remain open. |
+| Reorg and delay evidence | Watchtower and publication behaviour under delayed observations and chain reorg scenarios. | Canonical cursor reset/rescan plus injected delay and IntegrationTest truncate/alternate-chain recovery now pass locally. Repeated public-network evidence remains open. |
+| Multi-operator watchtower evidence | At least two independent operators following documented procedures. | Two least-privilege local operators with distinct keys, SponsorCells, stores, cursors, profiles, and attempt logs pass the deterministic contention gate. Independent hosts, RPC providers, and administrators remain open. |
 | Operational runbooks | Key handling, package retention, alert response, rollback, incident response, and upgrade procedures. | Implemented for the controlled-devnet candidate with a repository-side rehearsal; independent operator rehearsal remains open. |
 | Value-limit policy | Explicit caps tied to evidence level and operator readiness. | Implemented as a machine-checked, dated, no-real-assets devnet envelope. Any public testnet/mainnet or real-asset policy remains open. |
 
@@ -71,6 +71,10 @@ Local evidence covers:
 - exact State/Factory carrier-capacity deltas across ordinary update,
   activation, splice, and exit paths;
 - expected failure paths for malformed or attack-shaped transactions.
+- node-informed publication fees, durable attempt reconciliation, and successful
+  CKB RBF after learning an unknown competing transaction's replacement floor;
+- deterministic two-operator failover and canonical-cursor recovery after a
+  locally induced chain reorganisation.
 
 ## What Local Evidence Does Not Prove
 
@@ -128,4 +132,4 @@ prohibits real assets.
 | Can the current repo be used for local research? | Yes. |
 | Can it be used for devnet evidence generation? | Yes. |
 | Can it be used for mainnet real assets today? | No. |
-| What is the next readiness step? | Successful CI provenance for the candidate, external review, independent operator rehearsal, and repeated induced-reorg/fee evidence. |
+| What is the next readiness step? | External review, independent-host/operator rehearsal, at least 1000 fresh public-network latency samples, and repeated public-network reorg/fee evidence. |

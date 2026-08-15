@@ -192,6 +192,87 @@ target/devnet-e2e/<run>/smoke/summary.json
 target/devnet-e2e/<run>/smoke/summary-budget-check.json
 ```
 
+## Publication Reliability Rehearsal
+
+Run the fee, RBF, failover, delay, and reorg gate against a fresh isolated node:
+
+```sh
+CKB_BIN=../ckb/target/debug/ckb \
+  scripts/devnet-publication-reliability.sh
+```
+
+The runner builds the current CLI and, unless `BUILD_CONTRACTS=0` is set, the
+current RISC-V contracts. It configures CKB with a fee floor ten times the
+normal devnet default and a higher RBF rate, then proves:
+
+- a below-floor carrier is rejected;
+- an over-cap carrier is stopped before broadcast while its SponsorCell remains
+  live and the pool remains unchanged;
+- operator A publishes with no participant private keys;
+- an underpriced conflicting operator-B carrier is rejected;
+- operator B learns CKB's replacement floor, rebuilds under its caps, and wins
+  with a distinct SponsorCell and operator key;
+- every watcher child passes a private-key-environment probe, and both the
+  original and alternate carriers preserve the package header and participant
+  witness byte-for-byte;
+- the replaced transaction is `RBFRejected` and the replacement commits;
+- durable JSONL attempt records reconcile after confirmation;
+- clearing the pool without a reorg forces a cursor-floor retry, while an
+  already-pending duplicate carrier is reconciled idempotently;
+- a delayed watcher detects an IntegrationTest `truncate` that orphans the
+  committed publication, clears orphanable context, republishes from retained
+  evidence, and reconfirms on an alternate branch;
+- the challenge dataset is bound to the connected network, genesis, exact CKB
+  version, publication-profile digest, and canonical StateType window.
+
+The rehearsal deploys a 40-block StateType window. Its report records how many
+confirmations the stale state had already accumulated and proves that the
+runtime deadline still leaves the configured reorg, failover, safety, and
+canonical-confirmation reserves; requested retry sleeps must fit strictly inside
+the remaining latency budget.
+
+Evidence is written to:
+
+```text
+target/devnet-publication-reliability/<run>/evidence/report.json
+target/devnet-publication-reliability/<run>/evidence/operator-a/attempts.jsonl
+target/devnet-publication-reliability/<run>/evidence/operator-b/attempts.jsonl
+target/devnet-publication-reliability/<run>/logs/ckb-node.log
+```
+
+Useful isolated-devnet overrides are `RUN_ID`, `RPC_PORT`, `P2P_PORT`,
+`MIN_FEE_RATE`, `MIN_RBF_RATE`, and `INJECTED_DELAY_MS`. The CKB fee settings
+must satisfy `MIN_RBF_RATE > MIN_FEE_RATE`. The protocol-defined StateCell
+activation transaction burns exactly 10,000 shannons, so the runner's default
+pool floor is 10,000 shannons/KW; publication attempts themselves use the
+measured rate and explicit operator/sponsor caps.
+
+The generated challenge-window dataset contains one deterministic fault sample
+and is valid only for exercising the calculator. A production assessment uses
+`--production`, fails closed below 1000 fresh samples overall or in any required
+fault family, and must be based on public-network measurements and independently
+operated infrastructure:
+
+```sh
+cargo run -p morph-cli --features devnet -- devnet --devnet-only \
+  assess-challenge-window \
+  --profile /path/to/publication-profile.json \
+  --dataset /path/to/challenge-window-dataset.json \
+  --expected-dataset-sha256 0x<sha256-of-exact-dataset-bytes> \
+  --state-out-point <canonical-live-state-tx-hash>:0 \
+  --production --json
+```
+
+Production assessment also requires at least 1000 samples for each coverage
+label `ordinary_load`,
+`fee_pressure`, `rpc_delay`, `operator_failover`, and `induced_reorg`, and
+checks that the dataset profile digest, connected-chain genesis, and deployed
+StateType `finalise_since` all match the assessed profile. The expected SHA-256
+pins the decision to exact bytes but does not replace signed collection receipts
+or independent-infrastructure evidence. Because trusted receipt verification is
+not implemented, local `--production` assessment remains fail-closed with
+`production_provenance_verified: false`.
+
 ## Stateful Acceptance
 
 Run:

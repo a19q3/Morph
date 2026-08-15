@@ -10,6 +10,7 @@ use crate::devnet::{
     WatchLatestStatePackageOptions, WatchLatestStatePackageReport, watch_latest_state_package,
 };
 use crate::packages::canonical_hex32;
+use crate::publication::read_publication_profile;
 use crate::rpc::CkbRpcClient;
 
 const WATCH_CONFIG_SCHEMA: &str = "morph.watchtower_config";
@@ -31,9 +32,44 @@ fn bytes32_hex(seed: u8) -> String {
     format!("0x{}", format!("{seed:02x}").repeat(32))
 }
 
+fn default_operator_id() -> String {
+    "watchtower-local".to_string()
+}
+
+fn validate_operator_id(value: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty(),
+        "watchtower operator_id must not be empty"
+    );
+    ensure!(
+        value.len() <= 64,
+        "watchtower operator_id must not exceed 64 bytes"
+    );
+    ensure!(
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
+        "watchtower operator_id contains unsupported characters"
+    );
+    Ok(())
+}
+
+fn validate_publication_profile_operator(path: &Path, operator_id: &str) -> Result<()> {
+    let profile = read_publication_profile(path)?;
+    ensure!(
+        profile.operator_id == operator_id,
+        "publication profile operator_id {} does not match watchtower config operator_id {}",
+        profile.operator_id,
+        operator_id
+    );
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchtowerConfig {
     pub schema: String,
+    #[serde(default = "default_operator_id")]
+    pub operator_id: String,
     #[serde(default)]
     pub defaults: WatchtowerConfigDefaults,
     pub channels: Vec<WatchtowerChannelConfig>,
@@ -43,6 +79,8 @@ pub struct WatchtowerConfig {
 pub struct WatchtowerConfigDefaults {
     pub store_dir: Option<PathBuf>,
     pub watch_policy: Option<PathBuf>,
+    pub publication_profile: Option<PathBuf>,
+    pub publication_attempt_log: Option<PathBuf>,
     pub alert_file: Option<PathBuf>,
     pub alert_webhook_url: Option<String>,
     pub detection_depth: Option<u64>,
@@ -63,6 +101,8 @@ pub struct WatchtowerChannelConfig {
     pub store_dir: Option<PathBuf>,
     pub cursor_file: Option<PathBuf>,
     pub watch_policy: Option<PathBuf>,
+    pub publication_profile: Option<PathBuf>,
+    pub publication_attempt_log: Option<PathBuf>,
     pub alert_file: Option<PathBuf>,
     pub alert_webhook_url: Option<String>,
     pub detection_depth: Option<u64>,
@@ -78,8 +118,6 @@ pub struct WatchtowerChannelConfig {
 pub struct WatchtowerRuntimeOptions {
     pub contracts_dir: PathBuf,
     pub private_key: String,
-    pub alice_private_key: String,
-    pub bob_private_key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +141,7 @@ pub struct WatchtowerConfigServiceOptions {
 #[derive(Debug, Serialize)]
 pub struct WatchtowerConfigRunReport {
     pub schema: String,
+    pub operator_id: String,
     pub config_path: String,
     pub channel_count: usize,
     pub published_count: usize,
@@ -119,6 +158,7 @@ pub struct WatchtowerChannelRunReport {
 #[derive(Debug, Serialize)]
 pub struct WatchtowerConfigLoopReport {
     pub schema: String,
+    pub operator_id: String,
     pub config_path: String,
     pub requested_passes: u64,
     pub completed_passes: u64,
@@ -137,6 +177,7 @@ pub struct WatchtowerConfigPassReport {
 #[derive(Debug, Serialize)]
 pub struct WatchtowerConfigServiceReport {
     pub schema: String,
+    pub operator_id: String,
     pub config_path: String,
     pub completed_passes: u64,
     pub published_count: usize,
@@ -152,6 +193,7 @@ pub struct WatchtowerConfigServiceReport {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchtowerConfigServiceHealth {
     pub schema: String,
+    pub operator_id: String,
     pub config_path: String,
     pub updated_unix_ms: u64,
     pub completed_passes: u64,
@@ -168,9 +210,12 @@ impl WatchtowerConfig {
     pub fn fixture() -> Self {
         Self {
             schema: WATCH_CONFIG_SCHEMA.to_string(),
+            operator_id: default_operator_id(),
             defaults: WatchtowerConfigDefaults {
                 store_dir: Some(PathBuf::from("target/morph-state-packages")),
                 watch_policy: Some(PathBuf::from("target/watch-policy.json")),
+                publication_profile: None,
+                publication_attempt_log: None,
                 alert_file: Some(PathBuf::from("target/watch-alerts.jsonl")),
                 alert_webhook_url: None,
                 detection_depth: Some(3),
@@ -188,6 +233,8 @@ impl WatchtowerConfig {
                 store_dir: None,
                 cursor_file: None,
                 watch_policy: None,
+                publication_profile: None,
+                publication_attempt_log: None,
                 alert_file: None,
                 alert_webhook_url: None,
                 detection_depth: None,
@@ -207,6 +254,7 @@ impl WatchtowerConfig {
             "unsupported watchtower config schema {}",
             self.schema
         );
+        validate_operator_id(&self.operator_id)?;
         ensure!(
             !self.channels.is_empty(),
             "watchtower config must contain at least one channel"
@@ -268,6 +316,42 @@ impl WatchtowerConfig {
         }
         Ok(())
     }
+
+    pub fn validate_for_path(&self, config_path: &Path) -> Result<()> {
+        self.validate()?;
+        let base_dir = config_base_dir(config_path);
+        for channel in &self.channels {
+            let profile_path = optional_resolved_path(
+                &base_dir,
+                channel
+                    .publication_profile
+                    .as_ref()
+                    .or(self.defaults.publication_profile.as_ref()),
+            );
+            let attempt_log = optional_resolved_path(
+                &base_dir,
+                channel
+                    .publication_attempt_log
+                    .as_ref()
+                    .or(self.defaults.publication_attempt_log.as_ref()),
+            );
+            ensure!(
+                profile_path.is_none() || attempt_log.is_some(),
+                "watchtower channel {} needs publication_attempt_log when publication_profile is configured",
+                channel.channel_id
+            );
+            if let Some(profile_path) = profile_path.as_ref() {
+                validate_publication_profile_operator(profile_path, &self.operator_id)
+                    .with_context(|| {
+                        format!(
+                            "invalid publication settings for channel {}",
+                            channel.channel_id
+                        )
+                    })?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn fixture_config() -> WatchtowerConfig {
@@ -280,7 +364,7 @@ pub fn read_watchtower_config(path: &Path) -> Result<WatchtowerConfig> {
     let config: WatchtowerConfig = serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse watchtower config {}", path.display()))?;
     config
-        .validate()
+        .validate_for_path(path)
         .with_context(|| format!("invalid watchtower config {}", path.display()))?;
     Ok(config)
 }
@@ -291,13 +375,20 @@ pub fn run_watchtower_config_once(
     config: &WatchtowerConfig,
     runtime: WatchtowerRuntimeOptions,
 ) -> Result<WatchtowerConfigRunReport> {
-    config.validate()?;
+    config.validate_for_path(config_path)?;
     let base_dir = config_base_dir(config_path);
     let mut reports = Vec::with_capacity(config.channels.len());
     for channel in &config.channels {
         let options = channel_options(&base_dir, &config.defaults, channel, &runtime)?;
         let report = watch_latest_state_package(rpc, options)
             .with_context(|| format!("failed to watch channel {}", channel.channel_id))?;
+        if let Some(profile_operator_id) = report.operator_id.as_deref() {
+            ensure!(
+                profile_operator_id == config.operator_id,
+                "publication profile operator_id {profile_operator_id} does not match watchtower config operator_id {}",
+                config.operator_id
+            );
+        }
         reports.push(WatchtowerChannelRunReport {
             channel_id: channel.channel_id.clone(),
             report,
@@ -305,16 +396,37 @@ pub fn run_watchtower_config_once(
     }
     let published_count = reports
         .iter()
-        .filter(|channel| channel.report.publication.is_some())
+        .filter(|channel| {
+            terminal_publication_observed(
+                channel
+                    .report
+                    .publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.canonical_confirmed),
+                channel
+                    .report
+                    .publication_reconciliation
+                    .as_ref()
+                    .map_or(0, |reconciliation| reconciliation.confirmed),
+            )
+        })
         .count();
     Ok(WatchtowerConfigRunReport {
         schema: WATCH_CONFIG_RUN_SCHEMA.to_string(),
+        operator_id: config.operator_id.clone(),
         config_path: config_path.display().to_string(),
         channel_count: reports.len(),
         published_count,
         idle_count: reports.len().saturating_sub(published_count),
         channels: reports,
     })
+}
+
+fn terminal_publication_observed(
+    publication_canonical_confirmed: bool,
+    reconciled_confirmed: usize,
+) -> bool {
+    publication_canonical_confirmed || reconciled_confirmed > 0
 }
 
 pub fn run_watchtower_config_loop(
@@ -324,7 +436,7 @@ pub fn run_watchtower_config_loop(
     runtime: WatchtowerRuntimeOptions,
     options: WatchtowerConfigLoopOptions,
 ) -> Result<WatchtowerConfigLoopReport> {
-    config.validate()?;
+    config.validate_for_path(config_path)?;
     ensure!(
         options.passes > 0,
         "watchtower loop passes must be non-zero"
@@ -368,6 +480,7 @@ pub fn run_watchtower_config_loop(
         .sum::<usize>();
     Ok(WatchtowerConfigLoopReport {
         schema: WATCH_CONFIG_LOOP_SCHEMA.to_string(),
+        operator_id: config.operator_id.clone(),
         config_path: config_path.display().to_string(),
         requested_passes: options.passes,
         completed_passes,
@@ -385,7 +498,7 @@ pub fn run_watchtower_config_service(
     runtime: WatchtowerRuntimeOptions,
     options: WatchtowerConfigServiceOptions,
 ) -> Result<WatchtowerConfigServiceReport> {
-    config.validate()?;
+    config.validate_for_path(config_path)?;
     validate_service_options(&options)?;
 
     let config_path_string = config_path.display().to_string();
@@ -400,6 +513,7 @@ pub fn run_watchtower_config_service(
         &options.health_file,
         service_health(
             &config_path_string,
+            &config.operator_id,
             "starting",
             None,
             completed_passes,
@@ -434,6 +548,7 @@ pub fn run_watchtower_config_service(
                     &options.health_file,
                     service_health(
                         &config_path_string,
+                        &config.operator_id,
                         "running",
                         None,
                         completed_passes,
@@ -464,6 +579,7 @@ pub fn run_watchtower_config_service(
                     &options.health_file,
                     service_health(
                         &config_path_string,
+                        &config.operator_id,
                         "error",
                         None,
                         completed_passes,
@@ -486,6 +602,7 @@ pub fn run_watchtower_config_service(
         &options.health_file,
         service_health(
             &config_path_string,
+            &config.operator_id,
             "stopped",
             Some(stopped_reason.clone()),
             completed_passes,
@@ -499,6 +616,7 @@ pub fn run_watchtower_config_service(
 
     Ok(WatchtowerConfigServiceReport {
         schema: WATCH_CONFIG_SERVICE_SCHEMA.to_string(),
+        operator_id: config.operator_id.clone(),
         config_path: config_path_string,
         completed_passes,
         published_count,
@@ -521,8 +639,6 @@ fn channel_options(
     Ok(WatchLatestStatePackageOptions {
         contracts_dir: runtime.contracts_dir.clone(),
         private_key: runtime.private_key.clone(),
-        alice_private_key: runtime.alice_private_key.clone(),
-        bob_private_key: runtime.bob_private_key.clone(),
         sponsor_out_point: channel.sponsor_out_point.clone(),
         store_dir: resolve_path(
             base_dir,
@@ -542,6 +658,20 @@ fn channel_options(
                 .watch_policy
                 .as_ref()
                 .or(defaults.watch_policy.as_ref()),
+        ),
+        publication_profile: optional_resolved_path(
+            base_dir,
+            channel
+                .publication_profile
+                .as_ref()
+                .or(defaults.publication_profile.as_ref()),
+        ),
+        publication_attempt_log: optional_resolved_path(
+            base_dir,
+            channel
+                .publication_attempt_log
+                .as_ref()
+                .or(defaults.publication_attempt_log.as_ref()),
         ),
         alert_file: optional_resolved_path(
             base_dir,
@@ -668,6 +798,7 @@ fn write_service_health(path: &Path, health: &WatchtowerConfigServiceHealth) -> 
 #[allow(clippy::too_many_arguments)]
 fn service_health(
     config_path: &str,
+    operator_id: &str,
     status: &str,
     stopped_reason: Option<String>,
     completed_passes: u64,
@@ -679,6 +810,7 @@ fn service_health(
 ) -> Result<WatchtowerConfigServiceHealth> {
     Ok(WatchtowerConfigServiceHealth {
         schema: WATCH_CONFIG_HEALTH_SCHEMA.to_string(),
+        operator_id: operator_id.to_string(),
         config_path: config_path.to_string(),
         updated_unix_ms: now_unix_ms()?,
         completed_passes,
@@ -758,6 +890,52 @@ mod tests {
             options.cursor_file,
             Some(PathBuf::from("/tmp/morph-watch/cursor.json"))
         );
+    }
+
+    #[test]
+    fn rejects_publication_profile_operator_before_rpc_work() {
+        let path = std::env::temp_dir().join(format!(
+            "morph-watch-profile-operator-{}.json",
+            std::process::id()
+        ));
+        let mut profile = crate::publication::fixture_publication_profile();
+        profile.operator_id = "watchtower-b".to_string();
+        fs::write(&path, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let error = validate_publication_profile_operator(&path, "watchtower-a").unwrap_err();
+        assert!(error.to_string().contains("does not match"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn config_preflight_requires_attempt_log_for_effective_profile() {
+        let dir =
+            std::env::temp_dir().join(format!("morph-watch-profile-log-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let profile_path = dir.join("profile.json");
+        let config_path = dir.join("watch.json");
+        let mut profile = crate::publication::fixture_publication_profile();
+        profile.operator_id = default_operator_id();
+        fs::write(&profile_path, serde_json::to_vec(&profile).unwrap()).unwrap();
+        let mut config = WatchtowerConfig::fixture();
+        config.defaults.publication_profile = Some(PathBuf::from("profile.json"));
+        config.defaults.publication_attempt_log = None;
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+
+        let error = read_watchtower_config(&config_path).unwrap_err();
+        assert!(format!("{error:#}").contains("publication_attempt_log"));
+
+        config.defaults.publication_attempt_log = Some(PathBuf::from("attempts.jsonl"));
+        fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+        read_watchtower_config(&config_path).unwrap();
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stop_count_requires_a_canonically_confirmed_publication() {
+        assert!(!terminal_publication_observed(false, 0));
+        assert!(terminal_publication_observed(true, 0));
+        assert!(terminal_publication_observed(false, 1));
     }
 
     #[test]
@@ -926,8 +1104,6 @@ mod tests {
         WatchtowerRuntimeOptions {
             contracts_dir: PathBuf::from("contracts"),
             private_key: private_key_hex(1),
-            alice_private_key: private_key_hex(2),
-            bob_private_key: private_key_hex(3),
         }
     }
 
