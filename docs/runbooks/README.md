@@ -12,6 +12,8 @@ Read and rehearse all of the following before activation:
   reorg recovery, evidence preservation, and restart approval;
 - [`upgrade-and-migration.md`](upgrade-and-migration.md): pre-release resets,
   contract upgrades, and rollback;
+- [`value-limits.md`](value-limits.md): authoring, reviewing, and applying the
+  operator value-limit policy before any real-assets phase;
 - [`rehearsal-2026-08-15.md`](rehearsal-2026-08-15.md): the repository-side dry
   run evidence for this candidate.
 

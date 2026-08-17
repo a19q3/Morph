@@ -4,7 +4,7 @@ Morph Channel is a CKB-native channel prototype. It shows how two people, or a
 small factory of people, can move channel state off chain while CKB keeps the
 enforceable evidence on chain.
 
-Current source release: **v1.11.0 — Publication Verification Follow-up**.
+Current source release: **v2.0.0 — Factory 2.0 Surface and Value-Limit Policy**.
 
 The short version is:
 
@@ -60,6 +60,12 @@ Implemented locally:
 - factory local exits that materialise child bilateral channels;
 - reduced factory paths for bounded rights updates, exits, sparse-Merkle
   updates, and splices, carried by `WitnessEnvelope`;
+- multi-right factory updates (envelope kind 8): one touched participant
+  atomically updates up to four of their own value rights per update, each
+  localised by a compact variable-depth sparse-Merkle proof that omits empty
+  siblings; see `docs/v2.0-plan.md`;
+- a fail-closed operator value-limit policy with a runbook
+  (`docs/runbooks/value-limits.md`), checked by `morph-cli value-limit-check`;
 - two-stage bilateral/Factory Vault activation that binds enforceable state to
   an exact CKB OutPoint and rejects byte-identical clone substitution;
 - type-bound FactoryState locking and exact State/Factory carrier-capacity
@@ -360,6 +366,8 @@ cargo run -p morph-cli -- devnet-smoke-compare \
 - [Implementation notes](docs/implementation.md): protocol objects, script
   boundaries, and invariant coverage.
 - [Roadmap](docs/roadmap.md): milestone status and deferred work.
+- [2.0 plan](docs/v2.0-plan.md): scope, wire format, and test matrix of the
+  multi-right factory update and value-limit-policy release.
 - [Mainnet readiness](docs/mainnet-readiness.md): what remains before any
   production or real-assets claim.
 - [Publication reliability hardening](docs/hardening/production-publication-reliability/hardening.md):

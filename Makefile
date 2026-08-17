@@ -68,6 +68,8 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-exit-package target/fixture-checks/factory-reduced-exit.json --json > target/fixture-checks/factory-reduced-exit-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-merkle-update-fixture > target/fixture-checks/factory-merkle-update.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-merkle-update-package target/fixture-checks/factory-merkle-update.json --json > target/fixture-checks/factory-merkle-update-summary.json
+	$(CARGO) run -q -p morph-cli -- print-factory-multi-right-update-fixture > target/fixture-checks/factory-multi-right-update.json
+	$(CARGO) run -q -p morph-cli -- validate-factory-multi-right-update-package target/fixture-checks/factory-multi-right-update.json --json > target/fixture-checks/factory-multi-right-update-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-local-exit-fixture > target/fixture-checks/factory-local-exit.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-local-exit-package target/fixture-checks/factory-local-exit.json --json > target/fixture-checks/factory-local-exit-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-splice-fixture --kind splice-in > target/fixture-checks/factory-splice-in.json
@@ -80,6 +82,9 @@ fixture-checks:
 	$(CARGO) run -q -p morph-cli -- validate-factory-reduced-splice-package target/fixture-checks/factory-reduced-xudt-splice-out.json --json > target/fixture-checks/factory-reduced-xudt-splice-out-summary.json
 	$(CARGO) run -q -p morph-cli -- print-watch-policy-fixture > target/fixture-checks/watch-policy.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-policy target/fixture-checks/watch-policy.json --json > target/fixture-checks/watch-policy-summary.json
+	$(CARGO) run -q -p morph-cli -- print-value-limit-policy-fixture > target/fixture-checks/value-limit-policy.json
+	$(CARGO) run -q -p morph-cli -- validate-value-limit-policy target/fixture-checks/value-limit-policy.json --json > target/fixture-checks/value-limit-policy-summary.json
+	$(CARGO) run -q -p morph-cli -- value-limit-check --policy target/fixture-checks/value-limit-policy.json --package target/fixture-checks/factory-splice-in.json > target/fixture-checks/value-limit-check-factory-splice-in.txt
 	$(CARGO) run -q -p morph-cli -- print-watch-config-fixture > target/fixture-checks/watch-config.json
 	$(CARGO) run -q -p morph-cli -- validate-watch-config target/fixture-checks/watch-config.json --json > target/fixture-checks/watch-config-summary.json
 

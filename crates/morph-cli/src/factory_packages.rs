@@ -7,14 +7,16 @@ use anyhow::{Context, Result, ensure};
 use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
 use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use morph_core::{
-    Amount, Bytes32, FactoryMerkleSibling, FactoryMerkleSiblingSide, FactoryParticipantKey,
+    Amount, Bytes32, FactoryCompactMerkleSibling, FactoryCompactRightProof, FactoryMerkleSibling,
+    FactoryMerkleSiblingSide, FactoryMultiRightMerkleUpdate, FactoryParticipantKey,
     FactoryParticipantSignature, FactoryReducedExit, FactoryReducedSpliceTransition,
     FactoryReducedSpliceWitness, FactoryRight, FactoryRightId, FactoryRightKind,
     FactoryRightMerkleProof, FactorySingleRightMerkleUpdate, FactorySpliceHeader,
     FactorySpliceKind, FactorySpliceTransition, FactoryUpdate, FactoryVaultDelta,
     FactoryVaultDescriptor, ParticipantSignature, SpliceWitness, VaultAsset, VaultAssetAmount,
-    blake2b256, bytes32, factory_right_sparse_proof, factory_right_sparse_root,
-    factory_vault_delta_commitment, participants_commitment, validate_factory_non_interference,
+    blake2b256, bytes32, factory_right_sparse_proof, factory_right_sparse_proof_compact,
+    factory_right_sparse_root, factory_vault_delta_commitment, participants_commitment,
+    validate_factory_multi_right_merkle_update, validate_factory_non_interference,
     validate_factory_reduced_splice_transition, validate_factory_single_right_merkle_localization,
     validate_factory_single_right_merkle_update, validate_factory_splice_transition,
     validate_reduced_factory_exit,
@@ -46,6 +48,9 @@ const FACTORY_STATE_DIGEST_DOMAIN: &str = "CKB_MORPH_FACTORY_STATE_PACKAGE";
 const FACTORY_REDUCED_EXIT_PACKAGE_SCHEMA: &str = "morph.factory_reduced_exit_package";
 const FACTORY_MERKLE_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_merkle_update_package";
 const FACTORY_MERKLE_UPDATE_DIGEST_DOMAIN: &str = "CKB_MORPH_FACTORY_MERKLE_UPDATE_PACKAGE";
+const FACTORY_MULTI_RIGHT_UPDATE_PACKAGE_SCHEMA: &str = "morph.factory_multi_right_update_package";
+const FACTORY_MULTI_RIGHT_UPDATE_DIGEST_DOMAIN: &str =
+    "CKB_MORPH_FACTORY_MULTI_RIGHT_UPDATE_PACKAGE";
 const FACTORY_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_splice_package";
 const FACTORY_REDUCED_SPLICE_PACKAGE_SCHEMA: &str = "morph.factory_reduced_splice_package";
 const FACTORY_SIGNATURE_MODE_ALL_PARTICIPANTS: &str = "all_participants";
@@ -145,6 +150,29 @@ pub struct StoredFactoryMerkleUpdatePackage {
     pub right_before: StoredFactoryRight,
     pub right_after: StoredFactoryRight,
     pub proof_siblings: Vec<StoredFactoryMerkleSibling>,
+    pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryCompactMerkleSibling {
+    pub depth: u16,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFactoryMultiRightUpdatePackage {
+    pub schema: String,
+    pub created_unix_ms: u64,
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub touched_participants: Vec<String>,
+    pub authorised_participants: Vec<String>,
+    pub rights_before: Vec<StoredFactoryRight>,
+    pub rights_after: Vec<StoredFactoryRight>,
+    pub proof_siblings_before: Vec<Vec<StoredFactoryCompactMerkleSibling>>,
+    pub proof_siblings_after: Vec<Vec<StoredFactoryCompactMerkleSibling>>,
     pub non_interference_digest: String,
 }
 
@@ -285,6 +313,22 @@ pub struct FactoryMerkleUpdatePackageSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryMultiRightUpdatePackageSummary {
+    pub factory_id: String,
+    pub update_number: u64,
+    pub state_root_before: String,
+    pub state_root_after: String,
+    pub touched_participants: usize,
+    pub authorised_participants: usize,
+    pub changed_participant: String,
+    pub right_count: usize,
+    pub asset_groups: usize,
+    pub proof_pairs_before: usize,
+    pub proof_pairs_after: usize,
+    pub non_interference_digest: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FactorySplicePackageSummary {
     pub factory_id: String,
     pub chain_id: String,
@@ -389,6 +433,22 @@ struct FactoryMerkleDigestPayload {
     right_before: StoredFactoryRight,
     right_after: StoredFactoryRight,
     proof_siblings: Vec<StoredFactoryMerkleSibling>,
+}
+
+#[derive(Debug, Serialize)]
+struct FactoryMultiRightDigestPayload {
+    domain: &'static str,
+    schema: &'static str,
+    factory_id: String,
+    update_number: u64,
+    state_root_before: String,
+    state_root_after: String,
+    touched_participants: Vec<String>,
+    authorised_participants: Vec<String>,
+    rights_before: Vec<StoredFactoryRight>,
+    rights_after: Vec<StoredFactoryRight>,
+    proof_siblings_before: Vec<Vec<StoredFactoryCompactMerkleSibling>>,
+    proof_siblings_after: Vec<Vec<StoredFactoryCompactMerkleSibling>>,
 }
 
 impl StoredFactoryUpdatePackage {
@@ -1113,6 +1173,334 @@ impl StoredFactoryMerkleUpdatePackage {
             right_before: self.right_before.canonical()?,
             right_after: self.right_after.canonical()?,
             proof_siblings: canonical_merkle_siblings(&self.proof_siblings)?,
+        };
+        let encoded = serde_json::to_vec(&payload)?;
+        Ok(hex_prefixed(&blake2b256(&encoded)))
+    }
+}
+
+impl StoredFactoryCompactMerkleSibling {
+    fn from_sibling(sibling: &FactoryCompactMerkleSibling) -> Self {
+        Self {
+            depth: sibling.depth,
+            hash: hex_prefixed(&sibling.hash),
+        }
+    }
+
+    fn to_sibling(&self) -> Result<FactoryCompactMerkleSibling> {
+        Ok(FactoryCompactMerkleSibling {
+            depth: self.depth,
+            hash: hex32_bytes(&self.hash)?,
+        })
+    }
+
+    fn canonical(&self) -> Result<Self> {
+        Ok(Self {
+            depth: self.depth,
+            hash: canonical_hex32(&self.hash)?,
+        })
+    }
+}
+
+impl StoredFactoryMultiRightUpdatePackage {
+    pub fn from_update(
+        factory_id: Bytes32,
+        update_number: u64,
+        update: FactoryMultiRightMerkleUpdate,
+    ) -> Result<Self> {
+        validate_factory_multi_right_merkle_update(&update)
+            .map_err(|err| anyhow::anyhow!("factory multi-right update proof failed: {err}"))?;
+        let mut package = Self {
+            schema: FACTORY_MULTI_RIGHT_UPDATE_PACKAGE_SCHEMA.to_string(),
+            created_unix_ms: now_unix_ms()?,
+            factory_id: hex_prefixed(&factory_id),
+            update_number,
+            state_root_before: hex_prefixed(&update.before_root),
+            state_root_after: hex_prefixed(&update.after_root),
+            touched_participants: update
+                .touched_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            authorised_participants: update
+                .authorised_participants
+                .iter()
+                .map(|participant| hex_prefixed(participant))
+                .collect(),
+            rights_before: update
+                .before
+                .iter()
+                .map(|proof| StoredFactoryRight::from_right(&proof.right))
+                .collect(),
+            rights_after: update
+                .after
+                .iter()
+                .map(|proof| StoredFactoryRight::from_right(&proof.right))
+                .collect(),
+            proof_siblings_before: update
+                .before
+                .iter()
+                .map(|proof| {
+                    proof
+                        .siblings
+                        .iter()
+                        .map(StoredFactoryCompactMerkleSibling::from_sibling)
+                        .collect()
+                })
+                .collect(),
+            proof_siblings_after: update
+                .after
+                .iter()
+                .map(|proof| {
+                    proof
+                        .siblings
+                        .iter()
+                        .map(StoredFactoryCompactMerkleSibling::from_sibling)
+                        .collect()
+                })
+                .collect(),
+            non_interference_digest: String::new(),
+        };
+        package.normalise()?;
+        package.non_interference_digest = package.compute_digest()?;
+        package.validate()?;
+        Ok(package)
+    }
+
+    pub fn from_rights(
+        factory_id: Bytes32,
+        update_number: u64,
+        before: Vec<FactoryRight>,
+        after: Vec<FactoryRight>,
+        changed_ids: &[FactoryRightId],
+        touched_participants: BTreeSet<Bytes32>,
+        authorised_participants: BTreeSet<Bytes32>,
+    ) -> Result<Self> {
+        let before_root = factory_right_sparse_root(&before)
+            .map_err(|err| anyhow::anyhow!("failed to compute before root: {err}"))?;
+        let after_root = factory_right_sparse_root(&after)
+            .map_err(|err| anyhow::anyhow!("failed to compute after root: {err}"))?;
+        let mut proof_pairs = Vec::new();
+        for id in changed_ids {
+            let before_proof = factory_right_sparse_proof_compact(&before, id)
+                .map_err(|err| anyhow::anyhow!("failed to build compact before proof: {err}"))?;
+            let after_proof = factory_right_sparse_proof_compact(&after, id)
+                .map_err(|err| anyhow::anyhow!("failed to build compact after proof: {err}"))?;
+            proof_pairs.push((before_proof, after_proof));
+        }
+        proof_pairs.sort_by(|(left, _), (right, _)| left.right.id.cmp(&right.right.id));
+        let (before_proofs, after_proofs): (Vec<_>, Vec<_>) = proof_pairs.into_iter().unzip();
+        let update = FactoryMultiRightMerkleUpdate {
+            before_root,
+            after_root,
+            touched_participants,
+            authorised_participants,
+            before: before_proofs,
+            after: after_proofs,
+        };
+        Self::from_update(factory_id, update_number, update)
+    }
+
+    pub fn validate(&self) -> Result<FactoryMultiRightMerkleUpdate> {
+        let update = self.decode_update()?;
+        validate_factory_multi_right_merkle_update(&update)
+            .map_err(|err| anyhow::anyhow!("factory multi-right update proof failed: {err}"))?;
+        Ok(update)
+    }
+
+    fn decode_update(&self) -> Result<FactoryMultiRightMerkleUpdate> {
+        ensure!(
+            self.schema == FACTORY_MULTI_RIGHT_UPDATE_PACKAGE_SCHEMA,
+            "unsupported factory multi-right update package schema {}",
+            self.schema
+        );
+        ensure!(
+            self.factory_id == canonical_hex32(&self.factory_id)?,
+            "factory_id must be canonical"
+        );
+        ensure!(
+            self.state_root_before == canonical_hex32(&self.state_root_before)?,
+            "state_root_before must be canonical"
+        );
+        ensure!(
+            self.state_root_after == canonical_hex32(&self.state_root_after)?,
+            "state_root_after must be canonical"
+        );
+        ensure_sorted_unique_hex32(&self.touched_participants, "touched_participants")?;
+        ensure_sorted_unique_hex32(&self.authorised_participants, "authorised_participants")?;
+        ensure!(
+            self.rights_before.len() == self.rights_after.len()
+                && self.proof_siblings_before.len() == self.rights_before.len()
+                && self.proof_siblings_after.len() == self.rights_after.len(),
+            "factory multi-right update package arrays disagree on right count"
+        );
+        for proof in self
+            .proof_siblings_before
+            .iter()
+            .chain(self.proof_siblings_after.iter())
+        {
+            ensure!(
+                proof == canonical_compact_merkle_siblings(proof)?.as_slice(),
+                "compact proof siblings must be canonical"
+            );
+        }
+        ensure!(
+            self.non_interference_digest == self.compute_digest()?,
+            "factory multi-right update package non_interference_digest mismatch"
+        );
+
+        let decode_proofs = |rights: &[StoredFactoryRight],
+                             siblings: &[Vec<StoredFactoryCompactMerkleSibling>]|
+         -> Result<Vec<FactoryCompactRightProof>> {
+            rights
+                .iter()
+                .zip(siblings.iter())
+                .map(|(right, proof)| {
+                    Ok(FactoryCompactRightProof {
+                        right: right.to_right()?,
+                        siblings: proof
+                            .iter()
+                            .map(StoredFactoryCompactMerkleSibling::to_sibling)
+                            .collect::<Result<Vec<_>>>()?,
+                    })
+                })
+                .collect()
+        };
+
+        Ok(FactoryMultiRightMerkleUpdate {
+            before_root: hex32_bytes(&self.state_root_before)?,
+            after_root: hex32_bytes(&self.state_root_after)?,
+            touched_participants: self
+                .touched_participants
+                .iter()
+                .map(|value| hex32_bytes(value))
+                .collect::<Result<BTreeSet<_>>>()?,
+            authorised_participants: self
+                .authorised_participants
+                .iter()
+                .map(|value| hex32_bytes(value))
+                .collect::<Result<BTreeSet<_>>>()?,
+            before: decode_proofs(&self.rights_before, &self.proof_siblings_before)?,
+            after: decode_proofs(&self.rights_after, &self.proof_siblings_after)?,
+        })
+    }
+
+    pub fn summary(&self) -> Result<FactoryMultiRightUpdatePackageSummary> {
+        let update = self.validate()?;
+        let touched = update
+            .touched_participants
+            .iter()
+            .next()
+            .map(|participant| hex_prefixed(participant))
+            .unwrap_or_default();
+        Ok(FactoryMultiRightUpdatePackageSummary {
+            factory_id: self.factory_id.clone(),
+            update_number: self.update_number,
+            state_root_before: self.state_root_before.clone(),
+            state_root_after: self.state_root_after.clone(),
+            touched_participants: update.touched_participants.len(),
+            authorised_participants: update.authorised_participants.len(),
+            changed_participant: touched,
+            right_count: update.before.len(),
+            asset_groups: update
+                .before
+                .iter()
+                .map(|proof| proof.right.id.asset_type)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            proof_pairs_before: self
+                .proof_siblings_before
+                .iter()
+                .map(|proof| proof.len())
+                .sum(),
+            proof_pairs_after: self
+                .proof_siblings_after
+                .iter()
+                .map(|proof| proof.len())
+                .sum(),
+            non_interference_digest: self.non_interference_digest.clone(),
+        })
+    }
+
+    fn normalise(&mut self) -> Result<()> {
+        self.factory_id = canonical_hex32(&self.factory_id)?;
+        self.state_root_before = canonical_hex32(&self.state_root_before)?;
+        self.state_root_after = canonical_hex32(&self.state_root_after)?;
+        self.touched_participants = canonical_hex32_vec(&self.touched_participants)?;
+        self.authorised_participants = canonical_hex32_vec(&self.authorised_participants)?;
+        self.rights_before = self
+            .rights_before
+            .iter()
+            .map(StoredFactoryRight::canonical)
+            .collect::<Result<Vec<_>>>()?;
+        self.rights_after = self
+            .rights_after
+            .iter()
+            .map(StoredFactoryRight::canonical)
+            .collect::<Result<Vec<_>>>()?;
+        self.proof_siblings_before = self
+            .proof_siblings_before
+            .iter()
+            .map(|proof| {
+                proof
+                    .iter()
+                    .map(StoredFactoryCompactMerkleSibling::canonical)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.proof_siblings_after = self
+            .proof_siblings_after
+            .iter()
+            .map(|proof| {
+                proof
+                    .iter()
+                    .map(StoredFactoryCompactMerkleSibling::canonical)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(())
+    }
+
+    fn compute_digest(&self) -> Result<String> {
+        let payload = FactoryMultiRightDigestPayload {
+            domain: FACTORY_MULTI_RIGHT_UPDATE_DIGEST_DOMAIN,
+            schema: FACTORY_MULTI_RIGHT_UPDATE_PACKAGE_SCHEMA,
+            factory_id: canonical_hex32(&self.factory_id)?,
+            update_number: self.update_number,
+            state_root_before: canonical_hex32(&self.state_root_before)?,
+            state_root_after: canonical_hex32(&self.state_root_after)?,
+            touched_participants: canonical_hex32_vec(&self.touched_participants)?,
+            authorised_participants: canonical_hex32_vec(&self.authorised_participants)?,
+            rights_before: self
+                .rights_before
+                .iter()
+                .map(StoredFactoryRight::canonical)
+                .collect::<Result<Vec<_>>>()?,
+            rights_after: self
+                .rights_after
+                .iter()
+                .map(StoredFactoryRight::canonical)
+                .collect::<Result<Vec<_>>>()?,
+            proof_siblings_before: self
+                .proof_siblings_before
+                .iter()
+                .map(|proof| {
+                    proof
+                        .iter()
+                        .map(StoredFactoryCompactMerkleSibling::canonical)
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?,
+            proof_siblings_after: self
+                .proof_siblings_after
+                .iter()
+                .map(|proof| {
+                    proof
+                        .iter()
+                        .map(StoredFactoryCompactMerkleSibling::canonical)
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?,
         };
         let encoded = serde_json::to_vec(&payload)?;
         Ok(hex_prefixed(&blake2b256(&encoded)))
@@ -2166,6 +2554,31 @@ pub fn read_factory_merkle_update_package(path: &Path) -> Result<StoredFactoryMe
     Ok(package)
 }
 
+pub fn read_factory_multi_right_update_package(
+    path: &Path,
+) -> Result<StoredFactoryMultiRightUpdatePackage> {
+    let bytes = fs::read(path).with_context(|| {
+        format!(
+            "failed to read factory multi-right update package {}",
+            path.display()
+        )
+    })?;
+    let package: StoredFactoryMultiRightUpdatePackage = serde_json::from_slice(&bytes)
+        .with_context(|| {
+            format!(
+                "failed to parse factory multi-right update package {}",
+                path.display()
+            )
+        })?;
+    package.validate().with_context(|| {
+        format!(
+            "invalid factory multi-right update package {}",
+            path.display()
+        )
+    })?;
+    Ok(package)
+}
+
 pub fn read_factory_splice_package(path: &Path) -> Result<StoredFactorySplicePackage> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read factory splice package {}", path.display()))?;
@@ -2550,6 +2963,42 @@ pub fn fixture_merkle_update_package() -> Result<StoredFactoryMerkleUpdatePackag
     )
 }
 
+pub fn fixture_multi_right_update_package() -> Result<StoredFactoryMultiRightUpdatePackage> {
+    let before = large_factory_rights();
+    let mut after = before.clone();
+    let balance_id = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::Balance,
+        asset_type: None,
+    };
+    let reserve_claim_id = FactoryRightId {
+        participant: bytes32(3),
+        subchannel: bytes32(12),
+        kind: FactoryRightKind::ReserveClaim,
+        asset_type: None,
+    };
+    for (id, quantity) in [
+        (balance_id.clone(), 60u128),
+        (reserve_claim_id.clone(), 80u128),
+    ] {
+        after
+            .iter_mut()
+            .find(|right| right.id == id)
+            .ok_or_else(|| anyhow::anyhow!("fixture changed right is missing"))?
+            .quantity = quantity;
+    }
+    StoredFactoryMultiRightUpdatePackage::from_rights(
+        bytes32(90),
+        3,
+        before,
+        after,
+        &[balance_id, reserve_claim_id],
+        BTreeSet::from([bytes32(3)]),
+        BTreeSet::from([bytes32(3)]),
+    )
+}
+
 pub fn fixture_state_package() -> Result<StoredFactoryStatePackage> {
     let update_package = fixture_package()?;
     let alice = fixture_signing_key(1)?;
@@ -2705,6 +3154,15 @@ fn canonical_merkle_siblings(
     values
         .iter()
         .map(StoredFactoryMerkleSibling::canonical)
+        .collect()
+}
+
+fn canonical_compact_merkle_siblings(
+    values: &[StoredFactoryCompactMerkleSibling],
+) -> Result<Vec<StoredFactoryCompactMerkleSibling>> {
+    values
+        .iter()
+        .map(StoredFactoryCompactMerkleSibling::canonical)
         .collect()
 }
 
@@ -3552,6 +4010,24 @@ mod tests {
         assert_eq!(summary.quantity_before, 50);
         assert_eq!(summary.quantity_after, 35);
         assert_eq!(summary.proof_siblings, 256);
+    }
+
+    #[test]
+    fn multi_right_fixture_uses_raw_identity_order_not_merkle_key_order() {
+        let package = fixture_multi_right_update_package().unwrap();
+        let update = package.validate().unwrap();
+
+        assert!(
+            update
+                .before
+                .windows(2)
+                .all(|window| window[0].right.id < window[1].right.id)
+        );
+        assert!(
+            morph_core::factory_right_key(&update.before[0].right.id)
+                > morph_core::factory_right_key(&update.before[1].right.id),
+            "fixture must keep a vector where identity and Merkle-key order differ"
+        );
     }
 
     #[test]

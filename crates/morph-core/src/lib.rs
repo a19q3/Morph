@@ -11,6 +11,7 @@ pub mod backend;
 pub mod bridge;
 pub mod hash;
 pub mod node;
+pub mod policy;
 pub mod rgbpp;
 pub mod types;
 pub mod validation;
@@ -24,6 +25,7 @@ pub use hash::{
     splice_asset_delta_commitment, vault_descriptor_commitment, vault_outpoint_commitment,
 };
 pub use node::*;
+pub use policy::*;
 pub use rgbpp::*;
 pub use types::*;
 pub use validation::*;

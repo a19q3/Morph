@@ -8,16 +8,23 @@ use ckb_testtool::ckb_types::{
 use ckb_testtool::context::Context;
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
-use morph_core::types::{FactoryMerkleSibling, FactoryRight, FactoryRightId, FactoryRightKind};
-use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
+use morph_core::types::{
+    FactoryCompactMerkleSibling, FactoryMerkleSibling, FactoryRight, FactoryRightId,
+    FactoryRightKind,
+};
+use morph_core::validation::{
+    factory_right_sparse_proof, factory_right_sparse_proof_compact, factory_right_sparse_root,
+};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
     BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT,
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
     BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION, FACTORY_MERKLE_UPDATE_RIGHT_COUNT,
-    FACTORY_MERKLE_UPDATE_WITNESS_VERSION, FACTORY_MIN_PARTICIPANTS,
+    ECDSA_SIGNATURE_LEN, FACTORY_COMPACT_PROOF_LEN, FACTORY_COMPACT_PROOF_MAX_SIBLINGS,
+    FACTORY_COMPACT_PROOF_PAIR_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION,
+    FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_VERSION,
+    FACTORY_MIN_PARTICIPANTS, FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION,
     FACTORY_REDUCED_EXIT_RIGHTS_COUNT, FACTORY_REDUCED_EXIT_WITNESS_VERSION,
     FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT, FACTORY_REDUCED_RIGHTS_COUNT,
     FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN, FACTORY_REDUCED_RIGHTS_WITNESS_VERSION,
@@ -25,27 +32,28 @@ use morph_script_common::{
     FACTORY_SIGNATURE_WITNESS_VERSION, FACTORY_SPARSE_MERKLE_DEPTH, FACTORY_SPLICE_HEADER_LEN,
     FACTORY_SPLICE_WITNESS_VERSION, FACTORY_STATE_HEADER_LEN, FACTORY_VAULT_ASSET_AMOUNT_LEN,
     FACTORY_VAULT_DELTA_LEN, FACTORY_VAULT_DELTAS_LEN, FACTORY_VAULT_DESCRIPTOR_LEN,
-    FactoryMerkleUpdateWitness, FactoryReducedExitWitness, FactoryReducedRightsWitness,
-    FactoryReducedSpliceWitness, FactorySpliceHeader, FactoryStateHeader, FactoryVaultDeltas,
-    PHASE_ACTIVE, PHASE_SETTLING, SPLICE_ASSET_DELTA_LEN, SPLICE_ASSET_DELTAS_LEN,
-    SPLICE_HEADER_LEN, SPLICE_KIND_IN, SPLICE_KIND_OUT, SPLICE_SIGNATURE_COUNT,
-    SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN, SPLICE_SIGNATURE_WITNESS_VERSION,
-    SPLICE_STATE_TRANSITION_WITNESS_LEN, SPLICE_STATE_TRANSITION_WITNESS_VERSION,
-    SPLICE_VAULT_ASSET_AMOUNT_LEN, SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN,
-    STATE_CARRIER_ACTIVATION_FEE, STATE_HEADER_LEN, STATE_MODE_FACTORY_PROOF, SpliceAssetDeltas,
-    SpliceHeader, SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
-    StateHeaderInput, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
+    FactoryMerkleUpdateWitness, FactoryMultiRightUpdateWitness, FactoryReducedExitWitness,
+    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySpliceHeader,
+    FactoryStateHeader, FactoryVaultDeltas, PHASE_ACTIVE, PHASE_SETTLING, SPLICE_ASSET_DELTA_LEN,
+    SPLICE_ASSET_DELTAS_LEN, SPLICE_HEADER_LEN, SPLICE_KIND_IN, SPLICE_KIND_OUT,
+    SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD, SPLICE_SIGNATURE_WITNESS_LEN,
+    SPLICE_SIGNATURE_WITNESS_VERSION, SPLICE_STATE_TRANSITION_WITNESS_LEN,
+    SPLICE_STATE_TRANSITION_WITNESS_VERSION, SPLICE_VAULT_ASSET_AMOUNT_LEN,
+    SPLICE_VAULT_DESCRIPTOR_LEN, SPONSOR_POLICY_LEN, STATE_CARRIER_ACTIVATION_FEE,
+    STATE_HEADER_LEN, STATE_MODE_FACTORY_PROOF, SpliceAssetDeltas, SpliceHeader,
+    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader, StateHeaderInput,
+    VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, WITNESS_ENVELOPE_FORMAT,
     WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
-    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
-    WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
-    WitnessEnvelope, blake2b256, encode_state_header, factory_local_exit_digest,
-    factory_local_exit_witness_len, factory_merkle_update_witness_len,
-    factory_participants_commitment, factory_reduced_exit_witness_len,
-    factory_reduced_rights_witness_len, factory_reduced_splice_witness_len,
-    factory_signature_witness_len, factory_splice_witness_len, participants_commitment,
-    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
-    vault_outpoint_commitment, witness_envelope_body_commitment,
+    WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
+    WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
+    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256, encode_state_header,
+    factory_local_exit_digest, factory_local_exit_witness_len, factory_merkle_update_witness_len,
+    factory_multi_right_update_witness_len, factory_participants_commitment,
+    factory_reduced_exit_witness_len, factory_reduced_rights_witness_len,
+    factory_reduced_splice_witness_len, factory_signature_witness_len, factory_splice_witness_len,
+    participants_commitment, relative_block_since, settlement_descriptor_commitment,
+    vault_cell_commitment, vault_outpoint_commitment, witness_envelope_body_commitment,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -2497,6 +2505,197 @@ fn reduced_exit_participant_offset(index: usize) -> usize {
     8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
 
+fn multi_right_touched_offset() -> usize {
+    8 + FACTORY_MIN_PARTICIPANTS as usize * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+}
+
+fn multi_right_capacity_offset() -> usize {
+    multi_right_touched_offset() + BYTE32_LEN
+}
+
+fn multi_right_right_offset(right_count: u8, after: bool, index: usize) -> usize {
+    let before_offset = multi_right_capacity_offset() + 2 + 2;
+    if after {
+        before_offset + right_count as usize * FACTORY_RIGHT_LEN + index * FACTORY_RIGHT_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_LEN
+    }
+}
+
+fn multi_right_proof_offset(right_count: u8, after: bool, index: usize) -> usize {
+    let proofs_offset =
+        multi_right_right_offset(right_count, true, 0) + right_count as usize * FACTORY_RIGHT_LEN;
+    if after {
+        proofs_offset
+            + right_count as usize * FACTORY_COMPACT_PROOF_LEN
+            + index * FACTORY_COMPACT_PROOF_LEN
+    } else {
+        proofs_offset + index * FACTORY_COMPACT_PROOF_LEN
+    }
+}
+
+fn write_compact_proof_pairs(
+    raw: &mut [u8],
+    offset: usize,
+    siblings: &[FactoryCompactMerkleSibling],
+) {
+    put_u16(raw, offset, siblings.len() as u16);
+    for (pair, sibling) in siblings.iter().enumerate() {
+        let pair_offset = offset + 2 + pair * FACTORY_COMPACT_PROOF_PAIR_LEN;
+        put_u16(raw, pair_offset, sibling.depth);
+        raw[pair_offset + 2..pair_offset + 2 + BYTE32_LEN].copy_from_slice(&sibling.hash);
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn signed_multi_right_update_pair_with_quantities(
+    old_number: u64,
+    new_number: u64,
+    after_balance: u128,
+    after_reserve: u128,
+    foreign_bump: Option<u128>,
+) -> (Bytes, Bytes, Bytes) {
+    signed_multi_right_update_pair_with_assets(
+        old_number,
+        new_number,
+        after_balance,
+        after_reserve,
+        foreign_bump,
+        None,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn signed_multi_right_update_pair_with_assets(
+    old_number: u64,
+    new_number: u64,
+    after_balance: u128,
+    after_reserve: u128,
+    foreign_bump: Option<u128>,
+    changed_assets: Option<([u8; BYTE32_LEN], [u8; BYTE32_LEN])>,
+) -> (Bytes, Bytes, Bytes) {
+    let key0 = signing_key(1);
+    let key1 = signing_key(2);
+    let touched = [1u8; BYTE32_LEN];
+    let mut before = large_factory_rights();
+    if let Some((balance_asset, reserve_asset)) = changed_assets {
+        before[0].id.asset_type = Some(balance_asset);
+        before[1].id.asset_type = Some(reserve_asset);
+    }
+    let mut after = before.clone();
+    after[0].quantity = after_balance;
+    after[1].quantity = after_reserve;
+    if let Some(bump) = foreign_bump {
+        // Participant 8's subchannel-10 balance (participant-major layout,
+        // index 7 * 12): an unlisted right the touched participant must not
+        // be able to change between the committed roots.
+        after[84].quantity += bump;
+    }
+    let mut proof_pairs = [
+        (
+            factory_right_sparse_proof_compact(&before, &before[0].id).unwrap(),
+            factory_right_sparse_proof_compact(&after, &after[0].id).unwrap(),
+        ),
+        (
+            factory_right_sparse_proof_compact(&before, &before[1].id).unwrap(),
+            factory_right_sparse_proof_compact(&after, &after[1].id).unwrap(),
+        ),
+    ];
+    proof_pairs.sort_by(|(left, _), (right, _)| left.right.id.cmp(&right.right.id));
+    let before_root = factory_right_sparse_root(&before).unwrap();
+    let after_root = factory_right_sparse_root(&after).unwrap();
+
+    let right_count = 2u8;
+    let mut raw = vec![0u8; factory_multi_right_update_witness_len(2, right_count)];
+    put_u16(&mut raw, 0, FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION);
+    raw[2] = FACTORY_MIN_PARTICIPANTS;
+    raw[3] = FACTORY_MIN_PARTICIPANTS;
+    raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    raw[5] = right_count;
+    let mut entries = [
+        ([1u8; BYTE32_LEN], pubkey(&key0)),
+        ([2u8; BYTE32_LEN], pubkey(&key1)),
+    ];
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    for (index, (participant, pubkey)) in entries.iter().enumerate() {
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+        raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .copy_from_slice(pubkey);
+        raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+            u8::from(*participant == touched);
+    }
+    raw[multi_right_touched_offset()..multi_right_touched_offset() + BYTE32_LEN]
+        .copy_from_slice(&touched);
+    put_u16(
+        &mut raw,
+        multi_right_capacity_offset(),
+        FACTORY_COMPACT_PROOF_MAX_SIBLINGS as u16,
+    );
+    for (index, (before_proof, after_proof)) in proof_pairs.iter().enumerate() {
+        let before_offset = multi_right_right_offset(right_count, false, index);
+        raw[before_offset..before_offset + FACTORY_RIGHT_LEN]
+            .copy_from_slice(&core_factory_right_bytes(&before_proof.right));
+        let after_offset = multi_right_right_offset(right_count, true, index);
+        raw[after_offset..after_offset + FACTORY_RIGHT_LEN]
+            .copy_from_slice(&core_factory_right_bytes(&after_proof.right));
+        write_compact_proof_pairs(
+            &mut raw,
+            multi_right_proof_offset(right_count, false, index),
+            &before_proof.siblings,
+        );
+        write_compact_proof_pairs(
+            &mut raw,
+            multi_right_proof_offset(right_count, true, index),
+            &after_proof.siblings,
+        );
+    }
+
+    let witness = FactoryMultiRightUpdateWitness::parse(&raw).unwrap();
+    for index in 0..right_count as usize {
+        assert_eq!(witness.proof_root(false, index).unwrap(), before_root);
+        assert_eq!(witness.proof_root(true, index).unwrap(), after_root);
+    }
+
+    let participants_commitment = factory_participants_commitment(
+        2,
+        &[
+            (entries[0].0.as_slice(), entries[0].1.as_slice()),
+            (entries[1].0.as_slice(), entries[1].1.as_slice()),
+        ],
+    );
+    let mut old = factory_header_raw(old_number);
+    old[76..108].copy_from_slice(&before_root);
+    old[108..140].copy_from_slice(&participants_commitment);
+    let old_header = FactoryStateHeader::parse(&old).unwrap();
+
+    let mut new = factory_header_raw(new_number);
+    new[76..108].copy_from_slice(&after_root);
+    new[108..140].copy_from_slice(&participants_commitment);
+    new[140..172].copy_from_slice(old_header.access_manifest_root());
+    let preliminary_new_header = FactoryStateHeader::parse(&new).unwrap();
+    let digest = witness
+        .non_interference_digest(&old_header, &preliminary_new_header)
+        .unwrap();
+    new[172..204].copy_from_slice(&digest);
+    let new_header = FactoryStateHeader::parse(&new).unwrap();
+    let authorisation = signature(&key0, &new_header.signing_digest());
+    for index in 0..FACTORY_MIN_PARTICIPANTS as usize {
+        let offset = 8 + index * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        if raw[offset..offset + BYTE32_LEN] == touched {
+            let signature_offset = offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+            raw[signature_offset..signature_offset + ECDSA_SIGNATURE_LEN]
+                .copy_from_slice(&authorisation);
+        }
+    }
+
+    (old.to_vec().into(), new.to_vec().into(), raw.into())
+}
+
+fn signed_multi_right_update_pair(old_number: u64, new_number: u64) -> (Bytes, Bytes, Bytes) {
+    signed_multi_right_update_pair_with_quantities(old_number, new_number, 700, 300, None)
+}
+
 fn reduced_exit_touched_offset() -> usize {
     8 + FACTORY_MIN_PARTICIPANTS as usize * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
@@ -4599,6 +4798,266 @@ fn factory_type_rejects_sparse_merkle_sibling_tamper() {
         .witness(factory_witness_with_input_type(
             WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
             merkle_witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_accepts_multi_right_update() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_multi_right_update_pair(1, 2);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("multi-right factory update should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_multi_right_total_increase() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) =
+        signed_multi_right_update_pair_with_quantities(1, 2, 1_500, 250, None);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_multi_right_cross_asset_rebalance() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_multi_right_update_pair_with_assets(
+        1,
+        2,
+        0,
+        1_250,
+        None,
+        Some(([41u8; BYTE32_LEN], [42u8; BYTE32_LEN])),
+    );
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_multi_right_compact_pair_tamper() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_multi_right_update_pair(1, 2);
+    let mut witness = witness.to_vec();
+    witness[multi_right_proof_offset(2, false, 0) + 2 + 2] ^= 1;
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn factory_type_rejects_multi_right_unlisted_change() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) =
+        signed_multi_right_update_pair_with_quantities(1, 2, 700, 300, Some(1_000));
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
+        ))
+        .build();
+    let tx = context.complete_tx(tx);
+
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[test]
+fn factory_type_rejects_multi_right_foreign_signature() {
+    let mut context = Context::default();
+    let lock = deploy_always_success(&mut context);
+    let factory_type = deploy_contract(&mut context, "morph-factory-type", FACTORY_ID.to_vec());
+    let (old_data, new_data, witness) = signed_multi_right_update_pair(1, 2);
+    let mut witness = witness.to_vec();
+    let key1 = signing_key(2);
+    let new_data_vec = new_data.to_vec();
+    let new_header = FactoryStateHeader::parse(&new_data_vec).unwrap();
+    let foreign_signature = signature(&key1, &new_header.signing_digest());
+    let touched_signature_offset = 8 + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN + 1;
+    witness[touched_signature_offset..touched_signature_offset + ECDSA_SIGNATURE_LEN]
+        .copy_from_slice(&foreign_signature);
+
+    let input_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(lock.clone())
+            .type_(Some(factory_type.clone()).pack())
+            .build(),
+        old_data,
+    );
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(input_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY)
+                .lock(lock)
+                .type_(Some(factory_type).pack())
+                .build(),
+        )
+        .output_data(new_data.pack())
+        .witness(factory_witness_with_input_type(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            witness,
         ))
         .build();
     let tx = context.complete_tx(tx);

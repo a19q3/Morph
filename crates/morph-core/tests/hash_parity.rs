@@ -443,3 +443,127 @@ fn factory_vault_delta_commitments_match_script_common() {
         wire_deltas.commitment().unwrap()
     );
 }
+
+#[test]
+fn multi_right_update_domains_match_script_common() {
+    assert_eq!(
+        morph_core::validation::FACTORY_MULTI_RIGHT_DOMAIN,
+        wire::FACTORY_MULTI_RIGHT_UPDATE_DOMAIN
+    );
+    assert_eq!(
+        morph_core::validation::FACTORY_RIGHT_EMPTY_SUBTREE_DOMAIN,
+        wire::FACTORY_RIGHT_EMPTY_DOMAIN
+    );
+}
+
+#[test]
+fn multi_right_compact_proof_roots_match_script_common() {
+    use morph_core::{
+        FactoryRight, FactoryRightId, FactoryRightKind, factory_right_sparse_proof_compact,
+        factory_right_sparse_root,
+    };
+
+    fn wire_right(right: &FactoryRight) -> [u8; wire::FACTORY_RIGHT_LEN] {
+        let mut raw = [0u8; wire::FACTORY_RIGHT_LEN];
+        raw[..32].copy_from_slice(&right.id.participant);
+        raw[32..64].copy_from_slice(&right.id.subchannel);
+        raw[64] = match right.id.kind {
+            FactoryRightKind::Balance => 0,
+            FactoryRightKind::ReserveClaim => 1,
+            FactoryRightKind::Membership => 2,
+            FactoryRightKind::ExitPath => 3,
+            FactoryRightKind::SponsorBudgetClaim => 4,
+        };
+        if let Some(asset_type) = right.id.asset_type {
+            raw[65] = 1;
+            raw[66..98].copy_from_slice(&asset_type);
+        }
+        raw[98..114].copy_from_slice(&right.quantity.to_le_bytes());
+        raw
+    }
+
+    let right =
+        |participant: u8, subchannel: u8, kind: FactoryRightKind, quantity: u128| FactoryRight {
+            id: FactoryRightId {
+                participant: bytes32(participant),
+                subchannel: bytes32(subchannel),
+                kind,
+                asset_type: None,
+            },
+            quantity,
+        };
+    let before = vec![
+        right(1, 10, FactoryRightKind::Balance, 100),
+        right(1, 10, FactoryRightKind::ReserveClaim, 50),
+        right(1, 10, FactoryRightKind::SponsorBudgetClaim, 20),
+        right(2, 10, FactoryRightKind::Balance, 100),
+        right(2, 10, FactoryRightKind::ReserveClaim, 50),
+    ];
+    let mut after = before.clone();
+    after[0].quantity = 60;
+    after[1].quantity = 80;
+    let before_root = factory_right_sparse_root(&before).unwrap();
+    let after_root = factory_right_sparse_root(&after).unwrap();
+
+    let mut ids = [before[0].id.clone(), before[1].id.clone()];
+    ids.sort();
+
+    let participant_count = 2u8;
+    let right_count = 2u8;
+    let mut body =
+        vec![0u8; wire::factory_multi_right_update_witness_len(participant_count, right_count)];
+    put_u16(
+        &mut body,
+        0,
+        wire::FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION,
+    );
+    body[2] = participant_count;
+    body[3] = participant_count;
+    body[4] = wire::FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+    body[5] = right_count;
+    for index in 0..participant_count as usize {
+        let offset = 8 + index * wire::FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+        body[offset..offset + 32].fill((index + 1) as u8);
+        body[offset + 32..offset + 32 + wire::COMPRESSED_SECP256K1_PUBKEY_LEN]
+            .fill((index + 2) as u8);
+        body[offset + 32 + wire::COMPRESSED_SECP256K1_PUBKEY_LEN] = u8::from(index == 0);
+    }
+    let touched_offset =
+        8 + participant_count as usize * wire::FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN;
+    body[touched_offset..touched_offset + 32].fill(1);
+    put_u16(
+        &mut body,
+        touched_offset + 32,
+        wire::FACTORY_COMPACT_PROOF_MAX_SIBLINGS as u16,
+    );
+    let rights_before_offset = touched_offset + 32 + 2 + 2;
+    let rights_after_offset = rights_before_offset + right_count as usize * wire::FACTORY_RIGHT_LEN;
+    let proofs_offset = rights_after_offset + right_count as usize * wire::FACTORY_RIGHT_LEN;
+    for (index, id) in ids.iter().enumerate() {
+        let before_proof = factory_right_sparse_proof_compact(&before, id).unwrap();
+        let after_proof = factory_right_sparse_proof_compact(&after, id).unwrap();
+        let before_offset = rights_before_offset + index * wire::FACTORY_RIGHT_LEN;
+        body[before_offset..before_offset + wire::FACTORY_RIGHT_LEN]
+            .copy_from_slice(&wire_right(&before_proof.right));
+        let after_offset = rights_after_offset + index * wire::FACTORY_RIGHT_LEN;
+        body[after_offset..after_offset + wire::FACTORY_RIGHT_LEN]
+            .copy_from_slice(&wire_right(&after_proof.right));
+        for (after_side, proof) in [(false, &before_proof), (true, &after_proof)] {
+            let proof_offset = proofs_offset
+                + (right_count as usize * usize::from(after_side) + index)
+                    * wire::FACTORY_COMPACT_PROOF_LEN;
+            put_u16(&mut body, proof_offset, proof.siblings.len() as u16);
+            for (pair, sibling) in proof.siblings.iter().enumerate() {
+                let pair_offset = proof_offset + 2 + pair * wire::FACTORY_COMPACT_PROOF_PAIR_LEN;
+                put_u16(&mut body, pair_offset, sibling.depth);
+                body[pair_offset + 2..pair_offset + 2 + 32].copy_from_slice(&sibling.hash);
+            }
+        }
+    }
+
+    let witness = wire::FactoryMultiRightUpdateWitness::parse(&body).unwrap();
+    for index in 0..right_count as usize {
+        assert_eq!(witness.proof_root(false, index).unwrap(), before_root);
+        assert_eq!(witness.proof_root(true, index).unwrap(), after_root);
+    }
+}
