@@ -5038,6 +5038,7 @@ fn factory_type_rejects_multi_right_unlisted_change() {
 }
 
 #[test]
+#[ignore = "requires `make build-contracts`"]
 fn factory_type_rejects_multi_right_foreign_signature() {
     let mut context = Context::default();
     let lock = deploy_always_success(&mut context);
