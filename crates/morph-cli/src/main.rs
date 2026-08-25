@@ -37,6 +37,7 @@ use morph_core::*;
 #[cfg(feature = "devnet")]
 use rpc::{CkbRpcClient, HeaderView};
 
+mod conditional_packages;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
 mod devnet;
 #[cfg(feature = "devnet")]
@@ -53,6 +54,7 @@ mod rpc;
 mod smoke_report;
 mod splice_packages;
 mod stateful_report;
+mod value_limit;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
 mod watch_alert;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
@@ -222,6 +224,8 @@ enum Command {
     },
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
+    /// Print a bounded CKB conditional-batch force-resolution package fixture.
+    PrintConditionalBatchFixture,
     /// Print a conservative all-participant signed factory state package fixture.
     PrintFactoryStateFixture,
     /// Print a host-side authorised-participant signed factory state package fixture.
@@ -232,6 +236,10 @@ enum Command {
     PrintFactoryReducedExitFixture,
     /// Print a host-side single-right sparse Merkle factory update package fixture.
     PrintFactoryMerkleUpdateFixture,
+    /// Print a host-side multi-right compact sparse Merkle factory update package fixture.
+    PrintFactoryMultiRightUpdateFixture,
+    /// Print an operator value-limit policy fixture.
+    PrintValueLimitPolicyFixture,
     /// Print a valid factory local-exit evidence package fixture.
     PrintFactoryLocalExitFixture,
     /// Print a valid conservative factory splice package fixture.
@@ -280,6 +288,14 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Validate a conditional-batch force-resolution package.
+    ValidateConditionalBatchPackage {
+        /// Path to the conditional-batch package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Validate a conservative all-participant signed factory state package.
     ValidateFactoryStatePackage {
         /// Path to the factory state package JSON.
@@ -311,6 +327,41 @@ enum Command {
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Validate a host-side multi-right compact sparse Merkle factory update package.
+    ValidateFactoryMultiRightUpdatePackage {
+        /// Path to the factory multi-right update package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate an operator value-limit policy file.
+    ValidateValueLimitPolicy {
+        /// Path to the value-limit policy JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON including the policy digest.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Check a package or explicit amounts against an operator value-limit policy.
+    ValueLimitCheck {
+        /// Path to the value-limit policy JSON.
+        #[arg(long)]
+        policy: std::path::PathBuf,
+        /// Path to a value-bearing package JSON (bilateral or factory splice family).
+        #[arg(long)]
+        package: Option<std::path::PathBuf>,
+        /// Explicit CKB capacity to check, in base units.
+        #[arg(long, conflicts_with = "package")]
+        ckb: Option<u64>,
+        /// Explicit xUDT amount to check, formatted as <type-hash>:<amount>.
+        #[arg(
+            long = "xudt",
+            value_name = "TYPE_HASH:AMOUNT",
+            conflicts_with = "package"
+        )]
+        xudt: Vec<String>,
     },
     /// Validate a factory local-exit evidence package.
     ValidateFactoryLocalExitPackage {
@@ -2989,6 +3040,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintConditionalBatchFixture => {
+            let package = conditional_packages::fixture_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintFactoryStateFixture => {
             let package = factory_packages::fixture_state_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -3012,6 +3068,16 @@ fn main() -> Result<()> {
         Command::PrintFactoryMerkleUpdateFixture => {
             let package = factory_packages::fixture_merkle_update_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintFactoryMultiRightUpdateFixture => {
+            let package = factory_packages::fixture_multi_right_update_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
+        Command::PrintValueLimitPolicyFixture => {
+            let policy = value_limit::fixture_value_limit_policy()?;
+            println!("{}", serde_json::to_string_pretty(&policy)?);
             Ok(())
         }
         Command::PrintFactoryLocalExitFixture => {
@@ -3147,6 +3213,25 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::ValidateConditionalBatchPackage { path, json } => {
+            let package = conditional_packages::read_package(&path)?;
+            let summary = package.validate()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("conditional batch package ok");
+                println!("batch_id={}", summary.batch_id);
+                println!("transfer_count={}", summary.transfer_count);
+                println!("total_capacity={}", summary.total_capacity);
+                println!("descriptor_commitment={}", summary.descriptor_commitment);
+                println!("input_since={}", summary.input_since);
+                println!(
+                    "resolved_capacities={},{}",
+                    summary.resolved_capacities[0], summary.resolved_capacities[1]
+                );
+            }
+            Ok(())
+        }
         Command::ValidateFactoryStatePackage { path, json } => {
             let package = factory_packages::read_factory_state_package(&path)?;
             let summary = package.summary()?;
@@ -3250,6 +3335,34 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::ValidateFactoryMultiRightUpdatePackage { path, json } => {
+            let package = factory_packages::read_factory_multi_right_update_package(&path)?;
+            let summary = package.summary()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("factory multi-right update package ok");
+                println!("factory_id={}", summary.factory_id);
+                println!("update_number={}", summary.update_number);
+                println!("state_root_before={}", summary.state_root_before);
+                println!("state_root_after={}", summary.state_root_after);
+                println!("touched_participants={}", summary.touched_participants);
+                println!(
+                    "authorised_participants={}",
+                    summary.authorised_participants
+                );
+                println!("changed_participant={}", summary.changed_participant);
+                println!("right_count={}", summary.right_count);
+                println!("asset_groups={}", summary.asset_groups);
+                println!("proof_pairs_before={}", summary.proof_pairs_before);
+                println!("proof_pairs_after={}", summary.proof_pairs_after);
+                println!(
+                    "non_interference_digest={}",
+                    summary.non_interference_digest
+                );
+            }
+            Ok(())
+        }
         Command::ValidateFactoryLocalExitPackage { path, json } => {
             let package = packages::read_factory_local_exit_package(&path)?;
             let summary = package.summary()?;
@@ -3268,6 +3381,63 @@ fn main() -> Result<()> {
                 println!("state_output_index={}", summary.state_output_index);
                 println!("vault_output_index={}", summary.vault_output_index);
             }
+            Ok(())
+        }
+        Command::ValidateValueLimitPolicy { path, json } => {
+            let policy = value_limit::read_value_limit_policy(&path)?;
+            let digest = policy.digest()?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schema": policy.schema,
+                        "max_channel_ckb_capacity": policy.max_channel_ckb_capacity,
+                        "max_xudt_amounts": policy.max_xudt_amounts,
+                        "digest": format!("0x{}", hex::encode(digest)),
+                    })
+                );
+            } else {
+                println!("value-limit policy ok");
+                println!(
+                    "max_channel_ckb_capacity={}",
+                    policy.max_channel_ckb_capacity
+                );
+                println!("admitted_xudt_assets={}", policy.max_xudt_amounts.len());
+                println!("digest=0x{}", hex::encode(digest));
+            }
+            Ok(())
+        }
+        Command::ValueLimitCheck {
+            policy: policy_path,
+            package,
+            ckb,
+            xudt,
+        } => {
+            let policy = value_limit::read_value_limit_policy(&policy_path)?;
+            let subject = match (&package, ckb) {
+                (Some(package_path), None) if xudt.is_empty() => {
+                    let (schema, subject) = value_limit::extract_value_subject(package_path)?;
+                    println!("package_schema={schema}");
+                    subject
+                }
+                (None, Some(ckb_capacity)) => {
+                    let mut subject = morph_core::ValueSubject::default();
+                    subject.add_ckb(u128::from(ckb_capacity))?;
+                    for entry in &xudt {
+                        let (type_hash, amount) = entry.split_once(':').ok_or_else(|| {
+                            anyhow::anyhow!("xudt entries must be <type-hash>:<amount>")
+                        })?;
+                        let amount: u128 = amount.parse()?;
+                        subject.add_xudt(type_hash, amount)?;
+                    }
+                    subject
+                }
+                _ => return Err(anyhow::anyhow!("pass exactly one of --package or --ckb")),
+            };
+            policy.enforce(&subject)?;
+            println!("value-limit check ok");
+            println!("ckb_capacity={}", subject.ckb_capacity);
+            println!("xudt_assets={}", subject.xudt_amounts.len());
             Ok(())
         }
         Command::ValidateFactorySplicePackage { path, json } => {

@@ -21,18 +21,19 @@ use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_VERSION,
     BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION, BYTE32_LEN,
     BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
-    FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryReducedExitWitness,
-    FactoryReducedRightsWitness, FactoryReducedSpliceWitness, FactorySignatureWitness,
-    FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result, SETTLEMENT_DESCRIPTOR_DOMAIN,
-    STATE_CARRIER_ACTIVATION_FEE, ScriptError, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT,
-    WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+    FactoryLocalExitWitness, FactoryMerkleUpdateWitness, FactoryMultiRightUpdateWitness,
+    FactoryReducedExitWitness, FactoryReducedRightsWitness, FactoryReducedSpliceWitness,
+    FactorySignatureWitness, FactorySpliceWitness, FactoryStateHeader, PHASE_ACTIVE, Result,
+    SETTLEMENT_DESCRIPTOR_DOMAIN, STATE_CARRIER_ACTIVATION_FEE, ScriptError, StateHeader,
+    UNBOUND_VAULT_OUTPOINT_COMMITMENT, WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT,
+    WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE, WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE,
     WITNESS_ENVELOPE_KIND_FACTORY_SPLICE, WitnessEnvelope, blake2b256, read_u128,
     vault_cell_commitment, vault_outpoint_commitment, verify_factory_merkle_update,
-    verify_factory_reduced_exit_update, verify_factory_reduced_rights_update,
-    verify_factory_reduced_splice_update, verify_factory_splice_update,
-    verify_factory_state_signatures,
+    verify_factory_multi_right_update, verify_factory_reduced_exit_update,
+    verify_factory_reduced_rights_update, verify_factory_reduced_splice_update,
+    verify_factory_splice_update, verify_factory_state_signatures,
 };
 
 #[cfg(target_arch = "riscv64")]
@@ -158,7 +159,8 @@ fn validate_update(
     match authorisation_kind {
         WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE
         | WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS
-        | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
+        | WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE
+        | WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE => {
             if !new_header.vault_is_bound()
                 || old_header.vault_materialisation_root()
                     != new_header.vault_materialisation_root()
@@ -221,6 +223,10 @@ fn validate_participant_authorisation(
         WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE => {
             let witness = FactoryMerkleUpdateWitness::parse(raw)?;
             verify_factory_merkle_update(old_header, header, &witness)?;
+        }
+        WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE => {
+            let witness = FactoryMultiRightUpdateWitness::parse(raw)?;
+            verify_factory_multi_right_update(old_header, header, &witness)?;
         }
         WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT => {
             let witness = FactoryReducedExitWitness::parse(raw)?;

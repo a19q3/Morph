@@ -3,12 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
-    BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, COMPRESSED_SECP256K1_PUBKEY_LEN,
-    FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS, FACTORY_RIGHT_KEY_DOMAIN,
-    FACTORY_RIGHT_LEAF_DOMAIN, FACTORY_RIGHT_NODE_DOMAIN, MORPH_PROTOCOL_VERSION,
-    SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPLICE_SIGNATURE_COUNT, SPLICE_SIGNATURE_THRESHOLD,
-    STATE_CARRIER_ACTIVATION_FEE, STATE_LAYOUT_VERSION,
+    BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION, BILATERAL_CKB_DESCRIPTOR_VERSION,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION, BILATERAL_SIGNATURE_COUNT,
+    BILATERAL_SIGNATURE_THRESHOLD, COMPRESSED_SECP256K1_PUBKEY_LEN,
+    FACTORY_COMPACT_PROOF_MAX_SIBLINGS, FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS,
+    FACTORY_MULTI_RIGHT_MAX_COUNT, FACTORY_MULTI_RIGHT_UPDATE_DOMAIN, FACTORY_RIGHT_EMPTY_DOMAIN,
+    FACTORY_RIGHT_KEY_DOMAIN, FACTORY_RIGHT_LEAF_DOMAIN, FACTORY_RIGHT_NODE_DOMAIN,
+    MORPH_PROTOCOL_VERSION, SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B, SPLICE_SIGNATURE_COUNT,
+    SPLICE_SIGNATURE_THRESHOLD, STATE_CARRIER_ACTIVATION_FEE, STATE_LAYOUT_VERSION,
 };
 use thiserror::Error;
 
@@ -18,8 +20,12 @@ use crate::hash::{
 };
 use crate::types::*;
 
-const FACTORY_RIGHT_EMPTY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY";
 const FACTORY_SPARSE_MERKLE_DEPTH: usize = 256;
+
+/// Re-exported so host tooling and the hash-parity suite can pin the compact
+/// proof domain against the script boundary.
+pub const FACTORY_MULTI_RIGHT_DOMAIN: &[u8] = FACTORY_MULTI_RIGHT_UPDATE_DOMAIN;
+pub const FACTORY_RIGHT_EMPTY_SUBTREE_DOMAIN: &[u8] = FACTORY_RIGHT_EMPTY_DOMAIN;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MorphError {
@@ -1008,6 +1014,256 @@ pub fn factory_right_sparse_proof(
     Ok(FactoryRightMerkleProof { right, siblings })
 }
 
+pub fn factory_empty_subtree_hash(height: usize) -> Bytes32 {
+    factory_empty_hashes()[height]
+}
+
+/// Generates a compact (variable-depth) sparse-Merkle proof: only non-empty
+/// sibling hashes are carried, ordered by strictly descending depth, bounded
+/// by `FACTORY_COMPACT_PROOF_MAX_SIBLINGS`. This is the host model of the
+/// kind-8 `FACTORY_MULTI_RIGHT_UPDATE` witness proofs.
+pub fn factory_right_sparse_proof_compact(
+    rights: &[FactoryRight],
+    id: &FactoryRightId,
+) -> Result<FactoryCompactRightProof> {
+    let full = factory_right_sparse_proof(rights, id)?;
+    let empty_hashes = factory_empty_hashes();
+    let mut siblings = Vec::new();
+    for (depth, sibling) in full.siblings.iter().enumerate() {
+        if sibling.hash != empty_hashes[FACTORY_SPARSE_MERKLE_DEPTH - depth - 1] {
+            siblings.push(FactoryCompactMerkleSibling {
+                depth: depth as u16,
+                hash: sibling.hash,
+            });
+        }
+    }
+    if siblings.len() > FACTORY_COMPACT_PROOF_MAX_SIBLINGS {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    siblings.reverse();
+    Ok(FactoryCompactRightProof {
+        right: full.right,
+        siblings,
+    })
+}
+
+/// Verifies a compact sparse-Merkle proof by completing the omitted
+/// (necessarily empty) sibling positions with the canonical empty-subtree
+/// hash chain, exactly like the kind-8 script path.
+pub fn verify_factory_right_compact_proof(
+    expected_root: Bytes32,
+    proof: &FactoryCompactRightProof,
+) -> Result<()> {
+    if proof.siblings.len() > FACTORY_COMPACT_PROOF_MAX_SIBLINGS {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    let key = factory_right_key(&proof.right.id);
+    let mut current = factory_right_leaf_hash(&proof.right);
+    let mut pair_index = 0usize;
+    let mut empty = blake2b256(FACTORY_RIGHT_EMPTY_DOMAIN);
+    for depth in (0..FACTORY_SPARSE_MERKLE_DEPTH).rev() {
+        let sibling = match proof.siblings.get(pair_index) {
+            Some(sibling) if usize::from(sibling.depth) == depth => {
+                pair_index += 1;
+                sibling.hash
+            }
+            _ => empty,
+        };
+        current = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, sibling, current)
+        } else {
+            factory_right_node_hash(depth, current, sibling)
+        };
+        empty = factory_right_node_hash(depth, empty, empty);
+    }
+    if pair_index != proof.siblings.len() || current != expected_root {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    Ok(())
+}
+
+/// Verifies a before/after compact-proof pair against both committed roots
+/// while enforcing cross-side localization: any sibling subtree that differs
+/// between the two proofs must contain one of `other_keys` (the other listed
+/// changed rights). This is the multi-right analogue of the single-right
+/// sibling-equality check; without it the per-side inclusion proofs would
+/// only constrain the listed rights and an unlisted right could be silently
+/// rewritten between the committed roots.
+pub fn verify_factory_right_compact_proof_pair(
+    before_root: Bytes32,
+    after_root: Bytes32,
+    before_proof: &FactoryCompactRightProof,
+    after_proof: &FactoryCompactRightProof,
+    other_keys: &[Bytes32],
+) -> Result<()> {
+    if before_proof.siblings.len() > FACTORY_COMPACT_PROOF_MAX_SIBLINGS
+        || after_proof.siblings.len() > FACTORY_COMPACT_PROOF_MAX_SIBLINGS
+        || before_proof.right.id != after_proof.right.id
+    {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    let key = factory_right_key(&before_proof.right.id);
+    let mut current_before = factory_right_leaf_hash(&before_proof.right);
+    let mut current_after = factory_right_leaf_hash(&after_proof.right);
+    let mut pair_before = 0usize;
+    let mut pair_after = 0usize;
+    let mut empty = blake2b256(FACTORY_RIGHT_EMPTY_DOMAIN);
+    for depth in (0..FACTORY_SPARSE_MERKLE_DEPTH).rev() {
+        let sibling_before = match before_proof.siblings.get(pair_before) {
+            Some(sibling) if usize::from(sibling.depth) == depth => {
+                pair_before += 1;
+                sibling.hash
+            }
+            _ => empty,
+        };
+        let sibling_after = match after_proof.siblings.get(pair_after) {
+            Some(sibling) if usize::from(sibling.depth) == depth => {
+                pair_after += 1;
+                sibling.hash
+            }
+            _ => empty,
+        };
+        if sibling_before != sibling_after {
+            let sibling_bit = !factory_key_bit(&key, depth);
+            if !other_keys
+                .iter()
+                .any(|other| factory_key_in_sibling_subtree(&key, other, depth, sibling_bit))
+            {
+                return Err(MorphError::FactoryMerkleProofInterference);
+            }
+        }
+        current_before = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, sibling_before, current_before)
+        } else {
+            factory_right_node_hash(depth, current_before, sibling_before)
+        };
+        current_after = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, sibling_after, current_after)
+        } else {
+            factory_right_node_hash(depth, current_after, sibling_after)
+        };
+        empty = factory_right_node_hash(depth, empty, empty);
+    }
+    if pair_before != before_proof.siblings.len()
+        || pair_after != after_proof.siblings.len()
+        || current_before != before_root
+        || current_after != after_root
+    {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    Ok(())
+}
+
+/// Does `candidate` fall inside the sibling subtree of `key`'s path at
+/// `depth`? That subtree covers exactly the keys sharing `key`'s first
+/// `depth` bits whose bit `depth` takes the sibling side.
+fn factory_key_in_sibling_subtree(
+    key: &Bytes32,
+    candidate: &Bytes32,
+    depth: usize,
+    sibling_bit: bool,
+) -> bool {
+    let full_bytes = depth / 8;
+    if candidate[..full_bytes] != key[..full_bytes] {
+        return false;
+    }
+    let remainder = depth % 8;
+    if remainder != 0 {
+        let mask = 0xffu8 << (8 - remainder);
+        if candidate[full_bytes] & mask != key[full_bytes] & mask {
+            return false;
+        }
+    }
+    factory_key_bit(candidate, depth) == sibling_bit
+}
+
+/// Host-side mirror of the kind-8 `FACTORY_MULTI_RIGHT_UPDATE` predicate:
+/// one touched participant atomically updates 1-4 of their own value rights,
+/// each localised by an independent compact sparse-Merkle proof, and the
+/// claim in every asset domain never increases.
+pub fn validate_factory_multi_right_merkle_update(
+    update: &FactoryMultiRightMerkleUpdate,
+) -> Result<()> {
+    let count = update.before.len();
+    if count == 0 || count > FACTORY_MULTI_RIGHT_MAX_COUNT as usize || update.after.len() != count {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    if update.touched_participants.len() != 1 || update.authorised_participants.len() != 1 {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+    let touched = match update.touched_participants.iter().next() {
+        Some(participant) => *participant,
+        None => return Err(MorphError::FactoryMissingAuthorisation),
+    };
+    if !update.authorised_participants.contains(&touched) {
+        return Err(MorphError::FactoryMissingAuthorisation);
+    }
+
+    let keys = update
+        .before
+        .iter()
+        .map(|proof| factory_right_key(&proof.right.id))
+        .collect::<Vec<_>>();
+
+    let mut asset_totals = BTreeMap::<Option<Bytes32>, (u128, u128)>::new();
+    let mut changed = false;
+    let mut previous_id: Option<&FactoryRightId> = None;
+    for (index, (before_proof, after_proof)) in
+        update.before.iter().zip(update.after.iter()).enumerate()
+    {
+        let before = &before_proof.right;
+        let after = &after_proof.right;
+        if before.id != after.id
+            || before.id.participant != touched
+            || !matches!(
+                before.id.kind,
+                FactoryRightKind::Balance
+                    | FactoryRightKind::ReserveClaim
+                    | FactoryRightKind::SponsorBudgetClaim
+            )
+        {
+            return Err(MorphError::FactoryMerkleProofInvalid);
+        }
+        if previous_id.is_some_and(|previous| previous >= &before.id) {
+            return Err(MorphError::FactoryMerkleProofInvalid);
+        }
+        previous_id = Some(&before.id);
+        if before != after {
+            changed = true;
+        }
+        let other_keys = keys
+            .iter()
+            .enumerate()
+            .filter(|(slot, _)| *slot != index)
+            .map(|(_, listed)| *listed)
+            .collect::<Vec<_>>();
+        verify_factory_right_compact_proof_pair(
+            update.before_root,
+            update.after_root,
+            before_proof,
+            after_proof,
+            &other_keys,
+        )?;
+        let totals = asset_totals.entry(before.id.asset_type).or_default();
+        totals.0 = totals
+            .0
+            .checked_add(before.quantity)
+            .ok_or(MorphError::FactoryMerkleProofInvalid)?;
+        totals.1 = totals
+            .1
+            .checked_add(after.quantity)
+            .ok_or(MorphError::FactoryMerkleProofInvalid)?;
+    }
+    if !changed
+        || asset_totals
+            .values()
+            .any(|(total_before, total_after)| total_after > total_before)
+    {
+        return Err(MorphError::FactoryMerkleProofInvalid);
+    }
+    Ok(())
+}
+
 pub fn factory_right_key(id: &FactoryRightId) -> Bytes32 {
     let mut bytes = Vec::with_capacity(128);
     bytes.extend_from_slice(FACTORY_RIGHT_KEY_DOMAIN);
@@ -1583,7 +1839,9 @@ fn validate_state_profile(header: &StateHeader) -> Result<()> {
         || !matches!(header.mode, Mode::BilateralPlain | Mode::FactoryProof)
         || !matches!(
             header.descriptor_version,
-            BILATERAL_CKB_DESCRIPTOR_VERSION | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+            BILATERAL_CKB_DESCRIPTOR_VERSION
+                | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                | BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
         )
     {
         return Err(MorphError::UnsupportedProtocolProfile);

@@ -4,6 +4,7 @@
 use ckb_hash::new_blake2b;
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_LEN: usize = 346;
@@ -15,6 +16,23 @@ pub const SPLICE_HEADER_LEN: usize = 485;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
+pub const CONDITIONAL_TRANSFER_LEN: usize = BYTE32_LEN + 1 + 1 + 2 + BYTE32_LEN + 8 + 8;
+pub const CONDITIONAL_TRANSFER_MAX_COUNT: u8 = 8;
+pub const BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN: usize = 2
+    + 1
+    + 1
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + 1
+    + 7
+    + 2 * (BYTE32_LEN + 8)
+    + CONDITIONAL_TRANSFER_MAX_COUNT as usize * CONDITIONAL_TRANSFER_LEN;
+pub const CONDITIONAL_RESOLUTION_LEN: usize = 1 + BYTE32_LEN;
+pub const CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN: usize = 2
+    + 1
+    + 1
+    + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN
+    + CONDITIONAL_TRANSFER_MAX_COUNT as usize * CONDITIONAL_RESOLUTION_LEN;
 pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
 pub const ECDSA_SIGNATURE_LEN: usize = 64;
 pub const BILATERAL_SIGNATURE_WITNESS_LEN: usize =
@@ -111,6 +129,25 @@ pub const fn factory_reduced_splice_witness_len(participant_count: u8) -> usize 
         + FACTORY_VAULT_DELTAS_LEN
 }
 
+pub const FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION: u16 = 1;
+pub const FACTORY_MULTI_RIGHT_MAX_COUNT: u8 = 4;
+pub const FACTORY_COMPACT_PROOF_MAX_SIBLINGS: usize = 64;
+pub const FACTORY_COMPACT_PROOF_PAIR_LEN: usize = 2 + BYTE32_LEN;
+pub const FACTORY_COMPACT_PROOF_LEN: usize =
+    2 + FACTORY_COMPACT_PROOF_MAX_SIBLINGS * FACTORY_COMPACT_PROOF_PAIR_LEN;
+
+pub const fn factory_multi_right_update_witness_len(
+    participant_count: u8,
+    right_count: u8,
+) -> usize {
+    8 + participant_count as usize * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+        + BYTE32_LEN
+        + 2
+        + 2
+        + 2 * right_count as usize * FACTORY_RIGHT_LEN
+        + 2 * right_count as usize * FACTORY_COMPACT_PROOF_LEN
+}
+
 pub const PHASE_ACTIVE: u8 = 1;
 pub const PHASE_SETTLING: u8 = 2;
 pub const MORPH_PROTOCOL_VERSION: u16 = 1;
@@ -148,6 +185,9 @@ pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT: u16 = 4;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_LOCAL_EXIT: u16 = 5;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_SPLICE: u16 = 6;
 pub const WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE: u16 = 7;
+pub const WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE: u16 = 8;
+pub const FACTORY_MULTI_RIGHT_UPDATE_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_MULTI_RIGHT_UPDATE";
+pub const FACTORY_RIGHT_EMPTY_DOMAIN: &[u8] = b"CKB_MORPH_FACTORY_RIGHT_EMPTY";
 pub const ASSET_REGISTRY_DOMAIN: &[u8] = b"CKB_MORPH_ASSET_REGISTRY_V1";
 
 #[derive(Clone, Copy)]
@@ -187,6 +227,10 @@ pub const WITNESS_ENVELOPE_KIND_SPECS: &[WitnessEnvelopeKindSpec] = &[
         kind: WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
         body_lens: FACTORY_WITNESS_BODY_LENS,
     },
+    WitnessEnvelopeKindSpec {
+        kind: WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+        body_lens: FACTORY_WITNESS_BODY_LENS,
+    },
 ];
 
 pub const STATE_DOMAIN: &[u8] = b"CKB_MORPH_CHANNEL_STATE";
@@ -216,6 +260,13 @@ pub const UNBOUND_VAULT_OUTPOINT_COMMITMENT: [u8; BYTE32_LEN] = [0u8; BYTE32_LEN
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION: u16 = 2;
+pub const BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION: u16 = 3;
+pub const CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION: u16 = 1;
+pub const CONDITIONAL_HASH_CKB_BLAKE2B: u8 = 0;
+pub const CONDITIONAL_HASH_SHA256: u8 = 1;
+pub const CONDITIONAL_RESOLUTION_UNUSED: u8 = 0;
+pub const CONDITIONAL_RESOLUTION_FULFILL: u8 = 1;
+pub const CONDITIONAL_RESOLUTION_REFUND: u8 = 2;
 pub const STATE_MODE_BILATERAL_PLAINTEXT: u8 = 1;
 pub const STATE_MODE_FACTORY_PROOF: u8 = 2;
 pub const BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT: u8 = 2;
@@ -278,6 +329,13 @@ pub enum ScriptError {
     StateCarrierMismatch = 52,
     SponsorFeeMismatch = 53,
     UnsupportedProtocolProfile = 54,
+    ConditionalDescriptorEncoding = 55,
+    ConditionalBatchOutputMismatch = 56,
+    ConditionalResolutionEncoding = 57,
+    ConditionalPreimageMismatch = 58,
+    ConditionalRefundNotMature = 59,
+    ConditionalBatchLockMismatch = 60,
+    ConditionalValueMismatch = 61,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -426,7 +484,9 @@ impl<'a> StateHeader<'a> {
             )
             || !matches!(
                 self.descriptor_version(),
-                BILATERAL_CKB_DESCRIPTOR_VERSION | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                BILATERAL_CKB_DESCRIPTOR_VERSION
+                    | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                    | BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
             )
         {
             return Err(ScriptError::UnsupportedProtocolProfile);
@@ -601,6 +661,16 @@ fn is_factory_witness_body_len_allowed(kind: u16, body_len: usize) -> bool {
             }
             WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE => {
                 body_len == factory_reduced_splice_witness_len(participant_count)
+            }
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE => {
+                for right_count in 1..=FACTORY_MULTI_RIGHT_MAX_COUNT {
+                    if body_len
+                        == factory_multi_right_update_witness_len(participant_count, right_count)
+                    {
+                        return true;
+                    }
+                }
+                false
             }
             _ => false,
         };
@@ -1474,6 +1544,10 @@ impl<'a> FactoryRight<'a> {
     fn same_id(&self, other: &Self) -> bool {
         self.id_key() == other.id_key()
     }
+
+    fn same_asset(&self, other: &Self) -> bool {
+        self.asset_present() == other.asset_present() && self.asset_type() == other.asset_type()
+    }
 }
 
 fn validate_reduced_value_right_decrease(
@@ -1497,16 +1571,36 @@ fn validate_reduced_prelude(
     expected_right_count: u8,
     expected_len: usize,
 ) -> Result<()> {
+    validate_reduced_prelude_bounds(
+        raw,
+        expected_version,
+        expected_right_count,
+        expected_right_count,
+        expected_len,
+    )
+}
+
+fn validate_reduced_prelude_bounds(
+    raw: &[u8],
+    expected_version: u16,
+    min_right_count: u8,
+    max_right_count: u8,
+    expected_len: usize,
+) -> Result<()> {
     if raw.len() != expected_len
         || read_u16(raw, 0) != expected_version
         || !(FACTORY_MIN_PARTICIPANTS..=FACTORY_MAX_PARTICIPANTS).contains(&raw[3])
         || raw[2] != raw[3]
         || raw[4] != FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT
-        || raw[5] != expected_right_count
+        || !(min_right_count..=max_right_count).contains(&raw[5])
         || read_u16(raw, 6) != 0
     {
         return Err(ScriptError::FactoryReducedProofEncoding);
     }
+    validate_reduced_participant_entries(raw)
+}
+
+fn validate_reduced_participant_entries(raw: &[u8]) -> Result<()> {
     let participant_count = raw[3] as usize;
     let mut signed_count = 0u8;
     for index in 0..participant_count {
@@ -1960,6 +2054,413 @@ pub fn validate_factory_merkle_update_local_predicate(
     witness: &FactoryMerkleUpdateWitness,
 ) -> Result<()> {
     validate_reduced_value_right_decrease(&witness.right_before()?, &witness.right_after()?)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactoryMultiRightUpdateWitness<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> FactoryMultiRightUpdateWitness<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() < 8 {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        let participant_count = raw[3];
+        let right_count = raw[5];
+        validate_reduced_prelude_bounds(
+            raw,
+            FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION,
+            1,
+            FACTORY_MULTI_RIGHT_MAX_COUNT,
+            factory_multi_right_update_witness_len(participant_count, right_count),
+        )?;
+        let witness = Self { raw };
+        if witness.compact_capacity() != FACTORY_COMPACT_PROOF_MAX_SIBLINGS as u16 {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        for index in 0..witness.right_count() as usize {
+            witness.validate_compact_pairs(false, index)?;
+            witness.validate_compact_pairs(true, index)?;
+        }
+        for index in 0..witness.right_count() as usize {
+            FactoryRight::parse(field(
+                raw,
+                factory_multi_right_right_offset(participant_count, right_count, false, index),
+                FACTORY_RIGHT_LEN,
+            ))?;
+            FactoryRight::parse(field(
+                raw,
+                factory_multi_right_right_offset(participant_count, right_count, true, index),
+                FACTORY_RIGHT_LEN,
+            ))?;
+        }
+        Ok(witness)
+    }
+
+    pub fn participant_count(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn right_count(&self) -> u8 {
+        self.raw[5]
+    }
+
+    pub fn compact_capacity(&self) -> u16 {
+        read_u16(
+            self.raw,
+            factory_multi_right_capacity_offset(self.participant_count()),
+        )
+    }
+
+    pub fn touched_participant(&self) -> &'a [u8] {
+        field(
+            self.raw,
+            factory_multi_right_touched_offset(self.participant_count()),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn right_before(&self, index: usize) -> Result<FactoryRight<'a>> {
+        FactoryRight::parse(field(
+            self.raw,
+            factory_multi_right_right_offset(
+                self.participant_count(),
+                self.right_count(),
+                false,
+                index,
+            ),
+            FACTORY_RIGHT_LEN,
+        ))
+    }
+
+    pub fn right_after(&self, index: usize) -> Result<FactoryRight<'a>> {
+        FactoryRight::parse(field(
+            self.raw,
+            factory_multi_right_right_offset(
+                self.participant_count(),
+                self.right_count(),
+                true,
+                index,
+            ),
+            FACTORY_RIGHT_LEN,
+        ))
+    }
+
+    pub fn participants_commitment(&self) -> [u8; BYTE32_LEN] {
+        factory_participants_commitment_from_reduced_witness(self.raw)
+    }
+
+    pub fn proof_root(&self, after: bool, index: usize) -> Result<[u8; BYTE32_LEN]> {
+        let offset = factory_multi_right_proof_offset(
+            self.participant_count(),
+            self.right_count(),
+            after,
+            index,
+        );
+        let right = if after {
+            self.right_after(index)?
+        } else {
+            self.right_before(index)?
+        };
+        factory_compact_proof_root(self.raw, offset, &right)
+    }
+
+    /// Recomputes both proof roots for `index` while enforcing cross-side
+    /// localization: any sibling subtree that differs between the before and
+    /// after proofs must contain one of `other_keys` (the other listed
+    /// changed rights). A differing subtree that no listed right excuses
+    /// means an unlisted right changed between the two committed roots.
+    pub fn localized_proof_roots(
+        &self,
+        index: usize,
+        other_keys: &[[u8; BYTE32_LEN]],
+    ) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
+        let offset_before = factory_multi_right_proof_offset(
+            self.participant_count(),
+            self.right_count(),
+            false,
+            index,
+        );
+        let offset_after = factory_multi_right_proof_offset(
+            self.participant_count(),
+            self.right_count(),
+            true,
+            index,
+        );
+        factory_compact_proof_pair_roots(
+            self.raw,
+            offset_before,
+            offset_after,
+            &self.right_before(index)?,
+            &self.right_after(index)?,
+            other_keys,
+        )
+    }
+
+    pub fn non_interference_digest(
+        &self,
+        old_header: &FactoryStateHeader,
+        new_header: &FactoryStateHeader,
+    ) -> Result<[u8; BYTE32_LEN]> {
+        let old_update_number = old_header.update_number().to_le_bytes();
+        let new_update_number = new_header.update_number().to_le_bytes();
+        let right_count = [self.right_count()];
+        let mut hasher = new_blake2b();
+        hasher.update(FACTORY_MULTI_RIGHT_UPDATE_DOMAIN);
+        hasher.update(old_header.factory_id());
+        hasher.update(&old_update_number);
+        hasher.update(&new_update_number);
+        hasher.update(old_header.state_root());
+        hasher.update(new_header.state_root());
+        hasher.update(old_header.access_manifest_root());
+        hasher.update(new_header.access_manifest_root());
+        hasher.update(self.touched_participant());
+        hasher.update(&right_count);
+        for index in 0..self.right_count() as usize {
+            hasher.update(self.right_before(index)?.raw());
+        }
+        for index in 0..self.right_count() as usize {
+            hasher.update(self.right_after(index)?.raw());
+        }
+        let mut out = [0u8; BYTE32_LEN];
+        hasher.finalize(&mut out);
+        Ok(out)
+    }
+
+    fn validate_compact_pairs(&self, after: bool, index: usize) -> Result<()> {
+        let offset = factory_multi_right_proof_offset(
+            self.participant_count(),
+            self.right_count(),
+            after,
+            index,
+        );
+        let count = read_u16(self.raw, offset) as usize;
+        if count > FACTORY_COMPACT_PROOF_MAX_SIBLINGS {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        let mut previous_depth: Option<usize> = None;
+        for pair in 0..count {
+            let depth =
+                read_u16(self.raw, offset + 2 + pair * FACTORY_COMPACT_PROOF_PAIR_LEN) as usize;
+            if depth >= FACTORY_SPARSE_MERKLE_DEPTH {
+                return Err(ScriptError::FactoryReducedProofEncoding);
+            }
+            if let Some(prev) = previous_depth
+                && prev <= depth
+            {
+                return Err(ScriptError::FactoryReducedProofEncoding);
+            }
+            previous_depth = Some(depth);
+        }
+        Ok(())
+    }
+}
+
+fn factory_compact_proof_root(
+    raw: &[u8],
+    offset: usize,
+    right: &FactoryRight,
+) -> Result<[u8; BYTE32_LEN]> {
+    let key = factory_right_key(right);
+    let mut current = factory_right_leaf_hash(right);
+    let count = read_u16(raw, offset) as usize;
+    let mut pair_index = 0usize;
+    let mut empty = blake2b256(&[FACTORY_RIGHT_EMPTY_DOMAIN]);
+    for depth in (0..FACTORY_SPARSE_MERKLE_DEPTH).rev() {
+        let pair_offset = offset + 2 + pair_index * FACTORY_COMPACT_PROOF_PAIR_LEN;
+        let mut sibling = [0u8; BYTE32_LEN];
+        if pair_index < count && read_u16(raw, pair_offset) as usize == depth {
+            sibling.copy_from_slice(field(raw, pair_offset + 2, BYTE32_LEN));
+            pair_index += 1;
+        } else {
+            sibling = empty;
+        }
+        current = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, &sibling, &current)
+        } else {
+            factory_right_node_hash(depth, &current, &sibling)
+        };
+        empty = factory_right_node_hash(depth, &empty, &empty);
+    }
+    if pair_index != count {
+        return Err(ScriptError::FactoryReducedProofEncoding);
+    }
+    Ok(current)
+}
+
+/// Walks a before/after compact-proof pair in lockstep, reconstructing both
+/// roots while enforcing cross-side localization. Every sibling subtree that
+/// differs between the two proofs must contain one of `other_keys` (the
+/// other listed changed rights); otherwise an unlisted right changed between
+/// the committed roots and the proof fails closed.
+fn factory_compact_proof_pair_roots(
+    raw: &[u8],
+    offset_before: usize,
+    offset_after: usize,
+    right_before: &FactoryRight,
+    right_after: &FactoryRight,
+    other_keys: &[[u8; BYTE32_LEN]],
+) -> Result<([u8; BYTE32_LEN], [u8; BYTE32_LEN])> {
+    let key = factory_right_key(right_before);
+    let mut current_before = factory_right_leaf_hash(right_before);
+    let mut current_after = factory_right_leaf_hash(right_after);
+    let count_before = read_u16(raw, offset_before) as usize;
+    let count_after = read_u16(raw, offset_after) as usize;
+    let mut pair_before = 0usize;
+    let mut pair_after = 0usize;
+    let mut empty = blake2b256(&[FACTORY_RIGHT_EMPTY_DOMAIN]);
+    for depth in (0..FACTORY_SPARSE_MERKLE_DEPTH).rev() {
+        let mut sibling_before = empty;
+        let pair_offset_before = offset_before + 2 + pair_before * FACTORY_COMPACT_PROOF_PAIR_LEN;
+        if pair_before < count_before && read_u16(raw, pair_offset_before) as usize == depth {
+            sibling_before.copy_from_slice(field(raw, pair_offset_before + 2, BYTE32_LEN));
+            pair_before += 1;
+        }
+        let mut sibling_after = empty;
+        let pair_offset_after = offset_after + 2 + pair_after * FACTORY_COMPACT_PROOF_PAIR_LEN;
+        if pair_after < count_after && read_u16(raw, pair_offset_after) as usize == depth {
+            sibling_after.copy_from_slice(field(raw, pair_offset_after + 2, BYTE32_LEN));
+            pair_after += 1;
+        }
+        if sibling_before != sibling_after {
+            let sibling_bit = !factory_key_bit(&key, depth);
+            let mut excused = false;
+            for other in other_keys {
+                if factory_key_in_sibling_subtree(&key, other, depth, sibling_bit) {
+                    excused = true;
+                    break;
+                }
+            }
+            if !excused {
+                return Err(ScriptError::FactoryReducedProofMismatch);
+            }
+        }
+        current_before = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, &sibling_before, &current_before)
+        } else {
+            factory_right_node_hash(depth, &current_before, &sibling_before)
+        };
+        current_after = if factory_key_bit(&key, depth) {
+            factory_right_node_hash(depth, &sibling_after, &current_after)
+        } else {
+            factory_right_node_hash(depth, &current_after, &sibling_after)
+        };
+        empty = factory_right_node_hash(depth, &empty, &empty);
+    }
+    if pair_before != count_before || pair_after != count_after {
+        return Err(ScriptError::FactoryReducedProofEncoding);
+    }
+    Ok((current_before, current_after))
+}
+
+pub fn verify_factory_multi_right_update(
+    old_header: &FactoryStateHeader,
+    new_header: &FactoryStateHeader,
+    witness: &FactoryMultiRightUpdateWitness,
+) -> Result<()> {
+    if new_header.signature_scheme_id() != SIGNATURE_SCHEME_SECP256K1_ECDSA_BLAKE2B {
+        return Err(ScriptError::FactoryReducedProofEncoding);
+    }
+    if new_header.participants_commitment() != witness.participants_commitment().as_slice() {
+        return Err(ScriptError::ParticipantCommitmentMismatch);
+    }
+    if old_header.access_manifest_root() != new_header.access_manifest_root() {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+
+    let right_count = witness.right_count() as usize;
+    let mut keys = [[0u8; BYTE32_LEN]; FACTORY_MULTI_RIGHT_MAX_COUNT as usize];
+    for (index, slot) in keys.iter_mut().enumerate().take(right_count) {
+        *slot = factory_right_key(&witness.right_before(index)?);
+    }
+
+    let touched = witness.touched_participant();
+    let mut changed = false;
+    let mut previous: Option<FactoryRight> = None;
+    for index in 0..right_count {
+        let before = witness.right_before(index)?;
+        let after = witness.right_after(index)?;
+        if !before.same_id(&after) {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        match before.kind() {
+            FACTORY_RIGHT_KIND_BALANCE
+            | FACTORY_RIGHT_KIND_RESERVE_CLAIM
+            | FACTORY_RIGHT_KIND_SPONSOR_BUDGET_CLAIM => {}
+            _ => return Err(ScriptError::FactoryReducedProofMismatch),
+        }
+        if before.participant() != touched {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        if let Some(prev) = previous
+            && prev.id_key() >= before.id_key()
+        {
+            return Err(ScriptError::FactoryReducedProofEncoding);
+        }
+        previous = Some(before);
+        if before.raw() != after.raw() {
+            changed = true;
+        }
+        let mut other_keys = [[0u8; BYTE32_LEN]; FACTORY_MULTI_RIGHT_MAX_COUNT as usize];
+        let mut other_count = 0usize;
+        for (slot, listed) in keys.iter().enumerate().take(right_count) {
+            if slot != index {
+                other_keys[other_count] = *listed;
+                other_count += 1;
+            }
+        }
+        let (root_before, root_after) =
+            witness.localized_proof_roots(index, &other_keys[..other_count])?;
+        if root_before != old_header.state_root() || root_after != new_header.state_root() {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+    }
+    if !changed {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+
+    // Quantities are only comparable inside one asset domain. Enforce the
+    // non-increase predicate independently for CKB and every xUDT type so a
+    // participant cannot burn one asset to mint another.
+    let mut checked = [false; FACTORY_MULTI_RIGHT_MAX_COUNT as usize];
+    let mut group_index = 0usize;
+    while group_index < right_count {
+        if checked[group_index] {
+            group_index += 1;
+            continue;
+        }
+        let group = witness.right_before(group_index)?;
+        let mut asset_before = 0u128;
+        let mut asset_after = 0u128;
+        let mut index = 0usize;
+        while index < right_count {
+            let before = witness.right_before(index)?;
+            if before.same_asset(&group) {
+                let after = witness.right_after(index)?;
+                asset_before = asset_before
+                    .checked_add(before.quantity())
+                    .ok_or(ScriptError::FactoryReducedProofMismatch)?;
+                asset_after = asset_after
+                    .checked_add(after.quantity())
+                    .ok_or(ScriptError::FactoryReducedProofMismatch)?;
+                checked[index] = true;
+            }
+            index += 1;
+        }
+        if asset_after > asset_before {
+            return Err(ScriptError::FactoryReducedProofMismatch);
+        }
+        group_index += 1;
+    }
+    if new_header.non_interference_digest()
+        != witness
+            .non_interference_digest(old_header, new_header)?
+            .as_slice()
+    {
+        return Err(ScriptError::FactoryReducedProofMismatch);
+    }
+    verify_reduced_signature(witness.raw, touched, &new_header.signing_digest())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3384,6 +3885,350 @@ impl<'a> BilateralCkbXudtSettlementDescriptor<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalTransfer<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalTransfer<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != CONDITIONAL_TRANSFER_LEN {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        let transfer = Self { raw };
+        if transfer.transfer_id().iter().all(|byte| *byte == 0)
+            || transfer.payer_index() > 1
+            || !matches!(
+                transfer.hash_algorithm(),
+                CONDITIONAL_HASH_CKB_BLAKE2B | CONDITIONAL_HASH_SHA256
+            )
+            || transfer.reserved() != 0
+            || transfer.payment_hash().iter().all(|byte| *byte == 0)
+            || transfer.amount() == 0
+            || transfer.refund_after_since() == 0
+            || !since_is_valid_absolute_block(transfer.refund_after_since())
+        {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        Ok(transfer)
+    }
+
+    pub fn transfer_id(&self) -> &'a [u8] {
+        field(self.raw, 0, BYTE32_LEN)
+    }
+
+    pub fn payer_index(&self) -> u8 {
+        self.raw[BYTE32_LEN]
+    }
+
+    pub fn hash_algorithm(&self) -> u8 {
+        self.raw[BYTE32_LEN + 1]
+    }
+
+    pub fn reserved(&self) -> u16 {
+        read_u16(self.raw, BYTE32_LEN + 2)
+    }
+
+    pub fn payment_hash(&self) -> &'a [u8] {
+        field(self.raw, BYTE32_LEN + 4, BYTE32_LEN)
+    }
+
+    pub fn amount(&self) -> u64 {
+        read_u64(self.raw, BYTE32_LEN + 4 + BYTE32_LEN)
+    }
+
+    pub fn refund_after_since(&self) -> u64 {
+        read_u64(self.raw, BYTE32_LEN + 4 + BYTE32_LEN + 8)
+    }
+
+    pub fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilateralCkbConditionalDescriptor<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BilateralCkbConditionalDescriptor<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        let descriptor = Self { raw };
+        if descriptor.version() != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
+            || descriptor.output_count() != BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT
+            || descriptor.transfer_capacity() != CONDITIONAL_TRANSFER_MAX_COUNT
+            || descriptor.transfer_count() > CONDITIONAL_TRANSFER_MAX_COUNT
+            || descriptor.reserved().iter().any(|byte| *byte != 0)
+            || descriptor.batch_id().iter().all(|byte| *byte == 0)
+            || descriptor
+                .application_context_commitment()
+                .iter()
+                .all(|byte| *byte == 0)
+            || descriptor.lock_hash(0) >= descriptor.lock_hash(1)
+            || descriptor.settled_capacity(0) == 0
+            || descriptor.settled_capacity(1) == 0
+        {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+
+        let mut previous_id: Option<&[u8]> = None;
+        for index in 0..CONDITIONAL_TRANSFER_MAX_COUNT as usize {
+            let raw_transfer = field(
+                descriptor.raw,
+                conditional_descriptor_transfer_offset(index),
+                CONDITIONAL_TRANSFER_LEN,
+            );
+            if index < descriptor.transfer_count() as usize {
+                let transfer = ConditionalTransfer::parse(raw_transfer)?;
+                if previous_id.is_some_and(|previous| previous >= transfer.transfer_id()) {
+                    return Err(ScriptError::ConditionalDescriptorEncoding);
+                }
+                for earlier in 0..index {
+                    if descriptor.transfer(earlier)?.payment_hash() == transfer.payment_hash() {
+                        return Err(ScriptError::ConditionalDescriptorEncoding);
+                    }
+                }
+                previous_id = Some(transfer.transfer_id());
+            } else if raw_transfer.iter().any(|byte| *byte != 0) {
+                return Err(ScriptError::ConditionalDescriptorEncoding);
+            }
+        }
+        descriptor.checked_total_capacity()?;
+        Ok(descriptor)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn output_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn transfer_capacity(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn batch_id(&self) -> &'a [u8] {
+        field(self.raw, 4, BYTE32_LEN)
+    }
+
+    pub fn application_context_commitment(&self) -> &'a [u8] {
+        field(self.raw, 4 + BYTE32_LEN, BYTE32_LEN)
+    }
+
+    pub fn transfer_count(&self) -> u8 {
+        self.raw[4 + 2 * BYTE32_LEN]
+    }
+
+    pub fn reserved(&self) -> &'a [u8] {
+        field(self.raw, 4 + 2 * BYTE32_LEN + 1, 7)
+    }
+
+    pub fn lock_hash(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            conditional_descriptor_participant_offset(index),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn settled_capacity(&self, index: usize) -> u64 {
+        read_u64(
+            self.raw,
+            conditional_descriptor_participant_offset(index) + BYTE32_LEN,
+        )
+    }
+
+    pub fn transfer(&self, index: usize) -> Result<ConditionalTransfer<'a>> {
+        if index >= self.transfer_count() as usize {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        ConditionalTransfer::parse(field(
+            self.raw,
+            conditional_descriptor_transfer_offset(index),
+            CONDITIONAL_TRANSFER_LEN,
+        ))
+    }
+
+    pub fn checked_total_capacity(&self) -> Result<u64> {
+        let mut total = self
+            .settled_capacity(0)
+            .checked_add(self.settled_capacity(1))
+            .ok_or(ScriptError::ConditionalValueMismatch)?;
+        for index in 0..self.transfer_count() as usize {
+            total = total
+                .checked_add(self.transfer(index)?.amount())
+                .ok_or(ScriptError::ConditionalValueMismatch)?;
+        }
+        Ok(total)
+    }
+
+    pub fn commitment(&self) -> [u8; BYTE32_LEN] {
+        settlement_descriptor_commitment(self.raw)
+    }
+
+    pub fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalResolution<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalResolution<'a> {
+    pub fn kind(&self) -> u8 {
+        self.raw[0]
+    }
+
+    pub fn preimage(&self) -> &'a [u8] {
+        field(self.raw, 1, BYTE32_LEN)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalBatchResolutionWitness<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalBatchResolutionWitness<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION
+            || witness.reserved() != 0
+        {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        let descriptor = witness.descriptor()?;
+        if witness.resolution_count() != descriptor.transfer_count() {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        for index in 0..CONDITIONAL_TRANSFER_MAX_COUNT as usize {
+            let resolution = witness.resolution_unchecked(index);
+            if index < witness.resolution_count() as usize {
+                match resolution.kind() {
+                    CONDITIONAL_RESOLUTION_FULFILL => {
+                        if resolution.preimage().iter().all(|byte| *byte == 0) {
+                            return Err(ScriptError::ConditionalResolutionEncoding);
+                        }
+                    }
+                    CONDITIONAL_RESOLUTION_REFUND => {
+                        if resolution.preimage().iter().any(|byte| *byte != 0) {
+                            return Err(ScriptError::ConditionalResolutionEncoding);
+                        }
+                    }
+                    _ => return Err(ScriptError::ConditionalResolutionEncoding),
+                }
+            } else if resolution.kind() != CONDITIONAL_RESOLUTION_UNUSED
+                || resolution.preimage().iter().any(|byte| *byte != 0)
+            {
+                return Err(ScriptError::ConditionalResolutionEncoding);
+            }
+        }
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn resolution_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn reserved(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn descriptor(&self) -> Result<BilateralCkbConditionalDescriptor<'a>> {
+        BilateralCkbConditionalDescriptor::parse(field(
+            self.raw,
+            4,
+            BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN,
+        ))
+    }
+
+    pub fn resolution(&self, index: usize) -> Result<ConditionalResolution<'a>> {
+        if index >= self.resolution_count() as usize {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        Ok(self.resolution_unchecked(index))
+    }
+
+    pub fn resolved_capacities(&self, input_since: u64) -> Result<[u64; 2]> {
+        let descriptor = self.descriptor()?;
+        let mut capacities = [
+            descriptor.settled_capacity(0),
+            descriptor.settled_capacity(1),
+        ];
+        for index in 0..descriptor.transfer_count() as usize {
+            let transfer = descriptor.transfer(index)?;
+            let resolution = self.resolution(index)?;
+            let recipient = match resolution.kind() {
+                CONDITIONAL_RESOLUTION_FULFILL => {
+                    let actual =
+                        conditional_payment_hash(transfer.hash_algorithm(), resolution.preimage())?;
+                    if actual.as_slice() != transfer.payment_hash() {
+                        return Err(ScriptError::ConditionalPreimageMismatch);
+                    }
+                    1usize.saturating_sub(transfer.payer_index() as usize)
+                }
+                CONDITIONAL_RESOLUTION_REFUND => {
+                    validate_absolute_block_since(input_since, transfer.refund_after_since())
+                        .map_err(|_| ScriptError::ConditionalRefundNotMature)?;
+                    transfer.payer_index() as usize
+                }
+                _ => return Err(ScriptError::ConditionalResolutionEncoding),
+            };
+            capacities[recipient] = capacities[recipient]
+                .checked_add(transfer.amount())
+                .ok_or(ScriptError::ConditionalValueMismatch)?;
+        }
+        if capacities[0]
+            .checked_add(capacities[1])
+            .ok_or(ScriptError::ConditionalValueMismatch)?
+            != descriptor.checked_total_capacity()?
+        {
+            return Err(ScriptError::ConditionalValueMismatch);
+        }
+        Ok(capacities)
+    }
+
+    fn resolution_unchecked(&self, index: usize) -> ConditionalResolution<'a> {
+        ConditionalResolution {
+            raw: field(
+                self.raw,
+                conditional_resolution_offset(index),
+                CONDITIONAL_RESOLUTION_LEN,
+            ),
+        }
+    }
+}
+
+pub fn conditional_payment_hash(algorithm: u8, preimage: &[u8]) -> Result<[u8; BYTE32_LEN]> {
+    if preimage.len() != BYTE32_LEN {
+        return Err(ScriptError::ConditionalResolutionEncoding);
+    }
+    match algorithm {
+        CONDITIONAL_HASH_CKB_BLAKE2B => Ok(blake2b256(&[preimage])),
+        CONDITIONAL_HASH_SHA256 => {
+            let digest = Sha256::digest(preimage);
+            let mut hash = [0u8; BYTE32_LEN];
+            hash.copy_from_slice(&digest);
+            Ok(hash)
+        }
+        _ => Err(ScriptError::ConditionalDescriptorEncoding),
+    }
+}
+
 pub fn settlement_descriptor_commitment(raw: &[u8]) -> [u8; 32] {
     blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN, raw])
 }
@@ -3769,6 +4614,29 @@ fn since_is_valid_relative_block(value: u64) -> bool {
         && (value & CKB_SINCE_METRIC_TYPE_FLAG_MASK == CKB_SINCE_LOCK_BY_BLOCK_NUMBER)
 }
 
+pub fn absolute_block_since(value: u64) -> Result<u64> {
+    if value & !CKB_SINCE_VALUE_MASK != 0 {
+        return Err(ScriptError::ConditionalRefundNotMature);
+    }
+    Ok(CKB_SINCE_LOCK_BY_BLOCK_NUMBER | value)
+}
+
+pub fn validate_absolute_block_since(input_since: u64, required_since: u64) -> Result<()> {
+    if !since_is_valid_absolute_block(input_since)
+        || !since_is_valid_absolute_block(required_since)
+        || (input_since & CKB_SINCE_VALUE_MASK) < (required_since & CKB_SINCE_VALUE_MASK)
+    {
+        return Err(ScriptError::ConditionalRefundNotMature);
+    }
+    Ok(())
+}
+
+fn since_is_valid_absolute_block(value: u64) -> bool {
+    (value & CKB_SINCE_LOCK_TYPE_FLAG == 0)
+        && (value & CKB_SINCE_REMAIN_FLAGS_BITS == 0)
+        && (value & CKB_SINCE_METRIC_TYPE_FLAG_MASK == CKB_SINCE_LOCK_BY_BLOCK_NUMBER)
+}
+
 pub fn vault_cell_commitment(
     lock_hash: &[u8],
     capacity: u64,
@@ -3947,6 +4815,45 @@ fn factory_merkle_sibling_offset(participant_count: u8, depth: usize) -> usize {
     factory_merkle_right_offset(participant_count, true) + FACTORY_RIGHT_LEN + depth * BYTE32_LEN
 }
 
+fn factory_multi_right_touched_offset(participant_count: u8) -> usize {
+    8 + participant_count as usize * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
+}
+
+fn factory_multi_right_capacity_offset(participant_count: u8) -> usize {
+    factory_multi_right_touched_offset(participant_count) + BYTE32_LEN
+}
+
+fn factory_multi_right_right_offset(
+    participant_count: u8,
+    right_count: u8,
+    after: bool,
+    index: usize,
+) -> usize {
+    let before_offset = factory_multi_right_capacity_offset(participant_count) + 2 + 2;
+    if after {
+        before_offset + right_count as usize * FACTORY_RIGHT_LEN + index * FACTORY_RIGHT_LEN
+    } else {
+        before_offset + index * FACTORY_RIGHT_LEN
+    }
+}
+
+fn factory_multi_right_proof_offset(
+    participant_count: u8,
+    right_count: u8,
+    after: bool,
+    index: usize,
+) -> usize {
+    let proofs_offset = factory_multi_right_right_offset(participant_count, right_count, true, 0)
+        + right_count as usize * FACTORY_RIGHT_LEN;
+    if after {
+        proofs_offset
+            + right_count as usize * FACTORY_COMPACT_PROOF_LEN
+            + index * FACTORY_COMPACT_PROOF_LEN
+    } else {
+        proofs_offset + index * FACTORY_COMPACT_PROOF_LEN
+    }
+}
+
 fn factory_reduced_exit_touched_offset(participant_count: u8) -> usize {
     8 + participant_count as usize * FACTORY_REDUCED_RIGHTS_PARTICIPANT_ENTRY_LEN
 }
@@ -4005,6 +4912,18 @@ fn descriptor_output_offset(index: usize) -> usize {
 
 fn ckb_xudt_descriptor_output_offset(index: usize) -> usize {
     4 + BYTE32_LEN + index * (BYTE32_LEN + 8 + 16)
+}
+
+fn conditional_descriptor_participant_offset(index: usize) -> usize {
+    4 + 2 * BYTE32_LEN + 1 + 7 + index * (BYTE32_LEN + 8)
+}
+
+fn conditional_descriptor_transfer_offset(index: usize) -> usize {
+    4 + 2 * BYTE32_LEN + 1 + 7 + 2 * (BYTE32_LEN + 8) + index * CONDITIONAL_TRANSFER_LEN
+}
+
+fn conditional_resolution_offset(index: usize) -> usize {
+    4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN + index * CONDITIONAL_RESOLUTION_LEN
 }
 
 fn splice_vault_asset_offset(index: usize) -> usize {
@@ -4066,6 +4985,29 @@ fn factory_key_bit(key: &[u8; 32], depth: usize) -> bool {
     let byte = key[depth / 8];
     let mask = 0x80u8 >> (depth % 8);
     byte & mask != 0
+}
+
+/// Does `candidate` fall inside the sibling subtree of `key`'s path at
+/// `depth`? That subtree covers exactly the keys sharing `key`'s first
+/// `depth` bits whose bit `depth` takes the sibling side.
+fn factory_key_in_sibling_subtree(
+    key: &[u8; BYTE32_LEN],
+    candidate: &[u8; BYTE32_LEN],
+    depth: usize,
+    sibling_bit: bool,
+) -> bool {
+    let full_bytes = depth / 8;
+    if candidate[..full_bytes] != key[..full_bytes] {
+        return false;
+    }
+    let remainder = depth % 8;
+    if remainder != 0 {
+        let mask = 0xffu8 << (8 - remainder);
+        if candidate[full_bytes] & mask != key[full_bytes] & mask {
+            return false;
+        }
+    }
+    factory_key_bit(candidate, depth) == sibling_bit
 }
 
 #[cfg(test)]
@@ -4402,6 +5344,286 @@ mod tests {
         );
 
         (old_raw, new_raw, witness_raw)
+    }
+
+    type TestTreeEntry = ([u8; BYTE32_LEN], [u8; BYTE32_LEN]);
+
+    fn test_empty_subtree_hash(height: usize) -> [u8; BYTE32_LEN] {
+        let mut current = blake2b256(&[FACTORY_RIGHT_EMPTY_DOMAIN]);
+        for step in 1..=height {
+            current =
+                factory_right_node_hash(FACTORY_SPARSE_MERKLE_DEPTH - step, &current, &current);
+        }
+        current
+    }
+
+    fn test_sparse_entries(rights: &[[u8; FACTORY_RIGHT_LEN]]) -> Vec<TestTreeEntry> {
+        let mut entries = rights
+            .iter()
+            .map(|raw| {
+                let right = FactoryRight::parse(raw).unwrap();
+                (factory_right_key(&right), factory_right_leaf_hash(&right))
+            })
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        entries
+    }
+
+    fn test_subtree_root(entries: &[TestTreeEntry], depth: usize) -> [u8; BYTE32_LEN] {
+        if entries.is_empty() {
+            return test_empty_subtree_hash(FACTORY_SPARSE_MERKLE_DEPTH - depth);
+        }
+        if depth == FACTORY_SPARSE_MERKLE_DEPTH {
+            return entries[0].1;
+        }
+        let split = entries.partition_point(|(key, _)| !factory_key_bit(key, depth));
+        let left = test_subtree_root(&entries[..split], depth + 1);
+        let right = test_subtree_root(&entries[split..], depth + 1);
+        factory_right_node_hash(depth, &left, &right)
+    }
+
+    fn test_compact_proof(
+        entries: &[TestTreeEntry],
+        target_key: &[u8; BYTE32_LEN],
+    ) -> Vec<(usize, [u8; BYTE32_LEN])> {
+        let mut siblings = Vec::new();
+        let mut branch = entries;
+        let mut depth = 0usize;
+        while depth < FACTORY_SPARSE_MERKLE_DEPTH {
+            let split = branch.partition_point(|(key, _)| !factory_key_bit(key, depth));
+            let (next, sibling) = if factory_key_bit(target_key, depth) {
+                (&branch[split..], &branch[..split])
+            } else {
+                (&branch[..split], &branch[split..])
+            };
+            if !sibling.is_empty() {
+                siblings.push((depth, test_subtree_root(sibling, depth + 1)));
+            }
+            branch = next;
+            depth += 1;
+        }
+        siblings.reverse();
+        siblings
+    }
+
+    fn test_manifest_root(tree: &[[u8; FACTORY_RIGHT_LEN]]) -> [u8; BYTE32_LEN] {
+        let mut rights = tree.iter().collect::<Vec<_>>();
+        rights.sort_by(|left, right| {
+            FactoryRight::parse(left.as_slice())
+                .unwrap()
+                .id_key()
+                .cmp(&FactoryRight::parse(right.as_slice()).unwrap().id_key())
+        });
+        let count = [rights.len() as u8];
+        let mut hasher = new_blake2b();
+        hasher.update(FACTORY_ACCESS_MANIFEST_ROOT_DOMAIN);
+        hasher.update(&count);
+        for raw in rights {
+            let right = FactoryRight::parse(raw).unwrap();
+            hasher.update(right.participant());
+            hasher.update(right.subchannel());
+            hasher.update(&[right.kind(), right.asset_present()]);
+            hasher.update(right.asset_type());
+        }
+        let mut out = [0u8; BYTE32_LEN];
+        hasher.finalize(&mut out);
+        out
+    }
+
+    fn multi_right_tree_before() -> Vec<[u8; FACTORY_RIGHT_LEN]> {
+        vec![
+            factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_BALANCE, 100),
+            factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+            factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_SPONSOR_BUDGET_CLAIM, 20),
+            factory_right_bytes(1, 11, FACTORY_RIGHT_KIND_BALANCE, 7),
+            factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_BALANCE, 100),
+            factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_RESERVE_CLAIM, 50),
+            factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_MEMBERSHIP, 1),
+            factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_EXIT_PATH, 1),
+        ]
+    }
+
+    fn multi_right_fixture(
+        after_balance: u128,
+        after_reserve: u128,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_LEN],
+        [u8; FACTORY_STATE_HEADER_LEN],
+        Vec<u8>,
+    ) {
+        multi_right_fixture_with_options(after_balance, after_reserve, None)
+    }
+
+    fn multi_right_fixture_with_options(
+        after_balance: u128,
+        after_reserve: u128,
+        foreign_bump: Option<u128>,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_LEN],
+        [u8; FACTORY_STATE_HEADER_LEN],
+        Vec<u8>,
+    ) {
+        multi_right_fixture_with_asset_options(after_balance, after_reserve, foreign_bump, None)
+    }
+
+    fn multi_right_fixture_with_asset_options(
+        after_balance: u128,
+        after_reserve: u128,
+        foreign_bump: Option<u128>,
+        changed_assets: Option<([u8; BYTE32_LEN], [u8; BYTE32_LEN])>,
+    ) -> (
+        [u8; FACTORY_STATE_HEADER_LEN],
+        [u8; FACTORY_STATE_HEADER_LEN],
+        Vec<u8>,
+    ) {
+        let key0 = signing_key(1);
+        let key1 = signing_key(2);
+        let touched = [1u8; BYTE32_LEN];
+        let mut participant_entries = [(touched, pubkey(&key0)), ([2u8; 32], pubkey(&key1))];
+        participant_entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let participants_commitment = factory_participants_commitment(
+            FACTORY_MIN_PARTICIPANTS,
+            &[
+                (
+                    participant_entries[0].0.as_slice(),
+                    participant_entries[0].1.as_slice(),
+                ),
+                (
+                    participant_entries[1].0.as_slice(),
+                    participant_entries[1].1.as_slice(),
+                ),
+            ],
+        );
+
+        let mut before_tree = multi_right_tree_before();
+        let (balance_asset, reserve_asset) = changed_assets
+            .map(|(balance, reserve)| (Some(balance), Some(reserve)))
+            .unwrap_or((None, None));
+        before_tree[0] =
+            factory_right_bytes_with_asset(1, 10, FACTORY_RIGHT_KIND_BALANCE, 100, balance_asset);
+        before_tree[1] = factory_right_bytes_with_asset(
+            1,
+            10,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            50,
+            reserve_asset,
+        );
+        let mut after_tree = before_tree.clone();
+        after_tree[0] = factory_right_bytes_with_asset(
+            1,
+            10,
+            FACTORY_RIGHT_KIND_BALANCE,
+            after_balance,
+            balance_asset,
+        );
+        after_tree[1] = factory_right_bytes_with_asset(
+            1,
+            10,
+            FACTORY_RIGHT_KIND_RESERVE_CLAIM,
+            after_reserve,
+            reserve_asset,
+        );
+        if let Some(bump) = foreign_bump {
+            // Participant 2's subchannel-10 balance: an unlisted right the
+            // touched participant must not be able to change.
+            after_tree[4] = factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_BALANCE, 100 + bump);
+        }
+        let before_entries = test_sparse_entries(&before_tree);
+        let after_entries = test_sparse_entries(&after_tree);
+        let before_root = test_subtree_root(&before_entries, 0);
+        let after_root = test_subtree_root(&after_entries, 0);
+        let manifest_root = test_manifest_root(&before_tree);
+
+        let mut witness_rights = [
+            (
+                factory_right_key(&FactoryRight::parse(&before_tree[0]).unwrap()),
+                before_tree[0],
+                after_tree[0],
+            ),
+            (
+                factory_right_key(&FactoryRight::parse(&before_tree[1]).unwrap()),
+                before_tree[1],
+                after_tree[1],
+            ),
+        ];
+        witness_rights.sort_by(|left, right| {
+            FactoryRight::parse(&left.1)
+                .unwrap()
+                .id_key()
+                .cmp(&FactoryRight::parse(&right.1).unwrap().id_key())
+        });
+
+        let right_count = witness_rights.len() as u8;
+        let mut raw = vec![0u8; factory_multi_right_update_witness_len(2, right_count)];
+        put_u16(&mut raw, 0, FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION);
+        raw[2] = FACTORY_MIN_PARTICIPANTS;
+        raw[3] = FACTORY_MIN_PARTICIPANTS;
+        raw[4] = FACTORY_REDUCED_RIGHTS_AUTHORISED_COUNT;
+        raw[5] = right_count;
+        for (index, (participant, pubkey)) in participant_entries.iter().enumerate() {
+            let offset = factory_reduced_participant_offset(index);
+            raw[offset..offset + BYTE32_LEN].copy_from_slice(participant);
+            raw[offset + BYTE32_LEN..offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN]
+                .copy_from_slice(pubkey);
+            raw[offset + BYTE32_LEN + COMPRESSED_SECP256K1_PUBKEY_LEN] =
+                u8::from(*participant == touched);
+        }
+        raw[factory_multi_right_touched_offset(2)
+            ..factory_multi_right_touched_offset(2) + BYTE32_LEN]
+            .copy_from_slice(&touched);
+        put_u16(
+            &mut raw,
+            factory_multi_right_capacity_offset(2),
+            FACTORY_COMPACT_PROOF_MAX_SIBLINGS as u16,
+        );
+        for (index, (key, before, after)) in witness_rights.iter().enumerate() {
+            let before_offset = factory_multi_right_right_offset(2, right_count, false, index);
+            raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(before);
+            let after_offset = factory_multi_right_right_offset(2, right_count, true, index);
+            raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(after);
+            for (after_side, tree) in [(false, &before_entries), (true, &after_entries)] {
+                let proof = test_compact_proof(tree, key);
+                let offset = factory_multi_right_proof_offset(2, right_count, after_side, index);
+                put_u16(&mut raw, offset, proof.len() as u16);
+                for (pair, (depth, hash)) in proof.iter().enumerate() {
+                    let pair_offset = offset + 2 + pair * FACTORY_COMPACT_PROOF_PAIR_LEN;
+                    put_u16(&mut raw, pair_offset, *depth as u16);
+                    raw[pair_offset + 2..pair_offset + 2 + BYTE32_LEN].copy_from_slice(hash);
+                }
+            }
+        }
+
+        let mut old_raw = factory_header_bytes(1);
+        old_raw[76..108].copy_from_slice(&before_root);
+        old_raw[108..140].copy_from_slice(&participants_commitment);
+        old_raw[140..172].copy_from_slice(&manifest_root);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+
+        let witness = FactoryMultiRightUpdateWitness::parse(&raw).unwrap();
+        let mut new_raw = factory_header_bytes(2);
+        new_raw[76..108].copy_from_slice(&after_root);
+        new_raw[108..140].copy_from_slice(&participants_commitment);
+        new_raw[140..172].copy_from_slice(&manifest_root);
+        let preliminary_new = FactoryStateHeader::parse(&new_raw).unwrap();
+        let digest = witness
+            .non_interference_digest(&old_header, &preliminary_new)
+            .unwrap();
+        new_raw[172..204].copy_from_slice(&digest);
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let authorisation = signature(&key0, &new_header.signing_digest());
+        for index in 0..FACTORY_MIN_PARTICIPANTS as usize {
+            if field(&raw, factory_reduced_participant_offset(index), BYTE32_LEN)
+                == touched.as_slice()
+            {
+                let offset = factory_reduced_participant_offset(index)
+                    + BYTE32_LEN
+                    + COMPRESSED_SECP256K1_PUBKEY_LEN
+                    + 1;
+                raw[offset..offset + ECDSA_SIGNATURE_LEN].copy_from_slice(&authorisation);
+            }
+        }
+
+        (old_raw, new_raw, raw)
     }
 
     fn reduced_rights_headers_and_witness(
@@ -7146,6 +8368,325 @@ mod tests {
     }
 
     #[test]
+    fn multi_right_update_round_trips_and_proofs_are_compact() {
+        let (_, _, witness_raw) = multi_right_fixture(60, 80);
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            read_u16(&witness_raw, 0),
+            FACTORY_MULTI_RIGHT_UPDATE_WITNESS_VERSION
+        );
+        assert_eq!(witness.participant_count(), 2);
+        assert_eq!(witness.right_count(), 2);
+        assert_eq!(witness.touched_participant(), &[1u8; 32]);
+        for index in 0..2 {
+            assert_eq!(
+                witness.right_before(index).unwrap().participant(),
+                &[1u8; 32]
+            );
+            assert!(
+                witness
+                    .right_before(index)
+                    .unwrap()
+                    .same_id(&witness.right_after(index).unwrap())
+            );
+        }
+        let before_pair_count = read_u16(
+            &witness_raw,
+            factory_multi_right_proof_offset(2, 2, false, 0),
+        );
+        assert!(before_pair_count >= 2);
+        assert!(
+            (before_pair_count as usize) < FACTORY_SPARSE_MERKLE_DEPTH,
+            "compact proof must omit empty siblings"
+        );
+    }
+
+    #[test]
+    fn verifies_factory_multi_right_update_transition() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture(60, 80);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap();
+    }
+
+    #[test]
+    fn verifies_factory_multi_right_update_rebalance() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture(40, 110);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap();
+    }
+
+    #[test]
+    fn rejects_multi_right_update_total_increase() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture(120, 80);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_cross_asset_rebalance() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture_with_asset_options(
+            0,
+            150,
+            None,
+            Some(([41u8; BYTE32_LEN], [42u8; BYTE32_LEN])),
+        );
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_without_change() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture(100, 50);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_foreign_participant_right() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        let foreign = factory_right_bytes(2, 10, FACTORY_RIGHT_KIND_BALANCE, 100);
+        let before_offset = factory_multi_right_right_offset(2, 2, false, 1);
+        witness_raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&foreign);
+        let after_offset = factory_multi_right_right_offset(2, 2, true, 1);
+        witness_raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&foreign);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_non_value_kind() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        let membership = factory_right_bytes(1, 10, FACTORY_RIGHT_KIND_MEMBERSHIP, 1);
+        let before_offset = factory_multi_right_right_offset(2, 2, false, 1);
+        witness_raw[before_offset..before_offset + FACTORY_RIGHT_LEN].copy_from_slice(&membership);
+        let after_offset = factory_multi_right_right_offset(2, 2, true, 1);
+        witness_raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&membership);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_identity_swap() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        let other = factory_right_bytes(1, 11, FACTORY_RIGHT_KIND_BALANCE, 7);
+        let after_offset = factory_multi_right_right_offset(2, 2, true, 1);
+        witness_raw[after_offset..after_offset + FACTORY_RIGHT_LEN].copy_from_slice(&other);
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_unsorted_rights() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        for after_side in [false, true] {
+            let first_right = factory_multi_right_right_offset(2, 2, after_side, 0);
+            let second_right = factory_multi_right_right_offset(2, 2, after_side, 1);
+            for byte in 0..FACTORY_RIGHT_LEN {
+                witness_raw.swap(first_right + byte, second_right + byte);
+            }
+            let first_proof = factory_multi_right_proof_offset(2, 2, after_side, 0);
+            let second_proof = factory_multi_right_proof_offset(2, 2, after_side, 1);
+            for byte in 0..FACTORY_COMPACT_PROOF_LEN {
+                witness_raw.swap(first_proof + byte, second_proof + byte);
+            }
+        }
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofEncoding
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_sibling_tamper() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        let proof_offset = factory_multi_right_proof_offset(2, 2, false, 0);
+        witness_raw[proof_offset + 2 + 2] ^= 1;
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_bad_signature() {
+        let (old_raw, new_raw, mut witness_raw) = multi_right_fixture(60, 80);
+        let signature_offset = factory_reduced_participant_offset(0)
+            + BYTE32_LEN
+            + COMPRESSED_SECP256K1_PUBKEY_LEN
+            + 1;
+        witness_raw[signature_offset] ^= 1;
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::InvalidParticipantSignature
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_manifest_change() {
+        let (old_raw, mut new_raw, witness_raw) = multi_right_fixture(60, 80);
+        new_raw[140] ^= 1;
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_unlisted_change() {
+        let (old_raw, new_raw, witness_raw) = multi_right_fixture_with_options(60, 80, Some(400));
+        let old_header = FactoryStateHeader::parse(&old_raw).unwrap();
+        let new_header = FactoryStateHeader::parse(&new_raw).unwrap();
+        let witness = FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap();
+        for index in 0..witness.right_count() as usize {
+            assert_eq!(
+                witness.proof_root(false, index).unwrap(),
+                old_header.state_root(),
+                "per-side inclusion must still hold for the tampered fixture"
+            );
+            assert_eq!(
+                witness.proof_root(true, index).unwrap(),
+                new_header.state_root(),
+                "per-side inclusion must still hold for the tampered fixture"
+            );
+        }
+
+        assert_eq!(
+            verify_factory_multi_right_update(&old_header, &new_header, &witness).unwrap_err(),
+            ScriptError::FactoryReducedProofMismatch
+        );
+    }
+
+    #[test]
+    fn sibling_subtree_membership_matches_naive_prefix_check() {
+        let keys = [
+            blake2b256(&[&[0u8]]),
+            blake2b256(&[&[1u8]]),
+            blake2b256(&[&[2u8]]),
+            [0u8; BYTE32_LEN],
+            [0xff; BYTE32_LEN],
+        ];
+        for key in keys {
+            for candidate in keys {
+                for depth in 0..FACTORY_SPARSE_MERKLE_DEPTH {
+                    for sibling_bit in [false, true] {
+                        let naive = (0..depth).all(|probe| {
+                            factory_key_bit(&candidate, probe) == factory_key_bit(&key, probe)
+                        }) && factory_key_bit(&candidate, depth) == sibling_bit;
+                        assert_eq!(
+                            factory_key_in_sibling_subtree(&key, &candidate, depth, sibling_bit),
+                            naive,
+                            "key {key:?} candidate {candidate:?} depth {depth} bit {sibling_bit}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_multi_right_update_wrong_capacity() {
+        let (_, _, mut witness_raw) = multi_right_fixture(60, 80);
+        put_u16(
+            &mut witness_raw,
+            factory_multi_right_capacity_offset(2),
+            FACTORY_COMPACT_PROOF_MAX_SIBLINGS as u16 + 1,
+        );
+
+        assert_eq!(
+            FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap_err(),
+            ScriptError::FactoryReducedProofEncoding
+        );
+    }
+
+    #[test]
+    fn rejects_multi_right_update_ascending_pairs() {
+        let (_, _, mut witness_raw) = multi_right_fixture(60, 80);
+        let proof_offset = factory_multi_right_proof_offset(2, 2, false, 0);
+        let first_pair = proof_offset + 2;
+        let second_pair = proof_offset + 2 + FACTORY_COMPACT_PROOF_PAIR_LEN;
+        for byte in 0..FACTORY_COMPACT_PROOF_PAIR_LEN {
+            witness_raw.swap(first_pair + byte, second_pair + byte);
+        }
+
+        assert_eq!(
+            FactoryMultiRightUpdateWitness::parse(&witness_raw).unwrap_err(),
+            ScriptError::FactoryReducedProofEncoding
+        );
+    }
+
+    #[test]
+    fn multi_right_witness_envelope_admits_kind_eight() {
+        let (_, _, body) = multi_right_fixture(60, 80);
+        assert!(witness_envelope_body_len_allowed(
+            WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE,
+            body.len()
+        ));
+        assert!(!witness_envelope_body_len_allowed(
+            WITNESS_ENVELOPE_KIND_FACTORY_MERKLE_UPDATE,
+            body.len()
+        ));
+    }
+
+    #[test]
     fn two_participant_reduced_factory_exit_vector_round_trips() {
         let (_, _, witness_raw) = reduced_exit_headers_and_witness(20, 30, false, true);
         let witness = FactoryReducedExitWitness::parse(&witness_raw).unwrap();
@@ -7647,5 +9188,116 @@ mod tests {
         assert_eq!(witness.exit_digest(), exit_digest);
         verify_factory_state_signatures(&factory_header, &witness.factory_signature().unwrap())
             .unwrap();
+    }
+
+    fn conditional_descriptor_bytes() -> [u8; BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN] {
+        let mut raw = [0u8; BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN];
+        put_u16(&mut raw, 0, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION);
+        raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT;
+        raw[3] = CONDITIONAL_TRANSFER_MAX_COUNT;
+        raw[4..36].fill(3);
+        raw[36..68].fill(4);
+        raw[68] = 2;
+        let participant_0 = conditional_descriptor_participant_offset(0);
+        raw[participant_0..participant_0 + BYTE32_LEN].fill(1);
+        put_u64(&mut raw, participant_0 + BYTE32_LEN, 100);
+        let participant_1 = conditional_descriptor_participant_offset(1);
+        raw[participant_1..participant_1 + BYTE32_LEN].fill(2);
+        put_u64(&mut raw, participant_1 + BYTE32_LEN, 200);
+
+        let preimages = [[7u8; BYTE32_LEN], [8u8; BYTE32_LEN]];
+        let algorithms = [CONDITIONAL_HASH_SHA256, CONDITIONAL_HASH_CKB_BLAKE2B];
+        let amounts = [25, 40];
+        let refund_blocks = [500, 600];
+        for index in 0..2 {
+            let offset = conditional_descriptor_transfer_offset(index);
+            raw[offset..offset + BYTE32_LEN].fill(5 + index as u8);
+            raw[offset + BYTE32_LEN] = index as u8;
+            raw[offset + BYTE32_LEN + 1] = algorithms[index];
+            let payment_hash =
+                conditional_payment_hash(algorithms[index], &preimages[index]).unwrap();
+            raw[offset + BYTE32_LEN + 4..offset + 2 * BYTE32_LEN + 4]
+                .copy_from_slice(&payment_hash);
+            put_u64(&mut raw, offset + 2 * BYTE32_LEN + 4, amounts[index]);
+            put_u64(
+                &mut raw,
+                offset + 2 * BYTE32_LEN + 12,
+                absolute_block_since(refund_blocks[index]).unwrap(),
+            );
+        }
+        raw
+    }
+
+    #[test]
+    fn parses_and_resolves_conditional_batch() {
+        let descriptor_raw = conditional_descriptor_bytes();
+        let descriptor = BilateralCkbConditionalDescriptor::parse(&descriptor_raw).unwrap();
+        assert_eq!(descriptor.transfer_count(), 2);
+        assert_eq!(descriptor.checked_total_capacity().unwrap(), 365);
+
+        let mut witness_raw = [0u8; CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN];
+        put_u16(
+            &mut witness_raw,
+            0,
+            CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION,
+        );
+        witness_raw[2] = 2;
+        witness_raw[4..4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN]
+            .copy_from_slice(&descriptor_raw);
+        let first = conditional_resolution_offset(0);
+        witness_raw[first] = CONDITIONAL_RESOLUTION_FULFILL;
+        witness_raw[first + 1..first + 1 + BYTE32_LEN].fill(7);
+        let second = conditional_resolution_offset(1);
+        witness_raw[second] = CONDITIONAL_RESOLUTION_REFUND;
+
+        let witness = ConditionalBatchResolutionWitness::parse(&witness_raw).unwrap();
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(600).unwrap())
+                .unwrap(),
+            [100, 265]
+        );
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(599).unwrap())
+                .unwrap_err(),
+            ScriptError::ConditionalRefundNotMature
+        );
+    }
+
+    #[test]
+    fn conditional_batch_rejects_wrong_preimage_and_duplicate_hash() {
+        let descriptor_raw = conditional_descriptor_bytes();
+        let mut witness_raw = [0u8; CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN];
+        put_u16(
+            &mut witness_raw,
+            0,
+            CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION,
+        );
+        witness_raw[2] = 2;
+        witness_raw[4..4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN]
+            .copy_from_slice(&descriptor_raw);
+        let first = conditional_resolution_offset(0);
+        witness_raw[first] = CONDITIONAL_RESOLUTION_FULFILL;
+        witness_raw[first + 1..first + 1 + BYTE32_LEN].fill(9);
+        let second = conditional_resolution_offset(1);
+        witness_raw[second] = CONDITIONAL_RESOLUTION_REFUND;
+        let witness = ConditionalBatchResolutionWitness::parse(&witness_raw).unwrap();
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(600).unwrap())
+                .unwrap_err(),
+            ScriptError::ConditionalPreimageMismatch
+        );
+
+        let mut duplicate = descriptor_raw;
+        let first_hash = conditional_descriptor_transfer_offset(0) + BYTE32_LEN + 4;
+        let second_hash = conditional_descriptor_transfer_offset(1) + BYTE32_LEN + 4;
+        let hash = duplicate[first_hash..first_hash + BYTE32_LEN].to_vec();
+        duplicate[second_hash..second_hash + BYTE32_LEN].copy_from_slice(&hash);
+        assert_eq!(
+            BilateralCkbConditionalDescriptor::parse(&duplicate).unwrap_err(),
+            ScriptError::ConditionalDescriptorEncoding
+        );
     }
 }

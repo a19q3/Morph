@@ -13,6 +13,9 @@ body, and digest for factory flows:
   the expected state type script, leaving transition rules to the type script.
 - `morph-vault-lock`: owns vault settlement, current-state authorisation, and
   descriptor-bound settlement output checks.
+- `morph-batch-lock`: resolves a bounded conditional CKB batch to exactly two
+  aggregate participant outputs using preimages or mature absolute-block
+  refunds.
 - `morph-sponsor-lock`: owns bounded sponsor budget spending and requires a
   matching settling StateHeader output.
 - `morph-factory-type`: owns conservative FactoryStateCell creation,

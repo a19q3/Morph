@@ -1,5 +1,121 @@
 # Changelog
 
+## v3.0.0 — 2026-08-25
+
+Morph 3.0 closes the conditional-settlement gap exposed by the Counter-Strike
+comparison. It adds a bounded CKB-native conditional batch primitive instead
+of treating a game-server result or an invoice status as enforceable channel
+state.
+
+### Consensus and wire boundary
+
+- Added bilateral descriptor version 3: two participants, zero to eight sorted
+  conditional transfers, SHA-256 or CKB-personalised Blake2b payment hashes,
+  and canonical absolute-block refund heights.
+- Added `morph-batch-lock`. A dispute materialises the whole Vault into one
+  code-hash-pinned Batch Cell; resolution requires every preimage/refund and
+  exactly two plain participant outputs with exact conservation.
+- Extended `morph-vault-lock` with Vault args v2 and fail-closed descriptor-v3
+  dispatch. Conditional xUDT inputs remain rejected.
+- Added distinct conditional parser/lock/value/preimage/timeout error codes and
+  fixed-size host/script parity tests.
+
+### Host, recovery, and application surface
+
+- Added `morph-core::conditional` plus the bilateral backend lifecycle for
+  arming batches, recording idempotent preimages, cooperative consolidation,
+  deterministic force-close construction, and settlement confirmation.
+- Added `morph.conditional_batch_package`, CLI fixture/validator, and Morph Hub
+  durable import. Hub packages must match the current channel ID, funding
+  context, and state number and survive restart.
+- Added TypeScript conditional package types and an authenticated
+  `MorphHubClient.importConditionalBatch` entry point for game/service adapters.
+
+### Release profile
+
+- The controlled-devnet bundle is now `morph-v3-conditional-batch.tar.gz` and
+  contains eight reviewed ELFs. New bilateral Vaults pin the Batch Lock identity
+  at creation.
+- The machine-checked envelope caps batches at eight CKB transfers and a 2,016
+  block refund horizon. Mainnet, real assets, and conditional xUDT remain out of
+  scope.
+- See `docs/v3.0-plan.md` for the architecture, invariants, and Counter-Strike
+  integration guidance.
+
+## v2.0.0 — 2026-08-16
+
+Morph Channel 2.0 closes the deferred factory reduced-proof protocol work and
+adds the operator value-limit policy. The plan of record is
+`docs/v2.0-plan.md`.
+
+### Factory protocol surface
+
+- Added `WitnessEnvelope` kind 8
+  (`WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE`, body version 1): one
+  touched participant atomically updates 1-4 of their own value rights
+  (`Balance`, `ReserveClaim`, `SponsorBudgetClaim`) in a single factory
+  update, each right localised by an independent sparse-Merkle proof against
+  both the old and new state roots. The touched participant's claim in each
+  asset domain can never increase, so one asset cannot be burned to mint
+  another; the access manifest cannot move, and the non-interference digest
+  binds every before/after right body.
+- Added compact variable-depth sparse-Merkle proofs: only non-empty sibling
+  hashes are carried (at most 64 `(depth, hash)` pairs per proof, strictly
+  descending depth); the script completes the omitted positions with the
+  canonical `CKB_MORPH_FACTORY_RIGHT_EMPTY` subtree hash chain, so proofs that
+  omit a real sibling fail root reconstruction. This delivers the deferred
+  "variable-depth proof profile" work item with strictly smaller witnesses.
+- `morph-factory-type` dispatches kind 8 through the same state-preserving
+  update arm as kinds 1-3 (monotonic update number, unchanged context, bound
+  vault OutPoint, preserved carrier capacity).
+- Security fix (2026-08-17, review finding): kind-8 verification now enforces
+  cross-side localization. The per-side compact proofs alone only constrained
+  the listed rights; the touched participant could commit a new state root
+  that changed an unlisted right (for example another participant's balance).
+  The verifier now walks each before/after proof pair in lockstep and rejects
+  any differing sibling subtree that no other listed right can excuse, on
+  both the host and the script. No wire-format change; honest witnesses are
+  unaffected.
+- Security fix (2026-08-17, review finding): kind-8 quantity conservation is
+  now enforced independently for CKB and every xUDT type. Host, CLI, and
+  script ordering also use the same canonical raw right identity order.
+
+### Host tooling
+
+- `morph-core`: `FactoryMultiRightMerkleUpdate` model, compact proof
+  generation/verification (`factory_right_sparse_proof_compact`,
+  `verify_factory_right_compact_proof`), host validation mirroring the script
+  predicate, and the shared `CKB_MORPH_FACTORY_MULTI_RIGHT_UPDATE` /
+  `CKB_MORPH_FACTORY_RIGHT_EMPTY` domains (parity enforced by
+  `hash_parity.rs`, including host/script proof-root equivalence).
+- `morph-cli`: `print-factory-multi-right-update-fixture`,
+  `validate-factory-multi-right-update-package`, and a real-tree fixture
+  (compact proofs built from a 96-right factory) wired into
+  `make fixture-checks`.
+
+### Operator value-limit policy
+
+- `morph-core::policy`: fail-closed `ValueLimitPolicy` (CKB capacity cap plus
+  per-asset xUDT caps; unlisted assets rejected) with a deterministic digest.
+- `morph-cli`: `print-value-limit-policy-fixture`,
+  `validate-value-limit-policy`, and `value-limit-check` (applies the policy
+  to fully validated bilateral/factory/reduced-splice packages or explicit
+  amounts; unknown, incomplete, or invalid packages and arithmetic overflow
+  fail closed).
+- Runbook: `docs/runbooks/value-limits.md`.
+
+### Release boundary
+
+Kind 8 is additive: kinds 1-7, all fixed lengths, and existing fixtures are
+unchanged. The four contract ELFs that statically link `morph-script-common`
+(`morph-state-type`, `morph-factory-type`, `morph-factory-vault-lock`,
+`morph-vault-lock`) were rebuilt for 2.0 and the reviewed manifest
+`release/factory-preproduction/contracts.json` was regenerated; a fresh devnet
+deployment is required for the 2.0 line. Known follow-up: the devnet
+save/publication command for kind 8 state-cell packages (mirroring
+`save-factory-merkle-update-package`) is not yet implemented; host
+validation, fixtures, and on-chain CKB-VM evidence exist today.
+
 ## Unreleased
 
 ### Security and reliability follow-up

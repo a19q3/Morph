@@ -220,6 +220,28 @@ pub struct FactorySingleRightMerkleUpdate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryCompactMerkleSibling {
+    pub depth: u16,
+    pub hash: Bytes32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryCompactRightProof {
+    pub right: FactoryRight,
+    pub siblings: Vec<FactoryCompactMerkleSibling>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactoryMultiRightMerkleUpdate {
+    pub before_root: Bytes32,
+    pub after_root: Bytes32,
+    pub touched_participants: BTreeSet<Bytes32>,
+    pub authorised_participants: BTreeSet<Bytes32>,
+    pub before: Vec<FactoryCompactRightProof>,
+    pub after: Vec<FactoryCompactRightProof>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FactorySpliceKind {
     In,
     Out,

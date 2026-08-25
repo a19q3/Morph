@@ -1,9 +1,9 @@
 # Factory Pre-production Envelope
 
-Effective: 2026-08-15. Mandatory review by: 2026-09-14.
+Effective: 2026-08-25. Mandatory review by: 2026-09-24.
 
 This envelope authorises only a controlled, no-real-assets CKB devnet pilot of
-the `factory-dynamic-n` profile. It does not authorise mainnet,
+the `morph-v3-conditional-batch` profile. It does not authorise mainnet,
 public-value testnet trials, externally issued xUDTs, production traffic, or a
 claim that Morph is production-ready.
 
@@ -25,6 +25,9 @@ effective/review window.
 | Materialised child channels per factory | 10 |
 | Capacity per Factory | 1,000,000,000,000 shannons (10,000 CKB) |
 | Capacity per child/bilateral channel | 100,000,000,000 shannons (1,000 CKB) |
+| Conditional transfers per batch | 8, CKB-only |
+| Conditional hash algorithms | CKB Blake2b and SHA-256 |
+| Maximum conditional refund horizon | 2,016 blocks |
 | Total pilot capacity | 4,000,000,000,000 shannons (40,000 CKB) |
 | Capacity per SponsorCell | 50,000,000,000 shannons (500 CKB) |
 | Fee per sponsored transaction | 200,000,000 shannons (2 CKB) |
@@ -48,9 +51,13 @@ commit the complete membership and admit exactly one touched participant's
 signature. Resize witness bodies use version 2: splice-out headers sign the
 participant withdrawal lock and the Vault scripts enforce the exact CKB/xUDT
 payout output. The profile also binds every live bilateral and Factory Vault by
-content and exact OutPoint. It intentionally excludes membership outside that
-bound, multi-right reduced updates, variable-depth proofs, arbitrary descriptor
-runtimes, and concurrent unconfirmed splice chains.
+content and exact OutPoint. Descriptor version 3 additionally admits up to
+eight CKB-only conditional transfers. Vault finalisation materialises the whole
+Vault into the code-hash-pinned Batch Cell; each leaf is fulfilled by an exact
+preimage or refunded only after its absolute block timeout. It intentionally
+excludes membership outside the Factory bound, more than four multi-right
+updates, conditional xUDT, arbitrary descriptor runtimes, and concurrent
+unconfirmed splice chains.
 
 Those exclusions are protocol boundaries, not bugs to bypass. Unknown shapes
 must continue to fail closed. Raising the participant bound or changing proof
@@ -77,7 +84,7 @@ Factory. See
 
 ## Approval and Expiry
 
-The envelope expires unless a release owner reviews it by 2026-09-14. Any
+The envelope expires unless a release owner reviews it by 2026-09-24. Any
 increase requires fresh acceptance evidence and a reviewed change to both the
 JSON policy and this document. CI validation is necessary but is not release
 owner approval for higher limits.

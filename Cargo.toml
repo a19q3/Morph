@@ -11,12 +11,13 @@ members = [
   "contracts/morph-factory-type",
   "contracts/morph-factory-vault-lock",
   "contracts/morph-vault-lock",
+  "contracts/morph-batch-lock",
   "contracts/morph-sponsor-lock",
   "contracts/morph-devnet-xudt",
 ]
 
 [workspace.package]
-version = "1.11.0"
+version = "3.0.0"
 edition = "2024"
 license = "MIT"
 authors = ["Arthur Zhang"]
@@ -48,7 +49,7 @@ ckb-hash = { version = "1.1.0", default-features = false, features = ["ckb-contr
 k256 = { version = "0.13.4", default-features = false, features = ["ecdsa", "arithmetic"] }
 proptest = "1"
 rand = "0.8"
-sha2 = "0.10"
+sha2 = { version = "0.10", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
 
 [profile.release]

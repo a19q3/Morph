@@ -96,12 +96,13 @@ const DEFAULT_SECP_TYPE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 pub const DEFAULT_SPONSOR_MIN_STATE_NUMBER: u64 = 1;
 pub const DEFAULT_SPONSOR_MAX_STATE_NUMBER: u64 = 1 << 20;
-const CONTRACTS: [(&str, &str); 7] = [
+const CONTRACTS: [(&str, &str); 8] = [
     ("morph-state-lock", "morph-state-lock"),
     ("morph-state-type", "morph-state-type"),
     ("morph-factory-type", "morph-factory-type"),
     ("morph-factory-vault-lock", "morph-factory-vault-lock"),
     ("morph-vault-lock", "morph-vault-lock"),
+    ("morph-batch-lock", "morph-batch-lock"),
     ("morph-sponsor-lock", "morph-sponsor-lock"),
     ("morph-devnet-xudt", "morph-devnet-xudt"),
 ];
@@ -1801,6 +1802,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
     let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let state_contract = contract_by_name(&contracts, "morph-state-type")?;
     let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let batch_contract = contract_by_name(&contracts, "morph-batch-lock")?;
     let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
 
     let channel_input = CellInput::new(funding_cell.out_point.clone(), 0);
@@ -1819,7 +1821,14 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
 
     let vault_lock = data1_script(
         vault_contract.data_hash.clone(),
-        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+        vault_lock_args(
+            &funding_anchor,
+            finalise_since,
+            &state_type,
+            &state_lock,
+            &batch_contract.data_hash,
+            ScriptHashType::Data1,
+        ),
     );
 
     let change_lock_hash = owner_lock.calc_script_hash();
@@ -5789,6 +5798,7 @@ pub fn factory_exit_channel(
     let factory_contract = contract_by_name(&contracts, "morph-factory-type")?;
     let factory_vault_contract = contract_by_name(&contracts, "morph-factory-vault-lock")?;
     let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let batch_contract = contract_by_name(&contracts, "morph-batch-lock")?;
     let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
     ensure!(
         byte32_to_h256(factory_type.code_hash()) == factory_contract.data_hash,
@@ -5892,7 +5902,14 @@ pub fn factory_exit_channel(
     let state_lock_hash: [u8; BYTE32_LEN] = state_lock.calc_script_hash().unpack();
     let vault_lock = data1_script(
         vault_contract.data_hash.clone(),
-        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+        vault_lock_args(
+            &funding_anchor,
+            finalise_since,
+            &state_type,
+            &state_lock,
+            &batch_contract.data_hash,
+            ScriptHashType::Data1,
+        ),
     );
     let vault_lock_hash: [u8; BYTE32_LEN] = vault_lock.calc_script_hash().unpack();
 
@@ -6477,6 +6494,7 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
     let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
     let state_contract = contract_by_name(&contracts, "morph-state-type")?;
     let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let batch_contract = contract_by_name(&contracts, "morph-batch-lock")?;
     let sponsor_contract = contract_by_name(&contracts, "morph-sponsor-lock")?;
     let xudt_contract = contract_by_name(&contracts, "morph-devnet-xudt")?;
 
@@ -6496,7 +6514,14 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
 
     let vault_lock = data1_script(
         vault_contract.data_hash.clone(),
-        vault_lock_args(&funding_anchor, finalise_since, &state_type, &state_lock),
+        vault_lock_args(
+            &funding_anchor,
+            finalise_since,
+            &state_type,
+            &state_lock,
+            &batch_contract.data_hash,
+            ScriptHashType::Data1,
+        ),
     );
 
     let owner_lock_hash = owner_lock.calc_script_hash();
@@ -13731,6 +13756,8 @@ fn vault_lock_args(
     finalise_since: u64,
     state_type: &Script,
     state_lock: &Script,
+    batch_lock_code_hash: &H256,
+    batch_lock_hash_type: ScriptHashType,
 ) -> Bytes {
     let mut args = funding_anchor.to_vec();
     args.extend_from_slice(&finalise_since.to_le_bytes());
@@ -13738,6 +13765,8 @@ fn vault_lock_args(
     args.push(state_type.hash_type().as_slice()[0]);
     args.extend_from_slice(state_lock.code_hash().as_slice());
     args.push(state_lock.hash_type().as_slice()[0]);
+    args.extend_from_slice(batch_lock_code_hash.as_bytes());
+    args.push(batch_lock_hash_type as u8);
     Bytes::from(args)
 }
 

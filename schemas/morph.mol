@@ -37,6 +37,8 @@
 // - WitnessEnvelope header: 50 bytes
 // - BilateralCkbSettlementDescriptor: 84 bytes
 // - BilateralCkbXudtSettlementDescriptor: 148 bytes
+// - BilateralCkbConditionalDescriptor: 828 bytes
+// - ConditionalBatchResolutionWitness: 1096 bytes
 // - SponsorPolicy: 136 bytes
 
 array Byte32 [byte; 32];
@@ -44,6 +46,7 @@ array WitnessEnvelopeMagic [byte; 8];
 array FactoryMerkleProofSiblings [Byte32; 256];
 array Secp256k1CompressedPubkey [byte; 33];
 array EcdsaSignature [byte; 64];
+array Reserved7 [byte; 7];
 
 // WitnessEnvelope is a fixed 50-byte prefix followed by a bounded variable
 // body. body_commitment is blake2b256(domain, kind_le, body). The current
@@ -338,6 +341,53 @@ struct BilateralCkbXudtSettlementDescriptor {
     xudt_type_hash: Byte32,
     output_0: BilateralCkbXudtSettlementOutput,
     output_1: BilateralCkbXudtSettlementOutput,
+}
+
+// Documentation-only mirror of descriptor version 3. The fixed-layout Rust
+// parsers remain authoritative until this draft is promoted through moleculec.
+struct ConditionalTransfer {
+    transfer_id: Byte32,
+    payer_index: byte,
+    hash_algorithm: byte,
+    reserved: uint16,
+    payment_hash: Byte32,
+    amount: uint64,
+    refund_after_since: uint64,
+}
+
+array ConditionalTransfers [ConditionalTransfer; 8];
+
+struct BilateralCkbConditionalParticipant {
+    lock_hash: Byte32,
+    settled_capacity: uint64,
+}
+
+struct BilateralCkbConditionalDescriptor {
+    version: uint16,
+    output_count: byte,
+    transfer_capacity: byte,
+    batch_id: Byte32,
+    application_context_commitment: Byte32,
+    transfer_count: byte,
+    reserved: Reserved7,
+    participant_0: BilateralCkbConditionalParticipant,
+    participant_1: BilateralCkbConditionalParticipant,
+    transfers: ConditionalTransfers,
+}
+
+struct ConditionalResolution {
+    kind: byte,
+    preimage: Byte32,
+}
+
+array ConditionalResolutions [ConditionalResolution; 8];
+
+struct ConditionalBatchResolutionWitness {
+    version: uint16,
+    resolution_count: byte,
+    reserved: byte,
+    descriptor: BilateralCkbConditionalDescriptor,
+    resolutions: ConditionalResolutions,
 }
 
 struct SponsorPolicy {

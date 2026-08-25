@@ -4,6 +4,7 @@ import {
   createSignedPaymentPayload,
   deriveMorphAccountId,
   MorphAgentClient,
+  MorphHubClient,
   verifySignedPaymentPayload,
 } from "../dist/index.js";
 
@@ -44,6 +45,11 @@ assert.throws(
   /must use HTTPS/,
 );
 assert.doesNotThrow(() => new MorphAgentClient("http://127.4.3.2:4617"));
+assert.doesNotThrow(() => new MorphHubClient("http://127.0.0.1:4617"));
+assert.throws(
+  () => new MorphHubClient("http://hub.example.com"),
+  /must use HTTPS/,
+);
 
 const apiBearerToken = "m".repeat(32);
 const originalFetch = globalThis.fetch;

@@ -17,6 +17,7 @@ use morph_core::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::conditional_packages::StoredConditionalBatchPackage;
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
@@ -84,6 +85,7 @@ struct HubRuntimeState {
     pubkey: String,
     peer_pubkeys: BTreeMap<Bytes32, String>,
     node: MorphNodeState,
+    conditional_batches: BTreeMap<Bytes32, StoredConditionalBatchPackage>,
     events: Vec<HubEvent>,
 }
 
@@ -153,6 +155,8 @@ struct PersistedHubState {
     peers: Vec<PersistedPeer>,
     channels: Vec<PersistedChannel>,
     factories: Vec<PersistedFactory>,
+    #[serde(default)]
+    conditional_batches: Vec<StoredConditionalBatchPackage>,
     invoices: Vec<StoredMorphInvoice>,
     completed_flows: Vec<MorphBusinessFlow>,
     events: Vec<HubEvent>,
@@ -241,6 +245,7 @@ struct RestoreStateSummary {
     peers: usize,
     channels: usize,
     factories: usize,
+    conditional_batches: usize,
     invoices: usize,
     completed_flows: usize,
     events: usize,
@@ -253,6 +258,7 @@ impl RestoreStateSummary {
             peers: state.node.peers.len(),
             channels: state.node.channels.len(),
             factories: state.node.factories.len(),
+            conditional_batches: state.conditional_batches.len(),
             invoices: state.node.invoices.records().count(),
             completed_flows: state.node.completed_flows.len(),
             events: state.events.len(),
@@ -380,6 +386,7 @@ struct HubView {
     channels: Vec<ChannelView>,
     invoices: Vec<InvoiceView>,
     factories: Vec<FactoryView>,
+    conditional_batches: Vec<StoredConditionalBatchPackage>,
     events: Vec<EventView>,
     required_flows: Vec<&'static str>,
     completed_flows: Vec<&'static str>,
@@ -559,7 +566,7 @@ fn local_state_provenance() -> RecordProvenanceView {
 
 fn hub_model_view() -> HubModelView {
     HubModelView {
-        profile: "sovereign-devnet-factory",
+        profile: "morph-v3-conditional-batch",
         hub_role: "local_operator_projection",
         factory_authority: "factory_state_and_vault",
         channel_authority: "state_and_vault",
@@ -857,6 +864,7 @@ impl HubStore {
                 pubkey: requested_pubkey.clone(),
                 peer_pubkeys: BTreeMap::new(),
                 node: MorphNodeState::new(node_id, network)?,
+                conditional_batches: BTreeMap::new(),
                 events: Vec::new(),
             }
         };
@@ -1091,6 +1099,7 @@ impl HubStore {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
+            conditional_batches: self.state.conditional_batches.values().cloned().collect(),
             events: self.state.events.iter().map(event_view).collect(),
             required_flows: MorphNodeState::required_business_flows()
                 .iter()
@@ -1148,6 +1157,7 @@ impl HubStore {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
+            conditional_batches: self.state.conditional_batches.values().cloned().collect(),
             invoices: self.state.node.invoices.records().cloned().collect(),
             completed_flows: self.state.node.completed_flows.iter().copied().collect(),
             events: self.state.events.clone(),
@@ -1275,6 +1285,15 @@ impl HubRuntimeState {
             };
             node.open_factory(factory)?;
         }
+        let mut conditional_batches = BTreeMap::new();
+        for package in persisted.conditional_batches {
+            package.validate()?;
+            let batch_id = parse_bytes32("batch_id", &package.batch_id)?;
+            ensure!(
+                conditional_batches.insert(batch_id, package).is_none(),
+                "conditional batch ids must be unique"
+            );
+        }
         for invoice in persisted.invoices {
             node.invoices.insert_stored(invoice)?;
         }
@@ -1283,6 +1302,7 @@ impl HubRuntimeState {
             pubkey,
             peer_pubkeys,
             node,
+            conditional_batches,
             events: persisted.events,
         })
     }
@@ -1548,6 +1568,43 @@ impl HubServer {
             ("POST", path) if path.starts_with("/api/channels/") => {
                 self.route_channel_action(path, &request.body, request_id)
             }
+            ("POST", "/api/conditional-batches") => self.mutate(request_id, |store| {
+                let package: StoredConditionalBatchPackage = parse_body(&request.body)?;
+                package.validate()?;
+                let batch_id = parse_bytes32("batch_id", &package.batch_id)?;
+                let channel_id = parse_bytes32("channel_id", &package.channel_id)?;
+                let funding_context_id =
+                    parse_bytes32("funding_context_id", &package.funding_context_id)?;
+                let channel = store
+                    .state
+                    .node
+                    .channels
+                    .get(&channel_id)
+                    .ok_or_else(|| anyhow!("conditional package channel is not open"))?;
+                ensure!(
+                    channel.funding_context_id == funding_context_id,
+                    "conditional package funding context is stale or unknown"
+                );
+                ensure!(
+                    channel.state_number == package.state_number,
+                    "conditional package state number must match the current channel state"
+                );
+                if let Some(existing) = store.state.conditional_batches.get(&batch_id) {
+                    ensure!(
+                        existing == &package,
+                        "conditional batch id already exists with different contents"
+                    );
+                    return Ok(());
+                }
+                store.state.conditional_batches.insert(batch_id, package);
+                store.push_event(
+                    EventSeverity::Warning,
+                    "conditional_batch_imported",
+                    Some(batch_id),
+                    "Validated conditional force-resolution package stored for watchtower recovery",
+                )?;
+                Ok(())
+            }),
             ("POST", "/api/factories") => self.mutate(request_id, |store| {
                 let body: OpenFactoryRequest = parse_body(&request.body)?;
                 let factory_id = parse_bytes32("factory_id", &body.factory_id)?;
@@ -3349,6 +3406,7 @@ fn now_unix() -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conditional_packages::fixture_package as conditional_fixture_package;
     use crate::watch_alert::append_watchtower_alert;
     use std::io::Cursor;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -3358,6 +3416,59 @@ mod tests {
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     static TEST_STATE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn conditional_force_package_is_validated_linked_and_persisted() {
+        let local_pubkey = pubkey_from_scalar(41);
+        let peer_pubkey = pubkey_from_scalar(42);
+        let server = test_server(&local_pubkey);
+        let package = conditional_fixture_package().unwrap();
+
+        let opened = route_json(
+            &server,
+            "POST",
+            "/api/channels",
+            json!({
+                "channel_id": package.channel_id,
+                "counterparty_pubkey": peer_pubkey,
+                "counterparty_alias": "conditional-peer",
+                "funding_context_id": package.funding_context_id,
+                "local": "12000000000",
+                "remote": "8000000000",
+                "sponsor_budget": 1000000,
+                "asset": { "kind": "ckb" }
+            }),
+        );
+        assert_eq!(opened.status, 200);
+        let published = route_json(
+            &server,
+            "POST",
+            format!("/api/channels/{}/publish", package.channel_id),
+            json!({
+                "funding_context_id": package.funding_context_id,
+                "state_number": package.state_number
+            }),
+        );
+        assert_eq!(published.status, 200);
+
+        let imported = route_json(
+            &server,
+            "POST",
+            "/api/conditional-batches",
+            serde_json::to_value(&package).unwrap(),
+        );
+        assert_eq!(imported.status, 200);
+        let body: serde_json::Value = serde_json::from_slice(&imported.body).unwrap();
+        assert_eq!(body["conditional_batches"].as_array().unwrap().len(), 1);
+
+        let (path, persisted_pubkey) = {
+            let store = server.store.lock().unwrap();
+            (store.path.clone(), store.state.pubkey.clone())
+        };
+        let reloaded =
+            HubStore::load_or_create(path, &persisted_pubkey, MorphNetwork::Devnet).unwrap();
+        assert_eq!(reloaded.state.conditional_batches.len(), 1);
+    }
 
     #[test]
     fn request_parser_rejects_oversized_request_lines() {
@@ -4442,7 +4553,7 @@ mod tests {
         assert_eq!(child["factory_id"].as_str(), Some(factory_id.as_str()));
         assert_eq!(
             body["model"]["profile"].as_str(),
-            Some("sovereign-devnet-factory")
+            Some("morph-v3-conditional-batch")
         );
         assert_eq!(
             body["model"]["hub_role"].as_str(),

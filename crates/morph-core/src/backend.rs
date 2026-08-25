@@ -4,9 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use morph_script_common::{
+    BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN,
-    BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor,
-    settlement_descriptor_commitment,
+    BilateralCkbConditionalDescriptor, BilateralCkbSettlementDescriptor,
+    BilateralCkbXudtSettlementDescriptor, absolute_block_since, settlement_descriptor_commitment,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -16,8 +17,9 @@ use crate::agent::{
 };
 use crate::validation::{MorphError, validate_state_authorization, validate_state_transition};
 use crate::{
-    AssetRegistry, Bytes32, Phase, StateAuthorization, StateCell, StateTransitionContext,
-    asset_registry_commitment, blake2b256,
+    AssetRegistry, Bytes32, ConditionalBatch, ConditionalError, ConditionalResolution, Phase,
+    StateAuthorization, StateCell, StateTransitionContext, asset_registry_commitment, blake2b256,
+    derive_conditional_batch_id,
 };
 
 const PREPARED_PAYMENT_DOMAIN: &[u8] = b"CKB_MORPH_PREPARED_PAYMENT_V1";
@@ -42,6 +44,40 @@ pub enum BackendPaymentState {
     Prepared(PreparedPayment),
     Settled(BackendSettlementEvidence),
     Cancelled(BackendSettlementEvidence),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ConditionalBatchLifecycle {
+    Armed,
+    ForceClosing,
+    CooperativeSettled { state_number: u64 },
+    ForceSettled { settlement_tx: Bytes32 },
+}
+
+impl ConditionalBatchLifecycle {
+    const fn is_active(&self) -> bool {
+        matches!(self, Self::Armed | Self::ForceClosing)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConditionalBatchRecord {
+    pub batch: ConditionalBatch,
+    pub armed_state_number: u64,
+    pub armed_at_block: u64,
+    pub preimages: BTreeMap<Bytes32, Bytes32>,
+    pub lifecycle: ConditionalBatchLifecycle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConditionalForceClosePackage {
+    pub batch_id: Bytes32,
+    pub armed_state_number: u64,
+    pub descriptor: Vec<u8>,
+    pub resolution_witness: Vec<u8>,
+    pub input_since: u64,
+    pub payout_capacities: [u64; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +125,8 @@ pub struct MorphBilateralChannelBackend {
     verified_rgbpp_bindings: BTreeSet<Bytes32>,
     payments: BTreeMap<Bytes32, BackendPaymentState>,
     idempotency_index: BTreeMap<Bytes32, Bytes32>,
+    #[serde(default)]
+    conditional_batches: BTreeMap<Bytes32, ConditionalBatchRecord>,
 }
 
 impl MorphBilateralChannelBackend {
@@ -130,6 +168,7 @@ impl MorphBilateralChannelBackend {
             verified_rgbpp_bindings,
             payments: BTreeMap::new(),
             idempotency_index: BTreeMap::new(),
+            conditional_batches: BTreeMap::new(),
         })
     }
 
@@ -146,6 +185,247 @@ impl MorphBilateralChannelBackend {
             return Err(BackendError::InvalidRgbppEvidence);
         }
         self.verified_rgbpp_bindings.insert(commitment);
+        Ok(())
+    }
+
+    pub fn conditional_batch(&self, batch_id: &Bytes32) -> Option<&ConditionalBatchRecord> {
+        self.conditional_batches.get(batch_id)
+    }
+
+    pub fn arm_conditional_batch(
+        &mut self,
+        batch: ConditionalBatch,
+        update: MorphSignedStateUpdate,
+        armed_at_block: u64,
+    ) -> BackendResult<&ConditionalBatchRecord> {
+        if self.conditional_batches.contains_key(&batch.batch_id) {
+            return Err(BackendError::ConditionalBatchAlreadyActive);
+        }
+        if self
+            .payments
+            .values()
+            .any(|state| matches!(state, BackendPaymentState::Prepared(_)))
+        {
+            return Err(BackendError::ConcurrentPreparationUnsupported);
+        }
+        if self
+            .conditional_batches
+            .values()
+            .any(|record| record.lifecycle.is_active())
+        {
+            return Err(BackendError::ConditionalBatchAlreadyActive);
+        }
+        let current_descriptor = match parse_descriptor(&self.current_settlement_descriptor)? {
+            ParsedDescriptor::Conditional(descriptor) if descriptor.transfer_count() == 0 => {
+                descriptor
+            }
+            _ => return Err(BackendError::ConditionalProfileRequired),
+        };
+        let descriptor = batch.encode_descriptor()?;
+        let expected_batch_id = derive_conditional_batch_id(
+            &self.current_state.header.channel_id,
+            &self.funding_context_id(),
+            update.next_state.header.state_number,
+            &batch.application_context_commitment,
+        );
+        if batch.batch_id != expected_batch_id {
+            return Err(BackendError::ConditionalBatchMismatch);
+        }
+        let parsed = BilateralCkbConditionalDescriptor::parse(&descriptor)
+            .map_err(|_| BackendError::InvalidSettlementDescriptor)?;
+        if update.settlement_descriptor != descriptor
+            || update.next_state.header.descriptor_version
+                != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
+            || update.next_state.header.settlement_descriptor_commitment
+                != settlement_descriptor_commitment(&descriptor)
+            || parsed
+                .checked_total_capacity()
+                .map_err(|_| BackendError::ConditionalBatchMismatch)?
+                != current_descriptor
+                    .checked_total_capacity()
+                    .map_err(|_| BackendError::ConditionalBatchMismatch)?
+        {
+            return Err(BackendError::ConditionalBatchMismatch);
+        }
+        validate_conditional_participant_locks(&parsed, &self.participants)?;
+        if update.context.asset_registry != self.asset_registry {
+            return Err(BackendError::AssetRegistryMismatch);
+        }
+        validate_participant_identities(&update.context.authorization, &self.participants)?;
+        validate_state_transition(&self.current_state, &update.next_state, &update.context)?;
+
+        let batch_id = batch.batch_id;
+        let record = ConditionalBatchRecord {
+            batch,
+            armed_state_number: update.next_state.header.state_number,
+            armed_at_block,
+            preimages: BTreeMap::new(),
+            lifecycle: ConditionalBatchLifecycle::Armed,
+        };
+        self.current_authorization = update.context.authorization;
+        self.current_settlement_descriptor = update.settlement_descriptor;
+        self.current_state = update.next_state;
+        self.conditional_batches.insert(batch_id, record);
+        self.conditional_batches
+            .get(&batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)
+    }
+
+    pub fn record_conditional_preimage(
+        &mut self,
+        batch_id: &Bytes32,
+        transfer_id: &Bytes32,
+        preimage: Bytes32,
+    ) -> BackendResult<()> {
+        let record = self
+            .conditional_batches
+            .get_mut(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?;
+        if !record.lifecycle.is_active() {
+            return Err(BackendError::ConditionalBatchNotActive);
+        }
+        let transfer = record
+            .batch
+            .transfers
+            .iter()
+            .find(|transfer| &transfer.transfer_id == transfer_id)
+            .ok_or(BackendError::ConditionalTransferNotFound)?;
+        let actual = crate::derive_conditional_payment_hash(transfer.hash_algorithm, &preimage)?;
+        if actual != transfer.payment_hash {
+            return Err(BackendError::ConditionalPreimageMismatch);
+        }
+        if let Some(existing) = record.preimages.get(transfer_id) {
+            if existing != &preimage {
+                return Err(BackendError::ConditionalPreimageMismatch);
+            }
+            return Ok(());
+        }
+        record.preimages.insert(*transfer_id, preimage);
+        Ok(())
+    }
+
+    pub fn begin_conditional_force_resolution(
+        &mut self,
+        batch_id: &Bytes32,
+        current_block: u64,
+    ) -> BackendResult<ConditionalForceClosePackage> {
+        let record = self
+            .conditional_batches
+            .get(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?
+            .clone();
+        if !record.lifecycle.is_active()
+            || self.current_state.header.state_number != record.armed_state_number
+        {
+            return Err(BackendError::ConditionalBatchNotActive);
+        }
+        let mut resolutions = BTreeMap::new();
+        let mut required_refund_block = 0u64;
+        for transfer in &record.batch.transfers {
+            let resolution = if let Some(preimage) = record.preimages.get(&transfer.transfer_id) {
+                ConditionalResolution::Fulfill {
+                    preimage: *preimage,
+                }
+            } else {
+                if current_block < transfer.refund_after_block {
+                    return Err(BackendError::ConditionalTransferPending);
+                }
+                required_refund_block = required_refund_block.max(transfer.refund_after_block);
+                ConditionalResolution::Refund
+            };
+            resolutions.insert(transfer.transfer_id, resolution);
+        }
+        let input_since = absolute_block_since(required_refund_block)
+            .map_err(|_| BackendError::ConditionalTransferPending)?;
+        let descriptor = record.batch.encode_descriptor()?.to_vec();
+        let resolution_witness = record
+            .batch
+            .encode_resolution_witness(&resolutions)?
+            .to_vec();
+        let payout_capacities = record.batch.resolve(&resolutions, input_since)?;
+        let stored = self
+            .conditional_batches
+            .get_mut(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?;
+        stored.lifecycle = ConditionalBatchLifecycle::ForceClosing;
+        Ok(ConditionalForceClosePackage {
+            batch_id: *batch_id,
+            armed_state_number: record.armed_state_number,
+            descriptor,
+            resolution_witness,
+            input_since,
+            payout_capacities,
+        })
+    }
+
+    pub fn confirm_conditional_force_settlement(
+        &mut self,
+        batch_id: &Bytes32,
+        settlement_tx: Bytes32,
+    ) -> BackendResult<()> {
+        if is_zero(&settlement_tx) {
+            return Err(BackendError::ConditionalSettlementIdInvalid);
+        }
+        let record = self
+            .conditional_batches
+            .get_mut(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?;
+        if !matches!(record.lifecycle, ConditionalBatchLifecycle::ForceClosing) {
+            return Err(BackendError::ConditionalBatchNotActive);
+        }
+        record.lifecycle = ConditionalBatchLifecycle::ForceSettled { settlement_tx };
+        Ok(())
+    }
+
+    pub fn cooperatively_settle_conditional_batch(
+        &mut self,
+        batch_id: &Bytes32,
+        final_batch: ConditionalBatch,
+        update: MorphSignedStateUpdate,
+    ) -> BackendResult<()> {
+        let record = self
+            .conditional_batches
+            .get(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?
+            .clone();
+        if !matches!(record.lifecycle, ConditionalBatchLifecycle::Armed)
+            || self.current_state.header.state_number != record.armed_state_number
+            || final_batch.batch_id != record.batch.batch_id
+            || final_batch.application_context_commitment
+                != record.batch.application_context_commitment
+            || !final_batch.transfers.is_empty()
+        {
+            return Err(BackendError::ConditionalBatchMismatch);
+        }
+        let expected = record.batch.cooperative_capacities(&record.preimages)?;
+        let descriptor = final_batch.encode_descriptor()?;
+        let parsed = BilateralCkbConditionalDescriptor::parse(&descriptor)
+            .map_err(|_| BackendError::InvalidSettlementDescriptor)?;
+        validate_conditional_participant_locks(&parsed, &self.participants)?;
+        if [parsed.settled_capacity(0), parsed.settled_capacity(1)] != expected
+            || update.settlement_descriptor != descriptor
+            || update.next_state.header.descriptor_version
+                != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
+            || update.next_state.header.settlement_descriptor_commitment
+                != settlement_descriptor_commitment(&descriptor)
+        {
+            return Err(BackendError::ConditionalBatchMismatch);
+        }
+        if update.context.asset_registry != self.asset_registry {
+            return Err(BackendError::AssetRegistryMismatch);
+        }
+        validate_participant_identities(&update.context.authorization, &self.participants)?;
+        validate_state_transition(&self.current_state, &update.next_state, &update.context)?;
+        let settled_state_number = update.next_state.header.state_number;
+        self.current_authorization = update.context.authorization;
+        self.current_settlement_descriptor = update.settlement_descriptor;
+        self.current_state = update.next_state;
+        self.conditional_batches
+            .get_mut(batch_id)
+            .ok_or(BackendError::ConditionalBatchNotFound)?
+            .lifecycle = ConditionalBatchLifecycle::CooperativeSettled {
+            state_number: settled_state_number,
+        };
         Ok(())
     }
 
@@ -229,6 +509,12 @@ impl ChannelBackend for MorphBilateralChannelBackend {
             Phase::Active | Phase::Settling
         ) {
             return Err(BackendError::InvalidChannel);
+        }
+        if matches!(
+            parse_descriptor(&self.current_settlement_descriptor)?,
+            ParsedDescriptor::Conditional(_)
+        ) {
+            return Err(BackendError::ConditionalBatchRequired);
         }
         let binding = intent
             .channel_binding
@@ -484,6 +770,7 @@ pub(crate) fn validate_participant_identities(
 enum ParsedDescriptor<'a> {
     Ckb(BilateralCkbSettlementDescriptor<'a>),
     Xudt(BilateralCkbXudtSettlementDescriptor<'a>),
+    Conditional(BilateralCkbConditionalDescriptor<'a>),
 }
 
 fn parse_descriptor(raw: &[u8]) -> BackendResult<ParsedDescriptor<'_>> {
@@ -493,6 +780,9 @@ fn parse_descriptor(raw: &[u8]) -> BackendResult<ParsedDescriptor<'_>> {
             .map_err(|_| BackendError::InvalidSettlementDescriptor),
         BILATERAL_CKB_XUDT_DESCRIPTOR_LEN => BilateralCkbXudtSettlementDescriptor::parse(raw)
             .map(ParsedDescriptor::Xudt)
+            .map_err(|_| BackendError::InvalidSettlementDescriptor),
+        BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN => BilateralCkbConditionalDescriptor::parse(raw)
+            .map(ParsedDescriptor::Conditional)
             .map_err(|_| BackendError::InvalidSettlementDescriptor),
         _ => Err(BackendError::InvalidSettlementDescriptor),
     }
@@ -504,6 +794,7 @@ fn descriptor_locks(raw: &[u8]) -> BackendResult<[Bytes32; 2]> {
         let bytes = match &parsed {
             ParsedDescriptor::Ckb(descriptor) => descriptor.lock_hash(index),
             ParsedDescriptor::Xudt(descriptor) => descriptor.lock_hash(index),
+            ParsedDescriptor::Conditional(descriptor) => descriptor.lock_hash(index),
         };
         bytes
             .try_into()
@@ -535,6 +826,7 @@ fn descriptor_amounts(raw: &[u8], asset: &AgentAsset) -> BackendResult<[u128; 2]
             }
             Ok([descriptor.xudt_amount(0), descriptor.xudt_amount(1)])
         }
+        (ParsedDescriptor::Conditional(_), _) => Err(BackendError::ConditionalBatchRequired),
         _ => Err(BackendError::AssetMismatch),
     }
 }
@@ -543,7 +835,25 @@ fn descriptor_capacities(raw: &[u8]) -> BackendResult<[u64; 2]> {
     match parse_descriptor(raw)? {
         ParsedDescriptor::Ckb(descriptor) => Ok([descriptor.capacity(0), descriptor.capacity(1)]),
         ParsedDescriptor::Xudt(descriptor) => Ok([descriptor.capacity(0), descriptor.capacity(1)]),
+        ParsedDescriptor::Conditional(_) => Err(BackendError::ConditionalBatchRequired),
     }
+}
+
+fn validate_conditional_participant_locks(
+    descriptor: &BilateralCkbConditionalDescriptor<'_>,
+    participants: &[ChannelParticipant; 2],
+) -> BackendResult<()> {
+    let mut expected = [
+        participants[0].settlement_lock_hash,
+        participants[1].settlement_lock_hash,
+    ];
+    expected.sort();
+    if descriptor.lock_hash(0) != expected[0].as_slice()
+        || descriptor.lock_hash(1) != expected[1].as_slice()
+    {
+        return Err(BackendError::WrongSettlementParticipants);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -566,6 +876,26 @@ pub enum BackendError {
     AlreadyTerminal,
     #[error("current bilateral profile permits one prepared successor at a time")]
     ConcurrentPreparationUnsupported,
+    #[error("this channel uses the conditional-batch profile")]
+    ConditionalBatchRequired,
+    #[error("a descriptor-version-3 channel with no pending batch is required")]
+    ConditionalProfileRequired,
+    #[error("another conditional batch is already active or the batch id was reused")]
+    ConditionalBatchAlreadyActive,
+    #[error("conditional batch was not found")]
+    ConditionalBatchNotFound,
+    #[error("conditional batch is not active at the current signed state")]
+    ConditionalBatchNotActive,
+    #[error("conditional batch does not match the signed state or expected consolidation")]
+    ConditionalBatchMismatch,
+    #[error("conditional transfer was not found")]
+    ConditionalTransferNotFound,
+    #[error("conditional transfer preimage does not match")]
+    ConditionalPreimageMismatch,
+    #[error("at least one conditional transfer is neither fulfilled nor refundable")]
+    ConditionalTransferPending,
+    #[error("conditional force-settlement transaction id is invalid")]
+    ConditionalSettlementIdInvalid,
     #[error("prepared payment was not found")]
     PreparedPaymentNotFound,
     #[error("prepared payment is stale relative to the current signed state")]
@@ -590,6 +920,8 @@ pub enum BackendError {
     InvalidCommitTime,
     #[error(transparent)]
     Agent(#[from] crate::agent::AgentError),
+    #[error(transparent)]
+    Conditional(#[from] ConditionalError),
     #[error(transparent)]
     Morph(#[from] MorphError),
 }
@@ -746,6 +1078,117 @@ mod tests {
             keys,
             participants,
         )
+    }
+
+    fn conditional_fixture() -> (
+        MorphBilateralChannelBackend,
+        [SigningKey; 2],
+        [ChannelParticipant; 2],
+    ) {
+        let (base, keys, participants) = fixture();
+        let empty = ConditionalBatch {
+            batch_id: [40; 32],
+            application_context_commitment: [41; 32],
+            participants: [
+                crate::ConditionalParticipant {
+                    settlement_lock_hash: [21; 32],
+                    settled_capacity: 6_000,
+                },
+                crate::ConditionalParticipant {
+                    settlement_lock_hash: [22; 32],
+                    settled_capacity: 4_000,
+                },
+            ],
+            transfers: Vec::new(),
+        };
+        let descriptor = empty.encode_descriptor().unwrap().to_vec();
+        let mut state = base.current_state.clone();
+        state.header.descriptor_version = BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION;
+        state.header.settlement_descriptor_commitment =
+            settlement_descriptor_commitment(&descriptor);
+        let auth = authorization(&state.header, &keys);
+        (
+            MorphBilateralChannelBackend::new(
+                state,
+                auth,
+                descriptor,
+                participants.clone(),
+                AssetRegistry {
+                    xudt_types: BTreeSet::new(),
+                },
+                BTreeSet::new(),
+            )
+            .unwrap(),
+            keys,
+            participants,
+        )
+    }
+
+    fn pending_batch(backend: &MorphBilateralChannelBackend) -> (ConditionalBatch, [Bytes32; 2]) {
+        let preimages = [[7; 32], [8; 32]];
+        let application_context_commitment = [43; 32];
+        (
+            ConditionalBatch {
+                batch_id: derive_conditional_batch_id(
+                    &backend.channel_id(),
+                    &backend.funding_context_id(),
+                    backend.current_state.header.state_number + 1,
+                    &application_context_commitment,
+                ),
+                application_context_commitment,
+                participants: [
+                    crate::ConditionalParticipant {
+                        settlement_lock_hash: [21; 32],
+                        settled_capacity: 5_500,
+                    },
+                    crate::ConditionalParticipant {
+                        settlement_lock_hash: [22; 32],
+                        settled_capacity: 3_700,
+                    },
+                ],
+                transfers: vec![
+                    crate::ConditionalTransferSpec {
+                        transfer_id: [44; 32],
+                        payer_lock_hash: [21; 32],
+                        hash_algorithm: crate::ConditionalHashAlgorithm::Sha256,
+                        payment_hash: crate::derive_conditional_payment_hash(
+                            crate::ConditionalHashAlgorithm::Sha256,
+                            &preimages[0],
+                        )
+                        .unwrap(),
+                        amount: 500,
+                        refund_after_block: 500,
+                    },
+                    crate::ConditionalTransferSpec {
+                        transfer_id: [45; 32],
+                        payer_lock_hash: [22; 32],
+                        hash_algorithm: crate::ConditionalHashAlgorithm::CkbBlake2b,
+                        payment_hash: crate::derive_conditional_payment_hash(
+                            crate::ConditionalHashAlgorithm::CkbBlake2b,
+                            &preimages[1],
+                        )
+                        .unwrap(),
+                        amount: 300,
+                        refund_after_block: 600,
+                    },
+                ],
+            },
+            preimages,
+        )
+    }
+
+    fn conditional_update(
+        backend: &MorphBilateralChannelBackend,
+        keys: &[SigningKey; 2],
+        batch: &ConditionalBatch,
+    ) -> MorphSignedStateUpdate {
+        let descriptor = batch.encode_descriptor().unwrap().to_vec();
+        let mut signed = update(backend, keys, descriptor);
+        signed.next_state.header.descriptor_version = BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION;
+        signed.next_state.header.settlement_descriptor_commitment =
+            settlement_descriptor_commitment(&signed.settlement_descriptor);
+        signed.context.authorization = authorization(&signed.next_state.header, keys);
+        signed
     }
 
     fn intent(backend: &MorphBilateralChannelBackend) -> PaymentIntent {
@@ -989,6 +1432,122 @@ mod tests {
                 BTreeSet::new(),
             ),
             Err(BackendError::AssetRegistryMismatch)
+        );
+    }
+
+    #[test]
+    fn conditional_batch_arms_multiple_transfers_and_builds_force_resolution() {
+        let (mut backend, keys, _) = conditional_fixture();
+        let (batch, preimages) = pending_batch(&backend);
+        let armed = backend
+            .arm_conditional_batch(
+                batch.clone(),
+                conditional_update(&backend, &keys, &batch),
+                100,
+            )
+            .unwrap();
+        assert_eq!(armed.batch.transfers.len(), 2);
+        backend
+            .record_conditional_preimage(&batch.batch_id, &[44; 32], preimages[0])
+            .unwrap();
+        assert_eq!(
+            backend.begin_conditional_force_resolution(&batch.batch_id, 599),
+            Err(BackendError::ConditionalTransferPending)
+        );
+        let package = backend
+            .begin_conditional_force_resolution(&batch.batch_id, 600)
+            .unwrap();
+        assert_eq!(package.armed_state_number, 1);
+        assert_eq!(package.payout_capacities, [5_500, 4_500]);
+        assert_eq!(package.input_since, absolute_block_since(600).unwrap());
+        assert!(matches!(
+            backend
+                .conditional_batch(&batch.batch_id)
+                .unwrap()
+                .lifecycle,
+            ConditionalBatchLifecycle::ForceClosing
+        ));
+        backend
+            .confirm_conditional_force_settlement(&batch.batch_id, [99; 32])
+            .unwrap();
+        assert!(matches!(
+            backend
+                .conditional_batch(&batch.batch_id)
+                .unwrap()
+                .lifecycle,
+            ConditionalBatchLifecycle::ForceSettled { .. }
+        ));
+    }
+
+    #[test]
+    fn conditional_batch_rejects_wrong_preimage() {
+        let (mut backend, keys, _) = conditional_fixture();
+        let (batch, _) = pending_batch(&backend);
+        backend
+            .arm_conditional_batch(
+                batch.clone(),
+                conditional_update(&backend, &keys, &batch),
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            backend.record_conditional_preimage(&batch.batch_id, &[44; 32], [9; 32]),
+            Err(BackendError::ConditionalPreimageMismatch)
+        );
+    }
+
+    #[test]
+    fn conditional_batch_cooperatively_consolidates_known_and_cancelled_transfers() {
+        let (mut backend, keys, _) = conditional_fixture();
+        let (batch, preimages) = pending_batch(&backend);
+        backend
+            .arm_conditional_batch(
+                batch.clone(),
+                conditional_update(&backend, &keys, &batch),
+                100,
+            )
+            .unwrap();
+        backend
+            .record_conditional_preimage(&batch.batch_id, &[44; 32], preimages[0])
+            .unwrap();
+        let final_batch = ConditionalBatch {
+            batch_id: batch.batch_id,
+            application_context_commitment: batch.application_context_commitment,
+            participants: [
+                crate::ConditionalParticipant {
+                    settlement_lock_hash: [21; 32],
+                    settled_capacity: 5_500,
+                },
+                crate::ConditionalParticipant {
+                    settlement_lock_hash: [22; 32],
+                    settled_capacity: 4_500,
+                },
+            ],
+            transfers: Vec::new(),
+        };
+        backend
+            .cooperatively_settle_conditional_batch(
+                &batch.batch_id,
+                final_batch.clone(),
+                conditional_update(&backend, &keys, &final_batch),
+            )
+            .unwrap();
+        assert!(matches!(
+            backend
+                .conditional_batch(&batch.batch_id)
+                .unwrap()
+                .lifecycle,
+            ConditionalBatchLifecycle::CooperativeSettled { state_number: 2 }
+        ));
+    }
+
+    #[test]
+    fn conditional_profile_rejects_single_intent_prepare() {
+        let (mut backend, _, _) = conditional_fixture();
+        let request = intent(&backend);
+        assert_eq!(
+            backend.prepare_payment(request, 110),
+            Err(BackendError::ConditionalBatchRequired)
         );
     }
 }

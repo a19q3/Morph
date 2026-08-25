@@ -2281,6 +2281,7 @@ const EXPECTED_DEPLOYED_SCRIPT_NAMES: &[&str] = &[
     "morph-factory-type",
     "morph-factory-vault-lock",
     "morph-vault-lock",
+    "morph-batch-lock",
     "morph-sponsor-lock",
     "morph-devnet-xudt",
 ];

@@ -133,6 +133,20 @@ export interface FactoryRecord {
   provenance: RecordProvenance;
 }
 
+export interface ConditionalBatchPackage {
+  schema: 'morph.conditional_batch_package';
+  channel_id: Hex32;
+  funding_context_id: Hex32;
+  state_number: number;
+  batch_id: Hex32;
+  application_context_commitment: Hex32;
+  input_since: number;
+  descriptor_commitment: Hex32;
+  resolved_capacities: [number, number];
+  transfers: unknown[];
+  resolutions: unknown[];
+}
+
 export interface HubEvent {
   id: number;
   severity: EventSeverity;
@@ -194,6 +208,7 @@ export interface NodeState {
   channels: ChannelRecord[];
   invoices: InvoiceRecord[];
   factories: FactoryRecord[];
+  conditional_batches: ConditionalBatchPackage[];
   events: HubEvent[];
   required_flows: FlowKey[];
   completed_flows: FlowKey[];
@@ -221,7 +236,7 @@ export const emptyState: NodeState = {
     max_invoice_expiry_secs: 604800,
   },
   model: {
-    profile: 'sovereign-devnet-factory',
+    profile: 'morph-v3-conditional-batch',
     hub_role: 'local_operator_projection',
     factory_authority: 'factory_state_and_vault',
     channel_authority: 'state_and_vault',
@@ -258,6 +273,7 @@ export const emptyState: NodeState = {
   channels: [],
   invoices: [],
   factories: [],
+  conditional_batches: [],
   events: [],
   required_flows: [],
   completed_flows: [],

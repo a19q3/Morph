@@ -147,6 +147,7 @@ flowchart LR
       SL["morph-state-lock"]
       ST["morph-state-type"]
       VL["morph-vault-lock"]
+      BL["morph-batch-lock"]
       SP["morph-sponsor-lock"]
     end
     subgraph Factory["Factory scripts"]
@@ -155,6 +156,7 @@ flowchart LR
     end
     X["morph-devnet-xudt"] --> VL
     ST --> VL
+    VL --> BL
     SP --> ST
     FT --> FVL
 ```
@@ -176,8 +178,10 @@ ordinary State Cell publication/supersession. They are consumed at explicit
 value boundaries: finalisation, resize/re-anchor, and Factory
 exit/materialisation paths. A resize successor is a newly committed Vault, not
 the same Vault left untouched for the full logical channel lifetime.
-The current bilateral finalisation profile is atomic: it consumes the committed
-vault value and does not create terminal receipt Cells.
+The v1/v2 bilateral finalisation profiles are atomic. Descriptor v3 instead
+materialises the whole CKB Vault into one code-hash-pinned Batch Cell when any
+condition remains; `morph-batch-lock` later verifies every preimage/refund and
+the exact two participant outputs.
 Cooperative close is not part of the current State type, vault contract, CLI,
 host operation taxonomy, or devnet execution profile.
 
@@ -284,6 +288,8 @@ at the boundary that needs them:
   participant signatures;
 - `morph-vault-lock` parses descriptor witnesses and checks settlement outputs
   against the committed descriptor;
+- `morph-batch-lock` resolves bounded descriptor-v3 leaves against preimages
+  and canonical absolute-block refunds;
 - `morph-sponsor-lock` checks the publication State type hash and bounded
   sponsor policy;
 - `morph-factory-type` and `morph-factory-vault-lock` resolve factory envelopes,
@@ -300,6 +306,11 @@ funding context id and falls back to the funding anchor for older package
 stores. The broader paper `StatePackage` object is the protocol requirement for
 arbitrary representation profiles; the current bilateral devnet package is the
 implemented plaintext profile.
+
+`StoredConditionalBatchPackage` additionally stores the channel/funding/state
+binding, canonical descriptor, force-resolution witness, input `since`, and
+expected capacities. CLI and Hub revalidate the package from semantic fields;
+Hub will not import it for a stale or unknown live channel context.
 
 ## Factory Witness Envelope
 
@@ -381,9 +392,11 @@ in [devnet.md](devnet.md).
 crates/morph-core/src/types.rs          protocol structs
 crates/morph-core/src/hash.rs           signing and commitment domains
 crates/morph-core/src/validation.rs     host-side invariants
+crates/morph-core/src/conditional.rs    bounded conditional batch model
 contracts/morph-script-common/src/lib.rs fixed-layout parsers and verifiers
 contracts/morph-state-type/src/main.rs  State Cell rules
 contracts/morph-vault-lock/src/main.rs  Vault rules
+contracts/morph-batch-lock/src/main.rs  conditional CKB resolution rules
 contracts/morph-factory-type/src/main.rs Factory State rules
 contracts/morph-factory-vault-lock/src/main.rs Factory reserve rules
 crates/morph-cli/src/devnet.rs          local devnet transaction paths

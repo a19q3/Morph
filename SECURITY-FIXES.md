@@ -292,6 +292,120 @@ multi-operator rehearsal, and a real-asset value policy remain required.
 - Remaining limitation: expiry windows and sponsor source are not current
   script-enforced fields.
 
+## Multi-right factory updates and compact proofs (v2.0, 2026-08-16)
+
+- Issue (deferred protocol work, not a discovered vulnerability): the reduced
+  factory paths could prove and change exactly one right per update, and every
+  sparse-Merkle witness carried all 256 sibling hashes.
+- Fix: `WitnessEnvelope` kind 8
+  (`WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE`, body version 1) lets the
+  single touched participant atomically update 1-4 of their own value rights,
+  each localised by an independent compact sparse-Merkle proof. Compact proofs
+  carry only non-empty siblings (bounded by `FACTORY_COMPACT_PROOF_MAX_SIBLINGS
+  = 64` pairs, strictly descending depth); the script completes the omitted
+  positions with the canonical `CKB_MORPH_FACTORY_RIGHT_EMPTY` subtree hash
+  chain, so a proof that omits a real sibling cannot reconstruct the committed
+  root and fails closed.
+- Safety boundaries and their negative tests (script level, in
+  `contracts/morph-script-common`): exactly one authorisation signature from
+  the touched participant (`rejects_multi_right_update_bad_signature`); every
+  right belongs to the touched participant
+  (`rejects_multi_right_update_foreign_participant_right`); only value kinds
+  (`rejects_multi_right_update_non_value_kind`); stable identities
+  (`rejects_multi_right_update_identity_swap`); strictly ordered rights
+  (`rejects_multi_right_update_unsorted_rights`); unchanged access manifest
+  (`rejects_multi_right_update_manifest_change`); every asset-domain claim
+  never increases and something must change
+  (`rejects_multi_right_update_total_increase`,
+  `rejects_multi_right_update_cross_asset_rebalance`,
+  `rejects_multi_right_update_without_change`); proof localisation
+  (`rejects_multi_right_update_sibling_tamper`,
+  `rejects_multi_right_update_ascending_pairs`,
+  `rejects_multi_right_update_wrong_capacity`). On-chain CKB-VM negatives:
+  `factory_type_rejects_multi_right_total_increase`,
+  `factory_type_rejects_multi_right_cross_asset_rebalance`,
+  `factory_type_rejects_multi_right_compact_pair_tamper`,
+  `factory_type_rejects_multi_right_foreign_signature`. Host mirrors live in
+  `crates/morph-core/tests/multi_right.rs` and the parity suite pins the
+  domain constants and proof-root equivalence in `tests/hash_parity.rs`.
+- Boundary note: kind 8 is additive. Kinds 1-7, all fixed lengths, and the
+  existing fixtures are unchanged; the four contract ELFs that statically link
+  `morph-script-common` were rebuilt and the reviewed manifest
+  `release/factory-preproduction/contracts.json` was regenerated for the 2.0
+  boundary. The devnet save/publication command for kind 8 state-cell packages
+  (mirroring `save-factory-merkle-update-package`) remains future work; the
+  host package layer validates and fixtures kind 8 today.
+
+## Kind-8 cross-side localization (v2.0 fix, 2026-08-17)
+
+- Issue (high, found in review): the kind-8 per-side compact proofs
+  established that each listed right exists in both committed trees but
+  placed no constraint on the unlisted leaves. The touched participant could
+  commit a new state root that mints or burns any other participant's rights
+  while decreasing their own listed total; host validation returned success
+  and the on-chain script enforced the same missing constraint. Kind 3 is not
+  affected: its wire format carries a single sibling list shared by both
+  sides, so the two reconstructed roots can only differ at the changed leaf.
+- Fix: `verify_factory_multi_right_update` (script) and
+  `validate_factory_multi_right_merkle_update` (host) now walk each
+  before/after proof pair in lockstep and require every sibling subtree whose
+  hash differs between the sides to contain one of the other listed changed
+  rights. A differing subtree with no listed excuse means an unlisted right
+  changed between the committed roots, and the witness fails closed. No
+  wire-format change: the existing witness already carries everything the
+  check needs, and honest witnesses are unaffected.
+- Negative tests: script level `rejects_multi_right_update_unlisted_change`
+  (which first asserts per-side inclusion still holds, isolating the new
+  check) and `sibling_subtree_membership_matches_naive_prefix_check` pinning
+  the subtree-membership mask against a bit-by-bit oracle; host mirror
+  `multi_right_update_rejects_unlisted_foreign_change`; on-chain CKB-VM
+  `factory_type_rejects_multi_right_unlisted_change`.
+- Boundary note: the four contract ELFs that statically link
+  `morph-script-common` were rebuilt and the reviewed manifest regenerated
+  for the tightened kind-8 boundary.
+
+## Kind-8 per-asset conservation and ordering parity (v2.0 fix, 2026-08-17)
+
+- Issue (critical, found in review): kind 8 compared one global quantity sum
+  across all listed rights. Quantities from different assets are not
+  interchangeable, so a participant could burn CKB or xUDT-A while minting an
+  equal numeric amount of xUDT-B. Separately, host/CLI arrays were ordered by
+  hashed Merkle key while the script required raw right-identity order, which
+  could make a host-valid package fail on chain.
+- Fix: host and script now accumulate and compare quantities independently for
+  CKB and every xUDT type. Rebalancing remains possible only within the same
+  asset domain. Host validation, CLI package generation, script verification,
+  and test witness builders all use canonical raw `FactoryRightId` order.
+- Negative tests: script
+  `rejects_multi_right_update_cross_asset_rebalance`; host
+  `multi_right_update_rejects_cross_asset_rebalance`; CKB-VM
+  `factory_type_rejects_multi_right_cross_asset_rebalance`. Existing positive
+  rebalance tests pin same-asset behavior and the generated fixture pins the
+  common identity ordering.
+
+## Operator value-limit policy (v2.0, 2026-08-16)
+
+- Issue: the roadmap required a value-limit policy and operator runbook before
+  any real-assets claim; none existed.
+- Fix: `morph-core::policy` defines a fail-closed `ValueLimitPolicy` (per
+  deployment CKB capacity cap and per-asset xUDT caps; unlisted assets are
+  rejected) with a deterministic digest. `morph-cli value-limit-check` applies
+  it to fully validated value-bearing splice packages or to explicit amounts;
+  `validate-value-limit-policy` reviews a policy file. Unknown, incomplete, or
+  invalid package schemas and arithmetic overflow fail closed. The extracted
+  subject is the component-wise peak across old/new vault descriptors rather
+  than their sum. Runbook: `docs/runbooks/value-limits.md`.
+- Negative tests: `policy_rejects_ckb_over_limit`,
+  `policy_rejects_xudt_over_limit`, `policy_rejects_unlisted_assets`,
+  `policy_rejects_malformed_keys_and_zero_caps`,
+  `extraction_rejects_unknown_schemas`,
+  `extraction_rejects_malformed_supported_schema`,
+  `bilateral_extraction_uses_validated_old_and_expected_new_vaults`,
+  `subject_addition_fails_closed_on_overflow`,
+  `unlisted_xudt_fails_closed`.
+- Boundary note: the policy is an operator control only. It never authorises
+  anything and does not replace script consensus or package validation.
+
 ## Evidence run
 
 The local verification run for this closeout passed:
@@ -308,3 +422,13 @@ not fetch the RustSec advisory database because the GitHub request failed with
 an IO error. Later cached and CI runs passed the repository's narrow reviewed
 waiver policy. Every release candidate must still rerun `make supply-chain` and
 record fresh CI/independent-build evidence.
+# Morph 3.0 conditional-batch boundary
+
+Morph 3.0 adds descriptor version 3 and `morph-batch-lock`. Conditional CKB
+value is never paid directly from an application result: the signed descriptor
+commits every transfer, the Vault can materialise only the pinned Batch Lock,
+and the Batch Lock independently verifies preimages, canonical absolute-block
+refunds, exact capacity conservation, and exactly two plain settlement outputs.
+Negative CKB-VM coverage rejects wrong preimages, premature refunds, descriptor
+substitution, wrong Batch Lock identity/args, and capacity loss. Conditional
+xUDT remains rejected by design.

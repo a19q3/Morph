@@ -17,17 +17,20 @@ use ckb_std::high_level::{
 use ckb_std::{default_alloc, entry};
 #[cfg(target_arch = "riscv64")]
 use morph_script_common::{
+    BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BYTE32_LEN,
-    BilateralCkbSettlementDescriptor, BilateralCkbXudtSettlementDescriptor, PHASE_ACTIVE,
-    PHASE_SETTLING, Result, ScriptError, SpliceAssetDelta, SpliceAssetDeltas, SpliceHeader,
-    SpliceStateTransitionWitness, SpliceVaultDescriptor, StateHeader,
-    UNBOUND_VAULT_OUTPOINT_COMMITMENT, VAULT_ASSET_KIND_CKB, VAULT_ASSET_KIND_XUDT, read_u64,
-    read_u128, validate_relative_block_since, vault_cell_commitment, vault_outpoint_commitment,
-    verify_splice_state_transition_bundle,
+    BilateralCkbConditionalDescriptor, BilateralCkbSettlementDescriptor,
+    BilateralCkbXudtSettlementDescriptor, PHASE_ACTIVE, PHASE_SETTLING, Result, ScriptError,
+    SpliceAssetDelta, SpliceAssetDeltas, SpliceHeader, SpliceStateTransitionWitness,
+    SpliceVaultDescriptor, StateHeader, UNBOUND_VAULT_OUTPOINT_COMMITMENT, VAULT_ASSET_KIND_CKB,
+    VAULT_ASSET_KIND_XUDT, read_u64, read_u128, validate_relative_block_since,
+    vault_cell_commitment, vault_outpoint_commitment, verify_splice_state_transition_bundle,
 };
 
 #[cfg(target_arch = "riscv64")]
 const VAULT_ARGS_LEN: usize = BYTE32_LEN + 8 + BYTE32_LEN + 1 + BYTE32_LEN + 1;
+#[cfg(target_arch = "riscv64")]
+const VAULT_ARGS_V2_LEN: usize = VAULT_ARGS_LEN + BYTE32_LEN + 1;
 #[cfg(target_arch = "riscv64")]
 const MAX_WITNESS_INPUTS_PER_TX: usize = 64;
 
@@ -51,7 +54,7 @@ fn main() {}
 fn main() -> Result<()> {
     let script = load_script().map_err(|_| ScriptError::Encoding)?;
     let args = script.args().raw_data();
-    if args.len() != VAULT_ARGS_LEN {
+    if args.len() != VAULT_ARGS_LEN && args.len() != VAULT_ARGS_V2_LEN {
         return Err(ScriptError::WrongArgsLength);
     }
     let expected_funding_anchor = &args.as_ref()[..BYTE32_LEN];
@@ -130,9 +133,89 @@ fn main() -> Result<()> {
             }
             verify_ckb_xudt_descriptor_outputs(&descriptor)?;
         }
+        BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN => {
+            if args.len() != VAULT_ARGS_V2_LEN {
+                return Err(ScriptError::ConditionalBatchLockMismatch);
+            }
+            let descriptor = BilateralCkbConditionalDescriptor::parse(descriptor_raw.as_ref())?;
+            if header.descriptor_version() != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
+                || header.settlement_descriptor_commitment() != descriptor.commitment().as_slice()
+            {
+                return Err(ScriptError::SettlementDescriptorMismatch);
+            }
+            ensure_no_group_xudt(Source::GroupInput)?;
+            let vault_capacity = sum_group_capacity(Source::GroupInput)?;
+            if descriptor.checked_total_capacity()? != vault_capacity {
+                return Err(ScriptError::ConditionalValueMismatch);
+            }
+            if descriptor.transfer_count() == 0 {
+                verify_exact_plain_output(descriptor.lock_hash(0), descriptor.settled_capacity(0))?;
+                verify_exact_plain_output(descriptor.lock_hash(1), descriptor.settled_capacity(1))?;
+            } else {
+                verify_conditional_batch_output(
+                    &descriptor,
+                    &header,
+                    &args.as_ref()[VAULT_ARGS_LEN..VAULT_ARGS_V2_LEN],
+                    vault_capacity,
+                )?;
+            }
+        }
         _ => return Err(ScriptError::SettlementDescriptorEncoding),
     }
 
+    Ok(())
+}
+
+#[cfg(target_arch = "riscv64")]
+fn verify_conditional_batch_output(
+    descriptor: &BilateralCkbConditionalDescriptor,
+    header: &StateHeader,
+    batch_script_identity: &[u8],
+    expected_capacity: u64,
+) -> Result<()> {
+    let expected_code_hash = &batch_script_identity[..BYTE32_LEN];
+    let expected_hash_type = batch_script_identity[BYTE32_LEN];
+    let mut expected_args = [0u8; BYTE32_LEN + 8 + BYTE32_LEN];
+    expected_args[..BYTE32_LEN].copy_from_slice(header.channel_id());
+    expected_args[BYTE32_LEN..BYTE32_LEN + 8].copy_from_slice(&header.state_number().to_le_bytes());
+    expected_args[BYTE32_LEN + 8..].copy_from_slice(&descriptor.commitment());
+
+    let mut matches = 0u8;
+    let mut index = 0;
+    loop {
+        match load_cell_lock(index, Source::Output) {
+            Ok(lock) => {
+                let lock_args = lock.args().raw_data();
+                if lock.code_hash().as_slice() == expected_code_hash
+                    && lock.hash_type().as_slice()[0] == expected_hash_type
+                    && lock_args.as_ref() == expected_args
+                {
+                    matches = matches
+                        .checked_add(1)
+                        .ok_or(ScriptError::ConditionalBatchOutputMismatch)?;
+                    if matches != 1
+                        || load_cell_capacity(index, Source::Output)
+                            .map_err(|_| ScriptError::Encoding)?
+                            != expected_capacity
+                        || load_cell_type_hash(index, Source::Output)
+                            .map_err(|_| ScriptError::Encoding)?
+                            .is_some()
+                        || !load_cell_data(index, Source::Output)
+                            .map_err(|_| ScriptError::Encoding)?
+                            .is_empty()
+                    {
+                        return Err(ScriptError::ConditionalBatchOutputMismatch);
+                    }
+                }
+                index += 1;
+            }
+            Err(SysError::IndexOutOfBound) | Err(SysError::ItemMissing) => break,
+            Err(_) => return Err(ScriptError::Encoding),
+        }
+    }
+    if matches != 1 {
+        return Err(ScriptError::ConditionalBatchOutputMismatch);
+    }
     Ok(())
 }
 

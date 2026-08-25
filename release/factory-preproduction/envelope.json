@@ -1,11 +1,11 @@
 {
   "schema": "morph.preproduction_envelope",
-  "release_profile": "factory-dynamic-n",
-  "effective_date": "2026-08-15",
-  "review_by": "2026-09-14",
+  "release_profile": "morph-v3-conditional-batch",
+  "effective_date": "2026-08-25",
+  "review_by": "2026-09-24",
   "approval_timezone": "Asia/Shanghai",
-  "effective_unix": 1786723200,
-  "review_by_unix": 1789401599,
+  "effective_unix": 1787587200,
+  "review_by_unix": 1790265599,
   "approved_networks": [
     "devnet"
   ],
@@ -21,6 +21,16 @@
   "channel": {
     "max_capacity_shannons": 100000000000,
     "max_total_pilot_capacity_shannons": 4000000000000
+  },
+  "conditional_batch": {
+    "enabled": true,
+    "ckb_only": true,
+    "max_transfers": 8,
+    "max_refund_block_delta": 2016,
+    "allowed_hash_algorithms": [
+      "ckb_blake2b",
+      "sha256"
+    ]
   },
   "sponsor": {
     "max_capacity_shannons": 50000000000,

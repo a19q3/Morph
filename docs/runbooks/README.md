@@ -1,7 +1,7 @@
 # Pre-production Operator Runbooks
 
 These runbooks govern the controlled-devnet
-`factory-dynamic-n` pilot. They are executable procedures, not a
+`morph-v3-conditional-batch` pilot. They are executable procedures, not a
 mainnet operations claim.
 
 Read and rehearse all of the following before activation:
@@ -12,6 +12,8 @@ Read and rehearse all of the following before activation:
   reorg recovery, evidence preservation, and restart approval;
 - [`upgrade-and-migration.md`](upgrade-and-migration.md): pre-release resets,
   contract upgrades, and rollback;
+- [`value-limits.md`](value-limits.md): authoring, reviewing, and applying the
+  operator value-limit policy before any real-assets phase;
 - [`rehearsal-2026-08-15.md`](rehearsal-2026-08-15.md): the repository-side dry
   run evidence for this candidate.
 
@@ -32,7 +34,7 @@ an independently operated watchtower as declared by the policy envelope.
 Activation is allowed only when all items are true:
 
 1. `make ci` passes on the exact candidate commit.
-2. `make release-readiness` matches all seven ELF hashes.
+2. `make release-readiness` matches all eight ELF hashes.
 3. The deployment report contains those same CKB data hashes.
 4. The envelope is unexpired and every intended value is below its cap.
 5. The Factory has 2–16 participants and every member verifies its N-of-N initial package.
