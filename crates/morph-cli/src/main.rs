@@ -37,6 +37,7 @@ use morph_core::*;
 #[cfg(feature = "devnet")]
 use rpc::{CkbRpcClient, HeaderView};
 
+mod conditional_packages;
 #[cfg_attr(not(feature = "devnet"), allow(dead_code))]
 mod devnet;
 #[cfg(feature = "devnet")]
@@ -223,6 +224,8 @@ enum Command {
     },
     /// Print a valid host-side factory non-interference package fixture.
     PrintFactoryFixture,
+    /// Print a bounded CKB conditional-batch force-resolution package fixture.
+    PrintConditionalBatchFixture,
     /// Print a conservative all-participant signed factory state package fixture.
     PrintFactoryStateFixture,
     /// Print a host-side authorised-participant signed factory state package fixture.
@@ -280,6 +283,14 @@ enum Command {
     /// Validate a host-side factory non-interference package.
     ValidateFactoryPackage {
         /// Path to the factory update package JSON.
+        path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate a conditional-batch force-resolution package.
+    ValidateConditionalBatchPackage {
+        /// Path to the conditional-batch package JSON.
         path: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
@@ -3029,6 +3040,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&package)?);
             Ok(())
         }
+        Command::PrintConditionalBatchFixture => {
+            let package = conditional_packages::fixture_package()?;
+            println!("{}", serde_json::to_string_pretty(&package)?);
+            Ok(())
+        }
         Command::PrintFactoryStateFixture => {
             let package = factory_packages::fixture_state_package()?;
             println!("{}", serde_json::to_string_pretty(&package)?);
@@ -3193,6 +3209,25 @@ fn main() -> Result<()> {
                 println!(
                     "non_interference_digest={}",
                     summary.non_interference_digest
+                );
+            }
+            Ok(())
+        }
+        Command::ValidateConditionalBatchPackage { path, json } => {
+            let package = conditional_packages::read_package(&path)?;
+            let summary = package.validate()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("conditional batch package ok");
+                println!("batch_id={}", summary.batch_id);
+                println!("transfer_count={}", summary.transfer_count);
+                println!("total_capacity={}", summary.total_capacity);
+                println!("descriptor_commitment={}", summary.descriptor_commitment);
+                println!("input_since={}", summary.input_since);
+                println!(
+                    "resolved_capacities={},{}",
+                    summary.resolved_capacities[0], summary.resolved_capacities[1]
                 );
             }
             Ok(())

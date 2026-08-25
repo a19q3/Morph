@@ -1,5 +1,47 @@
 # Changelog
 
+## v3.0.0 — 2026-08-25
+
+Morph 3.0 closes the conditional-settlement gap exposed by the Counter-Strike
+comparison. It adds a bounded CKB-native conditional batch primitive instead
+of treating a game-server result or an invoice status as enforceable channel
+state.
+
+### Consensus and wire boundary
+
+- Added bilateral descriptor version 3: two participants, zero to eight sorted
+  conditional transfers, SHA-256 or CKB-personalised Blake2b payment hashes,
+  and canonical absolute-block refund heights.
+- Added `morph-batch-lock`. A dispute materialises the whole Vault into one
+  code-hash-pinned Batch Cell; resolution requires every preimage/refund and
+  exactly two plain participant outputs with exact conservation.
+- Extended `morph-vault-lock` with Vault args v2 and fail-closed descriptor-v3
+  dispatch. Conditional xUDT inputs remain rejected.
+- Added distinct conditional parser/lock/value/preimage/timeout error codes and
+  fixed-size host/script parity tests.
+
+### Host, recovery, and application surface
+
+- Added `morph-core::conditional` plus the bilateral backend lifecycle for
+  arming batches, recording idempotent preimages, cooperative consolidation,
+  deterministic force-close construction, and settlement confirmation.
+- Added `morph.conditional_batch_package`, CLI fixture/validator, and Morph Hub
+  durable import. Hub packages must match the current channel ID, funding
+  context, and state number and survive restart.
+- Added TypeScript conditional package types and an authenticated
+  `MorphHubClient.importConditionalBatch` entry point for game/service adapters.
+
+### Release profile
+
+- The controlled-devnet bundle is now `morph-v3-conditional-batch.tar.gz` and
+  contains eight reviewed ELFs. New bilateral Vaults pin the Batch Lock identity
+  at creation.
+- The machine-checked envelope caps batches at eight CKB transfers and a 2,016
+  block refund horizon. Mainnet, real assets, and conditional xUDT remain out of
+  scope.
+- See `docs/v3.0-plan.md` for the architecture, invariants, and Counter-Strike
+  integration guidance.
+
 ## v2.0.0 — 2026-08-16
 
 Morph Channel 2.0 closes the deferred factory reduced-proof protocol work and

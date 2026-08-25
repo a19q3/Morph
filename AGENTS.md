@@ -5,7 +5,7 @@ Guidance for LLM/AI agents working in this repository. Focus on non-obvious know
 ## Project Snapshot
 
 - Morph Channel is a CKB-native off-chain channel + factory prototype. Host-side protocol semantics live in `morph-core`; the on-chain boundary is a set of `no_std` CKB scripts built for `riscv64imac-unknown-none-elf`.
-- Workspace members: four Rust crates (`crates/morph-core`, `crates/morph-cli`, `crates/morph-agent`, `crates/morph-fiber-adapter`) and eight contract crates under `contracts/`. Plus a TypeScript SDK (`sdk/typescript`), a React UI (`ui/morph-hub`), and a small Molecule schema draft (`schemas/morph.mol`).
+- Workspace members: four Rust crates (`crates/morph-core`, `crates/morph-cli`, `crates/morph-agent`, `crates/morph-fiber-adapter`) and nine contract crates under `contracts/` (including the shared script crate). Plus a TypeScript SDK (`sdk/typescript`), a React UI (`ui/morph-hub`), and a small Molecule schema draft (`schemas/morph.mol`).
 - This is devnet research code. README explicitly disclaims mainnet, real-assets, and production-readiness claims.
 
 ## Build, Test, Lint
@@ -21,7 +21,7 @@ Use `make` targets — they orchestrate the right flags.
 | `make source-hygiene` | Syntax-check every shell script, reject npm lockfiles pinned to the unsupported `npmmirror.com` registry, and deny `unwrap`/`expect`/`panic!` in production Rust targets. |
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
-| `make release-readiness` | Verifies all seven built ELF CKB data hashes, the dynamic-N (2–16 participants) no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
+| `make release-readiness` | Verifies all eight built ELF CKB data hashes, the v3 conditional-batch/dynamic-N no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
 | `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-dynamic-n.tar.gz` after readiness checks pass. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |
 | `make fixture-checks` | Generates and validates every protocol fixture (bilateral, factory, splice, watch). Writes to `target/fixture-checks/`. |
@@ -61,6 +61,7 @@ crates/morph-cli           CLI entry point. Subcommands: print/validate fixtures
 contracts/morph-script-common    Shared no_std parsers, lengths, domains, witness envelope dispatch.
 contracts/morph-state-{lock,type}      State cell boundary.
 contracts/morph-vault-lock            Vault settlement, splice checks.
+contracts/morph-batch-lock            Bounded CKB conditional preimage/refund settlement.
 contracts/morph-sponsor-lock          Bounded sponsor budget.
 contracts/morph-factory-{type,vault-lock}  Factory state + reserve, with WitnessEnvelope dispatch.
 contracts/morph-devnet-xudt           Devnet-only xUDT issuer/conservation script.

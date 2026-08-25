@@ -422,3 +422,13 @@ not fetch the RustSec advisory database because the GitHub request failed with
 an IO error. Later cached and CI runs passed the repository's narrow reviewed
 waiver policy. Every release candidate must still rerun `make supply-chain` and
 record fresh CI/independent-build evidence.
+# Morph 3.0 conditional-batch boundary
+
+Morph 3.0 adds descriptor version 3 and `morph-batch-lock`. Conditional CKB
+value is never paid directly from an application result: the signed descriptor
+commits every transfer, the Vault can materialise only the pinned Batch Lock,
+and the Batch Lock independently verifies preimages, canonical absolute-block
+refunds, exact capacity conservation, and exactly two plain settlement outputs.
+Negative CKB-VM coverage rejects wrong preimages, premature refunds, descriptor
+substitution, wrong Batch Lock identity/args, and capacity loss. Conditional
+xUDT remains rejected by design.

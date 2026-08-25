@@ -6,17 +6,18 @@ use morph_core::blake2b256;
 use serde::{Deserialize, Serialize};
 
 pub const CONTRACT_MANIFEST_SCHEMA: &str = "morph.contract_release_manifest";
-pub const FACTORY_RELEASE_PROFILE: &str = "factory-dynamic-n";
+pub const FACTORY_RELEASE_PROFILE: &str = "morph-v3-conditional-batch";
 pub const CONTRACT_RUST_TOOLCHAIN: &str = "1.92.0";
 pub const CONTRACT_BUILD_TARGET: &str = "riscv64imac-unknown-none-elf";
 pub const CONTRACT_BUILD_PROFILE: &str = "release";
 
-const CONTRACTS: [ContractSpec; 7] = [
+const CONTRACTS: [ContractSpec; 8] = [
     ContractSpec::preproduction("morph-state-lock"),
     ContractSpec::preproduction("morph-state-type"),
     ContractSpec::preproduction("morph-factory-type"),
     ContractSpec::preproduction("morph-factory-vault-lock"),
     ContractSpec::preproduction("morph-vault-lock"),
+    ContractSpec::preproduction("morph-batch-lock"),
     ContractSpec::preproduction("morph-sponsor-lock"),
     ContractSpec::devnet_only("morph-devnet-xudt"),
 ];

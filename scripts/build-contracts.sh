@@ -33,6 +33,7 @@ scripts=(
   morph-factory-type
   morph-factory-vault-lock
   morph-vault-lock
+  morph-batch-lock
   morph-sponsor-lock
   morph-devnet-xudt
 )
@@ -50,6 +51,7 @@ env -u CARGO_ENCODED_RUSTFLAGS \
   -p morph-factory-type \
   -p morph-factory-vault-lock \
   -p morph-vault-lock \
+  -p morph-batch-lock \
   -p morph-sponsor-lock \
   -p morph-devnet-xudt
 

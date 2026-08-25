@@ -56,6 +56,8 @@ smoke:
 fixture-checks:
 	mkdir -p target/fixture-checks
 	$(CARGO) run -q -p morph-cli -- validate-fixture
+	$(CARGO) run -q -p morph-cli -- print-conditional-batch-fixture > target/fixture-checks/conditional-batch.json
+	$(CARGO) run -q -p morph-cli -- validate-conditional-batch-package target/fixture-checks/conditional-batch.json --json > target/fixture-checks/conditional-batch-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-fixture > target/fixture-checks/factory-update.json
 	$(CARGO) run -q -p morph-cli -- validate-factory-package target/fixture-checks/factory-update.json --json > target/fixture-checks/factory-update-summary.json
 	$(CARGO) run -q -p morph-cli -- print-factory-state-fixture > target/fixture-checks/factory-state.json

@@ -1,28 +1,27 @@
-# Factory Pre-production Candidate
+# Morph 3 Conditional-Batch Candidate
 
-This directory defines the bounded release profile
-`factory-dynamic-n`. It is a controlled-devnet candidate, not a
-mainnet or real-assets release.
+This directory defines the bounded `morph-v3-conditional-batch` release
+profile. It is a controlled-devnet candidate, not a mainnet or real-assets
+release.
 
-The profile deliberately freezes the executable Factory boundary:
+The profile freezes these executable boundaries:
 
-- 2–16 Factory signing participants with sorted, commitment-bound membership;
-- N-of-N conservative updates and exactly one touched-member authorisation on reduced paths;
-- fixed-layout rights bodies and one-right, depth-256 sparse-Merkle proofs;
-- resize witness version 2 with signed participant withdrawal locks and exact
-  CKB/xUDT payout-output enforcement;
-- exact bilateral and Factory Vault content plus OutPoint commitments;
+- bilateral and dynamic 2–16 participant Factory state/Vault rules;
+- Factory N-of-N and reduced paths through witness-envelope kinds 1–8;
+- bilateral descriptor version 3 for zero to eight CKB conditional transfers;
+- SHA-256 or CKB-personalised Blake2b payment hashes, exact 32-byte preimages,
+  and canonical absolute-block refunds;
+- Vault args v2 pinning the only allowed `morph-batch-lock` code hash/hash type;
+- whole-Vault materialisation into one Batch Cell, followed by exactly two
+  plain participant outputs with no value loss;
+- durable, channel/funding/state-bound force-resolution packages in Morph Hub;
 - direct CKB flows plus the devnet-only `morph-devnet-xudt` test asset;
-- no Hub-submitted chain mutations, RGB++, or Morph-backed Fiber routing.
+- no conditional xUDT, Hub-submitted chain mutations, mainnet deployment, or
+  real-asset use.
 
-`contracts.json` records the exact CKB data hash and size of every RISC-V ELF.
-`envelope.json` is the machine-checked deployment policy. Both are checked by
-CI and included with the built ELFs in the CI release bundle.
-
-`watch-policy.json` is the enforced pilot policy. Copy
-`watch-config.example.json` into operator-controlled storage, replace its
-placeholder channel ID, set `from_block` to no later than channel creation, and
-keep its relative policy/package/cursor paths together.
+`contracts.json` records the exact CKB data hash and size of all eight RISC-V
+ELFs. `envelope.json` is the machine-checked deployment policy. Both are
+checked by CI and included with the ELFs in the deterministic release archive.
 
 Verify a clean build:
 
@@ -32,22 +31,8 @@ make release-readiness
 make package-contract-release
 ```
 
-`make build-contracts` always compiles in a fresh temporary target directory
-and remaps the repository and Cargo-home prefixes to stable virtual paths. This
-prevents machine-specific source paths or restored build caches from changing
-the reviewed CKB Data Hashes.
-
-Changing any contract hash requires a fresh protocol review, contract tests,
-devnet acceptance run, and deliberate manifest update. Never update the
-manifest merely to make CI green.
-
-The current manifest includes the 2026-08-15 withdrawal-binding semantics and
-was refreshed for the v1.10.0 deterministic path-remapped build. Any archive
-produced before this manifest is stale and must not be used;
-`make package-contract-release` always builds a fresh archive from the reviewed
-files in this directory.
-
-The v1.11.0 host, Fiber-adapter, SDK, and Hub follow-up does not change any CKB
-contract source, wire format, reviewed Data Hash, or envelope rule. A v1.11.0
-archive must still be rebuilt from the tagged source and verified against this
-unchanged manifest.
+`make build-contracts` compiles in a fresh target directory and remaps source
+paths so machine-specific paths and restored caches cannot change reviewed CKB
+Data Hashes. A contract-hash change requires protocol review, contract tests,
+devnet acceptance, and a deliberate manifest update; never update the manifest
+only to make CI green.

@@ -4,6 +4,7 @@
 use ckb_hash::new_blake2b;
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use k256::ecdsa::{Signature, VerifyingKey};
+use sha2::{Digest, Sha256};
 
 pub const BYTE32_LEN: usize = 32;
 pub const STATE_HEADER_LEN: usize = 346;
@@ -15,6 +16,23 @@ pub const SPLICE_HEADER_LEN: usize = 485;
 pub const BILATERAL_CKB_DESCRIPTOR_LEN: usize = 2 + 1 + 1 + 2 * (BYTE32_LEN + 8);
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
+pub const CONDITIONAL_TRANSFER_LEN: usize = BYTE32_LEN + 1 + 1 + 2 + BYTE32_LEN + 8 + 8;
+pub const CONDITIONAL_TRANSFER_MAX_COUNT: u8 = 8;
+pub const BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN: usize = 2
+    + 1
+    + 1
+    + BYTE32_LEN
+    + BYTE32_LEN
+    + 1
+    + 7
+    + 2 * (BYTE32_LEN + 8)
+    + CONDITIONAL_TRANSFER_MAX_COUNT as usize * CONDITIONAL_TRANSFER_LEN;
+pub const CONDITIONAL_RESOLUTION_LEN: usize = 1 + BYTE32_LEN;
+pub const CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN: usize = 2
+    + 1
+    + 1
+    + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN
+    + CONDITIONAL_TRANSFER_MAX_COUNT as usize * CONDITIONAL_RESOLUTION_LEN;
 pub const COMPRESSED_SECP256K1_PUBKEY_LEN: usize = 33;
 pub const ECDSA_SIGNATURE_LEN: usize = 64;
 pub const BILATERAL_SIGNATURE_WITNESS_LEN: usize =
@@ -242,6 +260,13 @@ pub const UNBOUND_VAULT_OUTPOINT_COMMITMENT: [u8; BYTE32_LEN] = [0u8; BYTE32_LEN
 pub const SETTLEMENT_DESCRIPTOR_DOMAIN: &[u8] = b"CKB_MORPH_SETTLEMENT_DESCRIPTOR";
 pub const BILATERAL_CKB_DESCRIPTOR_VERSION: u16 = 1;
 pub const BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION: u16 = 2;
+pub const BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION: u16 = 3;
+pub const CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION: u16 = 1;
+pub const CONDITIONAL_HASH_CKB_BLAKE2B: u8 = 0;
+pub const CONDITIONAL_HASH_SHA256: u8 = 1;
+pub const CONDITIONAL_RESOLUTION_UNUSED: u8 = 0;
+pub const CONDITIONAL_RESOLUTION_FULFILL: u8 = 1;
+pub const CONDITIONAL_RESOLUTION_REFUND: u8 = 2;
 pub const STATE_MODE_BILATERAL_PLAINTEXT: u8 = 1;
 pub const STATE_MODE_FACTORY_PROOF: u8 = 2;
 pub const BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT: u8 = 2;
@@ -304,6 +329,13 @@ pub enum ScriptError {
     StateCarrierMismatch = 52,
     SponsorFeeMismatch = 53,
     UnsupportedProtocolProfile = 54,
+    ConditionalDescriptorEncoding = 55,
+    ConditionalBatchOutputMismatch = 56,
+    ConditionalResolutionEncoding = 57,
+    ConditionalPreimageMismatch = 58,
+    ConditionalRefundNotMature = 59,
+    ConditionalBatchLockMismatch = 60,
+    ConditionalValueMismatch = 61,
 }
 
 pub type Result<T> = core::result::Result<T, ScriptError>;
@@ -452,7 +484,9 @@ impl<'a> StateHeader<'a> {
             )
             || !matches!(
                 self.descriptor_version(),
-                BILATERAL_CKB_DESCRIPTOR_VERSION | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                BILATERAL_CKB_DESCRIPTOR_VERSION
+                    | BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION
+                    | BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
             )
         {
             return Err(ScriptError::UnsupportedProtocolProfile);
@@ -3851,6 +3885,350 @@ impl<'a> BilateralCkbXudtSettlementDescriptor<'a> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalTransfer<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalTransfer<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != CONDITIONAL_TRANSFER_LEN {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        let transfer = Self { raw };
+        if transfer.transfer_id().iter().all(|byte| *byte == 0)
+            || transfer.payer_index() > 1
+            || !matches!(
+                transfer.hash_algorithm(),
+                CONDITIONAL_HASH_CKB_BLAKE2B | CONDITIONAL_HASH_SHA256
+            )
+            || transfer.reserved() != 0
+            || transfer.payment_hash().iter().all(|byte| *byte == 0)
+            || transfer.amount() == 0
+            || transfer.refund_after_since() == 0
+            || !since_is_valid_absolute_block(transfer.refund_after_since())
+        {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        Ok(transfer)
+    }
+
+    pub fn transfer_id(&self) -> &'a [u8] {
+        field(self.raw, 0, BYTE32_LEN)
+    }
+
+    pub fn payer_index(&self) -> u8 {
+        self.raw[BYTE32_LEN]
+    }
+
+    pub fn hash_algorithm(&self) -> u8 {
+        self.raw[BYTE32_LEN + 1]
+    }
+
+    pub fn reserved(&self) -> u16 {
+        read_u16(self.raw, BYTE32_LEN + 2)
+    }
+
+    pub fn payment_hash(&self) -> &'a [u8] {
+        field(self.raw, BYTE32_LEN + 4, BYTE32_LEN)
+    }
+
+    pub fn amount(&self) -> u64 {
+        read_u64(self.raw, BYTE32_LEN + 4 + BYTE32_LEN)
+    }
+
+    pub fn refund_after_since(&self) -> u64 {
+        read_u64(self.raw, BYTE32_LEN + 4 + BYTE32_LEN + 8)
+    }
+
+    pub fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BilateralCkbConditionalDescriptor<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> BilateralCkbConditionalDescriptor<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        let descriptor = Self { raw };
+        if descriptor.version() != BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION
+            || descriptor.output_count() != BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT
+            || descriptor.transfer_capacity() != CONDITIONAL_TRANSFER_MAX_COUNT
+            || descriptor.transfer_count() > CONDITIONAL_TRANSFER_MAX_COUNT
+            || descriptor.reserved().iter().any(|byte| *byte != 0)
+            || descriptor.batch_id().iter().all(|byte| *byte == 0)
+            || descriptor
+                .application_context_commitment()
+                .iter()
+                .all(|byte| *byte == 0)
+            || descriptor.lock_hash(0) >= descriptor.lock_hash(1)
+            || descriptor.settled_capacity(0) == 0
+            || descriptor.settled_capacity(1) == 0
+        {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+
+        let mut previous_id: Option<&[u8]> = None;
+        for index in 0..CONDITIONAL_TRANSFER_MAX_COUNT as usize {
+            let raw_transfer = field(
+                descriptor.raw,
+                conditional_descriptor_transfer_offset(index),
+                CONDITIONAL_TRANSFER_LEN,
+            );
+            if index < descriptor.transfer_count() as usize {
+                let transfer = ConditionalTransfer::parse(raw_transfer)?;
+                if previous_id.is_some_and(|previous| previous >= transfer.transfer_id()) {
+                    return Err(ScriptError::ConditionalDescriptorEncoding);
+                }
+                for earlier in 0..index {
+                    if descriptor.transfer(earlier)?.payment_hash() == transfer.payment_hash() {
+                        return Err(ScriptError::ConditionalDescriptorEncoding);
+                    }
+                }
+                previous_id = Some(transfer.transfer_id());
+            } else if raw_transfer.iter().any(|byte| *byte != 0) {
+                return Err(ScriptError::ConditionalDescriptorEncoding);
+            }
+        }
+        descriptor.checked_total_capacity()?;
+        Ok(descriptor)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn output_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn transfer_capacity(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn batch_id(&self) -> &'a [u8] {
+        field(self.raw, 4, BYTE32_LEN)
+    }
+
+    pub fn application_context_commitment(&self) -> &'a [u8] {
+        field(self.raw, 4 + BYTE32_LEN, BYTE32_LEN)
+    }
+
+    pub fn transfer_count(&self) -> u8 {
+        self.raw[4 + 2 * BYTE32_LEN]
+    }
+
+    pub fn reserved(&self) -> &'a [u8] {
+        field(self.raw, 4 + 2 * BYTE32_LEN + 1, 7)
+    }
+
+    pub fn lock_hash(&self, index: usize) -> &'a [u8] {
+        field(
+            self.raw,
+            conditional_descriptor_participant_offset(index),
+            BYTE32_LEN,
+        )
+    }
+
+    pub fn settled_capacity(&self, index: usize) -> u64 {
+        read_u64(
+            self.raw,
+            conditional_descriptor_participant_offset(index) + BYTE32_LEN,
+        )
+    }
+
+    pub fn transfer(&self, index: usize) -> Result<ConditionalTransfer<'a>> {
+        if index >= self.transfer_count() as usize {
+            return Err(ScriptError::ConditionalDescriptorEncoding);
+        }
+        ConditionalTransfer::parse(field(
+            self.raw,
+            conditional_descriptor_transfer_offset(index),
+            CONDITIONAL_TRANSFER_LEN,
+        ))
+    }
+
+    pub fn checked_total_capacity(&self) -> Result<u64> {
+        let mut total = self
+            .settled_capacity(0)
+            .checked_add(self.settled_capacity(1))
+            .ok_or(ScriptError::ConditionalValueMismatch)?;
+        for index in 0..self.transfer_count() as usize {
+            total = total
+                .checked_add(self.transfer(index)?.amount())
+                .ok_or(ScriptError::ConditionalValueMismatch)?;
+        }
+        Ok(total)
+    }
+
+    pub fn commitment(&self) -> [u8; BYTE32_LEN] {
+        settlement_descriptor_commitment(self.raw)
+    }
+
+    pub fn raw(&self) -> &'a [u8] {
+        self.raw
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalResolution<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalResolution<'a> {
+    pub fn kind(&self) -> u8 {
+        self.raw[0]
+    }
+
+    pub fn preimage(&self) -> &'a [u8] {
+        field(self.raw, 1, BYTE32_LEN)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConditionalBatchResolutionWitness<'a> {
+    raw: &'a [u8],
+}
+
+impl<'a> ConditionalBatchResolutionWitness<'a> {
+    pub fn parse(raw: &'a [u8]) -> Result<Self> {
+        if raw.len() != CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        let witness = Self { raw };
+        if witness.version() != CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION
+            || witness.reserved() != 0
+        {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        let descriptor = witness.descriptor()?;
+        if witness.resolution_count() != descriptor.transfer_count() {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        for index in 0..CONDITIONAL_TRANSFER_MAX_COUNT as usize {
+            let resolution = witness.resolution_unchecked(index);
+            if index < witness.resolution_count() as usize {
+                match resolution.kind() {
+                    CONDITIONAL_RESOLUTION_FULFILL => {
+                        if resolution.preimage().iter().all(|byte| *byte == 0) {
+                            return Err(ScriptError::ConditionalResolutionEncoding);
+                        }
+                    }
+                    CONDITIONAL_RESOLUTION_REFUND => {
+                        if resolution.preimage().iter().any(|byte| *byte != 0) {
+                            return Err(ScriptError::ConditionalResolutionEncoding);
+                        }
+                    }
+                    _ => return Err(ScriptError::ConditionalResolutionEncoding),
+                }
+            } else if resolution.kind() != CONDITIONAL_RESOLUTION_UNUSED
+                || resolution.preimage().iter().any(|byte| *byte != 0)
+            {
+                return Err(ScriptError::ConditionalResolutionEncoding);
+            }
+        }
+        Ok(witness)
+    }
+
+    pub fn version(&self) -> u16 {
+        read_u16(self.raw, 0)
+    }
+
+    pub fn resolution_count(&self) -> u8 {
+        self.raw[2]
+    }
+
+    pub fn reserved(&self) -> u8 {
+        self.raw[3]
+    }
+
+    pub fn descriptor(&self) -> Result<BilateralCkbConditionalDescriptor<'a>> {
+        BilateralCkbConditionalDescriptor::parse(field(
+            self.raw,
+            4,
+            BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN,
+        ))
+    }
+
+    pub fn resolution(&self, index: usize) -> Result<ConditionalResolution<'a>> {
+        if index >= self.resolution_count() as usize {
+            return Err(ScriptError::ConditionalResolutionEncoding);
+        }
+        Ok(self.resolution_unchecked(index))
+    }
+
+    pub fn resolved_capacities(&self, input_since: u64) -> Result<[u64; 2]> {
+        let descriptor = self.descriptor()?;
+        let mut capacities = [
+            descriptor.settled_capacity(0),
+            descriptor.settled_capacity(1),
+        ];
+        for index in 0..descriptor.transfer_count() as usize {
+            let transfer = descriptor.transfer(index)?;
+            let resolution = self.resolution(index)?;
+            let recipient = match resolution.kind() {
+                CONDITIONAL_RESOLUTION_FULFILL => {
+                    let actual =
+                        conditional_payment_hash(transfer.hash_algorithm(), resolution.preimage())?;
+                    if actual.as_slice() != transfer.payment_hash() {
+                        return Err(ScriptError::ConditionalPreimageMismatch);
+                    }
+                    1usize.saturating_sub(transfer.payer_index() as usize)
+                }
+                CONDITIONAL_RESOLUTION_REFUND => {
+                    validate_absolute_block_since(input_since, transfer.refund_after_since())
+                        .map_err(|_| ScriptError::ConditionalRefundNotMature)?;
+                    transfer.payer_index() as usize
+                }
+                _ => return Err(ScriptError::ConditionalResolutionEncoding),
+            };
+            capacities[recipient] = capacities[recipient]
+                .checked_add(transfer.amount())
+                .ok_or(ScriptError::ConditionalValueMismatch)?;
+        }
+        if capacities[0]
+            .checked_add(capacities[1])
+            .ok_or(ScriptError::ConditionalValueMismatch)?
+            != descriptor.checked_total_capacity()?
+        {
+            return Err(ScriptError::ConditionalValueMismatch);
+        }
+        Ok(capacities)
+    }
+
+    fn resolution_unchecked(&self, index: usize) -> ConditionalResolution<'a> {
+        ConditionalResolution {
+            raw: field(
+                self.raw,
+                conditional_resolution_offset(index),
+                CONDITIONAL_RESOLUTION_LEN,
+            ),
+        }
+    }
+}
+
+pub fn conditional_payment_hash(algorithm: u8, preimage: &[u8]) -> Result<[u8; BYTE32_LEN]> {
+    if preimage.len() != BYTE32_LEN {
+        return Err(ScriptError::ConditionalResolutionEncoding);
+    }
+    match algorithm {
+        CONDITIONAL_HASH_CKB_BLAKE2B => Ok(blake2b256(&[preimage])),
+        CONDITIONAL_HASH_SHA256 => {
+            let digest = Sha256::digest(preimage);
+            let mut hash = [0u8; BYTE32_LEN];
+            hash.copy_from_slice(&digest);
+            Ok(hash)
+        }
+        _ => Err(ScriptError::ConditionalDescriptorEncoding),
+    }
+}
+
 pub fn settlement_descriptor_commitment(raw: &[u8]) -> [u8; 32] {
     blake2b256(&[SETTLEMENT_DESCRIPTOR_DOMAIN, raw])
 }
@@ -4236,6 +4614,29 @@ fn since_is_valid_relative_block(value: u64) -> bool {
         && (value & CKB_SINCE_METRIC_TYPE_FLAG_MASK == CKB_SINCE_LOCK_BY_BLOCK_NUMBER)
 }
 
+pub fn absolute_block_since(value: u64) -> Result<u64> {
+    if value & !CKB_SINCE_VALUE_MASK != 0 {
+        return Err(ScriptError::ConditionalRefundNotMature);
+    }
+    Ok(CKB_SINCE_LOCK_BY_BLOCK_NUMBER | value)
+}
+
+pub fn validate_absolute_block_since(input_since: u64, required_since: u64) -> Result<()> {
+    if !since_is_valid_absolute_block(input_since)
+        || !since_is_valid_absolute_block(required_since)
+        || (input_since & CKB_SINCE_VALUE_MASK) < (required_since & CKB_SINCE_VALUE_MASK)
+    {
+        return Err(ScriptError::ConditionalRefundNotMature);
+    }
+    Ok(())
+}
+
+fn since_is_valid_absolute_block(value: u64) -> bool {
+    (value & CKB_SINCE_LOCK_TYPE_FLAG == 0)
+        && (value & CKB_SINCE_REMAIN_FLAGS_BITS == 0)
+        && (value & CKB_SINCE_METRIC_TYPE_FLAG_MASK == CKB_SINCE_LOCK_BY_BLOCK_NUMBER)
+}
+
 pub fn vault_cell_commitment(
     lock_hash: &[u8],
     capacity: u64,
@@ -4511,6 +4912,18 @@ fn descriptor_output_offset(index: usize) -> usize {
 
 fn ckb_xudt_descriptor_output_offset(index: usize) -> usize {
     4 + BYTE32_LEN + index * (BYTE32_LEN + 8 + 16)
+}
+
+fn conditional_descriptor_participant_offset(index: usize) -> usize {
+    4 + 2 * BYTE32_LEN + 1 + 7 + index * (BYTE32_LEN + 8)
+}
+
+fn conditional_descriptor_transfer_offset(index: usize) -> usize {
+    4 + 2 * BYTE32_LEN + 1 + 7 + 2 * (BYTE32_LEN + 8) + index * CONDITIONAL_TRANSFER_LEN
+}
+
+fn conditional_resolution_offset(index: usize) -> usize {
+    4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN + index * CONDITIONAL_RESOLUTION_LEN
 }
 
 fn splice_vault_asset_offset(index: usize) -> usize {
@@ -8775,5 +9188,116 @@ mod tests {
         assert_eq!(witness.exit_digest(), exit_digest);
         verify_factory_state_signatures(&factory_header, &witness.factory_signature().unwrap())
             .unwrap();
+    }
+
+    fn conditional_descriptor_bytes() -> [u8; BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN] {
+        let mut raw = [0u8; BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN];
+        put_u16(&mut raw, 0, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION);
+        raw[2] = BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT;
+        raw[3] = CONDITIONAL_TRANSFER_MAX_COUNT;
+        raw[4..36].fill(3);
+        raw[36..68].fill(4);
+        raw[68] = 2;
+        let participant_0 = conditional_descriptor_participant_offset(0);
+        raw[participant_0..participant_0 + BYTE32_LEN].fill(1);
+        put_u64(&mut raw, participant_0 + BYTE32_LEN, 100);
+        let participant_1 = conditional_descriptor_participant_offset(1);
+        raw[participant_1..participant_1 + BYTE32_LEN].fill(2);
+        put_u64(&mut raw, participant_1 + BYTE32_LEN, 200);
+
+        let preimages = [[7u8; BYTE32_LEN], [8u8; BYTE32_LEN]];
+        let algorithms = [CONDITIONAL_HASH_SHA256, CONDITIONAL_HASH_CKB_BLAKE2B];
+        let amounts = [25, 40];
+        let refund_blocks = [500, 600];
+        for index in 0..2 {
+            let offset = conditional_descriptor_transfer_offset(index);
+            raw[offset..offset + BYTE32_LEN].fill(5 + index as u8);
+            raw[offset + BYTE32_LEN] = index as u8;
+            raw[offset + BYTE32_LEN + 1] = algorithms[index];
+            let payment_hash =
+                conditional_payment_hash(algorithms[index], &preimages[index]).unwrap();
+            raw[offset + BYTE32_LEN + 4..offset + 2 * BYTE32_LEN + 4]
+                .copy_from_slice(&payment_hash);
+            put_u64(&mut raw, offset + 2 * BYTE32_LEN + 4, amounts[index]);
+            put_u64(
+                &mut raw,
+                offset + 2 * BYTE32_LEN + 12,
+                absolute_block_since(refund_blocks[index]).unwrap(),
+            );
+        }
+        raw
+    }
+
+    #[test]
+    fn parses_and_resolves_conditional_batch() {
+        let descriptor_raw = conditional_descriptor_bytes();
+        let descriptor = BilateralCkbConditionalDescriptor::parse(&descriptor_raw).unwrap();
+        assert_eq!(descriptor.transfer_count(), 2);
+        assert_eq!(descriptor.checked_total_capacity().unwrap(), 365);
+
+        let mut witness_raw = [0u8; CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN];
+        put_u16(
+            &mut witness_raw,
+            0,
+            CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION,
+        );
+        witness_raw[2] = 2;
+        witness_raw[4..4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN]
+            .copy_from_slice(&descriptor_raw);
+        let first = conditional_resolution_offset(0);
+        witness_raw[first] = CONDITIONAL_RESOLUTION_FULFILL;
+        witness_raw[first + 1..first + 1 + BYTE32_LEN].fill(7);
+        let second = conditional_resolution_offset(1);
+        witness_raw[second] = CONDITIONAL_RESOLUTION_REFUND;
+
+        let witness = ConditionalBatchResolutionWitness::parse(&witness_raw).unwrap();
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(600).unwrap())
+                .unwrap(),
+            [100, 265]
+        );
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(599).unwrap())
+                .unwrap_err(),
+            ScriptError::ConditionalRefundNotMature
+        );
+    }
+
+    #[test]
+    fn conditional_batch_rejects_wrong_preimage_and_duplicate_hash() {
+        let descriptor_raw = conditional_descriptor_bytes();
+        let mut witness_raw = [0u8; CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN];
+        put_u16(
+            &mut witness_raw,
+            0,
+            CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION,
+        );
+        witness_raw[2] = 2;
+        witness_raw[4..4 + BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN]
+            .copy_from_slice(&descriptor_raw);
+        let first = conditional_resolution_offset(0);
+        witness_raw[first] = CONDITIONAL_RESOLUTION_FULFILL;
+        witness_raw[first + 1..first + 1 + BYTE32_LEN].fill(9);
+        let second = conditional_resolution_offset(1);
+        witness_raw[second] = CONDITIONAL_RESOLUTION_REFUND;
+        let witness = ConditionalBatchResolutionWitness::parse(&witness_raw).unwrap();
+        assert_eq!(
+            witness
+                .resolved_capacities(absolute_block_since(600).unwrap())
+                .unwrap_err(),
+            ScriptError::ConditionalPreimageMismatch
+        );
+
+        let mut duplicate = descriptor_raw;
+        let first_hash = conditional_descriptor_transfer_offset(0) + BYTE32_LEN + 4;
+        let second_hash = conditional_descriptor_transfer_offset(1) + BYTE32_LEN + 4;
+        let hash = duplicate[first_hash..first_hash + BYTE32_LEN].to_vec();
+        duplicate[second_hash..second_hash + BYTE32_LEN].copy_from_slice(&hash);
+        assert_eq!(
+            BilateralCkbConditionalDescriptor::parse(&duplicate).unwrap_err(),
+            ScriptError::ConditionalDescriptorEncoding
+        );
     }
 }

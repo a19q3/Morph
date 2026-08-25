@@ -13,6 +13,7 @@ flowchart LR
     M3 --> M4["M4<br/>Factory reduced proofs"]
     M4 --> M5["M5<br/>Watchtower + stateful audit"]
     M5 --> M6["M6<br/>External readiness work"]
+    M5 --> M8["M8<br/>Conditional batches"]
 ```
 
 The current repository sits at the devnet research implementation stage:
@@ -31,6 +32,7 @@ acceptance gates exist locally. Production work remains open.
 | M5: Watchtower and audit gates | Implemented locally | Watch config, policy checks, JSONL/webhook alerts, stale-package guard, smoke assertions, stateful assertions, and budget profiles. |
 | M6: Production readiness | Controlled-devnet candidate; production open | Factory has a checked manifest/envelope and runbooks. Publication now has bounded node-informed fees, CKB RBF, least-privilege two-operator local evidence, and induced-reorg recovery. External review, independent rebuild/operators, and repeated public-network measurements remain open. |
 | M7: Factory 2.0 surface (v2.0) | Implemented locally | Multi-right reduced updates (envelope kind 8), compact variable-depth sparse-Merkle proofs, and the operator value-limit policy with runbook; see `docs/v2.0-plan.md`. Devnet save/publication plumbing for kind 8 packages is the remaining follow-up. |
+| M8: Conditional batch surface (v3.0) | Implemented locally | Descriptor v3, bounded preimage/absolute-refund leaves, cooperative consolidation, Vault-to-Batch materialisation, Batch CKB-VM enforcement, canonical CLI package, and durable Hub import; see `docs/v3.0-plan.md`. |
 
 ## Current Factory Witness Baseline
 
@@ -56,6 +58,7 @@ authorisation boundary.
 | Factory 2.0 tooling | Devnet save/publication command for kind 8 state-cell packages. | Host validation, fixtures, and on-chain evidence exist; the live-node publication flow mirrors `save-factory-merkle-update-package` and needs a devnet rehearsal. |
 | Factory membership | Larger participant sets with production ergonomics. | The wire supports 2-16 participants; production ergonomics still need proof-size, fee, and UX evidence. |
 | Watchtower | Independent multi-operator deployment evidence. | Two isolated local operator scopes pass; distinct hosts, administrators, RPC providers, and alert paths still require rehearsal. |
+| Conditional batches | xUDT leaves, cross-channel routing, and production auto-broadcast. | v3 deliberately ships a bounded CKB-only primitive first; broader assets and routing need separate wire and operational evidence. |
 | Network conditions | Repeated public-network reorg, delay, and fee-pressure runs. | A deterministic local fault-injection gate passes, but one devnet sample is not a production measurement. |
 | Release process | Independent reproduction and release-owner sign-off. | Deterministic bundles, reviewed ELF hashes, successful main-branch CI upload/attestation, and staging cleanup exist; a successful independent external rebuild and release-owner sign-off remain open. |
 | Policy | Value-limit policy and operator runbooks. | Delivered in 2.0 (`morph-core::policy`, `value-limit-check`, `docs/runbooks/value-limits.md`); enforcing it in live publication automation remains operator process work. |

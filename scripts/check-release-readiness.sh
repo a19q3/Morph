@@ -34,4 +34,4 @@ cargo run -q -p morph-cli -- validate-watch-policy \
 cargo run -q -p morph-cli -- validate-watch-config \
   release/factory-preproduction/watch-config.example.json
 
-echo "Factory pre-production release-readiness documents verified"
+echo "Morph v3 conditional-batch release-readiness documents verified"

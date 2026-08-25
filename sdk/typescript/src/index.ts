@@ -78,6 +78,93 @@ export interface FairExchangeClaim {
   receipt: PaymentReceipt;
 }
 
+export type ConditionalHashAlgorithm = "ckb_blake2b" | "sha256";
+
+export interface ConditionalTransfer {
+  transfer_id: string;
+  payer_lock_hash: string;
+  hash_algorithm: ConditionalHashAlgorithm;
+  payment_hash: string;
+  amount: number;
+  refund_after_block: number;
+}
+
+export type ConditionalResolution =
+  | { kind: "fulfill"; transfer_id: string; preimage: string }
+  | { kind: "refund"; transfer_id: string };
+
+export interface ConditionalBatchPackage {
+  schema: "morph.conditional_batch_package";
+  channel_id: string;
+  funding_context_id: string;
+  state_number: number;
+  batch_id: string;
+  application_context_commitment: string;
+  participants: Array<{ settlement_lock_hash: string; settled_capacity: number }>;
+  transfers: ConditionalTransfer[];
+  resolutions: ConditionalResolution[];
+  input_since: number;
+  descriptor_hex: string;
+  descriptor_commitment: string;
+  resolution_witness_hex: string;
+  resolved_capacities: [number, number];
+}
+
+/** Authenticated client for durable conditional recovery packages in Morph Hub. */
+export class MorphHubClient {
+  private readonly baseUrl: URL;
+
+  constructor(
+    baseUrl: string,
+    private readonly bearerToken?: string,
+  ) {
+    this.baseUrl = new URL(baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`);
+    if (
+      this.baseUrl.protocol !== "https:"
+      && !(this.baseUrl.protocol === "http:" && isLoopbackHostname(this.baseUrl.hostname))
+    ) {
+      throw new TypeError("Morph Hub URL must use HTTPS unless it is loopback HTTP");
+    }
+    if (bearerToken !== undefined && bearerToken.length < 32) {
+      throw new TypeError("Morph Hub bearer token must contain at least 32 bytes");
+    }
+  }
+
+  state(): Promise<Record<string, unknown>> {
+    return this.request("api/state");
+  }
+
+  importConditionalBatch(value: ConditionalBatchPackage): Promise<Record<string, unknown>> {
+    if (value.schema !== "morph.conditional_batch_package") {
+      throw new TypeError("unsupported conditional batch package schema");
+    }
+    return this.request("api/conditional-batches", value);
+  }
+
+  private async request(path: string, body?: unknown): Promise<Record<string, unknown>> {
+    const response = await fetch(new URL(path, this.baseUrl), {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        ...(body === undefined ? {} : { "content-type": "application/json" }),
+        ...(this.bearerToken === undefined
+          ? {}
+          : { authorization: `Bearer ${this.bearerToken}` }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      redirect: "error",
+    });
+    const decoded = await readJsonResponseLimited(response, MAX_RESPONSE_BYTES);
+    if (!response.ok) {
+      const message = isRecord(decoded) && typeof decoded.error === "string"
+        ? decoded.error
+        : "Morph Hub request failed";
+      throw new MorphAgentError(message, response.status);
+    }
+    if (!isRecord(decoded)) throw new Error("Morph Hub returned a non-object response");
+    return decoded;
+  }
+}
+
 export class MorphAgentError extends Error {
   constructor(
     message: string,

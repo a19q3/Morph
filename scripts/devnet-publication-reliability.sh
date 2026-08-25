@@ -839,7 +839,7 @@ MORPH_CLI_SHA256="$(sha256sum "$MORPH_BIN" | awk '{print $1}')"
 HARNESS_SHA256="$(sha256sum scripts/devnet-publication-reliability.sh | awk '{print $1}')"
 CONTRACT_HASH_MANIFEST="$OUT_DIR/contract-sha256.txt"
 for contract in \
-  morph-state-lock morph-state-type morph-vault-lock morph-sponsor-lock \
+  morph-state-lock morph-state-type morph-vault-lock morph-batch-lock morph-sponsor-lock \
   morph-factory-type morph-factory-vault-lock morph-devnet-xudt
 do
   sha256sum "target/riscv64imac-unknown-none-elf/release/$contract"

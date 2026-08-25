@@ -14,7 +14,7 @@ make package-contract-release
 ```
 
 The Rust release must be 1.92.0, the Git worktree must be clean, and the
-manifest verifier must report seven matching scripts. Compare the deployment
+manifest verifier must report eight matching scripts. Compare the deployment
 report's `data_hash` values with
 `release/factory-preproduction/contracts.json` before creating cells.
 
@@ -51,7 +51,7 @@ package before using it to supersede, exit, or splice.
 
 Retain:
 
-- every signed state, Factory, reduced-right, exit, and splice package;
+- every signed state, conditional-batch, Factory, reduced-right, exit, and splice package;
 - watch configuration, policy, cursor, health, and JSONL alerts;
 - the deployment report and exact release bundle;
 - smoke/stateful summaries and transaction hashes;

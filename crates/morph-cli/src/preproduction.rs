@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, ensure};
 use morph_script_common::{
-    FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS, FACTORY_REDUCED_RIGHTS_COUNT,
+    CONDITIONAL_TRANSFER_MAX_COUNT, FACTORY_MAX_PARTICIPANTS, FACTORY_MIN_PARTICIPANTS,
+    FACTORY_REDUCED_RIGHTS_COUNT,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,7 @@ const MAX_FEE_PER_TRANSACTION_SHANNONS: u64 = 200_000_000;
 const MAX_TOTAL_PILOT_CAPACITY_SHANNONS: u64 = 4_000_000_000_000;
 const MAX_DEVNET_XUDT_UNITS_PER_FACTORY: u128 = 1_000_000_000_000;
 const MIN_WATCHTOWER_DETECTION_DEPTH: u64 = 3;
+const MAX_CONDITIONAL_REFUND_BLOCK_DELTA: u64 = 2_016;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreproductionEnvelope {
@@ -36,6 +38,7 @@ pub struct PreproductionEnvelope {
     pub hub_chain_actions_allowed: bool,
     pub factory: FactoryLimits,
     pub channel: ChannelLimits,
+    pub conditional_batch: ConditionalBatchLimits,
     pub sponsor: SponsorLimits,
     pub xudt: XudtLimits,
     pub watchtower: WatchtowerLimits,
@@ -54,6 +57,15 @@ pub struct FactoryLimits {
 pub struct ChannelLimits {
     pub max_capacity_shannons: u64,
     pub max_total_pilot_capacity_shannons: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConditionalBatchLimits {
+    pub enabled: bool,
+    pub ckb_only: bool,
+    pub max_transfers: u32,
+    pub max_refund_block_delta: u64,
+    pub allowed_hash_algorithms: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,6 +184,28 @@ impl PreproductionEnvelope {
         ensure!(
             self.channel.max_capacity_shannons <= self.factory.max_capacity_shannons,
             "channel cap must not exceed factory cap"
+        );
+        ensure!(
+            self.conditional_batch.enabled,
+            "conditional batch profile must be explicitly enabled"
+        );
+        ensure!(
+            self.conditional_batch.ckb_only,
+            "the reviewed v3 conditional batch profile is CKB-only"
+        );
+        ensure!(
+            self.conditional_batch.max_transfers == CONDITIONAL_TRANSFER_MAX_COUNT as u32,
+            "conditional max_transfers must match the executable bound {}",
+            CONDITIONAL_TRANSFER_MAX_COUNT
+        );
+        ensure!(
+            (1..=MAX_CONDITIONAL_REFUND_BLOCK_DELTA)
+                .contains(&self.conditional_batch.max_refund_block_delta),
+            "conditional max_refund_block_delta exceeds reviewed cap {MAX_CONDITIONAL_REFUND_BLOCK_DELTA}"
+        );
+        ensure!(
+            self.conditional_batch.allowed_hash_algorithms == ["ckb_blake2b", "sha256"],
+            "conditional hash algorithms must be ckb_blake2b and sha256"
         );
         ensure_nonzero_at_most(
             self.channel.max_total_pilot_capacity_shannons,
@@ -293,6 +327,13 @@ mod tests {
             channel: ChannelLimits {
                 max_capacity_shannons: MAX_CHANNEL_CAPACITY_SHANNONS,
                 max_total_pilot_capacity_shannons: MAX_TOTAL_PILOT_CAPACITY_SHANNONS,
+            },
+            conditional_batch: ConditionalBatchLimits {
+                enabled: true,
+                ckb_only: true,
+                max_transfers: CONDITIONAL_TRANSFER_MAX_COUNT as u32,
+                max_refund_block_delta: MAX_CONDITIONAL_REFUND_BLOCK_DELTA,
+                allowed_hash_algorithms: vec!["ckb_blake2b".to_string(), "sha256".to_string()],
             },
             sponsor: SponsorLimits {
                 max_capacity_shannons: MAX_SPONSOR_CAPACITY_SHANNONS,

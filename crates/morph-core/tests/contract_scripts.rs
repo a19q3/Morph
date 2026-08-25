@@ -15,6 +15,10 @@ use morph_core::types::{
 use morph_core::validation::{
     factory_right_sparse_proof, factory_right_sparse_proof_compact, factory_right_sparse_root,
 };
+use morph_core::{
+    ConditionalBatch, ConditionalHashAlgorithm, ConditionalParticipant, ConditionalResolution,
+    ConditionalTransferSpec, derive_conditional_payment_hash,
+};
 use morph_script_common::{
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
     BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT,
@@ -47,14 +51,16 @@ use morph_script_common::{
     WITNESS_ENVELOPE_KIND_FACTORY_MULTI_RIGHT_UPDATE, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_RIGHTS, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_SPLICE,
     WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_KIND_FACTORY_SPLICE,
-    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, blake2b256, encode_state_header,
-    factory_local_exit_digest, factory_local_exit_witness_len, factory_merkle_update_witness_len,
-    factory_multi_right_update_witness_len, factory_participants_commitment,
-    factory_reduced_exit_witness_len, factory_reduced_rights_witness_len,
-    factory_reduced_splice_witness_len, factory_signature_witness_len, factory_splice_witness_len,
-    participants_commitment, relative_block_since, settlement_descriptor_commitment,
-    vault_cell_commitment, vault_outpoint_commitment, witness_envelope_body_commitment,
+    WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC, WitnessEnvelope, absolute_block_since,
+    blake2b256, encode_state_header, factory_local_exit_digest, factory_local_exit_witness_len,
+    factory_merkle_update_witness_len, factory_multi_right_update_witness_len,
+    factory_participants_commitment, factory_reduced_exit_witness_len,
+    factory_reduced_rights_witness_len, factory_reduced_splice_witness_len,
+    factory_signature_witness_len, factory_splice_witness_len, participants_commitment,
+    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
+    vault_outpoint_commitment, witness_envelope_body_commitment,
 };
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -196,6 +202,19 @@ fn vault_args(
     args.push(state_type.hash_type().as_slice()[0]);
     args.extend_from_slice(state_lock.code_hash().as_slice());
     args.push(state_lock.hash_type().as_slice()[0]);
+    args
+}
+
+fn vault_args_v2(
+    anchor: [u8; 32],
+    finalise_since: u64,
+    state_type: &ckb_testtool::ckb_types::packed::Script,
+    state_lock: &ckb_testtool::ckb_types::packed::Script,
+    batch_lock_template: &ckb_testtool::ckb_types::packed::Script,
+) -> Vec<u8> {
+    let mut args = vault_args(anchor, finalise_since, state_type, state_lock);
+    args.extend_from_slice(batch_lock_template.code_hash().as_slice());
+    args.push(batch_lock_template.hash_type().as_slice()[0]);
     args
 }
 
@@ -7738,7 +7757,7 @@ fn state_type_rejects_invalid_participant_signature() {
 
 #[ignore = "requires `make build-contracts`"]
 #[test]
-fn vault_lock_accepts_finalise_with_current_state() {
+fn vault_lock_accepts_finalise_with_current_state_and_v2_args() {
     let mut context = Context::default();
     let alice_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![1]));
     let bob_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![2]));
@@ -7753,10 +7772,20 @@ fn vault_lock_accepts_finalise_with_current_state() {
     let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
     let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
     let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
+    let batch_code = context.deploy_cell(contract_bin("morph-batch-lock"));
+    let batch_template = context
+        .build_script(&batch_code, Bytes::new())
+        .expect("batch lock template");
     let vault_lock = deploy_contract(
         &mut context,
         "morph-vault-lock",
-        vault_args(FUNDING_ANCHOR, finalise_since, &state_type, &state_lock),
+        vault_args_v2(
+            FUNDING_ANCHOR,
+            finalise_since,
+            &state_type,
+            &state_lock,
+            &batch_template,
+        ),
     );
     let mut state_data = header_raw(3, PHASE_SETTLING);
     state_data[214..246].copy_from_slice(&descriptor_commitment);
@@ -8849,6 +8878,354 @@ fn state_and_vault_splice_in_tx(carrier_activation_reserve: u64) -> (Context, Tr
         .build();
     let tx = context.complete_tx(tx);
     (context, tx)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConditionalBatchTamper {
+    None,
+    WrongPreimage,
+    PrematureRefund,
+    OutputCapacity,
+    DescriptorCommitment,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConditionalVaultTamper {
+    None,
+    LegacyVaultArgs,
+    WrongBatchCode,
+    WrongBatchArgs,
+    BatchCapacity,
+}
+
+fn conditional_vault_finalise_tx(tamper: ConditionalVaultTamper) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let first_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![41]));
+    let second_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![42]));
+    let mut participant_locks = [first_lock, second_lock];
+    participant_locks.sort_by_key(|lock| lock.calc_script_hash().as_slice().to_vec());
+    let participant_hashes: [[u8; 32]; 2] = [
+        participant_locks[0].calc_script_hash().unpack(),
+        participant_locks[1].calc_script_hash().unpack(),
+    ];
+    let preimage = [7u8; 32];
+    let batch = ConditionalBatch {
+        batch_id: [3; 32],
+        application_context_commitment: [4; 32],
+        participants: [
+            ConditionalParticipant {
+                settlement_lock_hash: participant_hashes[0],
+                settled_capacity: ALICE_CAPACITY - 1_000,
+            },
+            ConditionalParticipant {
+                settlement_lock_hash: participant_hashes[1],
+                settled_capacity: BOB_CAPACITY,
+            },
+        ],
+        transfers: vec![ConditionalTransferSpec {
+            transfer_id: [5; 32],
+            payer_lock_hash: participant_hashes[0],
+            hash_algorithm: ConditionalHashAlgorithm::Sha256,
+            payment_hash: derive_conditional_payment_hash(
+                ConditionalHashAlgorithm::Sha256,
+                &preimage,
+            )
+            .unwrap(),
+            amount: 1_000,
+            refund_after_block: 500,
+        }],
+    };
+    let descriptor = batch.encode_descriptor().unwrap();
+    assert_eq!(batch.total_capacity().unwrap(), CELL_CAPACITY);
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
+    let finalise_since = relative_since(0);
+    let state_type = deploy_contract(&mut context, "morph-state-type", state_args(finalise_since));
+    let state_type_hash: [u8; 32] = state_type.calc_script_hash().unpack();
+    let state_lock = deploy_contract(&mut context, "morph-state-lock", state_type_hash.to_vec());
+
+    let batch_code = context.deploy_cell(contract_bin("morph-batch-lock"));
+    let batch_template = context
+        .build_script(&batch_code, Bytes::new())
+        .expect("batch lock template");
+    let vault_lock_args = if tamper == ConditionalVaultTamper::LegacyVaultArgs {
+        vault_args(FUNDING_ANCHOR, finalise_since, &state_type, &state_lock)
+    } else {
+        vault_args_v2(
+            FUNDING_ANCHOR,
+            finalise_since,
+            &state_type,
+            &state_lock,
+            &batch_template,
+        )
+    };
+    let vault_lock = deploy_contract(&mut context, "morph-vault-lock", vault_lock_args);
+    let mut state_data = header_raw(3, PHASE_SETTLING);
+    state_data[214..246].copy_from_slice(&descriptor_commitment);
+    put_u16(
+        &mut state_data,
+        246,
+        morph_script_common::BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+    );
+    set_state_vault_materialisation_root(
+        &mut state_data,
+        vault_commitment(&vault_lock, CELL_CAPACITY, None, &[]),
+    );
+    let state_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(state_lock)
+            .type_(Some(state_type).pack())
+            .build(),
+        Bytes::from(state_data.to_vec()),
+    );
+    let vault_out_point = create_bound_vault_cell(
+        &mut context,
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(vault_lock)
+            .build(),
+        Bytes::new(),
+    );
+
+    let mut batch_args = [0u8; BYTE32_LEN + 8 + BYTE32_LEN];
+    batch_args[..BYTE32_LEN].fill(3);
+    let batch_state_number = if tamper == ConditionalVaultTamper::WrongBatchArgs {
+        4u64
+    } else {
+        3u64
+    };
+    batch_args[BYTE32_LEN..BYTE32_LEN + 8].copy_from_slice(&batch_state_number.to_le_bytes());
+    batch_args[BYTE32_LEN + 8..].copy_from_slice(&descriptor_commitment);
+    let batch_lock = if tamper == ConditionalVaultTamper::WrongBatchCode {
+        deploy_always_success_with_args(&mut context, Bytes::from(batch_args.to_vec()))
+    } else {
+        context
+            .build_script(&batch_code, Bytes::from(batch_args.to_vec()))
+            .expect("batch lock")
+    };
+    let batch_capacity = if tamper == ConditionalVaultTamper::BatchCapacity {
+        CELL_CAPACITY - 1
+    } else {
+        CELL_CAPACITY
+    };
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(state_out_point)
+                .since(finalise_since)
+                .build(),
+        )
+        .input(
+            CellInput::new_builder()
+                .previous_output(vault_out_point)
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(batch_capacity)
+                .lock(batch_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(descriptor.to_vec().into()))
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_materialises_conditional_batch_cell() {
+    let (context, tx) = conditional_vault_finalise_tx(ConditionalVaultTamper::None);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("conditional vault finalisation should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_conditional_descriptor_under_legacy_args() {
+    let (context, tx) = conditional_vault_finalise_tx(ConditionalVaultTamper::LegacyVaultArgs);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_wrong_conditional_batch_code() {
+    let (context, tx) = conditional_vault_finalise_tx(ConditionalVaultTamper::WrongBatchCode);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_wrong_conditional_batch_args() {
+    let (context, tx) = conditional_vault_finalise_tx(ConditionalVaultTamper::WrongBatchArgs);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn vault_lock_rejects_conditional_batch_capacity_loss() {
+    let (context, tx) = conditional_vault_finalise_tx(ConditionalVaultTamper::BatchCapacity);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+fn conditional_batch_resolution_tx(tamper: ConditionalBatchTamper) -> (Context, TransactionView) {
+    let mut context = Context::default();
+    let first_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![31]));
+    let second_lock = deploy_always_success_with_args(&mut context, Bytes::from(vec![32]));
+    let mut locks = [first_lock, second_lock];
+    locks.sort_by_key(|lock| lock.calc_script_hash().as_slice().to_vec());
+    let lock_hashes: [[u8; 32]; 2] = [
+        locks[0].calc_script_hash().unpack(),
+        locks[1].calc_script_hash().unpack(),
+    ];
+    let sha_preimage = [7u8; 32];
+    let blake_preimage = [8u8; 32];
+    let batch = ConditionalBatch {
+        batch_id: [3; 32],
+        application_context_commitment: [4; 32],
+        participants: [
+            ConditionalParticipant {
+                settlement_lock_hash: lock_hashes[0],
+                settled_capacity: CELL_CAPACITY / 2 - 1_000,
+            },
+            ConditionalParticipant {
+                settlement_lock_hash: lock_hashes[1],
+                settled_capacity: CELL_CAPACITY / 2 - 2_000,
+            },
+        ],
+        transfers: vec![
+            ConditionalTransferSpec {
+                transfer_id: [5; 32],
+                payer_lock_hash: lock_hashes[0],
+                hash_algorithm: ConditionalHashAlgorithm::Sha256,
+                payment_hash: derive_conditional_payment_hash(
+                    ConditionalHashAlgorithm::Sha256,
+                    &sha_preimage,
+                )
+                .unwrap(),
+                amount: 1_000,
+                refund_after_block: 500,
+            },
+            ConditionalTransferSpec {
+                transfer_id: [6; 32],
+                payer_lock_hash: lock_hashes[1],
+                hash_algorithm: ConditionalHashAlgorithm::CkbBlake2b,
+                payment_hash: derive_conditional_payment_hash(
+                    ConditionalHashAlgorithm::CkbBlake2b,
+                    &blake_preimage,
+                )
+                .unwrap(),
+                amount: 2_000,
+                refund_after_block: 600,
+            },
+        ],
+    };
+    let resolutions = BTreeMap::from([
+        (
+            [5; 32],
+            ConditionalResolution::Fulfill {
+                preimage: if tamper == ConditionalBatchTamper::WrongPreimage {
+                    [9; 32]
+                } else {
+                    sha_preimage
+                },
+            },
+        ),
+        ([6; 32], ConditionalResolution::Refund),
+    ]);
+    let descriptor = batch.encode_descriptor().unwrap();
+    let witness = batch.encode_resolution_witness(&resolutions).unwrap();
+    let mut descriptor_commitment = settlement_descriptor_commitment(&descriptor);
+    if tamper == ConditionalBatchTamper::DescriptorCommitment {
+        descriptor_commitment[0] ^= 1;
+    }
+    let mut args = [0u8; BYTE32_LEN + 8 + BYTE32_LEN];
+    args[..BYTE32_LEN].fill(3);
+    args[BYTE32_LEN..BYTE32_LEN + 8].copy_from_slice(&1u64.to_le_bytes());
+    args[BYTE32_LEN + 8..].copy_from_slice(&descriptor_commitment);
+    let batch_lock = deploy_contract(&mut context, "morph-batch-lock", args.to_vec());
+    let batch_out_point = context.create_cell(
+        CellOutput::new_builder()
+            .capacity(CELL_CAPACITY)
+            .lock(batch_lock)
+            .build(),
+        Bytes::new(),
+    );
+    let since_block = if tamper == ConditionalBatchTamper::PrematureRefund {
+        599
+    } else {
+        600
+    };
+    let mut first_capacity = CELL_CAPACITY / 2 - 1_000;
+    if tamper == ConditionalBatchTamper::OutputCapacity {
+        first_capacity -= 1;
+    }
+    let tx = TransactionBuilder::default()
+        .input(
+            CellInput::new_builder()
+                .previous_output(batch_out_point)
+                .since(absolute_block_since(since_block).unwrap())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(first_capacity)
+                .lock(locks[0].clone())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(CELL_CAPACITY / 2 + 1_000)
+                .lock(locks[1].clone())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(witness_with_input_type(witness.to_vec().into()))
+        .build();
+    let tx = context.complete_tx(tx);
+    (context, tx)
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn batch_lock_resolves_mixed_fulfill_and_refund() {
+    let (context, tx) = conditional_batch_resolution_tx(ConditionalBatchTamper::None);
+    context
+        .verify_tx(&tx, MAX_CYCLES)
+        .expect("conditional batch resolution should verify");
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn batch_lock_rejects_wrong_preimage() {
+    let (context, tx) = conditional_batch_resolution_tx(ConditionalBatchTamper::WrongPreimage);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn batch_lock_rejects_premature_refund() {
+    let (context, tx) = conditional_batch_resolution_tx(ConditionalBatchTamper::PrematureRefund);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn batch_lock_rejects_output_capacity_mismatch() {
+    let (context, tx) = conditional_batch_resolution_tx(ConditionalBatchTamper::OutputCapacity);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
+}
+
+#[ignore = "requires `make build-contracts`"]
+#[test]
+fn batch_lock_rejects_descriptor_commitment_mismatch() {
+    let (context, tx) =
+        conditional_batch_resolution_tx(ConditionalBatchTamper::DescriptorCommitment);
+    assert!(context.verify_tx(&tx, MAX_CYCLES).is_err());
 }
 
 #[ignore = "requires `make build-contracts`"]

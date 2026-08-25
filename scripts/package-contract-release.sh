@@ -19,7 +19,7 @@ cleanup_staging_dir() {
   esac
 }
 trap cleanup_staging_dir EXIT
-ARTIFACT_DIR="$STAGING_DIR/factory-dynamic-n"
+ARTIFACT_DIR="$STAGING_DIR/morph-v3-conditional-batch"
 mkdir -p "$ARTIFACT_DIR/contracts"
 
 scripts=(
@@ -28,6 +28,7 @@ scripts=(
   morph-factory-type
   morph-factory-vault-lock
   morph-vault-lock
+  morph-batch-lock
   morph-sponsor-lock
   morph-devnet-xudt
 )
@@ -57,11 +58,11 @@ install -m 0644 \
     watch-policy.json watch-config.example.json > SHA256SUMS
 )
 
-STAGED_ARCHIVE="$STAGING_DIR/factory-dynamic-n.tar.gz"
+STAGED_ARCHIVE="$STAGING_DIR/morph-v3-conditional-batch.tar.gz"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
-  -C "$STAGING_DIR" -cf - factory-dynamic-n \
+  -C "$STAGING_DIR" -cf - morph-v3-conditional-batch \
   | gzip -n > "$STAGED_ARCHIVE"
-ARCHIVE_PATH="$OUTPUT_PARENT/factory-dynamic-n.tar.gz"
+ARCHIVE_PATH="$OUTPUT_PARENT/morph-v3-conditional-batch.tar.gz"
 install -m 0644 "$STAGED_ARCHIVE" "$ARCHIVE_PATH"
 
 echo "temporary release staging verified and scheduled for cleanup: $ARTIFACT_DIR"

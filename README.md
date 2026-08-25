@@ -4,7 +4,7 @@ Morph Channel is a CKB-native channel prototype. It shows how two people, or a
 small factory of people, can move channel state off chain while CKB keeps the
 enforceable evidence on chain.
 
-Current source release: **v2.0.0 — Factory 2.0 Surface and Value-Limit Policy**.
+Current source release: **v3.0.0 — Conditional Batch Settlement**.
 
 The short version is:
 
@@ -13,6 +13,8 @@ The short version is:
 - publication fees are paid by sponsor cells, not by channel balances;
 - newer signed state can replace older settling state before finalisation;
 - factories can hold shared reserve rights and materialise child channels.
+- a signed state can carry up to eight hash/time-locked CKB transfers, with a
+  cooperative consolidation path and a script-enforced Batch Cell fallback.
 
 This is devnet software and a research implementation, not mainnet
 infrastructure. The useful claim today is narrower: the repository contains
@@ -31,6 +33,8 @@ flowchart LR
     S --> V["Vault Cell<br/>channel value"]
     P["Sponsor Cell<br/>publication fees"] --> S
     V --> W["Withdrawal outputs"]
+    V --> B["Batch Cell<br/>bounded conditional fallback"]
+    B --> W
 ```
 
 This separation is the core idea from the paper:
@@ -66,6 +70,12 @@ Implemented locally:
   siblings; see `docs/v2.0-plan.md`;
 - a fail-closed operator value-limit policy with a runbook
   (`docs/runbooks/value-limits.md`), checked by `morph-cli value-limit-check`;
+- conditional CKB batches (descriptor version 3): zero to eight independent
+  transfers using SHA-256 or CKB Blake2b preimages, canonical absolute-block
+  refunds, whole-Vault Batch Cell materialisation, and exact two-party payout;
+- a native host lifecycle for arming a batch, recording preimages,
+  cooperatively consolidating it, or producing deterministic force-close
+  evidence; CLI fixtures and Morph Hub persist the same canonical package;
 - two-stage bilateral/Factory Vault activation that binds enforceable state to
   an exact CKB OutPoint and rejects byte-identical clone substitution;
 - type-bound FactoryState locking and exact State/Factory carrier-capacity
@@ -87,7 +97,7 @@ Still not claimed:
 - independent release artefact and supply-chain sign-off;
 - any real-asset value envelope.
 
-The bounded `factory-dynamic-n` controlled-devnet candidate has a
+The bounded `morph-v3-conditional-batch` controlled-devnet candidate has a
 machine-checked no-real-assets envelope, exact CKB contract data-hash manifest,
 operator runbooks, and CI provenance configuration. Verify it with:
 
@@ -112,6 +122,10 @@ flowchart LR
     E --> B
     A --> F["Factory reserve"]
     F --> G["Child channel"]
+    B --> H["Conditional batch"]
+    H -->|"cooperate"| B
+    H -->|"dispute"| I["Batch Cell"]
+    I --> D
 ```
 
 ### Open A Channel
@@ -174,6 +188,7 @@ Important scripts:
 - `morph-state-type`: state-cell progression and signed-state checks;
 - `morph-state-lock`: state-cell lock boundary;
 - `morph-vault-lock`: vault settlement and splice checks;
+- `morph-batch-lock`: bounded conditional preimage/absolute-refund settlement;
 - `morph-sponsor-lock`: bounded sponsor fee spending;
 - `morph-factory-type`: factory state progression, signatures, reduced proofs,
   exits, and envelope dispatch;
