@@ -21,15 +21,16 @@ use devnet::{
     FactoryReducedRightsSmokeOptions, FactoryReducedXudtExitSmokeOptions,
     FactoryReducedXudtNegativeExitSmokeOptions, FactorySmokeOptions, FactorySpliceSmokeOptions,
     FactoryXudtNegativeSmokeOptions, FactoryXudtSmokeOptions, FactoryXudtSpliceSmokeOptions,
-    FinaliseChannelOptions, FinaliseSinceNegativeSmokeOptions, FundSponsorOptions,
-    OpenChannelOptions, OpenFactoryOptions, PublishLatestStatePackageOptions, PublishStateOptions,
-    SaveFactoryMerkleUpdatePackageOptions, SaveFactoryReducedRightsPackageOptions,
-    SaveFactoryReducedSplicePackageOptions, SaveFactorySplicePackageOptions,
-    SaveFactoryStatePackageOptions, SaveSplicePackageOptions, SaveStatePackageOptions,
-    SpliceNegativeSmokeOptions, SpliceSmokeOptions, SponsorBudgetNegativeSmokeOptions,
-    SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions, UpdateFactoryOptions,
-    WatchLatestStatePackageOptions, XudtNegativeSmokeOptions, XudtSmokeOptions,
-    XudtSpliceSmokeOptions,
+    FinaliseChannelOptions, FinaliseConditionalBatchOptions, FinaliseSinceNegativeSmokeOptions,
+    FundSponsorOptions, OpenChannelOptions, OpenFactoryOptions, PublishConditionalBatchOptions,
+    PublishLatestStatePackageOptions, PublishStateOptions, ResolveConditionalBatchOptions,
+    SaveConditionalBatchPackageOptions, SaveFactoryMerkleUpdatePackageOptions,
+    SaveFactoryReducedRightsPackageOptions, SaveFactoryReducedSplicePackageOptions,
+    SaveFactorySplicePackageOptions, SaveFactoryStatePackageOptions, SaveSplicePackageOptions,
+    SaveStatePackageOptions, SpliceNegativeSmokeOptions, SpliceSmokeOptions,
+    SponsorBudgetNegativeSmokeOptions, SponsorPolicyNegativeSmokeOptions, SupersedeSmokeOptions,
+    UpdateFactoryOptions, WatchLatestStatePackageOptions, XudtNegativeSmokeOptions,
+    XudtSmokeOptions, XudtSpliceSmokeOptions,
 };
 use k256::ecdsa::signature::hazmat::PrehashSigner;
 use k256::ecdsa::{Signature, SigningKey};
@@ -97,6 +98,12 @@ enum CkbSpliceKindArg {
 enum SpliceAssetArg {
     Ckb,
     Xudt,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ChannelDescriptorProfileArg {
+    PlainV1,
+    ConditionalV3,
 }
 
 #[cfg(feature = "devnet")]
@@ -292,6 +299,23 @@ enum Command {
     ValidateConditionalBatchPackage {
         /// Path to the conditional-batch package JSON.
         path: std::path::PathBuf,
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a newly learned preimage to a conditional recovery package.
+    FulfillConditionalBatchPackage {
+        /// Existing signed conditional package.
+        input: std::path::PathBuf,
+        /// Transfer id whose refund resolution should become a fulfillment.
+        #[arg(long)]
+        transfer_id: String,
+        /// Exact 32-byte payment preimage.
+        #[arg(long)]
+        preimage: String,
+        /// Destination for the monotonic replacement package.
+        #[arg(long)]
+        output: std::path::PathBuf,
         /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -703,6 +727,9 @@ enum DevnetCommand {
         /// Devnet Bob channel key.
         #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
         bob_private_key: String,
+        /// Initial settlement descriptor family. conditional-v3 enables bounded conditional batches.
+        #[arg(long, value_enum, default_value = "plain-v1")]
+        descriptor_profile: ChannelDescriptorProfileArg,
         /// Capacity placed under the channel vault lock, in shannons.
         #[arg(long, default_value_t = 20_000_000_000)]
         vault_capacity: u64,
@@ -2002,6 +2029,25 @@ enum DevnetCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Publish a participant-signed conditional-batch package using a SponsorCell.
+    PublishConditionalBatch {
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
+        private_key: String,
+        #[arg(long)]
+        state_out_point: String,
+        #[arg(long)]
+        sponsor_out_point: String,
+        #[arg(long)]
+        package: std::path::PathBuf,
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        #[arg(long)]
+        json: bool,
+    },
     /// Save a signed splice package from the live StateCell/VaultCell pair.
     SaveSplicePackage {
         /// Devnet Alice channel signing key.
@@ -2095,6 +2141,26 @@ enum DevnetCommand {
         #[arg(long, default_value = "target/morph-state-packages")]
         store_dir: std::path::PathBuf,
         /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build and save a signed descriptor-v3 conditional-batch package from live cells.
+    SaveConditionalBatchPackage {
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
+        alice_private_key: String,
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
+        bob_private_key: String,
+        #[arg(long)]
+        state_out_point: String,
+        #[arg(long)]
+        vault_out_point: String,
+        #[arg(long)]
+        state_number: Option<u64>,
+        /// JSON plan containing participants, transfers, and currently known resolutions.
+        #[arg(long)]
+        plan: std::path::PathBuf,
+        #[arg(long, default_value = "target/morph-conditional-batch.json")]
+        output: std::path::PathBuf,
         #[arg(long)]
         json: bool,
     },
@@ -2384,6 +2450,48 @@ enum DevnetCommand {
         #[arg(long, default_value_t = 4)]
         mine_blocks: u64,
         /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Materialise a signed descriptor-v3 state and VaultCell into a BatchCell.
+    FinaliseConditionalBatch {
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
+        private_key: String,
+        #[arg(long)]
+        state_out_point: String,
+        #[arg(long)]
+        vault_out_point: String,
+        #[arg(long)]
+        package: std::path::PathBuf,
+        #[arg(long, default_value_t = 4)]
+        finalise_since: u64,
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve a BatchCell to the two participant locks using the package witness.
+    ResolveConditionalBatch {
+        #[arg(long, default_value = "target/riscv64imac-unknown-none-elf/release")]
+        contracts_dir: std::path::PathBuf,
+        #[arg(long, env = "MORPH_DEVNET_PRIVATE_KEY", hide_env_values = true)]
+        private_key: String,
+        #[arg(long, env = "MORPH_ALICE_PRIVATE_KEY", hide_env_values = true)]
+        alice_private_key: String,
+        #[arg(long, env = "MORPH_BOB_PRIVATE_KEY", hide_env_values = true)]
+        bob_private_key: String,
+        #[arg(long)]
+        batch_out_point: String,
+        #[arg(long)]
+        package: std::path::PathBuf,
+        #[arg(long, default_value_t = 100_000_000)]
+        fee: u64,
+        #[arg(long, default_value_t = 4)]
+        mine_blocks: u64,
         #[arg(long)]
         json: bool,
     },
@@ -3228,6 +3336,36 @@ fn main() -> Result<()> {
                 println!(
                     "resolved_capacities={},{}",
                     summary.resolved_capacities[0], summary.resolved_capacities[1]
+                );
+            }
+            Ok(())
+        }
+        Command::FulfillConditionalBatchPackage {
+            input,
+            transfer_id,
+            preimage,
+            output,
+            json,
+        } => {
+            let package = conditional_packages::read_package(&input)?;
+            let replacement = package.with_fulfillment(
+                parse_cli_bytes32("transfer_id", &transfer_id)?,
+                parse_cli_bytes32("preimage", &preimage)?,
+            )?;
+            conditional_packages::write_package(&output, &replacement)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&replacement.validate()?)?
+                );
+            } else {
+                println!("conditional batch package updated");
+                println!("path={}", output.display());
+                println!("batch_id={}", replacement.batch_id);
+                println!("input_since={}", replacement.input_since);
+                println!(
+                    "resolved_capacities={},{}",
+                    replacement.resolved_capacities[0], replacement.resolved_capacities[1]
                 );
             }
             Ok(())

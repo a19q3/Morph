@@ -18,6 +18,11 @@ pub const BILATERAL_CKB_XUDT_DESCRIPTOR_LEN: usize =
     2 + 1 + 1 + BYTE32_LEN + 2 * (BYTE32_LEN + 8 + 16);
 pub const CONDITIONAL_TRANSFER_LEN: usize = BYTE32_LEN + 1 + 1 + 2 + BYTE32_LEN + 8 + 8;
 pub const CONDITIONAL_TRANSFER_MAX_COUNT: u8 = 8;
+/// Minimum capacity of each plain participant settlement output in the bounded
+/// v3 profile. The descriptor carries only lock hashes, so the profile admits
+/// the canonical 61-byte plain CKB output floor and rejects descriptors that
+/// could resolve to consensus-invalid dust outputs.
+pub const CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY: u64 = 6_100_000_000;
 pub const BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN: usize = 2
     + 1
     + 1
@@ -3967,9 +3972,10 @@ impl<'a> BilateralCkbConditionalDescriptor<'a> {
                 .application_context_commitment()
                 .iter()
                 .all(|byte| *byte == 0)
+            || descriptor.lock_hash(0).iter().all(|byte| *byte == 0)
             || descriptor.lock_hash(0) >= descriptor.lock_hash(1)
-            || descriptor.settled_capacity(0) == 0
-            || descriptor.settled_capacity(1) == 0
+            || descriptor.settled_capacity(0) < CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY
+            || descriptor.settled_capacity(1) < CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY
         {
             return Err(ScriptError::ConditionalDescriptorEncoding);
         }
@@ -9200,10 +9206,18 @@ mod tests {
         raw[68] = 2;
         let participant_0 = conditional_descriptor_participant_offset(0);
         raw[participant_0..participant_0 + BYTE32_LEN].fill(1);
-        put_u64(&mut raw, participant_0 + BYTE32_LEN, 100);
+        put_u64(
+            &mut raw,
+            participant_0 + BYTE32_LEN,
+            CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 100,
+        );
         let participant_1 = conditional_descriptor_participant_offset(1);
         raw[participant_1..participant_1 + BYTE32_LEN].fill(2);
-        put_u64(&mut raw, participant_1 + BYTE32_LEN, 200);
+        put_u64(
+            &mut raw,
+            participant_1 + BYTE32_LEN,
+            CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 200,
+        );
 
         let preimages = [[7u8; BYTE32_LEN], [8u8; BYTE32_LEN]];
         let algorithms = [CONDITIONAL_HASH_SHA256, CONDITIONAL_HASH_CKB_BLAKE2B];
@@ -9233,7 +9247,10 @@ mod tests {
         let descriptor_raw = conditional_descriptor_bytes();
         let descriptor = BilateralCkbConditionalDescriptor::parse(&descriptor_raw).unwrap();
         assert_eq!(descriptor.transfer_count(), 2);
-        assert_eq!(descriptor.checked_total_capacity().unwrap(), 365);
+        assert_eq!(
+            descriptor.checked_total_capacity().unwrap(),
+            2 * CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 365
+        );
 
         let mut witness_raw = [0u8; CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN];
         put_u16(
@@ -9255,7 +9272,10 @@ mod tests {
             witness
                 .resolved_capacities(absolute_block_since(600).unwrap())
                 .unwrap(),
-            [100, 265]
+            [
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 100,
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 265,
+            ]
         );
         assert_eq!(
             witness
@@ -9297,6 +9317,28 @@ mod tests {
         duplicate[second_hash..second_hash + BYTE32_LEN].copy_from_slice(&hash);
         assert_eq!(
             BilateralCkbConditionalDescriptor::parse(&duplicate).unwrap_err(),
+            ScriptError::ConditionalDescriptorEncoding
+        );
+    }
+
+    #[test]
+    fn conditional_descriptor_rejects_zero_lock_and_dust_output() {
+        let mut zero_lock = conditional_descriptor_bytes();
+        let participant_0 = conditional_descriptor_participant_offset(0);
+        zero_lock[participant_0..participant_0 + BYTE32_LEN].fill(0);
+        assert_eq!(
+            BilateralCkbConditionalDescriptor::parse(&zero_lock).unwrap_err(),
+            ScriptError::ConditionalDescriptorEncoding
+        );
+
+        let mut dust = conditional_descriptor_bytes();
+        put_u64(
+            &mut dust,
+            participant_0 + BYTE32_LEN,
+            CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY - 1,
+        );
+        assert_eq!(
+            BilateralCkbConditionalDescriptor::parse(&dust).unwrap_err(),
             ScriptError::ConditionalDescriptorEncoding
         );
     }

@@ -3,6 +3,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+use morph_script_common::CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY;
 use morph_script_common::{
     BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
     BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN,
@@ -1092,11 +1094,11 @@ mod tests {
             participants: [
                 crate::ConditionalParticipant {
                     settlement_lock_hash: [21; 32],
-                    settled_capacity: 6_000,
+                    settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 6_000,
                 },
                 crate::ConditionalParticipant {
                     settlement_lock_hash: [22; 32],
-                    settled_capacity: 4_000,
+                    settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 4_000,
                 },
             ],
             transfers: Vec::new(),
@@ -1139,11 +1141,11 @@ mod tests {
                 participants: [
                     crate::ConditionalParticipant {
                         settlement_lock_hash: [21; 32],
-                        settled_capacity: 5_500,
+                        settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 5_500,
                     },
                     crate::ConditionalParticipant {
                         settlement_lock_hash: [22; 32],
-                        settled_capacity: 3_700,
+                        settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 3_700,
                     },
                 ],
                 transfers: vec![
@@ -1458,7 +1460,13 @@ mod tests {
             .begin_conditional_force_resolution(&batch.batch_id, 600)
             .unwrap();
         assert_eq!(package.armed_state_number, 1);
-        assert_eq!(package.payout_capacities, [5_500, 4_500]);
+        assert_eq!(
+            package.payout_capacities,
+            [
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 5_500,
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 4_500,
+            ]
+        );
         assert_eq!(package.input_since, absolute_block_since(600).unwrap());
         assert!(matches!(
             backend
@@ -1516,11 +1524,11 @@ mod tests {
             participants: [
                 crate::ConditionalParticipant {
                     settlement_lock_hash: [21; 32],
-                    settled_capacity: 5_500,
+                    settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 5_500,
                 },
                 crate::ConditionalParticipant {
                     settlement_lock_hash: [22; 32],
-                    settled_capacity: 4_500,
+                    settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 4_500,
                 },
             ],
             transfers: Vec::new(),

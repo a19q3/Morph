@@ -17,7 +17,7 @@ use morph_core::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::conditional_packages::StoredConditionalBatchPackage;
+use crate::conditional_packages::{StoredConditionalBatchPackage, StoredConditionalResolution};
 use crate::rpc::CkbRpcClient;
 use crate::watch_alert::{WatchAlertEvent, WatchAlertSeverity, WatchtowerAlert};
 
@@ -386,11 +386,35 @@ struct HubView {
     channels: Vec<ChannelView>,
     invoices: Vec<InvoiceView>,
     factories: Vec<FactoryView>,
-    conditional_batches: Vec<StoredConditionalBatchPackage>,
+    conditional_batches: Vec<ConditionalBatchView>,
     events: Vec<EventView>,
     required_flows: Vec<&'static str>,
     completed_flows: Vec<&'static str>,
     missing_flows: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct ConditionalBatchView {
+    schema: String,
+    channel_id: String,
+    funding_context_id: String,
+    state_number: String,
+    batch_id: String,
+    application_context_commitment: String,
+    descriptor_commitment: String,
+    transfer_count: usize,
+    input_since: String,
+    resolved_capacities: [String; 2],
+    resolutions: Vec<ConditionalResolutionView>,
+    actionable: bool,
+    provenance: RecordProvenanceView,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ConditionalResolutionView {
+    Fulfill { transfer_id: String },
+    Refund { transfer_id: String },
 }
 
 #[derive(Serialize)]
@@ -1099,7 +1123,12 @@ impl HubStore {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
-            conditional_batches: self.state.conditional_batches.values().cloned().collect(),
+            conditional_batches: self
+                .state
+                .conditional_batches
+                .values()
+                .map(|package| conditional_batch_view(package, &self.state.node.channels))
+                .collect::<Result<Vec<_>>>()?,
             events: self.state.events.iter().map(event_view).collect(),
             required_flows: MorphNodeState::required_business_flows()
                 .iter()
@@ -1289,6 +1318,11 @@ impl HubRuntimeState {
         for package in persisted.conditional_batches {
             package.validate()?;
             let batch_id = parse_bytes32("batch_id", &package.batch_id)?;
+            let channel_id = parse_bytes32("channel_id", &package.channel_id)?;
+            ensure!(
+                node.channels.contains_key(&channel_id),
+                "conditional batch package references an unknown restored channel"
+            );
             ensure!(
                 conditional_batches.insert(batch_id, package).is_none(),
                 "conditional batch ids must be unique"
@@ -1589,19 +1623,38 @@ impl HubServer {
                     channel.state_number == package.state_number,
                     "conditional package state number must match the current channel state"
                 );
-                if let Some(existing) = store.state.conditional_batches.get(&batch_id) {
+                ensure!(
+                    channel.phase == Phase::Settling,
+                    "conditional package channel must be in settling phase"
+                );
+                let replacing = if let Some(existing) =
+                    store.state.conditional_batches.get(&batch_id).cloned()
+                {
+                    if existing == package {
+                        return Ok(());
+                    }
                     ensure!(
-                        existing == &package,
-                        "conditional batch id already exists with different contents"
+                        package.is_monotonic_replacement_for(&existing)?,
+                        "conditional batch replacement must preserve the signed authorization and cannot remove a known preimage"
                     );
-                    return Ok(());
-                }
+                    true
+                } else {
+                    false
+                };
                 store.state.conditional_batches.insert(batch_id, package);
                 store.push_event(
                     EventSeverity::Warning,
-                    "conditional_batch_imported",
+                    if replacing {
+                        "conditional_batch_updated"
+                    } else {
+                        "conditional_batch_imported"
+                    },
                     Some(batch_id),
-                    "Validated conditional force-resolution package stored for watchtower recovery",
+                    if replacing {
+                        "Conditional recovery package updated with monotonic resolution knowledge"
+                    } else {
+                        "Signed conditional recovery package stored for watchtower recovery"
+                    },
                 )?;
                 Ok(())
             }),
@@ -3143,6 +3196,53 @@ fn channel_view(
     })
 }
 
+fn conditional_batch_view(
+    package: &StoredConditionalBatchPackage,
+    channels: &BTreeMap<Bytes32, MorphChannelRecord>,
+) -> Result<ConditionalBatchView> {
+    let channel_id = parse_bytes32("channel_id", &package.channel_id)?;
+    let package_funding_context = parse_bytes32("funding_context_id", &package.funding_context_id)?;
+    let actionable = channels.get(&channel_id).is_some_and(|channel| {
+        channel.phase == Phase::Settling
+            && channel.funding_context_id == package_funding_context
+            && channel.state_number == package.state_number
+    });
+    let resolutions = package
+        .resolutions
+        .iter()
+        .map(|resolution| match resolution {
+            StoredConditionalResolution::Fulfill { transfer_id, .. } => {
+                ConditionalResolutionView::Fulfill {
+                    transfer_id: transfer_id.clone(),
+                }
+            }
+            StoredConditionalResolution::Refund { transfer_id } => {
+                ConditionalResolutionView::Refund {
+                    transfer_id: transfer_id.clone(),
+                }
+            }
+        })
+        .collect();
+    Ok(ConditionalBatchView {
+        schema: package.schema.clone(),
+        channel_id: package.channel_id.clone(),
+        funding_context_id: package.funding_context_id.clone(),
+        state_number: package.state_number.to_string(),
+        batch_id: package.batch_id.clone(),
+        application_context_commitment: package.application_context_commitment.clone(),
+        descriptor_commitment: package.descriptor_commitment.clone(),
+        transfer_count: package.transfers.len(),
+        input_since: package.input_since.to_string(),
+        resolved_capacities: [
+            package.resolved_capacities[0].to_string(),
+            package.resolved_capacities[1].to_string(),
+        ],
+        resolutions,
+        actionable,
+        provenance: local_state_provenance(),
+    })
+}
+
 fn invoice_view(
     stored: &StoredMorphInvoice,
     _local_node_id: Bytes32,
@@ -3460,6 +3560,28 @@ mod tests {
         assert_eq!(imported.status, 200);
         let body: serde_json::Value = serde_json::from_slice(&imported.body).unwrap();
         assert_eq!(body["conditional_batches"].as_array().unwrap().len(), 1);
+        assert_eq!(body["conditional_batches"][0]["actionable"], true);
+        let public_body = String::from_utf8(imported.body).unwrap();
+        assert!(!public_body.contains("preimage"));
+        assert!(!public_body.contains("descriptor_hex"));
+        assert!(!public_body.contains("resolution_witness_hex"));
+        assert!(!public_body.contains("signed_state_witness_hex"));
+
+        let replacement = package.with_fulfillment([0x62; 32], [0x52; 32]).unwrap();
+        let updated = route_json(
+            &server,
+            "POST",
+            "/api/conditional-batches",
+            serde_json::to_value(&replacement).unwrap(),
+        );
+        assert_eq!(updated.status, 200);
+        let downgrade = route_json(
+            &server,
+            "POST",
+            "/api/conditional-batches",
+            serde_json::to_value(&package).unwrap(),
+        );
+        assert_eq!(downgrade.status, 400);
 
         let (path, persisted_pubkey) = {
             let store = server.store.lock().unwrap();
@@ -3468,6 +3590,10 @@ mod tests {
         let reloaded =
             HubStore::load_or_create(path, &persisted_pubkey, MorphNetwork::Devnet).unwrap();
         assert_eq!(reloaded.state.conditional_batches.len(), 1);
+        assert_eq!(
+            reloaded.state.conditional_batches.values().next().unwrap(),
+            &replacement
+        );
     }
 
     #[test]

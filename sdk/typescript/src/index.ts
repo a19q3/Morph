@@ -85,8 +85,8 @@ export interface ConditionalTransfer {
   payer_lock_hash: string;
   hash_algorithm: ConditionalHashAlgorithm;
   payment_hash: string;
-  amount: number;
-  refund_after_block: number;
+  amount: string;
+  refund_after_block: string;
 }
 
 export type ConditionalResolution =
@@ -97,17 +97,19 @@ export interface ConditionalBatchPackage {
   schema: "morph.conditional_batch_package";
   channel_id: string;
   funding_context_id: string;
-  state_number: number;
+  state_number: string;
   batch_id: string;
   application_context_commitment: string;
-  participants: Array<{ settlement_lock_hash: string; settled_capacity: number }>;
+  participants: Array<{ settlement_lock_hash: string; settled_capacity: string }>;
   transfers: ConditionalTransfer[];
   resolutions: ConditionalResolution[];
-  input_since: number;
+  input_since: string;
   descriptor_hex: string;
   descriptor_commitment: string;
   resolution_witness_hex: string;
-  resolved_capacities: [number, number];
+  resolved_capacities: [string, string];
+  signed_state_header_hex: string;
+  signed_state_witness_hex: string;
 }
 
 /** Authenticated client for durable conditional recovery packages in Morph Hub. */
@@ -138,6 +140,18 @@ export class MorphHubClient {
     if (value.schema !== "morph.conditional_batch_package") {
       throw new TypeError("unsupported conditional batch package schema");
     }
+    assertCanonicalU64("state_number", value.state_number);
+    assertCanonicalU64("input_since", value.input_since);
+    value.participants.forEach((participant, index) => {
+      assertCanonicalU64(`participants[${index}].settled_capacity`, participant.settled_capacity);
+    });
+    value.transfers.forEach((transfer, index) => {
+      assertCanonicalU64(`transfers[${index}].amount`, transfer.amount);
+      assertCanonicalU64(`transfers[${index}].refund_after_block`, transfer.refund_after_block);
+    });
+    value.resolved_capacities.forEach((capacity, index) => {
+      assertCanonicalU64(`resolved_capacities[${index}]`, capacity);
+    });
     return this.request("api/conditional-batches", value);
   }
 
@@ -608,4 +622,10 @@ function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function assertCanonicalU64(label: string, value: string): void {
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > 18_446_744_073_709_551_615n) {
+    throw new TypeError(`${label} must be a canonical unsigned u64 decimal string`);
+  }
 }

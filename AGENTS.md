@@ -22,7 +22,7 @@ Use `make` targets — they orchestrate the right flags.
 | `make build-contracts` | Build all RISC-V scripts to `target/riscv64imac-unknown-none-elf/release/`. Required before `make contract-tests`. |
 | `make contract-tests` | Runs `crates/morph-core/tests/contract_scripts.rs` against the built ELFs (uses `--ignored --test-threads=1`). Fails if ELFs are missing. |
 | `make release-readiness` | Verifies all eight built ELF CKB data hashes, the v3 conditional-batch/dynamic-N no-real-assets envelope, and required operator runbooks. Run after `make build-contracts`. |
-| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/factory-dynamic-n.tar.gz` after readiness checks pass. |
+| `make package-contract-release` | Stages a deterministic bundle under `target/contract-release.*` and writes `target/morph-v3-conditional-batch.tar.gz` after readiness checks pass. |
 | `make supply-chain` | `cargo audit` then `cargo deny check`. See `Makefile` for ignored advisory IDs. |
 | `make fixture-checks` | Generates and validates every protocol fixture (bilateral, factory, splice, watch). Writes to `target/fixture-checks/`. |
 | `make smoke` | Workspace tests plus `cargo run -p morph-cli -- validate-fixture`. |

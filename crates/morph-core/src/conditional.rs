@@ -11,10 +11,10 @@ use morph_script_common::{
     BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN, BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
     BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT, BilateralCkbConditionalDescriptor,
     CONDITIONAL_BATCH_RESOLUTION_WITNESS_LEN, CONDITIONAL_BATCH_RESOLUTION_WITNESS_VERSION,
-    CONDITIONAL_HASH_CKB_BLAKE2B, CONDITIONAL_HASH_SHA256, CONDITIONAL_RESOLUTION_FULFILL,
-    CONDITIONAL_RESOLUTION_LEN, CONDITIONAL_RESOLUTION_REFUND, CONDITIONAL_TRANSFER_LEN,
-    CONDITIONAL_TRANSFER_MAX_COUNT, ConditionalBatchResolutionWitness, absolute_block_since,
-    conditional_payment_hash, write_u16, write_u64,
+    CONDITIONAL_HASH_CKB_BLAKE2B, CONDITIONAL_HASH_SHA256, CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY,
+    CONDITIONAL_RESOLUTION_FULFILL, CONDITIONAL_RESOLUTION_LEN, CONDITIONAL_RESOLUTION_REFUND,
+    CONDITIONAL_TRANSFER_LEN, CONDITIONAL_TRANSFER_MAX_COUNT, ConditionalBatchResolutionWitness,
+    absolute_block_since, conditional_payment_hash, write_u16, write_u64,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -98,6 +98,9 @@ impl ConditionalBatch {
         let participants = &self.participants;
         if is_zero(&participants[0].settlement_lock_hash)
             || participants[0].settlement_lock_hash >= participants[1].settlement_lock_hash
+            || participants.iter().any(|participant| {
+                participant.settled_capacity < CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY
+            })
         {
             return Err(ConditionalError::InvalidParticipants);
         }
@@ -386,11 +389,11 @@ mod tests {
         let participants = [
             ConditionalParticipant {
                 settlement_lock_hash: [1; 32],
-                settled_capacity: 100,
+                settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 100,
             },
             ConditionalParticipant {
                 settlement_lock_hash: [2; 32],
-                settled_capacity: 200,
+                settled_capacity: CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 200,
             },
         ];
         let preimage_0 = [7; 32];
@@ -434,7 +437,10 @@ mod tests {
         let raw = batch.encode_descriptor().unwrap();
         assert_eq!(raw.len(), BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_LEN);
         assert_eq!(ConditionalBatch::decode_descriptor(&raw).unwrap(), batch);
-        assert_eq!(batch.total_capacity().unwrap(), 365);
+        assert_eq!(
+            batch.total_capacity().unwrap(),
+            2 * CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 365
+        );
     }
 
     #[test]
@@ -447,7 +453,13 @@ mod tests {
             ),
             ([6; 32], ConditionalResolution::Refund),
         ]);
-        assert_eq!(batch.resolve(&resolutions, 600).unwrap(), [100, 265]);
+        assert_eq!(
+            batch.resolve(&resolutions, 600).unwrap(),
+            [
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 100,
+                CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY + 265,
+            ]
+        );
         assert_eq!(
             batch.resolve(&resolutions, 599),
             Err(ConditionalError::RefundNotMature)
@@ -492,6 +504,13 @@ mod tests {
     fn zero_unconditional_capacity_is_rejected() {
         let mut batch = fixture();
         batch.participants[0].settled_capacity = 0;
-        assert_eq!(batch.validate(), Err(ConditionalError::Encoding));
+        assert_eq!(batch.validate(), Err(ConditionalError::InvalidParticipants));
+    }
+
+    #[test]
+    fn dust_settlement_capacity_is_rejected() {
+        let mut batch = fixture();
+        batch.participants[0].settled_capacity = CONDITIONAL_MIN_PLAIN_OUTPUT_CAPACITY - 1;
+        assert_eq!(batch.validate(), Err(ConditionalError::InvalidParticipants));
     }
 }

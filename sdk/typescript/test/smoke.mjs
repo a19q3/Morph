@@ -67,6 +67,59 @@ try {
   globalThis.fetch = originalFetch;
 }
 
+const maxU64 = "18446744073709551615";
+const conditionalPackage = {
+  schema: "morph.conditional_batch_package",
+  channel_id: "0x01",
+  funding_context_id: "0x02",
+  state_number: maxU64,
+  batch_id: "0x03",
+  application_context_commitment: "0x04",
+  participants: [
+    { settlement_lock_hash: "0x05", settled_capacity: maxU64 },
+    { settlement_lock_hash: "0x06", settled_capacity: "0" },
+  ],
+  transfers: [{
+    transfer_id: "0x07",
+    payer_lock_hash: "0x05",
+    hash_algorithm: "sha256",
+    payment_hash: "0x08",
+    amount: maxU64,
+    refund_after_block: maxU64,
+  }],
+  resolutions: [{ kind: "refund", transfer_id: "0x07" }],
+  input_since: maxU64,
+  descriptor_hex: "0x09",
+  descriptor_commitment: "0x0a",
+  resolution_witness_hex: "0x0b",
+  resolved_capacities: [maxU64, "0"],
+  signed_state_header_hex: "0x0c",
+  signed_state_witness_hex: "0x0d",
+};
+let postedConditionalBody;
+globalThis.fetch = async (_url, init) => {
+  postedConditionalBody = init.body;
+  return new Response(JSON.stringify({ imported: true }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+};
+try {
+  const client = new MorphHubClient("https://hub.example.com");
+  assert.deepEqual(await client.importConditionalBatch(conditionalPackage), { imported: true });
+  assert.equal(JSON.parse(postedConditionalBody).state_number, maxU64);
+  assert.throws(
+    () => client.importConditionalBatch({ ...conditionalPackage, input_since: "01" }),
+    /canonical unsigned u64/,
+  );
+  assert.throws(
+    () => client.importConditionalBatch({ ...conditionalPackage, state_number: `${maxU64}0` }),
+    /canonical unsigned u64/,
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+}
+
 globalThis.fetch = async () => new Response(
   new Uint8Array(2 * 1024 * 1024 + 1),
   { status: 200 },

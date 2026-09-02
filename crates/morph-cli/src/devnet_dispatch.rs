@@ -311,6 +311,7 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             private_key,
             alice_private_key,
             bob_private_key,
+            descriptor_profile,
             vault_capacity,
             alice_capacity,
             bob_capacity,
@@ -325,27 +326,30 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
             mine_blocks,
             json,
         } => {
-            let report = devnet::open_channel(
-                &rpc,
-                OpenChannelOptions {
-                    contracts_dir,
-                    private_key,
-                    alice_private_key,
-                    bob_private_key,
-                    vault_capacity,
-                    alice_capacity,
-                    bob_capacity,
-                    sponsor_capacity,
-                    sponsor_min_state_number,
-                    sponsor_max_state_number,
-                    strict_sponsor_range,
-                    sponsor_max_fee_per_tx,
-                    sponsor_max_total_fee,
-                    fee,
-                    finalise_since,
-                    mine_blocks,
-                },
-            )?;
+            let options = OpenChannelOptions {
+                contracts_dir,
+                private_key,
+                alice_private_key,
+                bob_private_key,
+                vault_capacity,
+                alice_capacity,
+                bob_capacity,
+                sponsor_capacity,
+                sponsor_min_state_number,
+                sponsor_max_state_number,
+                strict_sponsor_range,
+                sponsor_max_fee_per_tx,
+                sponsor_max_total_fee,
+                fee,
+                finalise_since,
+                mine_blocks,
+            };
+            let report = match descriptor_profile {
+                ChannelDescriptorProfileArg::PlainV1 => devnet::open_channel(&rpc, options),
+                ChannelDescriptorProfileArg::ConditionalV3 => {
+                    devnet::open_conditional_channel(&rpc, options)
+                }
+            }?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
@@ -359,6 +363,8 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
                 println!("channel_id={}", report.channel_id);
                 println!("funding_anchor={}", report.funding_anchor);
+                println!("descriptor_profile={}", report.descriptor_profile);
+                println!("descriptor_version={}", report.descriptor_version);
                 println!("finalise_since={}", report.finalise_since);
                 println!("input_capacity={}", report.input_capacity);
                 println!("state_capacity={}", report.state_capacity);
@@ -2214,6 +2220,42 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 }
             }
         }
+        DevnetCommand::PublishConditionalBatch {
+            contracts_dir,
+            private_key,
+            state_out_point,
+            sponsor_out_point,
+            package,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::publish_conditional_batch(
+                &rpc,
+                PublishConditionalBatchOptions {
+                    contracts_dir,
+                    private_key,
+                    state_out_point,
+                    sponsor_out_point,
+                    package,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                println!("channel_id={}", report.channel_id);
+                println!("new_state_number={}", report.new_state_number);
+                println!(
+                    "state_out_point={}:{}",
+                    report.state_out_point.tx_hash, report.state_out_point.index
+                );
+                println!("fee={}", report.fee);
+            }
+        }
         DevnetCommand::SaveSplicePackage {
             alice_private_key,
             bob_private_key,
@@ -2388,6 +2430,41 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                 println!("funding_anchor={}", report.package.funding_anchor);
                 println!("state_number={}", report.package.state_number);
                 println!("signing_digest={}", report.package.signing_digest);
+            }
+        }
+        DevnetCommand::SaveConditionalBatchPackage {
+            alice_private_key,
+            bob_private_key,
+            state_out_point,
+            vault_out_point,
+            state_number,
+            plan,
+            output,
+            json,
+        } => {
+            let report = devnet::save_conditional_batch_package(
+                &rpc,
+                SaveConditionalBatchPackageOptions {
+                    alice_private_key,
+                    bob_private_key,
+                    state_out_point,
+                    vault_out_point,
+                    state_number,
+                    plan,
+                    output,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("path={}", report.path);
+                println!("channel_id={}", report.package.channel_id);
+                println!("state_number={}", report.package.state_number);
+                println!("batch_id={}", report.package.batch_id);
+                println!(
+                    "descriptor_commitment={}",
+                    report.package.descriptor_commitment
+                );
             }
         }
         DevnetCommand::ListStatePackages {
@@ -2859,6 +2936,84 @@ pub(super) fn run_devnet(rpc_url: &str, command: DevnetCommand) -> Result<()> {
                         output.lock_hash
                     );
                 }
+            }
+        }
+        DevnetCommand::FinaliseConditionalBatch {
+            contracts_dir,
+            private_key,
+            state_out_point,
+            vault_out_point,
+            package,
+            finalise_since,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::finalise_conditional_batch(
+                &rpc,
+                FinaliseConditionalBatchOptions {
+                    contracts_dir,
+                    private_key,
+                    state_out_point,
+                    vault_out_point,
+                    package,
+                    finalise_since,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                println!("channel_id={}", report.channel_id);
+                println!("state_number={}", report.state_number);
+                println!(
+                    "batch_out_point={}:{}",
+                    report.batch_out_point.tx_hash, report.batch_out_point.index
+                );
+                println!("batch_capacity={}", report.batch_capacity);
+                println!("fee={}", report.fee);
+            }
+        }
+        DevnetCommand::ResolveConditionalBatch {
+            contracts_dir,
+            private_key,
+            alice_private_key,
+            bob_private_key,
+            batch_out_point,
+            package,
+            fee,
+            mine_blocks,
+            json,
+        } => {
+            let report = devnet::resolve_conditional_batch(
+                &rpc,
+                ResolveConditionalBatchOptions {
+                    contracts_dir,
+                    private_key,
+                    alice_private_key,
+                    bob_private_key,
+                    batch_out_point,
+                    package,
+                    fee,
+                    mine_blocks,
+                },
+            )?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("tx_hash={}", report.tx_hash);
+                println!("status={}", report.status);
+                println!("channel_id={}", report.channel_id);
+                println!("state_number={}", report.state_number);
+                println!("input_since={}", report.input_since);
+                println!(
+                    "resolved_capacities={},{}",
+                    report.resolved_capacities[0], report.resolved_capacities[1]
+                );
+                println!("fee={}", report.fee);
             }
         }
         DevnetCommand::SpliceInSmoke {

@@ -29,15 +29,16 @@ use morph_core::types::{
 };
 use morph_core::validation::{factory_right_sparse_proof, factory_right_sparse_root};
 use morph_core::{
-    asset_registry_commitment, factory_vault_delta_commitment,
-    participants_commitment as core_participants_commitment, splice_asset_delta_commitment,
-    vault_descriptor_commitment, vault_outpoint_commitment,
+    ConditionalBatch, ConditionalParticipant, asset_registry_commitment,
+    factory_vault_delta_commitment, participants_commitment as core_participants_commitment,
+    splice_asset_delta_commitment, vault_descriptor_commitment, vault_outpoint_commitment,
 };
 use morph_script_common::{
-    BILATERAL_CKB_DESCRIPTOR_LEN, BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT,
-    BILATERAL_CKB_DESCRIPTOR_VERSION, BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT,
-    BILATERAL_CKB_XUDT_DESCRIPTOR_LEN, BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
-    BILATERAL_SIGNATURE_COUNT, BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
+    BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION, BILATERAL_CKB_DESCRIPTOR_LEN,
+    BILATERAL_CKB_DESCRIPTOR_OUTPUT_COUNT, BILATERAL_CKB_DESCRIPTOR_VERSION,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_ASSET_COUNT, BILATERAL_CKB_XUDT_DESCRIPTOR_LEN,
+    BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION, BILATERAL_SIGNATURE_COUNT,
+    BILATERAL_SIGNATURE_THRESHOLD, BILATERAL_SIGNATURE_WITNESS_LEN,
     BILATERAL_SIGNATURE_WITNESS_VERSION, BYTE32_LEN, COMPRESSED_SECP256K1_PUBKEY_LEN,
     ECDSA_SIGNATURE_LEN, FACTORY_LOCAL_EXIT_WITNESS_VERSION, FACTORY_MAX_PARTICIPANTS,
     FACTORY_MERKLE_UPDATE_RIGHT_COUNT, FACTORY_MERKLE_UPDATE_WITNESS_VERSION,
@@ -54,12 +55,20 @@ use morph_script_common::{
     WITNESS_ENVELOPE_FORMAT, WITNESS_ENVELOPE_KIND_FACTORY_REDUCED_EXIT,
     WITNESS_ENVELOPE_KIND_FACTORY_SIGNATURE, WITNESS_ENVELOPE_LEN, WITNESS_ENVELOPE_MAGIC,
     WitnessEnvelope, blake2b256 as script_blake2b256, encode_state_header,
-    factory_local_exit_digest, factory_participants_commitment, participants_commitment,
-    relative_block_since, settlement_descriptor_commitment, vault_cell_commitment,
-    verify_factory_merkle_update, verify_factory_reduced_exit_update,
+    factory_local_exit_digest, factory_participants_commitment, funding_context_id,
+    participants_commitment, relative_block_since, settlement_descriptor_commitment,
+    vault_cell_commitment, verify_factory_merkle_update, verify_factory_reduced_exit_update,
     witness_envelope_body_commitment,
 };
 use serde::Serialize;
+
+use crate::conditional_packages::{
+    StoredConditionalBatchPackage, batch_from_plan as conditional_batch_from_plan,
+    package_from_signed_state as conditional_package_from_signed_state,
+    read_package as read_conditional_package, read_plan as read_conditional_plan,
+    resolutions_from_plan as conditional_resolutions_from_plan,
+    write_package as write_conditional_package,
+};
 
 use crate::factory_packages::{
     StoredFactoryReducedSplicePackage, StoredFactorySplicePackage,
@@ -133,6 +142,12 @@ pub struct OpenChannelOptions {
     pub fee: u64,
     pub finalise_since: u64,
     pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChannelDescriptorProfile {
+    PlainV1,
+    ConditionalV3,
 }
 
 #[derive(Debug, Clone)]
@@ -495,6 +510,52 @@ pub struct SaveStatePackageOptions {
     pub state_out_point: String,
     pub state_number: Option<u64>,
     pub store_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct SaveConditionalBatchPackageOptions {
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub state_out_point: String,
+    pub vault_out_point: String,
+    pub state_number: Option<u64>,
+    pub plan: PathBuf,
+    pub output: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct PublishConditionalBatchOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub state_out_point: String,
+    pub sponsor_out_point: String,
+    pub package: PathBuf,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FinaliseConditionalBatchOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub state_out_point: String,
+    pub vault_out_point: String,
+    pub package: PathBuf,
+    pub finalise_since: u64,
+    pub fee: u64,
+    pub mine_blocks: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolveConditionalBatchOptions {
+    pub contracts_dir: PathBuf,
+    pub private_key: String,
+    pub alice_private_key: String,
+    pub bob_private_key: String,
+    pub batch_out_point: String,
+    pub package: PathBuf,
+    pub fee: u64,
+    pub mine_blocks: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -876,6 +937,8 @@ pub struct OpenChannelReport {
     pub block_hash: Option<String>,
     pub channel_id: String,
     pub funding_anchor: String,
+    pub descriptor_profile: String,
+    pub descriptor_version: u16,
     pub finalise_since: u64,
     pub input_capacity: u64,
     pub state_capacity: u64,
@@ -1239,6 +1302,44 @@ pub struct PublishStateReport {
 pub struct SaveStatePackageReport {
     pub path: String,
     pub package: StoredStatePackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SaveConditionalBatchPackageReport {
+    pub path: String,
+    pub package: StoredConditionalBatchPackage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FinaliseConditionalBatchReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub channel_id: String,
+    pub state_number: u64,
+    pub batch_out_point: PrintableOutPoint,
+    pub batch_capacity: u64,
+    pub state_refund_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolveConditionalBatchReport {
+    pub tx_hash: String,
+    pub status: String,
+    pub block_number: Option<u64>,
+    pub block_hash: Option<String>,
+    pub channel_id: String,
+    pub state_number: u64,
+    pub input_since: u64,
+    pub resolved_capacities: [u64; 2],
+    pub fee_change_capacity: u64,
+    pub fee: u64,
+    pub metrics: TransactionMetrics,
+    pub mined_blocks: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1764,6 +1865,21 @@ pub fn deploy_contracts(
 }
 
 pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<OpenChannelReport> {
+    open_channel_with_profile(rpc, options, ChannelDescriptorProfile::PlainV1)
+}
+
+pub fn open_conditional_channel(
+    rpc: &CkbRpcClient,
+    options: OpenChannelOptions,
+) -> Result<OpenChannelReport> {
+    open_channel_with_profile(rpc, options, ChannelDescriptorProfile::ConditionalV3)
+}
+
+fn open_channel_with_profile(
+    rpc: &CkbRpcClient,
+    options: OpenChannelOptions,
+    descriptor_profile: ChannelDescriptorProfile,
+) -> Result<OpenChannelReport> {
     ensure!(options.fee > 0, "fee must be non-zero");
     ensure!(
         options.vault_capacity > 0,
@@ -1873,8 +1989,39 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
             .build(),
         0,
     )?;
-    let descriptor =
-        bilateral_ckb_descriptor(alice_lock_hash, alice_capacity, bob_lock_hash, bob_capacity);
+    let (descriptor, descriptor_version) = match descriptor_profile {
+        ChannelDescriptorProfile::PlainV1 => (
+            bilateral_ckb_descriptor(alice_lock_hash, alice_capacity, bob_lock_hash, bob_capacity)
+                .to_vec(),
+            BILATERAL_CKB_DESCRIPTOR_VERSION,
+        ),
+        ChannelDescriptorProfile::ConditionalV3 => {
+            let mut participants = [
+                ConditionalParticipant {
+                    settlement_lock_hash: alice_lock_hash,
+                    settled_capacity: alice_capacity,
+                },
+                ConditionalParticipant {
+                    settlement_lock_hash: bob_lock_hash,
+                    settled_capacity: bob_capacity,
+                },
+            ];
+            participants.sort_by_key(|participant| participant.settlement_lock_hash);
+            let empty_batch = ConditionalBatch {
+                batch_id: script_blake2b256(&[b"CKB_MORPH_EMPTY_CONDITIONAL_BATCH", &channel_id]),
+                application_context_commitment: script_blake2b256(&[
+                    b"CKB_MORPH_EMPTY_CONDITIONAL_CONTEXT",
+                    &channel_id,
+                ]),
+                participants,
+                transfers: Vec::new(),
+            };
+            (
+                empty_batch.encode_descriptor()?.to_vec(),
+                BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+            )
+        }
+    };
     let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
     let vault_set_commitment = vault_descriptor_commitment(&VaultDescriptor {
         funding_anchor,
@@ -1899,7 +2046,7 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
             xudt_types: BTreeSet::new(),
         }),
         settlement_descriptor_commitment: descriptor_commitment,
-        descriptor_version: BILATERAL_CKB_DESCRIPTOR_VERSION,
+        descriptor_version,
         challenge_policy_commitment,
     });
     let state_output_for_capacity = CellOutput::new_builder()
@@ -2023,6 +2170,12 @@ pub fn open_channel(rpc: &CkbRpcClient, options: OpenChannelOptions) -> Result<O
         block_hash: sent.block_hash,
         channel_id: hex32(&channel_id),
         funding_anchor: hex32(&funding_anchor),
+        descriptor_profile: match descriptor_profile {
+            ChannelDescriptorProfile::PlainV1 => "plain-v1",
+            ChannelDescriptorProfile::ConditionalV3 => "conditional-v3",
+        }
+        .to_string(),
+        descriptor_version,
         finalise_since: options.finalise_since,
         input_capacity: funding_cell.capacity,
         state_capacity,
@@ -6739,6 +6892,8 @@ fn open_xudt_channel(rpc: &CkbRpcClient, options: &XudtSmokeOptions) -> Result<O
         block_hash: sent.block_hash,
         channel_id: hex32(&channel_id),
         funding_anchor: hex32(&funding_anchor),
+        descriptor_profile: "ckb-xudt-v2".to_string(),
+        descriptor_version: BILATERAL_CKB_XUDT_DESCRIPTOR_VERSION,
         finalise_since: options.finalise_since,
         input_capacity: funding_cell.capacity,
         state_capacity,
@@ -6904,7 +7059,27 @@ pub fn publish_state(
     rpc: &CkbRpcClient,
     options: PublishStateOptions,
 ) -> Result<PublishStateReport> {
-    publish_state_with_descriptor_update_and_runtime(rpc, options, None, None)
+    publish_state_with_descriptor_update_and_runtime(rpc, options, None, None, None)
+}
+
+pub fn publish_conditional_batch(
+    rpc: &CkbRpcClient,
+    options: PublishConditionalBatchOptions,
+) -> Result<PublishStateReport> {
+    let package_path = options.package.clone();
+    let publish = PublishStateOptions {
+        contracts_dir: options.contracts_dir,
+        private_key: options.private_key,
+        alice_private_key: String::new(),
+        bob_private_key: String::new(),
+        state_out_point: options.state_out_point,
+        sponsor_out_point: options.sponsor_out_point,
+        state_number: None,
+        state_package: None,
+        fee: options.fee,
+        mine_blocks: options.mine_blocks,
+    };
+    publish_state_with_descriptor_update_and_runtime(rpc, publish, None, None, Some(&package_path))
 }
 
 fn validate_sponsor_policy_owner(
@@ -6930,7 +7105,7 @@ fn publish_state_with_descriptor_update(
     options: PublishStateOptions,
     descriptor_update: Option<&SettlementDescriptorUpdate>,
 ) -> Result<PublishStateReport> {
-    publish_state_with_descriptor_update_and_runtime(rpc, options, descriptor_update, None)
+    publish_state_with_descriptor_update_and_runtime(rpc, options, descriptor_update, None, None)
 }
 
 fn publish_state_with_publication_runtime(
@@ -6938,7 +7113,7 @@ fn publish_state_with_publication_runtime(
     options: PublishStateOptions,
     runtime: PublicationRuntime,
 ) -> Result<PublishStateReport> {
-    publish_state_with_descriptor_update_and_runtime(rpc, options, None, Some(runtime))
+    publish_state_with_descriptor_update_and_runtime(rpc, options, None, Some(runtime), None)
 }
 
 fn publish_state_with_descriptor_update_and_runtime(
@@ -6946,6 +7121,7 @@ fn publish_state_with_descriptor_update_and_runtime(
     options: PublishStateOptions,
     descriptor_update: Option<&SettlementDescriptorUpdate>,
     publication_runtime: Option<PublicationRuntime>,
+    conditional_package: Option<&Path>,
 ) -> Result<PublishStateReport> {
     ensure!(options.fee > 0, "fee must be non-zero");
 
@@ -6984,7 +7160,40 @@ fn publish_state_with_descriptor_update_and_runtime(
         .ok_or_else(|| anyhow!("sponsor policy already_spent exceeds max_total_fee"))?;
 
     let (new_state_data, signature_witness, new_state_number, state_package) =
-        if let Some(path) = &options.state_package {
+        if let Some(path) = conditional_package {
+            ensure!(
+                options.state_package.is_none() && descriptor_update.is_none(),
+                "conditional package cannot be combined with another state source"
+            );
+            let package = read_conditional_package(path)?;
+            let header_bytes = package.signed_state_header_bytes()?;
+            let witness_bytes = package.signed_state_witness_bytes()?;
+            let package_header = WireStateHeader::parse(&header_bytes)
+                .map_err(|error| anyhow!("conditional package header is invalid: {error:?}"))?;
+            ensure!(
+                old_header.same_context_except_progress(&package_header),
+                "conditional package does not match the current channel context"
+            );
+            ensure!(
+                package_header.state_number() > old_header.state_number(),
+                "conditional package state number {} must exceed old state number {}",
+                package_header.state_number(),
+                old_header.state_number()
+            );
+            ensure!(
+                package_header.phase() == PHASE_SETTLING
+                    && package_header.descriptor_version()
+                        == BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+                "conditional package must publish a settling descriptor-v3 state"
+            );
+            let package_state_number = package_header.state_number();
+            (
+                header_bytes,
+                witness_bytes,
+                package_state_number,
+                Some(path.display().to_string()),
+            )
+        } else if let Some(path) = &options.state_package {
             ensure!(
                 descriptor_update.is_none(),
                 "state package already defines the signed settlement descriptor"
@@ -7241,6 +7450,108 @@ pub fn save_state_package(
 
     Ok(SaveStatePackageReport {
         path: path.display().to_string(),
+        package,
+    })
+}
+
+pub fn save_conditional_batch_package(
+    rpc: &CkbRpcClient,
+    options: SaveConditionalBatchPackageOptions,
+) -> Result<SaveConditionalBatchPackageReport> {
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let vault_out_point = parse_out_point(&options.vault_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point)?;
+    let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
+    let old_header = WireStateHeader::parse(state_cell.data.as_ref())
+        .map_err(|error| anyhow!("state cell does not contain a valid StateHeader: {error:?}"))?;
+    old_header
+        .validate_profile()
+        .map_err(|error| anyhow!("StateHeader profile is invalid: {error:?}"))?;
+    ensure!(
+        old_header.phase() == PHASE_ACTIVE,
+        "conditional batches can only be armed from an active StateCell"
+    );
+    ensure!(
+        old_header.descriptor_version() == BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+        "StateCell was not opened with the conditional-v3 descriptor profile"
+    );
+    ensure_vault_outpoint_binding(
+        "--vault-out-point",
+        old_header.vault_outpoint_commitment(),
+        &vault_out_point,
+    )?;
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == old_header.vault_materialisation_root(),
+        "StateHeader does not commit the live VaultCell payload"
+    );
+
+    let state_number = options
+        .state_number
+        .unwrap_or_else(|| old_header.state_number().saturating_add(1));
+    ensure!(
+        state_number > old_header.state_number(),
+        "new state number must be greater than old state number {}",
+        old_header.state_number()
+    );
+    let plan = read_conditional_plan(&options.plan)?;
+    let context = funding_context_id(
+        old_header.chain_id(),
+        old_header.channel_id(),
+        old_header.funding_anchor(),
+        old_header.vault_set_commitment(),
+        old_header.vault_outpoint_commitment(),
+    );
+    let mut channel_id = [0u8; BYTE32_LEN];
+    channel_id.copy_from_slice(old_header.channel_id());
+    let batch = conditional_batch_from_plan(&plan, channel_id, context, state_number)?;
+    ensure!(
+        batch.total_capacity()? == vault_cell.capacity,
+        "conditional plan total capacity {} does not equal live VaultCell capacity {}",
+        batch.total_capacity()?,
+        vault_cell.capacity
+    );
+
+    let alice_key = parse_privkey(&options.alice_private_key)
+        .with_context(|| "invalid Alice conditional signing key")?;
+    let bob_key = parse_privkey(&options.bob_private_key)
+        .with_context(|| "invalid Bob conditional signing key")?;
+    let mut expected_locks: [[u8; BYTE32_LEN]; 2] = [
+        secp256k1_lock(&alice_key)?.calc_script_hash().unpack(),
+        secp256k1_lock(&bob_key)?.calc_script_hash().unpack(),
+    ];
+    expected_locks.sort();
+    ensure!(
+        batch.participants[0].settlement_lock_hash == expected_locks[0]
+            && batch.participants[1].settlement_lock_hash == expected_locks[1],
+        "conditional plan participants do not match the Alice/Bob settlement locks"
+    );
+
+    let descriptor = batch.encode_descriptor()?;
+    let mut signed_state = state_cell.data.to_vec();
+    put_u64(&mut signed_state, 140, state_number);
+    signed_state[149] = PHASE_SETTLING;
+    signed_state[214..246].copy_from_slice(&settlement_descriptor_commitment(&descriptor));
+    put_u16(
+        &mut signed_state,
+        246,
+        BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+    );
+    let signature_witness = bilateral_signature_witness(
+        &signed_state,
+        &options.alice_private_key,
+        &options.bob_private_key,
+    )?;
+    let resolutions = conditional_resolutions_from_plan(&plan)?;
+    let package = conditional_package_from_signed_state(
+        &signed_state,
+        &signature_witness,
+        &batch,
+        &resolutions,
+    )?;
+    write_conditional_package(&options.output, &package)?;
+    Ok(SaveConditionalBatchPackageReport {
+        path: options.output.display().to_string(),
         package,
     })
 }
@@ -8724,6 +9035,237 @@ pub fn finalise_channel(
                 state_refund_capacity,
             ),
         ],
+    })
+}
+
+pub fn finalise_conditional_batch(
+    rpc: &CkbRpcClient,
+    options: FinaliseConditionalBatchOptions,
+) -> Result<FinaliseConditionalBatchReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    let package = read_conditional_package(&options.package)?;
+    let summary = package.validate()?;
+    let signed_header = package.signed_state_header_bytes()?;
+    let descriptor = package.descriptor_bytes()?;
+    let header = WireStateHeader::parse(&signed_header)
+        .map_err(|error| anyhow!("conditional package header is invalid: {error:?}"))?;
+
+    let state_out_point = parse_out_point(&options.state_out_point)?;
+    let vault_out_point = parse_out_point(&options.vault_out_point)?;
+    let state_cell = load_live_cell(rpc, state_out_point.clone())?;
+    let vault_cell = load_live_cell(rpc, vault_out_point.clone())?;
+    ensure!(
+        state_cell.data.as_ref() == signed_header,
+        "conditional package StateHeader does not exactly match the live StateCell"
+    );
+    ensure!(
+        header.phase() == PHASE_SETTLING
+            && header.descriptor_version() == BILATERAL_CKB_CONDITIONAL_DESCRIPTOR_VERSION,
+        "conditional finalisation requires a settling descriptor-v3 StateCell"
+    );
+    ensure_vault_outpoint_binding(
+        "--vault-out-point",
+        header.vault_outpoint_commitment(),
+        &vault_out_point,
+    )?;
+    ensure!(
+        vault_cell_commitment_from_output(&vault_cell.output, vault_cell.data.as_ref()).as_slice()
+            == header.vault_materialisation_root(),
+        "StateHeader does not commit the live VaultCell payload"
+    );
+    ensure!(
+        vault_cell.capacity == summary.total_capacity,
+        "live VaultCell capacity {} does not match conditional descriptor total {}",
+        vault_cell.capacity,
+        summary.total_capacity
+    );
+
+    let owner_key =
+        parse_privkey(&options.private_key).with_context(|| "invalid state-refund private key")?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    let state_refund_capacity = state_cell
+        .capacity
+        .checked_sub(options.fee)
+        .ok_or_else(|| anyhow!("state carrier cannot cover fee {}", options.fee))?;
+    ensure_change_capacity(&owner_lock, state_refund_capacity)?;
+
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let state_lock_contract = contract_by_name(&contracts, "morph-state-lock")?;
+    let state_contract = contract_by_name(&contracts, "morph-state-type")?;
+    let vault_contract = contract_by_name(&contracts, "morph-vault-lock")?;
+    let batch_contract = contract_by_name(&contracts, "morph-batch-lock")?;
+    let descriptor_commitment = settlement_descriptor_commitment(&descriptor);
+    let mut batch_args = header.channel_id().to_vec();
+    batch_args.extend_from_slice(&header.state_number().to_le_bytes());
+    batch_args.extend_from_slice(&descriptor_commitment);
+    let batch_lock = data1_script(batch_contract.data_hash.clone(), Bytes::from(batch_args));
+    let batch_output = CellOutput::new_builder()
+        .capacity(vault_cell.capacity)
+        .lock(batch_lock)
+        .build();
+    ensure_output_capacity("conditional batch", &batch_output, 0)?;
+    let refund_output = CellOutput::new_builder()
+        .capacity(state_refund_capacity)
+        .lock(owner_lock)
+        .build();
+
+    let finalise_since = relative_block_since_arg(options.finalise_since)?;
+    mine_relative_since_maturity(rpc, options.finalise_since)?;
+    let tx = TransactionBuilder::default()
+        .cell_dep(state_lock_contract.cell_dep)
+        .cell_dep(state_contract.cell_dep)
+        .cell_dep(vault_contract.cell_dep)
+        .cell_dep(batch_contract.cell_dep)
+        .input(CellInput::new(state_out_point, finalise_since))
+        .input(CellInput::new(vault_out_point, 0))
+        .output(batch_output)
+        .output(refund_output)
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .witness(empty_witness())
+        .witness(witness_with_input_type(Bytes::from(descriptor)))
+        .build();
+    let sent = send_and_mine(rpc, tx, options.mine_blocks)?;
+    let tx_hash = sent.tx_hash.clone();
+    Ok(FinaliseConditionalBatchReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        channel_id: hex32(header.channel_id()),
+        state_number: header.state_number(),
+        batch_out_point: PrintableOutPoint { tx_hash, index: 0 },
+        batch_capacity: vault_cell.capacity,
+        state_refund_capacity,
+        fee: options.fee,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
+    })
+}
+
+pub fn resolve_conditional_batch(
+    rpc: &CkbRpcClient,
+    options: ResolveConditionalBatchOptions,
+) -> Result<ResolveConditionalBatchReport> {
+    ensure!(options.fee > 0, "fee must be non-zero");
+    let package = read_conditional_package(&options.package)?;
+    let summary = package.validate()?;
+    let signed_header = package.signed_state_header_bytes()?;
+    let header = WireStateHeader::parse(&signed_header)
+        .map_err(|error| anyhow!("conditional package header is invalid: {error:?}"))?;
+    let descriptor = package.descriptor_bytes()?;
+    let resolution_witness = package.resolution_witness_bytes()?;
+
+    let owner_key = parse_privkey(&options.private_key)
+        .with_context(|| "invalid conditional-resolution fee key")?;
+    let alice_key = parse_privkey(&options.alice_private_key)
+        .with_context(|| "invalid Alice settlement key")?;
+    let bob_key =
+        parse_privkey(&options.bob_private_key).with_context(|| "invalid Bob settlement key")?;
+    let mut settlement_outputs = [
+        (secp256k1_lock(&alice_key)?, 0u64),
+        (secp256k1_lock(&bob_key)?, 0u64),
+    ];
+    settlement_outputs.sort_by_key(|(lock, _)| lock.calc_script_hash().as_slice().to_vec());
+    for (index, (lock, capacity)) in settlement_outputs.iter_mut().enumerate() {
+        ensure!(
+            hex32(lock.calc_script_hash().as_slice())
+                == package.participants[index].settlement_lock_hash,
+            "participant settlement lock does not match package"
+        );
+        *capacity = summary.resolved_capacities[index];
+        ensure_output_capacity(
+            "conditional settlement",
+            &CellOutput::new_builder()
+                .capacity(*capacity)
+                .lock(lock.clone())
+                .build(),
+            0,
+        )?;
+    }
+
+    let batch_out_point = parse_out_point(&options.batch_out_point)?;
+    let batch_cell = load_live_cell(rpc, batch_out_point.clone())?;
+    ensure!(
+        batch_cell.capacity == summary.total_capacity && batch_cell.data.is_empty(),
+        "BatchCell payload does not match the conditional package"
+    );
+    let tip_number = rpc.tip_header()?.number_value()?;
+    let contracts = find_deployed_contracts(rpc, &options.contracts_dir, tip_number)?;
+    let batch_contract = contract_by_name(&contracts, "morph-batch-lock")?;
+    let mut batch_args = header.channel_id().to_vec();
+    batch_args.extend_from_slice(&header.state_number().to_le_bytes());
+    batch_args.extend_from_slice(&settlement_descriptor_commitment(&descriptor));
+    let expected_batch_lock =
+        data1_script(batch_contract.data_hash.clone(), Bytes::from(batch_args));
+    ensure!(
+        batch_cell.output.lock() == expected_batch_lock
+            && batch_cell.output.type_().to_opt().is_none(),
+        "--batch-out-point is not the exact BatchCell authorised by the package"
+    );
+
+    mine_conditional_refund_maturity(rpc, &package)?;
+    let owner_lock = secp256k1_lock(&owner_key)?;
+    ensure!(
+        settlement_outputs
+            .iter()
+            .all(|(lock, _)| lock.calc_script_hash() != owner_lock.calc_script_hash()),
+        "conditional resolution fee key must differ from both participant settlement keys"
+    );
+    let fee_cell = find_largest_live_cell(rpc, &owner_lock, rpc.tip_header()?.number_value()?)?;
+    let fee_change_capacity = fee_cell
+        .capacity
+        .checked_sub(options.fee)
+        .ok_or_else(|| anyhow!("fee cell cannot cover fee {}", options.fee))?;
+    ensure_change_capacity(&owner_lock, fee_change_capacity)?;
+    let secp_dep = find_secp256k1_cell_dep(rpc)?;
+    let unsigned = TransactionBuilder::default()
+        .cell_dep(batch_contract.cell_dep)
+        .cell_dep(secp_dep)
+        .input(CellInput::new(batch_out_point, package.input_since))
+        .input(CellInput::new(fee_cell.out_point, 0))
+        .output(
+            CellOutput::new_builder()
+                .capacity(settlement_outputs[0].1)
+                .lock(settlement_outputs[0].0.clone())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(settlement_outputs[1].1)
+                .lock(settlement_outputs[1].0.clone())
+                .build(),
+        )
+        .output(
+            CellOutput::new_builder()
+                .capacity(fee_change_capacity)
+                .lock(owner_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .output_data(Bytes::new().pack())
+        .build();
+    let signed = sign_conditional_resolution_transaction(
+        unsigned,
+        &owner_key,
+        Bytes::from(resolution_witness),
+    )?;
+    let sent = send_and_mine(rpc, signed, options.mine_blocks)?;
+    Ok(ResolveConditionalBatchReport {
+        tx_hash: sent.tx_hash,
+        status: sent.status,
+        block_number: sent.block_number,
+        block_hash: sent.block_hash,
+        channel_id: hex32(header.channel_id()),
+        state_number: header.state_number(),
+        input_since: package.input_since,
+        resolved_capacities: summary.resolved_capacities,
+        fee_change_capacity,
+        fee: options.fee,
+        metrics: sent.metrics,
+        mined_blocks: sent.mined_blocks,
     })
 }
 
@@ -11327,6 +11869,31 @@ fn sign_factory_update_transaction(
         .build())
 }
 
+fn sign_conditional_resolution_transaction(
+    tx: ckb_types::core::TransactionView,
+    privkey: &Privkey,
+    resolution_witness: Bytes,
+) -> Result<ckb_types::core::TransactionView> {
+    let batch_witness = WitnessArgs::new_builder()
+        .input_type(Some(resolution_witness).pack())
+        .build();
+    let unsigned_fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])))
+        .build();
+    let message = sighash_all_message(tx.hash(), &[unsigned_fee_witness.as_bytes()]);
+    let signature = privkey
+        .sign_recoverable(&message)
+        .context("failed to sign conditional resolution fee input")?;
+    let fee_witness = WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(signature.serialize())))
+        .build();
+    Ok(tx
+        .as_advanced_builder()
+        .witness(batch_witness.as_bytes())
+        .witness(fee_witness.as_bytes())
+        .build())
+}
+
 fn sign_factory_exit_transaction(
     tx: ckb_types::core::TransactionView,
     privkey: &Privkey,
@@ -12038,6 +12605,33 @@ fn append_publication_attempt_if_requested(
 fn mine_relative_since_maturity(rpc: &CkbRpcClient, finalise_since: u64) -> Result<()> {
     for _ in 0..finalise_since {
         rpc.generate_block()?;
+    }
+    Ok(())
+}
+
+fn mine_conditional_refund_maturity(
+    rpc: &CkbRpcClient,
+    package: &StoredConditionalBatchPackage,
+) -> Result<()> {
+    let required_block = package
+        .resolutions
+        .iter()
+        .filter_map(|resolution| match resolution {
+            crate::conditional_packages::StoredConditionalResolution::Refund { transfer_id } => {
+                package
+                    .transfers
+                    .iter()
+                    .find(|transfer| &transfer.transfer_id == transfer_id)
+                    .map(|transfer| transfer.refund_after_block)
+            }
+            crate::conditional_packages::StoredConditionalResolution::Fulfill { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut tip = rpc.tip_header()?.number_value()?;
+    while tip < required_block {
+        rpc.generate_block()?;
+        tip = tip.saturating_add(1);
     }
     Ok(())
 }

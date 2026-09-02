@@ -137,13 +137,14 @@ export interface ConditionalBatchPackage {
   schema: 'morph.conditional_batch_package';
   channel_id: Hex32;
   funding_context_id: Hex32;
-  state_number: number;
+  state_number: string;
   batch_id: Hex32;
   application_context_commitment: Hex32;
-  input_since: number;
+  input_since: string;
   descriptor_commitment: Hex32;
-  resolved_capacities: [number, number];
-  transfers: unknown[];
+  resolved_capacities: [string, string];
+  transfer_count: number;
+  actionable: boolean;
   resolutions: unknown[];
 }
 
